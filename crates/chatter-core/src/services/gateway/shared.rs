@@ -206,7 +206,7 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         error,
         SendError::Message(crate::services::message::MessageError::ShieldNotReady)
     ) {
-        return crate::services::message::core::SHIELD_WAITING_FOR_TOKENS.to_owned();
+        return chatter_i18n::tr("Shield is getting ready — will send automatically");
     }
     let detail = error.to_string();
 
@@ -220,22 +220,28 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
     match error {
         SendError::BeforeSubmission(original) => handle_send_error(original, context),
         SendError::Message(crate::services::message::MessageError::InvalidContent(reason))
-            if reason.contains("too large") => "Message too long".to_string(),
+            if reason.contains("too large") => chatter_i18n::tr("Message too long"),
         SendError::Message(crate::services::message::MessageError::Network(
             crate::error::NetworkError::InvalidRequest(reason),
-        )) if reason.contains("too large") => "Message too long".to_string(),
+        )) if reason.contains("too large") => chatter_i18n::tr("Message too long"),
         SendError::NotLoggedIn
         | SendError::Message(crate::services::message::MessageError::NotLoggedIn)
         | SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotLoggedIn)
         | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::NotLoggedIn) => {
-            "Not logged in".to_string()
+            chatter_i18n::tr("Not logged in")
         }
-        SendError::DeliveryUnconfirmed => SendError::DeliveryUnconfirmed.to_string(),
-        SendError::SendInProgress => SendError::SendInProgress.to_string(),
-        SendError::AttemptAlreadyConfirmed => SendError::AttemptAlreadyConfirmed.to_string(),
-        SendError::UnsupportedAction => "Action not supported for this channel type".to_string(),
+        SendError::DeliveryUnconfirmed => chatter_i18n::tr("Delivery is unconfirmed."),
+        SendError::SendInProgress => chatter_i18n::tr(
+            "An earlier message has unconfirmed delivery. This new draft has not been sent.",
+        ),
+        SendError::AttemptAlreadyConfirmed => {
+            chatter_i18n::tr("This send attempt was already confirmed. It was not sent again.")
+        }
+        SendError::UnsupportedAction => {
+            chatter_i18n::tr("Action not supported for this channel type")
+        }
         SendError::Message(crate::services::message::MessageError::EncryptionFailed(_)) => {
-            "Encryption failed — try again".to_string()
+            chatter_i18n::tr("Encryption failed — try again")
         }
         // NOT "try again". `ensure_session` refuses for as long as the change is
         // parked, so every retry fails identically; the only thing that clears
@@ -243,23 +249,23 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         // is already open in this conversation, so point at it.
         SendError::Message(crate::services::message::MessageError::RecipientIdentityChanged {
             ..
-        }) => "Their safety number changed — accept it above to send".to_string(),
+        }) => chatter_i18n::tr("Their safety number changed — accept it above to send"),
         // Not "try again" either: the server could not prove this contact's
         // key, and retrying asks it the same question.
         SendError::Message(crate::services::message::MessageError::RecipientKeyUnverified {
             ..
-        }) => "Can't verify this contact's security key — not sent".to_string(),
+        }) => chatter_i18n::tr("Can't verify this contact's security key — not sent"),
         SendError::AnonDm(crate::services::anon_dm::AnonDmError::ConversationBlocked(_))
         | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::GroupBlocked(_)) => {
-            "Conversation is blocked".to_string()
+            chatter_i18n::tr("Conversation is blocked")
         }
         SendError::AnonDm(crate::services::anon_dm::AnonDmError::RateLimitExceeded(n))
         | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::RateLimitExceeded(n)) =>
         {
-            format!("Slow down — {} messages per minute limit", n)
+            chatter_i18n::trf("Slow down — {} messages per minute limit", &[n])
         }
-        e if e.is_refused() => "You can't send messages here".to_string(),
-        _ => format!("Failed to send: {}", detail),
+        e if e.is_refused() => chatter_i18n::tr("You can't send messages here"),
+        _ => chatter_i18n::trf("Failed to send: {}", &[&detail]),
     }
 }
 

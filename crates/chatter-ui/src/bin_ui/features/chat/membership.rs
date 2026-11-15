@@ -71,7 +71,7 @@ fn apply_access(w: &MainWindow, view: &ChannelAccessView) {
         .iter()
         .map(|b| ServerOperatedRowData {
             name: b.name.as_str().into(),
-            label: b.label.into(),
+            label: b.label.as_str().into(),
         })
         .collect();
     g.set_server_operated(ModelRc::new(VecModel::from(bots)));
@@ -117,7 +117,7 @@ fn run_action<F>(
     weak: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
     channel_id: ChannelId,
-    done: &'static str,
+    done: String,
     clear_link_id: Option<String>,
     action: F,
 ) where
@@ -183,7 +183,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             weak.clone(),
             ctx.clone(),
             channel_id,
-            "Link created. Copy it now: it cannot be shown again.",
+            chatter_i18n::tr("Link created. Copy it now: it cannot be shown again."),
             None,
             async move {
                 c.create_channel_invite_link(&channel_id, needs_approval)
@@ -202,7 +202,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         std::thread::spawn(move || super::actions::copy_text(&link));
         if let Some(w) = weak.upgrade() {
             w.global::<MembershipGlobal>()
-                .set_access_status("Link copied".into());
+                .set_access_status(chatter_i18n::tr("Link copied").into());
         }
     });
 
@@ -216,7 +216,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             weak.clone(),
             ctx.clone(),
             channel_id,
-            "Link revoked",
+            chatter_i18n::tr("Link revoked"),
             // Clear the copy box only if, at completion, the revoked link is still
             // the one shown. The box holds the link's only copy, so revoking a
             // different row must not wipe a still-valid link.
@@ -240,7 +240,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             weak.clone(),
             ctx.clone(),
             channel_id,
-            "Request approved",
+            chatter_i18n::tr("Request approved"),
             None,
             async move {
                 c.approve_channel_join_request(&channel_id, &user_id)
@@ -280,7 +280,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             weak.clone(),
             ctx.clone(),
             channel_id,
-            "Request rejected",
+            chatter_i18n::tr("Request rejected"),
             None,
             async move {
                 c.reject_channel_join_request(&channel_id, &user_id)

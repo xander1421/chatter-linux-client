@@ -254,7 +254,10 @@ pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnCommunica
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     w.set_toast_message(
-                        "Could not switch audio route. Using an available device.".into(),
+                        chatter_i18n::tr(
+                            "Could not switch audio route. Using an available device.",
+                        )
+                        .into(),
                     );
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);

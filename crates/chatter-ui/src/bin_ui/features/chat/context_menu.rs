@@ -68,7 +68,9 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::error!(error = %e, "Failed to look up message for context menu");
                     crate::run_history_ui!(weak, owner, |w| {
                         if request_serial.load(Ordering::SeqCst) == serial {
-                            w.set_toast_message("Message actions are unavailable right now.".into());
+                            w.set_toast_message(
+                                chatter_i18n::tr("Message actions are unavailable right now.").into(),
+                            );
                             w.set_toast_variant("error".into());
                             w.set_toast_visible(true);
                         }
@@ -149,7 +151,7 @@ fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(window) = weak.upgrade() else { return };
         let info = window.global::<crate::MessageInfo>();
         info.set_message_id(id.clone());
-        info.set_details("Loading delivery details…".into());
+        info.set_details(chatter_i18n::tr("Loading delivery details…").into());
         super::super::back::push(&window, "message-info");
         let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
             &client,
@@ -162,7 +164,7 @@ fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(details) => details,
                 Err(error) => {
                     tracing::warn!(%error, "Could not load message delivery details");
-                    "Could not load delivery details.".to_owned()
+                    chatter_i18n::tr("Could not load delivery details.")
                 }
             };
             crate::run_history_ui!(weak, owner, |w| {

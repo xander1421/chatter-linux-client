@@ -70,7 +70,7 @@ export component EmojiPicker inherits GlassSurface {
     property <[string]> category-icons: ["\u{1F550}", "\u{1F600}", "\u{1F44B}", "\u{1F431}", "\u{1F34E}", "\u{1F680}", "\u{1F3C0}", "\u{1F4A1}", "\u{1F49C}", "\u{1F3C1}"];
     // The tabs' names, for screen readers and the UI tests; the glyph alone
     // is not a name.
-    property <[string]> category-names: ["Recent", "Smileys", "People", "Animals", "Food", "Travel", "Activities", "Objects", "Symbols", "Flags"];
+    property <[string]> category-names: [@tr("Recent"), @tr("Smileys"), @tr("People"), @tr("Animals"), @tr("Food"), @tr("Travel"), @tr("Activities"), @tr("Objects"), @tr("Symbols"), @tr("Flags")];
     // Map icon index to category value: index 0 → -1 (Recent), index 1 → 0 (Smileys), etc.
     pure function icon-index-to-category(idx: int) -> int { idx - 1; }
     pure function category-to-icon-index(cat: int) -> int { cat + 1; }
@@ -134,7 +134,7 @@ export component EmojiPicker inherits GlassSurface {
                     if root.search-query == "": Text {
                         width: 100%;
                         height: 100%;
-                        text: "Search emoji";
+                        text: @tr("Search emoji");
                         color: Colors.text-muted;
                         font-size: Typography.sm;
                         vertical-alignment: center;
@@ -147,7 +147,7 @@ export component EmojiPicker inherits GlassSurface {
                         font-size: Typography.sm;
                         vertical-alignment: center;
                         text <=> root.search-query;
-                        accessible-label: "Search emoji";
+                        accessible-label: @tr("Search emoji");
 
                         edited => {
                             root.search-changed(self.text);
@@ -163,7 +163,7 @@ export component EmojiPicker inherits GlassSurface {
                     border-radius: Spacing.radius-full;
                     background: clear-area.has-hover ? Materials.hover : transparent;
                     accessible-role: button;
-                    accessible-label: "Clear search";
+                    accessible-label: @tr("Clear search");
                     accessible-action-default => { root.search-query = ""; root.search-changed(""); }
 
                     Image {
@@ -271,7 +271,7 @@ export component EmojiPicker inherits GlassSurface {
                     border-width: current ? Spacing.stroke : 0px;
                     border-color: Colors.primary;
                     accessible-role: button;
-                    accessible-label: tone-idx == 0 ? "Default skin tone" : "Skin tone " + tone-idx;
+                    accessible-label: tone-idx == 0 ? @tr("Default skin tone") : @tr("Skin tone {}", tone-idx);
                     accessible-action-default => { root.selected-skin-tone = tone-idx; root.skin-tone-changed(tone-idx); }
 
                     Text {
@@ -296,7 +296,7 @@ export component EmojiPicker inherits GlassSurface {
 
         // Search results header (only show when searching)
         if root.search-query != "" && !root.embedded: Text {
-            text: "Search results";
+            text: @tr("Search results");
             color: Colors.text-secondary;
             font-size: Typography.xs;
             height: 20px;
@@ -372,9 +372,9 @@ export component EmojiPicker inherits GlassSurface {
                 }
 
                 Text {
-                    text: root.search-query != "" ? "No emoji found"
-                        : root.selected-category == -1 ? "Emoji you use show up here"
-                        : "No emoji in this category";
+                    text: root.search-query != "" ? @tr("No emoji found")
+                        : root.selected-category == -1 ? @tr("Emoji you use show up here")
+                        : @tr("No emoji in this category");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;

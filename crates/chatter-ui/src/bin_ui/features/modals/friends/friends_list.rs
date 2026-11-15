@@ -129,8 +129,10 @@ fn run_blocked_action(
                         tracing::error!("Blocked-user action failed: {}", e);
                         crate::run_ui!(weak, |w| {
                             w.set_toast_message(
-                                "That did not go through. Check your connection and try again."
-                                    .into(),
+                                chatter_i18n::tr(
+                                    "That did not go through. Check your connection and try again.",
+                                )
+                                .into(),
                             );
                             w.set_toast_variant("error".into());
                             w.set_toast_visible(true);

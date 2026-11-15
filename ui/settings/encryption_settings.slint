@@ -18,7 +18,7 @@ export component EncryptionSettings inherits VerticalLayout {
 
     // Section header
     Text {
-        text: "Encryption";
+        text: @tr("Encryption");
         color: Colors.text-primary;
         font-size: Typography.xl;
         font-weight: Typography.semibold;
@@ -26,7 +26,7 @@ export component EncryptionSettings inherits VerticalLayout {
 
     Text {
         width: parent.width;
-        text: "Your messages are protected with Signal Protocol end-to-end encryption";
+        text: @tr("Your messages are protected with Signal Protocol end-to-end encryption");
         color: Colors.text-muted;
         font-size: Typography.sm;
         wrap: word-wrap;
@@ -52,7 +52,7 @@ export component EncryptionSettings inherits VerticalLayout {
                 // Our identity key's fingerprint. A safety
                 // number is per conversation (Signal) and
                 // lives on the contact's profile.
-                text: "Your identity key";
+                text: @tr("Your identity key");
                 color: Colors.text-primary;
                 font-size: Typography.lg;
                 font-weight: Typography.medium;
@@ -69,7 +69,7 @@ export component EncryptionSettings inherits VerticalLayout {
                     padding: Spacing.lg;
 
                     Text {
-                        text: root.identity-fingerprint != "" ? root.identity-fingerprint : "No fingerprint available";
+                        text: root.identity-fingerprint != "" ? root.identity-fingerprint : @tr("No fingerprint available");
                         color: root.identity-fingerprint != "" ? Colors.text-secondary : Colors.text-muted;
                         font-size: Typography.sm;
                         letter-spacing: 1px;
@@ -85,7 +85,7 @@ export component EncryptionSettings inherits VerticalLayout {
 
                 Text {
                     width: max(0px, parent.width - (root.compact-mode ? 0px : Spacing.button-min-width));
-                    text: "To verify a contact, compare safety numbers from their profile";
+                    text: @tr("To verify a contact, compare safety numbers from their profile");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -94,7 +94,7 @@ export component EncryptionSettings inherits VerticalLayout {
 
                 if !root.compact-mode: Button {
                     touch: root.mobile-platform;
-                    text: "Copy";
+                    text: @tr("Copy");
                     variant: "ghost";
                     clicked => { root.copy-fingerprint-clicked(); }
                 }
@@ -103,7 +103,7 @@ export component EncryptionSettings inherits VerticalLayout {
             // Compact: full-width button stacked below
             if root.compact-mode: Button {
                 touch: root.mobile-platform;
-                text: "Copy";
+                text: @tr("Copy");
                 variant: "ghost";
                 clicked => { root.copy-fingerprint-clicked(); }
             }
@@ -127,7 +127,7 @@ export component EncryptionSettings inherits VerticalLayout {
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             min-height: root.compact-mode ? 128px : Spacing.button-height;
-            accessible-text: "Allow sealed sender from anyone";
+            accessible-text: @tr("Allow sealed sender from anyone");
             checked <=> root.sealed-sender-unrestricted;
             toggled(value) => {
                 root.sealed-sender-unrestricted = value;
@@ -135,14 +135,14 @@ export component EncryptionSettings inherits VerticalLayout {
             }
 
             Text {
-                text: "Allow sealed sender from anyone";
+                text: @tr("Allow sealed sender from anyone");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: sealed-sender-row.label-width;
-                text: "Let people who aren't your contacts send you sealed messages. The server still can't see who sent them.";
+                text: @tr("Let people who aren't your contacts send you sealed messages. The server still can't see who sent them.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;

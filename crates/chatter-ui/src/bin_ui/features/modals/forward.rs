@@ -85,12 +85,14 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if ui_ctx.active_conversation() == target {
                                     crate::bin_ui::features::chat::open::select_conversation(&w, target);
                                 } else {
-                                    w.set_toast_message("Contact shared".into());
+                                    w.set_toast_message(chatter_i18n::tr("Contact shared").into());
                                     w.set_toast_variant("success".into());
                                     w.set_toast_visible(true);
                                 }
                             } else {
-                                w.set_toast_message("Could not share contact".into());
+                                w.set_toast_message(
+                                    chatter_i18n::tr("Could not share contact").into(),
+                                );
                                 w.set_toast_variant("error".into());
                                 w.set_toast_visible(true);
                             }
@@ -127,7 +129,11 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             } else if failed == 0 {
                                 // The copy lands in another chat; without this
                                 // the sheet just closed and nothing confirmed it.
-                                let msg = if total == 1 { "Message forwarded".to_string() } else { format!("{total} messages forwarded") };
+                                let msg = if total == 1 {
+                                    chatter_i18n::tr("Message forwarded")
+                                } else {
+                                    chatter_i18n::trf("{} messages forwarded", &[&total])
+                                };
                                 w.set_toast_message(msg.into());
                                 w.set_toast_variant("success".into());
                                 w.set_toast_visible(true);
@@ -137,9 +143,12 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             // A failed forward used to look identical to a
                             // no-op: the button un-spun and nothing else moved.
                             let msg = if total == 1 {
-                                "Could not forward that message".to_string()
+                                chatter_i18n::tr("Could not forward that message")
                             } else {
-                                format!("Could not forward {failed} of {total} messages")
+                                chatter_i18n::trf(
+                                    "Could not forward {} of {} messages",
+                                    &[&failed, &total],
+                                )
                             };
                             w.set_toast_message(msg.into());
                             w.set_toast_variant("error".into());

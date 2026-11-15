@@ -71,7 +71,14 @@ pub fn timer_short_label(seconds: u32) -> String {
         .copied()
         .find(|(size, _)| seconds % size == 0)
         .unwrap_or((1, "s"));
-    format!("{}{suffix}", seconds / size)
+    let n = seconds / size;
+    match suffix {
+        "w" => chatter_i18n::trf("{}w", &[&n]),
+        "d" => chatter_i18n::trf("{}d", &[&n]),
+        "h" => chatter_i18n::trf("{}h", &[&n]),
+        "m" => chatter_i18n::trf("{}m", &[&n]),
+        _ => chatter_i18n::trf("{}s", &[&n]),
+    }
 }
 
 const TIMER_UPDATE_FLAG: u32 =
@@ -127,7 +134,10 @@ impl DmTimer {
         if self.effective_seconds(now) == 0 {
             return String::new();
         }
-        let ttl = format!("Messages disappear {} after read", timer_label(self.seconds));
+        let ttl = chatter_i18n::trf(
+            "Messages disappear {} after read",
+            &[&timer_label(self.seconds)],
+        );
         if self.enabled_until == 0 {
             return ttl;
         }
@@ -135,10 +145,13 @@ impl DmTimer {
             .enabled_until
             .saturating_sub(now)
             .div_ceil(1_000_000_000);
-        format!(
-            "{ttl} · enabled for {} · {} left",
-            timer_label(self.activation_seconds),
-            timer_short_label(remaining.min(u32::MAX as u64) as u32)
+        chatter_i18n::trf(
+            "{} · enabled for {} · {} left",
+            &[
+                &ttl,
+                &timer_label(self.activation_seconds),
+                &timer_short_label(remaining.min(u32::MAX as u64) as u32),
+            ],
         )
     }
 }

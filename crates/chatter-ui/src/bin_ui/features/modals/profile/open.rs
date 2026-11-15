@@ -62,7 +62,7 @@ pub fn open_user_profile_in_conversation(
         let name = ui_ctx
             .and_then(|ctx| ctx.get_anon_group_member_display_name(&group_id, user_id))
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "Anonymous member".into());
+            .unwrap_or_else(|| chatter_i18n::tr("Anonymous member"));
         w.global::<crate::ModalHostState>()
             .set_profile_initials(initials_from_name(&name).into());
         w.global::<crate::ModalHostState>()

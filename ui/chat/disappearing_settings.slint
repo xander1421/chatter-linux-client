@@ -16,7 +16,7 @@ component TimerOption inherits Rectangle {
     background: touch.pressed ? Colors.surface-hover : transparent;
     accessible-role: button;
     accessible-label: root.label;
-    accessible-description: root.selected ? "Selected" : "";
+    accessible-description: root.selected ? @tr("Selected") : "";
     accessible-action-default => { root.clicked(); }
     KeyFocus { border-radius: parent.border-radius; activate => { root.clicked(); } }
     HorizontalLayout {
@@ -59,8 +59,8 @@ export component DisappearingSettings inherits VerticalLayout {
     changed peer-id => { root.selected-ttl = root.current-ttl; }
     property <string> minutes: "5";
     spacing: Spacing.sm;
-    Text { text: "Message lifetime"; color: Colors.text-primary; font-size: Typography.sm; }
-    Text { text: "Each new message disappears after the selected time once its expiry clock starts."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+    Text { text: @tr("Message lifetime"); color: Colors.text-primary; font-size: Typography.sm; }
+    Text { text: @tr("Each new message disappears after the selected time once its expiry clock starts."); color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
     // A tap applies at once, as in Signal and Telegram; Off turns it off.
     for opt in DisappearingGlobal.options: TimerOption {
         label: opt.label;
@@ -75,10 +75,10 @@ export component DisappearingSettings inherits VerticalLayout {
     // The window only means something while a timer is on.
     if root.selected-ttl != 0: VerticalLayout {
         spacing: Spacing.sm;
-        Text { text: "How long to enable"; color: Colors.text-primary; font-size: Typography.sm; }
-        Text { text: "Current: " + DisappearingGlobal.dm-activation-label + ". The window applies to new messages only."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+        Text { text: @tr("How long to enable"); color: Colors.text-primary; font-size: Typography.sm; }
+        Text { text: @tr("Current: {}. The window applies to new messages only.", DisappearingGlobal.dm-activation-label); color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
         Button {
-            text: "5 minutes";
+            text: @tr("5 minutes");
             variant: root.minutes == "5" ? "primary" : "secondary";
             clicked => {
                 root.minutes = "5";
@@ -86,12 +86,12 @@ export component DisappearingSettings inherits VerticalLayout {
             }
         }
         Input {
-            placeholder: "Custom duration in minutes";
+            placeholder: @tr("Custom duration in minutes");
             text <=> root.minutes;
             accepted => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
         }
         Button {
-            text: "Set duration";
+            text: @tr("Set duration");
             variant: "secondary";
             clicked => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
         }

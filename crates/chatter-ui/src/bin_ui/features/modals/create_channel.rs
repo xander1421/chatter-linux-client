@@ -116,7 +116,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let picked = {
                     let config = chatter_core::media::FilePickerConfig::new()
-                        .with_title("Select channel icon")
+                        .with_title(chatter_i18n::tr("Select channel icon"))
                         .with_filter(chatter_core::media::FileFilter::images());
                     chatter_core::media::FilePicker::pick_file(config).await
                 };
@@ -283,8 +283,9 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak_toast.upgrade() {
                                         w.set_toast_message(
-                                            format!(
-                                                "Channel created, but the AI assistant was not added: {detail}"
+                                            chatter_i18n::trf(
+                                                "Channel created, but the AI assistant was not added: {}",
+                                                &[&detail],
                                             )
                                             .into(),
                                         );
@@ -308,7 +309,10 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if !fence.owns_ui(&w, &ui_ctx) {
                                     notify_background_success(
                                         &w,
-                                        format!("Channel \"{channel_name}\" created."),
+                                        chatter_i18n::trf(
+                                            "Channel \"{}\" created.",
+                                            &[&channel_name],
+                                        ),
                                     );
                                     return;
                                 }
@@ -374,7 +378,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 Err(e) => {
                     tracing::error!(error = %e, provider = %provider_str, "Failed to load AI models");
-                    let error_msg = format!("Failed to load models: {e}");
+                    let error_msg = chatter_i18n::trf("Failed to load models: {}", &[&e]);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.global::<crate::ModalHostState>().set_create_channel_ai_models_loading(false);
@@ -470,7 +474,10 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     if !fence.owns_ui(&w, &ui_ctx) {
                                         notify_background_success(
                                             &w,
-                                            format!("Private group \"{name}\" created."),
+                                            chatter_i18n::trf(
+                                                "Private group \"{}\" created.",
+                                                &[&name],
+                                            ),
                                         );
                                         return;
                                     }
@@ -490,7 +497,12 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     w.global::<crate::ModalHostState>()
                                         .set_create_channel_loading(false);
                                     w.global::<crate::ModalHostState>()
-                                        .set_create_channel_error("Couldn't create the group. Please try again.".into());
+                                        .set_create_channel_error(
+                                            chatter_i18n::tr(
+                                                "Couldn't create the group. Please try again.",
+                                            )
+                                            .into(),
+                                        );
                                 }
                             });
                         }
@@ -634,7 +646,10 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                                 w.global::<crate::ModalHostState>().set_invite_private_group_loading(false);
                                 crate::bin_ui::features::back::close(&w, "invite-private-group");
                             } else {
-                                notify_background_success(&w, "Invitations sent".into());
+                                notify_background_success(
+                                    &w,
+                                    chatter_i18n::tr("Invitations sent"),
+                                );
                             }
                         }
                     });
@@ -647,7 +662,12 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                             if fence.owns_ui(&w, &ui_ctx) {
                                 w.global::<crate::ModalHostState>().set_invite_private_group_loading(false);
                             }
-                            w.set_toast_message("Unable to send all invitations. Check the member list before retrying.".into());
+                            w.set_toast_message(
+                                chatter_i18n::tr(
+                                    "Unable to send all invitations. Check the member list before retrying.",
+                                )
+                                .into(),
+                            );
                             w.set_toast_variant("error".into());
                             w.set_toast_visible(true);
                         }

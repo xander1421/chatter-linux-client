@@ -63,7 +63,7 @@ export component AccountSettings inherits VerticalLayout {
 
     // Section header
     Text {
-        text: "Account";
+        text: @tr("Account");
         color: Colors.text-primary;
         font-size: Typography.xl;
         font-weight: Typography.semibold;
@@ -118,7 +118,7 @@ export component AccountSettings inherits VerticalLayout {
                 // Edit button — beside the name on wide screens
                 if !root.compact-mode: Button {
                     touch: root.mobile-platform;
-                    text: "Edit profile";
+                    text: @tr("Edit profile");
                     variant: "secondary";
                     icon: Icons.edit;
                     clicked => { root.edit-profile-clicked(); }
@@ -127,7 +127,7 @@ export component AccountSettings inherits VerticalLayout {
 
             // Compact: full-width button stacked below
             if root.compact-mode: Button {
-                text: "Edit profile";
+                text: @tr("Edit profile");
                 variant: "secondary";
                 touch: true;
                 icon: Icons.edit;
@@ -140,7 +140,7 @@ export component AccountSettings inherits VerticalLayout {
     Rectangle { height: Spacing.lg; }
 
     Text {
-        text: "Security";
+        text: @tr("Security");
         color: Colors.text-primary;
         font-size: Typography.lg;
         font-weight: Typography.semibold;
@@ -163,11 +163,11 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.lock;
-                title: "Password";
-                detail: "Choose a strong, unique password for your account.";
+                title: @tr("Password");
+                detail: @tr("Choose a strong, unique password for your account.");
                 clickable: false;
                 show-chevron: false;
-                action-label: show-password-form ? "" : "Change";
+                action-label: show-password-form ? "" : @tr("Change");
                 clicked => { show-password-form = true; }
             }
 
@@ -181,7 +181,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Input {
-                    placeholder: "Current password";
+                    placeholder: @tr("Current password");
                     password: true;
                     disabled: root.password-changing;
                     text <=> root.current-password;
@@ -193,7 +193,7 @@ export component AccountSettings inherits VerticalLayout {
                     spacing: Spacing.md;
 
                     Input {
-                        placeholder: "New password";
+                        placeholder: @tr("New password");
                         password: true;
                         disabled: root.password-changing;
                         text <=> root.new-password;
@@ -201,12 +201,12 @@ export component AccountSettings inherits VerticalLayout {
                     }
 
                     Input {
-                        placeholder: "Confirm new password";
+                        placeholder: @tr("Confirm new password");
                         password: true;
                         disabled: root.password-changing;
                         text <=> root.confirm-password;
                         error: root.password-error != "" || (root.confirm-password != "" && root.new-password != root.confirm-password);
-                        error-message: root.password-error != "" ? root.password-error : "Passwords do not match";
+                        error-message: root.password-error != "" ? root.password-error : @tr("Passwords do not match");
                         horizontal-stretch: 1;
                     }
                 }
@@ -217,7 +217,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "ghost";
                         disabled: root.password-changing || root.delete-loading;
                         clicked => {
@@ -230,7 +230,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Save";
+                        text: @tr("Save");
                         variant: "primary";
                         loading: root.password-changing;
                         disabled: root.password-changing || root.current-password == "" ||
@@ -259,11 +259,11 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.shield;
-                title: "Recovery codes";
-                detail: "Lost or used up your codes? Get a new set.";
+                title: @tr("Recovery codes");
+                detail: @tr("Lost or used up your codes? Get a new set.");
                 clickable: false;
                 show-chevron: false;
-                action-label: show-recovery-regen ? "" : "Regenerate";
+                action-label: show-recovery-regen ? "" : @tr("Regenerate");
                 clicked => { show-recovery-regen = true; }
             }
 
@@ -278,14 +278,14 @@ export component AccountSettings inherits VerticalLayout {
 
                 Text {
                     width: parent.width;
-                    text: "Your current recovery codes stop working and a new set is shown once. Enter your password to confirm.";
+                    text: @tr("Your current recovery codes stop working and a new set is shown once. Enter your password to confirm.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
                 }
 
                 Input {
-                    placeholder: "Password";
+                    placeholder: @tr("Password");
                     password: true;
                     disabled: root.recovery-regen-loading;
                     text <=> root.recovery-regen-password;
@@ -299,7 +299,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "ghost";
                         disabled: root.recovery-regen-loading;
                         clicked => {
@@ -310,7 +310,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Regenerate";
+                        text: @tr("Regenerate");
                         variant: "primary";
                         loading: root.recovery-regen-loading;
                         disabled: root.recovery-regen-loading || root.recovery-regen-password == "";
@@ -337,11 +337,11 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.lock;
-                title: "Backup PIN";
-                detail: "Your PIN secures your encrypted key backup.";
+                title: @tr("Backup PIN");
+                detail: @tr("Your PIN secures your encrypted key backup.");
                 clickable: false;
                 show-chevron: false;
-                action-label: show-pin-form ? "" : "Change";
+                action-label: show-pin-form ? "" : @tr("Change");
                 clicked => { show-pin-form = true; }
             }
 
@@ -355,7 +355,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Input {
-                    placeholder: "Current PIN";
+                    placeholder: @tr("Current PIN");
                     password: true;
                     disabled: root.change-pin-loading;
                     text <=> root.change-pin-current;
@@ -365,7 +365,7 @@ export component AccountSettings inherits VerticalLayout {
                     spacing: Spacing.md;
 
                     Input {
-                        placeholder: "New PIN (8+ characters)";
+                        placeholder: @tr("New PIN (8+ characters)");
                         password: true;
                         disabled: root.change-pin-loading;
                         text <=> root.change-pin-new;
@@ -373,12 +373,12 @@ export component AccountSettings inherits VerticalLayout {
                     }
 
                     Input {
-                        placeholder: "Confirm new PIN";
+                        placeholder: @tr("Confirm new PIN");
                         password: true;
                         disabled: root.change-pin-loading;
                         text <=> root.change-pin-confirm;
                         error: root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm;
-                        error-message: "PINs do not match";
+                        error-message: @tr("PINs do not match");
                         horizontal-stretch: 1;
                     }
                 }
@@ -403,7 +403,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "ghost";
                         disabled: root.change-pin-loading;
                         clicked => {
@@ -416,7 +416,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Save";
+                        text: @tr("Save");
                         variant: "primary";
                         loading: root.change-pin-loading;
                         disabled: root.change-pin-loading || root.change-pin-current == "" ||
@@ -445,12 +445,12 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.download;
-                title: "Key backup";
-                detail: "Status: " + (root.backup-status == "backed_up" ? "Backed up" : root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown");
+                title: @tr("Key backup");
+                detail: root.backup-status == "backed_up" ? @tr("Status: Backed up") : root.backup-status == "not_backed_up" ? @tr("Status: Not backed up") : @tr("Status: Unknown");
                 detail-color: root.backup-status == "backed_up" ? Colors.success : root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-secondary;
                 clickable: false;
                 show-chevron: false;
-                action-label: !show-backup-retry && root.backup-status != "backed_up" ? "Retry" : "";
+                action-label: !show-backup-retry && root.backup-status != "backed_up" ? @tr("Retry") : "";
                 clicked => { show-backup-retry = true; }
             }
 
@@ -464,7 +464,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Input {
-                    placeholder: "Enter your PIN to retry backup";
+                    placeholder: @tr("Enter your PIN to retry backup");
                     password: true;
                     disabled: root.backup-retry-loading;
                     text <=> root.backup-retry-pin;
@@ -484,7 +484,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "ghost";
                         disabled: root.backup-retry-loading;
                         clicked => {
@@ -495,7 +495,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Retry";
+                        text: @tr("Retry");
                         variant: "primary";
                         loading: root.backup-retry-loading;
                         disabled: root.backup-retry-loading || root.backup-retry-pin == "";
@@ -530,14 +530,14 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.download;
-                title: "Message backup";
-                detail: "Encrypted message history, conversations, and contacts. File backups need a passphrase; server backups need your PIN.";
+                title: @tr("Message backup");
+                detail: @tr("Encrypted message history, conversations, and contacts. File backups need a passphrase; server backups need your PIN.");
                 clickable: false;
                 show-chevron: false;
             }
 
             Input {
-                placeholder: "File backup passphrase";
+                placeholder: @tr("File backup passphrase");
                 password: true;
                 disabled: root.message-backup-busy;
                 text <=> root.message-backup-passphrase;
@@ -545,7 +545,7 @@ export component AccountSettings inherits VerticalLayout {
 
             if root.message-backup-passphrase == "": Text {
                 width: max(0px, parent.width - parent.padding * 2);
-                text: "Enter a backup passphrase to enable file export and restore.";
+                text: @tr("Enter a backup passphrase to enable file export and restore.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -556,7 +556,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Export to file…";
+                    text: @tr("Export to file…");
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-passphrase == "";
@@ -567,7 +567,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Restore from file…";
+                    text: @tr("Restore from file…");
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-passphrase == "";
@@ -578,7 +578,7 @@ export component AccountSettings inherits VerticalLayout {
             }
 
             Input {
-                placeholder: "PIN (for server backup)";
+                placeholder: @tr("PIN (for server backup)");
                 password: true;
                 disabled: root.message-backup-busy;
                 text <=> root.message-backup-pin;
@@ -586,7 +586,7 @@ export component AccountSettings inherits VerticalLayout {
 
             if root.message-backup-pin == "": Text {
                 width: max(0px, parent.width - parent.padding * 2);
-                text: "Enter your PIN to enable server backup and restore.";
+                text: @tr("Enter your PIN to enable server backup and restore.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -597,7 +597,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Back up to server";
+                    text: @tr("Back up to server");
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-pin == "";
@@ -608,7 +608,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Restore from server";
+                    text: @tr("Restore from server");
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-pin == "";
@@ -620,7 +620,7 @@ export component AccountSettings inherits VerticalLayout {
 
             if root.message-backup-busy || root.message-backup-status != "": Text {
                 width: max(0px, parent.width - parent.padding * 2);
-                text: root.message-backup-busy ? "Working on message backup…" : root.message-backup-status;
+                text: root.message-backup-busy ? @tr("Working on message backup…") : root.message-backup-status;
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -632,7 +632,7 @@ export component AccountSettings inherits VerticalLayout {
     Rectangle { height: Spacing.md; }
 
     Text {
-        text: "Danger zone";
+        text: @tr("Danger zone");
         color: Colors.error;
         font-size: Typography.lg;
         font-weight: Typography.semibold;
@@ -657,14 +657,14 @@ export component AccountSettings inherits VerticalLayout {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "Session on this device";
+                        text: @tr("Session on this device");
                         color: Colors.text-primary;
                         font-size: Typography.sm;
                         font-weight: Typography.medium;
                     }
 
                     Text {
-                        text: "Sign out of your account on this device.";
+                        text: @tr("Sign out of your account on this device.");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
@@ -672,7 +672,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 if !show-logout-confirm && !root.compact-mode: Button {
                     touch: root.mobile-platform;
-                    text: "Log out";
+                    text: @tr("Log out");
                     variant: "destructive";
                     clicked => { show-logout-confirm = true; }
                 }
@@ -681,7 +681,7 @@ export component AccountSettings inherits VerticalLayout {
             // Compact: full-width button stacked below
             if !show-logout-confirm && root.compact-mode: Button {
                 touch: root.mobile-platform;
-                text: "Log out";
+                text: @tr("Log out");
                 variant: "destructive";
                 clicked => { show-logout-confirm = true; }
             }
@@ -692,14 +692,14 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { show-logout-confirm = false; }
                 }
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Log out of this device";
+                    text: @tr("Log out of this device");
                     variant: "destructive";
                     clicked => {
                         show-logout-confirm = false;
@@ -724,14 +724,14 @@ export component AccountSettings inherits VerticalLayout {
                     Text {
                         // Not plain "Account" — that is the
                         // section header a few rows up.
-                        text: "This account";
+                        text: @tr("This account");
                         color: Colors.text-primary;
                         font-size: Typography.sm;
                         font-weight: Typography.medium;
                     }
 
                     Text {
-                        text: "Permanently delete your account and all associated data. This action cannot be undone.";
+                        text: @tr("Permanently delete your account and all associated data. This action cannot be undone.");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         wrap: word-wrap;
@@ -742,7 +742,7 @@ export component AccountSettings inherits VerticalLayout {
                 // (with password) — never deletes directly.
                 if !show-delete-confirm && !root.compact-mode: Button {
                     touch: root.mobile-platform;
-                    text: "Delete account";
+                    text: @tr("Delete account");
                     variant: "destructive";
                     clicked => {
                         root.delete-account-clicked();
@@ -754,7 +754,7 @@ export component AccountSettings inherits VerticalLayout {
             // Compact: full-width button stacked below
             if !show-delete-confirm && root.compact-mode: Button {
                 touch: root.mobile-platform;
-                text: "Delete account";
+                text: @tr("Delete account");
                 variant: "destructive";
                 clicked => {
                     root.delete-account-clicked();
@@ -773,14 +773,14 @@ export component AccountSettings inherits VerticalLayout {
 
                 Text {
                     width: parent.width;
-                    text: "This permanently deletes your account and all associated data. This cannot be undone. Enter your password to confirm.";
+                    text: @tr("This permanently deletes your account and all associated data. This cannot be undone. Enter your password to confirm.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
                 }
 
                 Input {
-                    placeholder: "Password";
+                    placeholder: @tr("Password");
                     password: true;
                     disabled: root.delete-loading;
                     text <=> root.delete-password;
@@ -794,7 +794,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "ghost";
                         disabled: root.delete-loading;
                         clicked => {
@@ -805,7 +805,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Delete forever";
+                        text: @tr("Delete forever");
                         variant: "destructive";
                         loading: root.delete-loading;
                         disabled: root.delete-loading || root.delete-password == "";

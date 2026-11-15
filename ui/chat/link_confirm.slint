@@ -11,7 +11,7 @@ export component LinkConfirm inherits Rectangle {
 
     Modal {
         show: root.url != "";
-        title: "Open this link?";
+        title: @tr("Open this link?");
         modal-width: 440px;
         show-close: false;
         close => { root.cancelled(); }
@@ -33,12 +33,12 @@ export component LinkConfirm inherits Rectangle {
                 spacing: Spacing.sm;
                 alignment: end;
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.cancelled(); }
                 }
                 Button {
-                    text: "Open";
+                    text: @tr("Open");
                     clicked => { root.confirmed(); }
                 }
             }

@@ -113,17 +113,20 @@ pub enum SystemMessage {
 
 impl SystemMessage {
     /// Describe a membership notice in its conversation's terms.
+    ///
+    /// The predicate alone. The chat row and the sidebar compose it with the
+    /// actor via [`Self::notice_line`].
     #[must_use]
     pub fn description_for(&self, conversation_type: &ConversationType) -> String {
         if *conversation_type == ConversationType::AnonGroup {
             match self {
-                Self::UserJoined(_) => "joined the group".to_string(),
-                Self::AnonGroupUserLeft { .. } => "left the group".to_string(),
-                Self::SelfRemoved { .. } => "removed you from the group".to_string(),
-                Self::UserRemoved { removed_name, .. } => format!(
-                    "removed {} from the group",
-                    removed_name.as_deref().unwrap_or("a member")
-                ),
+                Self::UserJoined(_) => chatter_i18n::tr("joined the group"),
+                Self::AnonGroupUserLeft { .. } => chatter_i18n::tr("left the group"),
+                Self::SelfRemoved { .. } => chatter_i18n::tr("removed you from the group"),
+                Self::UserRemoved { removed_name, .. } => match removed_name.as_deref() {
+                    Some(name) => chatter_i18n::trf("removed {} from the group", &[&name]),
+                    None => chatter_i18n::tr("removed a member from the group"),
+                },
                 _ => self.description(),
             }
         } else {
@@ -131,72 +134,168 @@ impl SystemMessage {
         }
     }
 
+    /// "{actor} {predicate}" as one sentence, for the chat row and the sidebar.
+    #[must_use]
+    pub fn notice_line(&self, actor: &str, conversation_type: &ConversationType) -> String {
+        if *conversation_type == ConversationType::AnonGroup {
+            match self {
+                Self::UserJoined(_) => {
+                    return chatter_i18n::trf("{} joined the group", &[&actor]);
+                }
+                Self::AnonGroupUserLeft { .. } => {
+                    return chatter_i18n::trf("{} left the group", &[&actor]);
+                }
+                Self::SelfRemoved { .. } => {
+                    return chatter_i18n::trf("{} removed you from the group", &[&actor]);
+                }
+                Self::UserRemoved { removed_name, .. } => {
+                    return match removed_name.as_deref() {
+                        Some(name) => {
+                            chatter_i18n::trf("{} removed {} from the group", &[&actor, &name])
+                        }
+                        None => chatter_i18n::trf("{} removed a member from the group", &[&actor]),
+                    };
+                }
+                _ => {}
+            }
+        }
+        match self {
+            Self::UserJoined(_) => chatter_i18n::trf("{} joined the channel", &[&actor]),
+            Self::UserLeft(_) => chatter_i18n::trf("{} left the channel", &[&actor]),
+            Self::AnonGroupUserLeft { .. } => chatter_i18n::trf("{} left the group", &[&actor]),
+            Self::UserGone(_) => chatter_i18n::trf("{} is no longer a member", &[&actor]),
+            Self::ChannelCreated => chatter_i18n::trf("{} created the channel", &[&actor]),
+            Self::ChannelPhotoChanged => {
+                chatter_i18n::trf("{} changed the channel photo", &[&actor])
+            }
+            Self::ChannelRenamed { old_name, new_name } => chatter_i18n::trf(
+                "{} renamed the channel from \"{}\" to \"{}\"",
+                &[&actor, &old_name, &new_name],
+            ),
+            Self::UserAdded { added_name, .. } => match added_name.as_deref() {
+                Some(name) => chatter_i18n::trf("{} added {}", &[&actor, &name]),
+                None => chatter_i18n::trf("{} added a member", &[&actor]),
+            },
+            Self::UserRemoved { removed_name, .. } => match removed_name.as_deref() {
+                Some(name) => chatter_i18n::trf("{} removed {}", &[&actor, &name]),
+                None => chatter_i18n::trf("{} removed a member", &[&actor]),
+            },
+            Self::UserBanned { banned_name, .. } => match banned_name.as_deref() {
+                Some(name) => chatter_i18n::trf("{} banned {}", &[&actor, &name]),
+                None => chatter_i18n::trf("{} banned a member", &[&actor]),
+            },
+            Self::OwnershipTransferred { to_name, .. } => match to_name.as_deref() {
+                Some(name) => chatter_i18n::trf("{} made {} the owner", &[&actor, &name]),
+                None => chatter_i18n::trf("{} made a member the owner", &[&actor]),
+            },
+            Self::MadeYouOwner => chatter_i18n::trf("{} made you the owner", &[&actor]),
+            Self::SelfRemoved { .. } => chatter_i18n::trf("{} removed you", &[&actor]),
+            Self::SelfBanned { .. } => chatter_i18n::trf("{} banned you", &[&actor]),
+            Self::NoLongerMember => {
+                chatter_i18n::trf("{} are no longer a member of this channel", &[&actor])
+            }
+            Self::ChannelDeleted => chatter_i18n::trf("{} deleted the channel", &[&actor]),
+            Self::DeliveryIssue => chatter_i18n::trf(
+                "{} sent a message that couldn't be delivered. The secure session has been \
+                 reset — ask them to send it again.",
+                &[&actor],
+            ),
+            Self::IdentityChanged { attributed: true } => chatter_i18n::trf(
+                "{} changed their safety number, so their message could not be read. Usually \
+                 this means they reinstalled the app, but it can also mean someone is \
+                 intercepting this conversation. Messages stay blocked until you accept the \
+                 new safety number.",
+                &[&actor],
+            ),
+            Self::IdentityChanged { attributed: false } => chatter_i18n::trf(
+                "{} may have changed their safety number, so the message could not be read. \
+                 The server says it came from them, but nothing proved that. Compare safety \
+                 numbers over another channel before you accept.",
+                &[&actor],
+            ),
+            Self::Undelivered { preview, .. } => chatter_i18n::trf(
+                "{} did not get your message \"{}\" — it could not be sent after several \
+                 tries. Send it again if it mattered.",
+                &[&actor, &preview],
+            ),
+            Self::DisappearingTimerChanged { seconds: 0 } => {
+                chatter_i18n::trf("{} turned off disappearing messages", &[&actor])
+            }
+            Self::DisappearingTimerChanged { seconds } => chatter_i18n::trf(
+                "{} set disappearing messages to {}",
+                &[&actor, &crate::domain::disappearing::timer_label(*seconds)],
+            ),
+        }
+    }
+
     /// Get a human-readable description of the system message.
     #[must_use]
     pub fn description(&self) -> String {
         match self {
-            Self::UserJoined(_) => "joined the channel".to_string(),
-            Self::UserLeft(_) => "left the channel".to_string(),
-            Self::AnonGroupUserLeft { .. } => "left the group".to_string(),
-            Self::UserGone(_) => "is no longer a member".to_string(),
-            Self::ChannelCreated => "created the channel".to_string(),
-            Self::ChannelPhotoChanged => "changed the channel photo".to_string(),
-            Self::ChannelRenamed { old_name, new_name } => {
-                format!(
-                    "renamed the channel from \"{}\" to \"{}\"",
-                    old_name, new_name
-                )
-            }
-            Self::UserAdded { added_name, .. } => {
-                format!("added {}", added_name.as_deref().unwrap_or("a member"))
-            }
-            Self::UserRemoved { removed_name, .. } => {
-                format!("removed {}", removed_name.as_deref().unwrap_or("a member"))
-            }
-            Self::UserBanned { banned_name, .. } => {
-                format!("banned {}", banned_name.as_deref().unwrap_or("a member"))
-            }
-            Self::OwnershipTransferred { to_name, .. } => {
-                format!(
-                    "made {} the owner",
-                    to_name.as_deref().unwrap_or("a member")
-                )
-            }
-            Self::MadeYouOwner => "made you the owner".to_string(),
-            Self::SelfRemoved { .. } => "removed you".to_string(),
-            Self::SelfBanned { .. } => "banned you".to_string(),
-            Self::NoLongerMember => "are no longer a member of this channel".to_string(),
-            Self::ChannelDeleted => "deleted the channel".to_string(),
+            Self::UserJoined(_) => chatter_i18n::tr("joined the channel"),
+            Self::UserLeft(_) => chatter_i18n::tr("left the channel"),
+            Self::AnonGroupUserLeft { .. } => chatter_i18n::tr("left the group"),
+            Self::UserGone(_) => chatter_i18n::tr("is no longer a member"),
+            Self::ChannelCreated => chatter_i18n::tr("created the channel"),
+            Self::ChannelPhotoChanged => chatter_i18n::tr("changed the channel photo"),
+            Self::ChannelRenamed { old_name, new_name } => chatter_i18n::trf(
+                "renamed the channel from \"{}\" to \"{}\"",
+                &[&old_name, &new_name],
+            ),
+            Self::UserAdded { added_name, .. } => match added_name.as_deref() {
+                Some(name) => chatter_i18n::trf("added {}", &[&name]),
+                None => chatter_i18n::tr("added a member"),
+            },
+            Self::UserRemoved { removed_name, .. } => match removed_name.as_deref() {
+                Some(name) => chatter_i18n::trf("removed {}", &[&name]),
+                None => chatter_i18n::tr("removed a member"),
+            },
+            Self::UserBanned { banned_name, .. } => match banned_name.as_deref() {
+                Some(name) => chatter_i18n::trf("banned {}", &[&name]),
+                None => chatter_i18n::tr("banned a member"),
+            },
+            Self::OwnershipTransferred { to_name, .. } => match to_name.as_deref() {
+                Some(name) => chatter_i18n::trf("made {} the owner", &[&name]),
+                None => chatter_i18n::tr("made a member the owner"),
+            },
+            Self::MadeYouOwner => chatter_i18n::tr("made you the owner"),
+            Self::SelfRemoved { .. } => chatter_i18n::tr("removed you"),
+            Self::SelfBanned { .. } => chatter_i18n::tr("banned you"),
+            Self::NoLongerMember => chatter_i18n::tr("are no longer a member of this channel"),
+            Self::ChannelDeleted => chatter_i18n::tr("deleted the channel"),
             // Rendered as "{sender_name} {description}", so this reads
             // "Alice sent a message that couldn't be delivered. ...".
-            Self::DeliveryIssue => "sent a message that couldn't be delivered. The secure \
-                 session has been reset — ask them to send it again."
-                .to_string(),
+            Self::DeliveryIssue => chatter_i18n::tr(
+                "sent a message that couldn't be delivered. The secure session has been \
+                 reset — ask them to send it again.",
+            ),
             // Also rendered as "{sender_name} {description}". The unattributed
             // wording must not state as fact that this was them: the only thing
             // that named them was the server.
-            Self::IdentityChanged { attributed: true } => "changed their safety number, so \
-                 their message could not be read. Usually this means they reinstalled the \
-                 app, but it can also mean someone is intercepting this conversation. \
-                 Messages stay blocked until you accept the new safety number."
-                .to_string(),
-            Self::IdentityChanged { attributed: false } => "may have changed their safety \
-                 number, so the message could not be read. The server says it came from \
-                 them, but nothing proved that. Compare safety numbers over another channel \
-                 before you accept."
-                .to_string(),
+            Self::IdentityChanged { attributed: true } => chatter_i18n::tr(
+                "changed their safety number, so their message could not be read. Usually \
+                 this means they reinstalled the app, but it can also mean someone is \
+                 intercepting this conversation. Messages stay blocked until you accept the \
+                 new safety number.",
+            ),
+            Self::IdentityChanged { attributed: false } => chatter_i18n::tr(
+                "may have changed their safety number, so the message could not be read. The \
+                 server says it came from them, but nothing proved that. Compare safety \
+                 numbers over another channel before you accept.",
+            ),
             // Rendered as "{member_name} {description}".
-            Self::Undelivered { preview, .. } => format!(
-                "did not get your message \"{preview}\" — it could not be sent after several \
-                 tries. Send it again if it mattered."
+            Self::Undelivered { preview, .. } => chatter_i18n::trf(
+                "did not get your message \"{}\" — it could not be sent after several tries. \
+                 Send it again if it mattered.",
+                &[&preview],
             ),
             // Rendered as "{sender_name} {description}".
             Self::DisappearingTimerChanged { seconds: 0 } => {
-                "turned off disappearing messages".to_string()
+                chatter_i18n::tr("turned off disappearing messages")
             }
-            Self::DisappearingTimerChanged { seconds } => format!(
+            Self::DisappearingTimerChanged { seconds } => chatter_i18n::trf(
                 "set disappearing messages to {}",
-                crate::domain::disappearing::timer_label(*seconds)
+                &[&crate::domain::disappearing::timer_label(*seconds)],
             ),
         }
     }

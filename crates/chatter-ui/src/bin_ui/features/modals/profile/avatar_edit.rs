@@ -144,7 +144,7 @@ fn begin(w: &MainWindow, owner: Owner, save: bool) -> Option<(Request, Option<Ve
         }
         if save {
             let error = if s.picking {
-                Some("Wait for the avatar picker to finish.".to_owned())
+                Some(chatter_i18n::tr("Wait for the avatar picker to finish."))
             } else {
                 s.staged.as_ref().and_then(|v| v.as_ref().err()).cloned()
             };
@@ -181,19 +181,22 @@ fn read_avatar(path: &std::path::Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     const INPUT_CAP: u64 = 32 * 1024 * 1024;
     let file =
-        std::fs::File::open(path).map_err(|_| "Unable to read selected avatar.".to_owned())?;
+        std::fs::File::open(path)
+            .map_err(|_| chatter_i18n::tr("Unable to read selected avatar."))?;
     let mut data = Vec::new();
     file.take(INPUT_CAP + 1)
         .read_to_end(&mut data)
-        .map_err(|_| "Unable to read selected avatar.".to_owned())?;
+        .map_err(|_| chatter_i18n::tr("Unable to read selected avatar."))?;
     if data.len() as u64 > INPUT_CAP {
-        return Err("Choose an image smaller than 32 MiB.".into());
+        return Err(chatter_i18n::tr("Choose an image smaller than 32 MiB."));
     }
     normalize(&data)
 }
 fn normalize(data: &[u8]) -> Result<Vec<u8>, String> {
     let bytes = chatter_core::media::ImageProcessor::process_avatar_from_memory(data)
-        .map_err(|_| "Unable to use this avatar. Choose a valid, smaller image.".to_owned())?;
+        .map_err(|_| {
+            chatter_i18n::tr("Unable to use this avatar. Choose a valid, smaller image.")
+        })?;
     // Server profile admission caps the encrypted blob at the anonymous wire
     // cap: AES-GCM adds a 12-byte nonce and 16-byte tag (profile_crypto).
     admit_wire_size(bytes.len())?;
@@ -204,7 +207,9 @@ fn admit_wire_size(size: usize) -> Result<(), String> {
         .checked_add(12 + 16)
         .is_none_or(|size| size > chatter_core::domain::anon_dm_init::MAX_AVATAR_SIZE)
     {
-        return Err("Avatar is too large to share. Choose a smaller image.".into());
+        return Err(chatter_i18n::tr(
+            "Avatar is too large to share. Choose a smaller image.",
+        ));
     }
     Ok(())
 }
@@ -233,7 +238,7 @@ fn finish_picker(
             }
             Err(_) => reject_picker(
                 w,
-                "Unable to preview this avatar. Choose another image.".into(),
+                chatter_i18n::tr("Unable to preview this avatar. Choose another image."),
             ),
         },
         Err(error) => reject_picker(w, error),
@@ -291,7 +296,7 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
         Ok(profile) => {
             if Some(profile.user_id) != r.owner.user {
                 w.global::<crate::ModalHostState>().set_edit_profile_error(
-                    "Profile response belongs to another account. Retry.".into(),
+                    chatter_i18n::tr("Profile response belongs to another account. Retry.").into(),
                 );
                 return;
             }
@@ -308,7 +313,8 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
                     }
                     Err(_) => {
                         w.global::<crate::ModalHostState>().set_edit_profile_error(
-                            "Unable to display saved avatar. Try another image.".into(),
+                            chatter_i18n::tr("Unable to display saved avatar. Try another image.")
+                                .into(),
                         );
                         return;
                     }
@@ -382,7 +388,7 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let picked = chatter_core::media::FilePicker::pick_file(
                     chatter_core::media::FilePickerConfig::new()
-                        .with_title("Select profile picture")
+                        .with_title(chatter_i18n::tr("Select profile picture"))
                         .with_filter(chatter_core::media::FileFilter::images()),
                 )
                 .await;
@@ -396,7 +402,7 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
                 let result = match picked {
                     Some(path) => tokio::task::spawn_blocking(move || read_avatar(&path))
                         .await
-                        .map_err(|_| "Unable to process selected avatar.".to_owned())
+                        .map_err(|_| chatter_i18n::tr("Unable to process selected avatar."))
                         .and_then(|r| r.map(Some)),
                     None => Ok(None),
                 };

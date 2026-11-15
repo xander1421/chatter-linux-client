@@ -78,10 +78,8 @@ pub fn decrypt_friend_display_name(
             // preserve an old name as though it were still verified. A later
             // authenticated message restates the sender's current profile key.
             tracing::warn!(%friend_id, "stored friend profile key does not decrypt their profile name");
-            return Some(format!(
-                "{} (profile unavailable)",
-                friend_display_name_placeholder(friend_id)
-            ));
+            let placeholder = friend_display_name_placeholder(friend_id);
+            return Some(chatter_i18n::trf("{} (profile unavailable)", &[&placeholder]));
         }
     };
     (!name.is_empty()).then_some(name)
@@ -213,15 +211,18 @@ impl UserError {
     #[must_use]
     pub fn user_message(&self) -> String {
         match self {
-            Self::NotLoggedIn => "You're signed out.".to_string(),
-            Self::UserNotFound(_) => "No account found.".to_string(),
+            Self::NotLoggedIn => chatter_i18n::tr("You're signed out."),
+            Self::UserNotFound(_) => chatter_i18n::tr("No account found."),
             Self::NotAuthorized | Self::Network(NetworkError::PermissionDenied) => {
-                "You can't contact this user.".to_string()
+                chatter_i18n::tr("You can't contact this user.")
             }
-            Self::RequiresAnonMode => "Turn on anonymous mode first.".to_string(),
-            Self::ForbiddenInAnonMode => "Not available in anonymous mode.".to_string(),
+            Self::RequiresAnonMode => chatter_i18n::tr("Turn on anonymous mode first."),
+            Self::ForbiddenInAnonMode => chatter_i18n::tr("Not available in anonymous mode."),
             Self::HandleLookupForbiddenInAnonMode => {
-                "Looking up people by handle isn't available in Shield mode.".to_string()
+                chatter_i18n::tr("Looking up people by handle isn't available in Shield mode.")
+            }
+            Self::InvalidInput(m) if m == "this user has no registered devices" => {
+                chatter_i18n::tr("This user has no registered devices")
             }
             Self::InvalidInput(m) => {
                 let mut c = m.chars();
@@ -229,12 +230,14 @@ impl UserError {
                     .map(|f| f.to_uppercase().chain(c).collect())
                     .unwrap_or_default()
             }
-            Self::Network(NetworkError::NotFound(_)) => "No account found.".to_string(),
+            Self::Network(NetworkError::NotFound(_)) => chatter_i18n::tr("No account found."),
             Self::Network(NetworkError::RateLimited) => {
-                "Too many attempts. Try again in a minute.".to_string()
+                chatter_i18n::tr("Too many attempts. Try again in a minute.")
             }
-            Self::Network(_) => "Couldn't reach the server. Try again.".to_string(),
-            Self::Storage(_) | Self::Crypto(_) => "Something went wrong. Try again.".to_string(),
+            Self::Network(_) => chatter_i18n::tr("Couldn't reach the server. Try again."),
+            Self::Storage(_) | Self::Crypto(_) => {
+                chatter_i18n::tr("Something went wrong. Try again.")
+            }
         }
     }
 }

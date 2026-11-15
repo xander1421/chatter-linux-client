@@ -202,10 +202,12 @@ impl ChatterClient {
                 let msg = &candidate.message;
                 let (preview, thumbnail) = if let Some(item) = &candidate.shared {
                     let label = if item.size_bytes > 0 {
-                        format!(
+                        chatter_i18n::trf(
                             "{} · {}",
-                            item.title,
-                            crate::domain::attachment::format_bytes(item.size_bytes)
+                            &[
+                                &item.title,
+                                &crate::domain::attachment::format_bytes(item.size_bytes),
+                            ],
                         )
                     } else {
                         item.title.clone()
@@ -324,17 +326,17 @@ impl ChatterClient {
                     .as_ref()
                     .map(|sender| {
                         if *sender == self.mesh_local_user_id() {
-                            "You".to_string()
+                            chatter_i18n::tr("You")
                         } else {
                             self.mesh_sender_display_name(sender)
-                                .unwrap_or_else(|| "Unknown peer".to_string())
+                                .unwrap_or_else(|| chatter_i18n::tr("Unknown peer"))
                         }
                     })
-                    .unwrap_or_else(|| "Unknown peer".to_string());
+                    .unwrap_or_else(|| chatter_i18n::tr("Unknown peer"));
                 continue;
             }
             if message.sender_id.is_some() && message.sender_id == self.session_current_user_id() {
-                *name = "You".to_string();
+                *name = chatter_i18n::tr("You");
             } else if message.sender_id.is_none()
                 && message.conversation_type == ConversationType::ServerDm
             {

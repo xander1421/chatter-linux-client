@@ -38,7 +38,7 @@ fn finish_decision(weak: slint::Weak<MainWindow>) {
     });
 }
 
-fn report_failure(weak: &slint::Weak<MainWindow>, message: &'static str) {
+fn report_failure(weak: &slint::Weak<MainWindow>, message: String) {
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
@@ -79,7 +79,10 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     Ok(id) => id,
                     Err(_) => {
                         tracing::error!("Invalid conversation ID: {}", conv_id_str);
-                        report_failure(&weak, "This request is no longer available.");
+                        report_failure(
+                            &weak,
+                            chatter_i18n::tr("This request is no longer available."),
+                        );
                         finish_decision(weak);
                         return;
                     }
@@ -111,7 +114,10 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     }
                     Err(e) => {
                         tracing::error!("Failed to accept private request: {}", e);
-                        report_failure(&weak, "Could not accept the private request. Try again.");
+                        report_failure(
+                            &weak,
+                            chatter_i18n::tr("Could not accept the private request. Try again."),
+                        );
                         finish_decision(weak);
                     }
                 }
@@ -145,7 +151,10 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                     Ok(id) => id,
                     Err(_) => {
                         tracing::error!("Invalid conversation ID: {}", conv_id_str);
-                        report_failure(&weak, "This request is no longer available.");
+                        report_failure(
+                            &weak,
+                            chatter_i18n::tr("This request is no longer available."),
+                        );
                         finish_decision(weak);
                         return;
                     }
@@ -170,7 +179,10 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                     }
                     Err(e) => {
                         tracing::error!("Failed to decline private request: {}", e);
-                        report_failure(&weak, "Could not decline the private request. Try again.");
+                        report_failure(
+                            &weak,
+                            chatter_i18n::tr("Could not decline the private request. Try again."),
+                        );
                         finish_decision(weak);
                     }
                 }
@@ -203,7 +215,10 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
                     Ok(id) => id,
                     Err(_) => {
                         tracing::error!("Invalid conversation ID: {}", conv_id_str);
-                        report_failure(&weak, "This request is no longer available.");
+                        report_failure(
+                            &weak,
+                            chatter_i18n::tr("This request is no longer available."),
+                        );
                         finish_decision(weak);
                         return;
                     }
@@ -225,7 +240,12 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
                                 ui_ctx.block_anon_dm_user(&user_id, Some("Blocked from request"))
                             {
                                 tracing::warn!("Failed to globally block user: {}", e);
-                                report_failure(&weak, "Chat blocked, but the user block failed. Try again from Blocked.");
+                                report_failure(
+                                    &weak,
+                                    chatter_i18n::tr(
+                                        "Chat blocked, but the user block failed. Try again from Blocked.",
+                                    ),
+                                );
                             } else {
                                 tracing::info!(
                                     "Globally blocked user {} from anonymous DMs",
@@ -244,7 +264,10 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
                     }
                     Err(e) => {
                         tracing::error!("Failed to block private request: {}", e);
-                        report_failure(&weak, "Could not block the private request. Try again.");
+                        report_failure(
+                            &weak,
+                            chatter_i18n::tr("Could not block the private request. Try again."),
+                        );
                         finish_decision(weak);
                     }
                 }

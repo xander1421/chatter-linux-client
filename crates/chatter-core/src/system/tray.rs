@@ -197,7 +197,7 @@ impl Tray for TrayServiceImpl {
 
         vec![
             StandardItem {
-                label: format!("Open {}", APP_DISPLAY_NAME),
+                label: chatter_i18n::trf("Open {}", &[&APP_DISPLAY_NAME]),
                 activate: Box::new(move |_| {
                     let _ = event_sender.try_send(TrayMessage::OpenWindow);
                 }),
@@ -206,7 +206,7 @@ impl Tray for TrayServiceImpl {
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Quit".to_string(),
+                label: chatter_i18n::tr("Quit"),
                 activate: Box::new(move |_| {
                     let _ = quit_sender.try_send(TrayMessage::Quit);
                 }),

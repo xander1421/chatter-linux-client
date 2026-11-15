@@ -77,7 +77,7 @@ export component AccountRecoveryPage inherits Rectangle {
 
                 // App logo/title
                 Text {
-                    text: "Chatter";
+                    text: @tr("Chatter");
                     color: Colors.primary;
                     font-size: Typography.xxxl;
                     font-weight: Typography.bold;
@@ -86,7 +86,7 @@ export component AccountRecoveryPage inherits Rectangle {
 
                 // Subtitle
                 Text {
-                    text: "Account recovery";
+                    text: @tr("Account recovery");
                     color: Colors.text-primary;
                     font-size: Typography.xl;
                     font-weight: Typography.semibold;
@@ -94,7 +94,7 @@ export component AccountRecoveryPage inherits Rectangle {
                 }
 
                 Text {
-                    text: "Enter a recovery code to reset your password and PIN";
+                    text: @tr("Enter a recovery code to reset your password and PIN");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -109,17 +109,17 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "Username";
+                        text: @tr("Username");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                     }
 
                     Input {
-                        placeholder: "Enter your username";
+                        placeholder: @tr("Enter your username");
                         text <=> root.username;
                         disabled: root.loading;
                         error: submitted && username-empty;
-                        error-message: submitted && username-empty ? "Username is required" : "";
+                        error-message: submitted && username-empty ? @tr("Username is required") : "";
                     }
                 }
 
@@ -128,24 +128,24 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "Recovery code";
+                        text: @tr("Recovery code");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                     }
 
                     Text {
-                        text: "26 letters and digits 2–9. Spaces and hyphens are OK.";
+                        text: @tr("26 letters and digits 2–9. Spaces and hyphens are OK.");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
 
                     Input {
-                        placeholder: "Enter your recovery code";
+                        placeholder: @tr("Enter your recovery code");
                         password: true;
                         text <=> root.recovery-code;
                         disabled: root.loading;
                         error: submitted && recovery-code-empty;
-                        error-message: submitted && recovery-code-empty ? "Recovery code is required" : "";
+                        error-message: submitted && recovery-code-empty ? @tr("Recovery code is required") : "";
                     }
                 }
 
@@ -157,18 +157,18 @@ export component AccountRecoveryPage inherits Rectangle {
                         spacing: Spacing.xs;
 
                         Text {
-                            text: "New password";
+                            text: @tr("New password");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                         }
 
                         Input {
-                            placeholder: "New password";
+                            placeholder: @tr("New password");
                             password: true;
                             text <=> root.new-password;
                             disabled: root.loading;
                             error: submitted && new-password-empty;
-                            error-message: submitted && new-password-empty ? "Password is required" : "";
+                            error-message: submitted && new-password-empty ? @tr("Password is required") : "";
                         }
                     }
 
@@ -176,22 +176,22 @@ export component AccountRecoveryPage inherits Rectangle {
                         spacing: Spacing.xs;
 
                         Text {
-                            text: "Confirm password";
+                            text: @tr("Confirm password");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                         }
 
                         Input {
-                            placeholder: "Confirm password";
+                            placeholder: @tr("Confirm password");
                             password: true;
                             text <=> root.confirm-password;
                             disabled: root.loading;
                             error: submitted && (confirm-password-empty || (!confirm-password-empty && !passwords-match));
                             error-message: {
                                 if submitted && confirm-password-empty {
-                                    "Please confirm your password"
+                                    @tr("Please confirm your password")
                                 } else if submitted && !passwords-match {
-                                    "Passwords do not match"
+                                    @tr("Passwords do not match")
                                 } else {
                                     ""
                                 }
@@ -205,24 +205,24 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "New recovery PIN";
+                        text: @tr("New recovery PIN");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                     }
 
                     Text {
-                        text: "Use at least 8 characters; keep it somewhere safe.";
+                        text: @tr("Use at least 8 characters; keep it somewhere safe.");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
 
                     Input {
-                        placeholder: "PIN (8+ characters)";
+                        placeholder: @tr("PIN (8+ characters)");
                         password: true;
                         text <=> root.new-pin;
                         disabled: root.loading;
                         error: submitted && new-pin-empty;
-                        error-message: submitted && new-pin-empty ? "PIN is required (8+ characters)" : "";
+                        error-message: submitted && new-pin-empty ? @tr("PIN is required (8+ characters)") : "";
                     }
                 }
 
@@ -268,7 +268,7 @@ export component AccountRecoveryPage inherits Rectangle {
 
                 // Recover Account button
                 Button {
-                    text: loading ? "" : "Recover account";
+                    text: loading ? "" : @tr("Recover account");
                     variant: "primary";
                     loading: root.loading;
                     disabled: root.loading || (submitted && !fields-valid);
@@ -287,7 +287,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Button {
-                        text: "Back to login";
+                        text: @tr("Back to login");
                         variant: "ghost";
                         clicked => { root.go-to-login(); }
                     }

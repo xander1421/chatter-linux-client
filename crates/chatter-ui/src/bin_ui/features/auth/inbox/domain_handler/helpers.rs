@@ -197,7 +197,7 @@ pub(super) fn handle_pin_ui_update(
         } else {
             // Use fallback if message wasn't in the loaded UI messages
             if preview.is_empty() {
-                preview = "[Pinned message]".to_string();
+                preview = chatter_i18n::tr("[Pinned message]");
             }
             w.global::<crate::ChatPane>()
                 .set_pinned_total_count(pinned_count);

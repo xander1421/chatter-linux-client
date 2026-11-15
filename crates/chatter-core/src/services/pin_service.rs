@@ -156,31 +156,42 @@ impl PinService {
             if attachments.len() == 1 {
                 let att = &attachments[0];
                 let category = att.metadata.category();
-                let (emoji, type_name) = match category {
-                    FileCategory::Image if att.metadata.is_gif() => ("GIF", "Animation"),
-                    FileCategory::Image => ("📷", "Photo"),
-                    FileCategory::Video => ("🎬", "Video"),
-                    FileCategory::Audio if att.metadata.waveform_samples.is_some() => {
-                        ("🎤", "Voice message")
+                return match category {
+                    FileCategory::Image if att.metadata.is_gif() => {
+                        chatter_i18n::tr("GIF Animation")
                     }
-                    FileCategory::Audio => ("🎵", "Music"),
-                    FileCategory::Document => ("📄", "Document"),
-                    FileCategory::Code => ("📝", "Code"),
-                    FileCategory::Archive => ("📦", "Archive"),
-                    FileCategory::Other => ("📎", "File"),
+                    FileCategory::Image => chatter_i18n::tr("📷 Photo"),
+                    FileCategory::Video => chatter_i18n::tr("🎬 Video"),
+                    FileCategory::Audio if att.metadata.waveform_samples.is_some() => {
+                        chatter_i18n::tr("🎤 Voice message")
+                    }
+                    FileCategory::Audio => chatter_i18n::tr("🎵 Music"),
+                    FileCategory::Document => chatter_i18n::tr("📄 Document"),
+                    FileCategory::Code => chatter_i18n::tr("📝 Code"),
+                    FileCategory::Archive => chatter_i18n::tr("📦 Archive"),
+                    FileCategory::Other => chatter_i18n::tr("📎 File"),
                 };
-                return format!("{} {}", emoji, type_name);
             } else {
-                return format!("📎 {} attachments", attachments.len());
+                return chatter_i18n::trn(
+                    "📎 {n} attachment",
+                    "📎 {n} attachments",
+                    attachments.len() as u64,
+                    &[],
+                );
             }
         }
 
         // Fallback for unresolved attachment IDs
         if !message.attachments.is_empty() {
             if message.attachments.len() == 1 {
-                "📎 Attachment".to_string()
+                chatter_i18n::tr("📎 Attachment")
             } else {
-                format!("📎 {} attachments", message.attachments.len())
+                chatter_i18n::trn(
+                    "📎 {n} attachment",
+                    "📎 {n} attachments",
+                    message.attachments.len() as u64,
+                    &[],
+                )
             }
         } else {
             message.sidebar_preview(None, None, None)

@@ -732,10 +732,11 @@ pub(crate) fn spawn_notification_listener(
                     if on_screen || muted || client.do_not_disturb() || conversation_preference(&client, &target) != crate::domain::channel::NotificationPreference::All {
                         continue;
                     }
+                    let reaction = chatter_i18n::trf("Reacted {}", &[&emoji]);
                     let _ = notification_service.show_message_notification(
                         &target.conversation_id,
                         None,
-                        Some(&format!("Reacted {}", emoji)),
+                        Some(&reaction),
                         // The reaction lives in the target's conversation.
                         is_private_notification(&target),
                         NotificationPriority::Low,
@@ -776,18 +777,21 @@ pub(crate) fn spawn_notification_listener(
                     // Locked: no device name or model on the lock screen.
                     let locked = notification_service.app_locked();
                     let body = match (device_name.as_deref(), device_info.as_deref()) {
-                        _ if locked => "A new device was just linked to your account.".to_string(),
+                        _ if locked => {
+                            chatter_i18n::tr("A new device was just linked to your account.")
+                        }
                         (Some(name), _) if !name.is_empty() => {
-                            format!("\"{}\" is now linked to your account.", name)
+                            chatter_i18n::trf("\"{}\" is now linked to your account.", &[&name])
                         }
                         (_, Some(info)) if !info.is_empty() => {
-                            format!("{} was just linked to your account.", info)
+                            chatter_i18n::trf("{} was just linked to your account.", &[&info])
                         }
-                        _ => "A new device was just linked to your account.".to_string(),
+                        _ => chatter_i18n::tr("A new device was just linked to your account."),
                     };
                     tracing::info!(device_id, "DeviceLinked notification → surfacing toast");
+                    let title = chatter_i18n::tr("New device linked");
                     let _ = notification_service.show_message(
-                        "New device linked",
+                        &title,
                         &body,
                         NotificationPriority::High,
                     );

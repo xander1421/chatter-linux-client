@@ -66,7 +66,10 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         match tempfile::NamedTempFile::new_in(ui_ctx.directories().cache_dir()) {
                             Ok(file) => file,
                             Err(_) => {
-                                set_message_backup_status(&weak, "Could not prepare the backup file.".into());
+                                set_message_backup_status(
+                                    &weak,
+                                    chatter_i18n::tr("Could not prepare the backup file."),
+                                );
                                 return;
                             }
                         };
@@ -76,20 +79,31 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     {
                         Ok(stats) => stats,
                         Err(_) => {
-                            set_message_backup_status(&weak, "Could not export backup. Check available storage and retry.".into());
+                            set_message_backup_status(
+                                &weak,
+                                chatter_i18n::tr(
+                                    "Could not export backup. Check available storage and retry.",
+                                ),
+                            );
                             return;
                         }
                     };
                     match backup_document::create().await {
                         Ok(true) => {
                             let status = match backup_document::write_document(staged.path()) {
-                                Ok(()) => format!("Backup exported ({} rows)", stats.rows),
-                                Err(_) => "Could not save the backup file.".into(),
+                                Ok(()) => chatter_i18n::trf(
+                                    "Backup exported ({} rows)",
+                                    &[&stats.rows],
+                                ),
+                                Err(_) => chatter_i18n::tr("Could not save the backup file."),
                             };
                             set_message_backup_status(&weak, status);
                         }
                         Ok(false) => cancel_message_backup(&weak),
-                        Err(_) => set_message_backup_status(&weak, "Could not open the backup destination.".into()),
+                        Err(_) => set_message_backup_status(
+                            &weak,
+                            chatter_i18n::tr("Could not open the backup destination."),
+                        ),
                     }
                 }
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -97,8 +111,11 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
                     let Some(path) = FilePicker::save_file(
                         FilePickerConfig::new()
-                            .with_title("Export message backup")
-                            .with_filter(FileFilter::new("Chatter backup", vec!["chbk"]))
+                            .with_title(chatter_i18n::tr("Export message backup"))
+                            .with_filter(FileFilter::new(
+                                chatter_i18n::tr("Chatter backup"),
+                                vec!["chbk"],
+                            ))
                             .with_default_path(
                                 dirs::document_dir()
                                     .or_else(dirs::home_dir)
@@ -115,8 +132,12 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return; // user cancelled
                     };
                     let status = match ui_ctx.export_message_backup(&path, &passphrase).await {
-                        Ok(stats) => format!("Backup exported ({} rows)", stats.rows),
-                        Err(_) => "Could not export backup. Check available storage and retry.".into(),
+                        Ok(stats) => {
+                            chatter_i18n::trf("Backup exported ({} rows)", &[&stats.rows])
+                        }
+                        Err(_) => chatter_i18n::tr(
+                            "Could not export backup. Check available storage and retry.",
+                        ),
                     };
                     set_message_backup_status(&weak, status);
                 }
@@ -152,7 +173,10 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             set_message_backup_status(&weak, status);
                         }
                         Ok(None) => cancel_message_backup(&weak),
-                        Err(_) => set_message_backup_status(&weak, "Could not open the backup file.".into()),
+                        Err(_) => set_message_backup_status(
+                            &weak,
+                            chatter_i18n::tr("Could not open the backup file."),
+                        ),
                     }
                 }
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -160,8 +184,11 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
                     let Some(path) = FilePicker::pick_file(
                         FilePickerConfig::new()
-                            .with_title("Restore message backup")
-                            .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
+                            .with_title(chatter_i18n::tr("Restore message backup"))
+                            .with_filter(FileFilter::new(
+                                chatter_i18n::tr("Chatter backup"),
+                                vec!["chbk"],
+                            )),
                     )
                     .await
                     else {
@@ -190,8 +217,12 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let pin = pin.to_string();
             tokio::spawn(async move {
                 let status = match ui_ctx.enable_server_message_backup(&pin).await {
-                    Ok(stats) => format!("Server backup updated ({} rows)", stats.rows),
-                    Err(_) => "Could not back up messages. Check your connection and PIN, then retry.".into(),
+                    Ok(stats) => {
+                        chatter_i18n::trf("Server backup updated ({} rows)", &[&stats.rows])
+                    }
+                    Err(_) => chatter_i18n::tr(
+                        "Could not back up messages. Check your connection and PIN, then retry.",
+                    ),
                 };
                 set_message_backup_status(&weak, status);
             });
@@ -219,14 +250,15 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn message_restore_status(result: Result<ImportSummary, ClientError>) -> String {
     match result {
-        Ok(summary) => format!(
+        Ok(summary) => chatter_i18n::trf(
             "Restored {} rows ({} already present or kept locally)",
-            summary.rows_inserted, summary.rows_skipped
+            &[&summary.rows_inserted, &summary.rows_skipped],
         ),
-        Err(error) if error.is_unsupported_backup() => {
-            "This backup was made by a newer version of Chatter. Update the app to restore it."
-                .into()
-        }
-        Err(_) => "Could not restore backup. Check your passphrase or PIN, then retry.".into(),
+        Err(error) if error.is_unsupported_backup() => chatter_i18n::tr(
+            "This backup was made by a newer version of Chatter. Update the app to restore it.",
+        ),
+        Err(_) => chatter_i18n::tr(
+            "Could not restore backup. Check your passphrase or PIN, then retry.",
+        ),
     }
 }

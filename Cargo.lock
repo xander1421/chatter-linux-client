@@ -1975,6 +1975,7 @@ dependencies = [
  "cbc",
  "chacha20poly1305 0.11.0",
  "chatter-attachment-crypto",
+ "chatter-i18n",
  "chatter-mesh",
  "chatter-mesh-android",
  "chatter-mesh-ble",
@@ -2082,6 +2083,10 @@ dependencies = [
  "zeroize",
  "zkgroup",
 ]
+
+[[package]]
+name = "chatter-i18n"
+version = "0.0.0"
 
 [[package]]
 name = "chatter-ios"
@@ -2214,6 +2219,7 @@ dependencies = [
  "arboard",
  "chatter-attachment-crypto",
  "chatter-core",
+ "chatter-i18n",
  "chatter-ui-slint",
  "chrono",
  "dirs 7.0.0",
@@ -2242,6 +2248,7 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "slint",
+ "sys-locale",
  "tempfile",
  "tokio",
  "tokio-util",

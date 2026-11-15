@@ -21,36 +21,34 @@ pub fn generate_preview_from_ui_message(msg: &crate::MessageItemData) -> String 
                 let filename = att.filename.to_string();
                 let fname = filename.trim();
                 if !fname.is_empty() && cat != "image" && cat != "video" {
-                    let emoji = match cat.as_str() {
-                        "audio" => "\u{1f3b5}",
-                        "document" => "\u{1f4c4}",
-                        "code" => "\u{1f4dd}",
-                        "archive" => "\u{1f4e6}",
-                        _ => "\u{1f4ce}",
+                    return match cat.as_str() {
+                        "audio" => chatter_i18n::trf("🎵 {}", &[&fname]),
+                        "document" => chatter_i18n::trf("📄 {}", &[&fname]),
+                        "code" => chatter_i18n::trf("📝 {}", &[&fname]),
+                        "archive" => chatter_i18n::trf("📦 {}", &[&fname]),
+                        _ => chatter_i18n::trf("📎 {}", &[&fname]),
                     };
-                    return format!("{} {}", emoji, fname);
                 }
-                let (emoji, name) = match cat.as_str() {
-                    "image" => ("\u{1f4f7}", "Photo"),
-                    "video" => ("\u{1f3ac}", "Video"),
-                    "audio" => ("\u{1f3b5}", "Voice message"),
-                    "document" => ("\u{1f4c4}", "Document"),
-                    "code" => ("\u{1f4dd}", "Code"),
-                    "archive" => ("\u{1f4e6}", "Archive"),
-                    _ => ("\u{1f4ce}", "File"),
+                return match cat.as_str() {
+                    "image" => chatter_i18n::tr("📷 Photo"),
+                    "video" => chatter_i18n::tr("🎬 Video"),
+                    "audio" => chatter_i18n::tr("🎵 Voice message"),
+                    "document" => chatter_i18n::tr("📄 Document"),
+                    "code" => chatter_i18n::tr("📝 Code"),
+                    "archive" => chatter_i18n::tr("📦 Archive"),
+                    _ => chatter_i18n::tr("📎 File"),
                 };
-                return format!("{} {}", emoji, name);
             }
         }
         if count > 1 {
-            return format!("\u{1f4ce} {} attachments", count);
+            return chatter_i18n::trf("📎 {} attachments", &[&count]);
         }
         // Fallback
         if msg.attachment_count == 1 {
-            return "\u{1f4ce} Attachment".to_string();
+            return chatter_i18n::tr("📎 Attachment");
         }
-        return format!("\u{1f4ce} {} attachments", msg.attachment_count);
+        return chatter_i18n::trf("📎 {} attachments", &[&msg.attachment_count]);
     }
 
-    "[Pinned message]".to_string()
+    chatter_i18n::tr("[Pinned message]")
 }

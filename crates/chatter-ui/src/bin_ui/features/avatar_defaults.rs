@@ -15,7 +15,7 @@ pub(crate) fn install(window: &MainWindow) {
                 })
                 .unwrap_or_default();
             AvatarOption {
-                label: choice.label.into(),
+                label: option_label(choice.label).into(),
                 source,
                 color: slint::Color::from_rgb_u8(choice.color[0], choice.color[1], choice.color[2]),
                 initials: choice.image.is_none(),
@@ -37,6 +37,20 @@ pub(crate) fn install(window: &MainWindow) {
     window
         .global::<crate::AuthFlow>()
         .set_register_preset_count(preset_count);
+}
+
+/// Accessible name of a preset. The English lives on `DEFAULT_AVATARS`; this
+/// is the copy the picker reads aloud.
+fn option_label(label: &str) -> String {
+    match label {
+        "Doge" => chatter_i18n::tr("Doge"),
+        "Pepe" => chatter_i18n::tr("Pepe"),
+        "Wojak" => chatter_i18n::tr("Wojak"),
+        "Teal initials" => chatter_i18n::tr("Teal initials"),
+        "Blue initials" => chatter_i18n::tr("Blue initials"),
+        "Purple initials" => chatter_i18n::tr("Purple initials"),
+        other => other.to_string(),
+    }
 }
 
 pub(crate) fn show_register_default(window: &MainWindow, index: usize) {

@@ -24,6 +24,7 @@ pub fn is_timer_notice(message: &Message) -> bool {
 /// largest unit that divides it exactly.
 #[must_use]
 pub fn timer_label(seconds: u32) -> String {
+    // "Off" is compared in channel_settings.slint (`active-label != "Off"`).
     if seconds == 0 {
         return "Off".to_string();
     }
@@ -39,10 +40,12 @@ pub fn timer_label(seconds: u32) -> String {
         .copied()
         .find(|(size, _)| seconds % size == 0)
         .unwrap_or((1, "second"));
-    let n = seconds / size;
-    if n == 1 {
-        format!("1 {name}")
-    } else {
-        format!("{n} {name}s")
+    let n = u64::from(seconds / size);
+    match name {
+        "week" => chatter_i18n::trn("{n} week", "{n} weeks", n, &[]),
+        "day" => chatter_i18n::trn("{n} day", "{n} days", n, &[]),
+        "hour" => chatter_i18n::trn("{n} hour", "{n} hours", n, &[]),
+        "minute" => chatter_i18n::trn("{n} minute", "{n} minutes", n, &[]),
+        _ => chatter_i18n::trn("{n} second", "{n} seconds", n, &[]),
     }
 }

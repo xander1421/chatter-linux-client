@@ -18,14 +18,14 @@ use crate::{
 const VW: f32 = 400.0;
 const VH: f32 = 300.0;
 
-fn kind_str(t: chatter_core::domain::jarvis::EntityType) -> &'static str {
+fn kind_str(t: chatter_core::domain::jarvis::EntityType) -> String {
     use chatter_core::domain::jarvis::EntityType::*;
     match t {
-        Person => "person",
-        Project => "project",
-        Topic => "topic",
-        Organization => "organization",
-        Technology => "technology",
+        Person => chatter_i18n::tr("person"),
+        Project => chatter_i18n::tr("project"),
+        Topic => chatter_i18n::tr("topic"),
+        Organization => chatter_i18n::tr("organization"),
+        Technology => chatter_i18n::tr("technology"),
     }
 }
 
@@ -65,7 +65,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::error!(%error, "failed to clear Jarvis history");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_toast_message("Couldn't clear Jarvis history. Try again.".into());
+                            w.set_toast_message(
+                                chatter_i18n::tr("Couldn't clear Jarvis history. Try again.")
+                                    .into(),
+                            );
                             w.set_toast_variant("error".into());
                             w.set_toast_visible(true);
                         }
@@ -112,19 +115,26 @@ async fn refresh(
     let center_name = selected_id
         .as_deref()
         .and_then(|id| entities.iter().find(|e| e.id.to_string() == id))
-        .map(|e| (e.name.clone(), kind_str(e.entity_type).to_string()));
+        .map(|e| (e.name.clone(), kind_str(e.entity_type)));
 
     let fact_rows: Vec<MemoryFactData> = facts
         .iter()
         .map(|f| MemoryFactData {
             predicate: f.predicate.clone().into(),
             object: f.object.clone().into(),
-            confidence_label: format!("{:.0}%", f.decayed_confidence() * 100.0).into(),
+            confidence_label: {
+                let percent = format!("{:.0}", f.decayed_confidence() * 100.0);
+                chatter_i18n::trf("{}%", &[&percent]).into()
+            },
             since_label: match (f.valid_from, f.valid_until) {
-                (Some(from), None) => format!("since {}", from.format("%Y-%m-%d")).into(),
-                (Some(from), Some(until)) => {
-                    format!("{} → {}", from.format("%Y-%m-%d"), until.format("%Y-%m-%d")).into()
+                (Some(from), None) => {
+                    chatter_i18n::trf("since {}", &[&from.format("%Y-%m-%d")]).into()
                 }
+                (Some(from), Some(until)) => chatter_i18n::trf(
+                    "{} → {}",
+                    &[&from.format("%Y-%m-%d"), &until.format("%Y-%m-%d")],
+                )
+                .into(),
                 _ => "".into(),
             },
             is_current: f.valid_until.is_none(),
@@ -137,11 +147,13 @@ async fn refresh(
             entity_id: e.id.to_string().into(),
             name: e.name.clone().into(),
             kind: kind_str(e.entity_type).into(),
-            mention_label: if e.mention_count == 1 {
-                "1 mention".into()
-            } else {
-                format!("{} mentions", e.mention_count).into()
-            },
+            mention_label: chatter_i18n::trn(
+                "{n} mention",
+                "{n} mentions",
+                u64::from(e.mention_count),
+                &[],
+            )
+            .into(),
             is_selected: selected_id.as_deref() == Some(&e.id.to_string()),
         })
         .collect();

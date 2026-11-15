@@ -16,7 +16,7 @@ export component AppearanceSettings inherits VerticalLayout {
 
     // Section header
     Text {
-        text: "Appearance";
+        text: @tr("Appearance");
         color: Colors.text-primary;
         font-size: Typography.xl;
         font-weight: Typography.semibold;
@@ -38,16 +38,16 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Theme";
+                text: @tr("Theme");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
 
             for opt in [
-                { key: "system", label: "System", hint: "Match this device's light or dark setting" },
-                { key: "light", label: "Light", hint: "" },
-                { key: "dark", label: "Dark", hint: "" },
+                { key: "system", label: @tr("System"), hint: @tr("Match this device's light or dark setting") },
+                { key: "light", label: @tr("theme" => "Light"), hint: "" },
+                { key: "dark", label: @tr("theme" => "Dark"), hint: "" },
             ]: Rectangle {
                 property <bool> selected: Appearance.theme == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -125,6 +125,106 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
 
+    // Language. Kept on this device (core: `app_language`); "system" follows
+    // the OS language when it is one Chatter ships, else English. Names come
+    // from `chatter_i18n::LANGUAGES`, each in its own language.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: @tr("Language");
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            for opt in Appearance.languages: Rectangle {
+                property <bool> selected: Appearance.language == opt.code;
+                property <string> label: opt.code == "system" ? @tr("System") : opt.name;
+                min-height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: language-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: label;
+                accessible-checkable: true;
+                accessible-checked: selected;
+                accessible-action-default => {
+                    Appearance.language = opt.code;
+                    Appearance.language-changed(opt.code);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.language = opt.code;
+                        Appearance.language-changed(opt.code);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Spacing.xxs;
+
+                        Text {
+                            text: label;
+                            color: selected ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: selected ? Typography.medium : Typography.normal;
+                        }
+
+                        if opt.code == "system": Text {
+                            text: @tr("Match this device's language");
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                language-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        Appearance.language = opt.code;
+                        Appearance.language-changed(opt.code);
+                    }
+                }
+            }
+        }
+    }
+
     // Text size. Kept on this device (core: `TextSize`); every
     // Typography step is drawn at `Appearance.text-scale`.
     Rectangle {
@@ -141,17 +241,17 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Text size";
+                text: @tr("Text size");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
 
             for opt in [
-                { key: "small", label: "Small", hint: "" },
-                { key: "default", label: "Default", hint: "Match this device's font size" },
-                { key: "large", label: "Large", hint: "" },
-                { key: "largest", label: "Largest", hint: "" },
+                { key: "small", label: @tr("text size" => "Small"), hint: "" },
+                { key: "default", label: @tr("text size" => "Default"), hint: @tr("Match this device's font size") },
+                { key: "large", label: @tr("text size" => "Large"), hint: "" },
+                { key: "largest", label: @tr("text size" => "Largest"), hint: "" },
             ]: Rectangle {
                 property <bool> selected: Appearance.text-size == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -238,19 +338,19 @@ export component AppearanceSettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Glass effects";
+            accessible-text: @tr("Glass effects");
             checked <=> Appearance.glass-effects;
             toggled(value) => { Appearance.glass-effects-changed(value); }
 
             Text {
-                text: "Glass effects";
+                text: @tr("Glass effects");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: glass-effects-row.label-width;
-                text: "Translucent navigation and controls. Turn off for a simpler appearance and better performance.";
+                text: @tr("Translucent navigation and controls. Turn off for a simpler appearance and better performance.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -267,19 +367,19 @@ export component AppearanceSettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Reduce animations";
+            accessible-text: @tr("Reduce animations");
             checked <=> Appearance.reduce-motion;
             toggled(value) => { Appearance.reduce-motion-changed(value); }
 
             Text {
-                text: "Reduce animations";
+                text: @tr("Reduce animations");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: reduce-motion-row.label-width;
-                text: "Menus, sheets and switches change without motion; loading shimmer, typing dots and the ringing pulse hold still.";
+                text: @tr("Menus, sheets and switches change without motion; loading shimmer, typing dots and the ringing pulse hold still.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -296,13 +396,13 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Animation speed";
+                text: @tr("Animation speed");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
-                text: "How quickly menus and transitions move";
+                text: @tr("How quickly menus and transitions move");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
             }
@@ -322,7 +422,7 @@ export component AppearanceSettings inherits VerticalLayout {
                     border-radius: Spacing.radius-md;
                     background: selected ? Colors.action-fill : Colors.surface-hover;
                     accessible-role: button;
-                    accessible-label: "Animation speed " + opt.label;
+                    accessible-label: @tr("Animation speed {}", opt.label);
                     accessible-checkable: true;
                     accessible-checked: selected;
                     accessible-action-default => {
@@ -372,15 +472,15 @@ export component AppearanceSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Message spacing";
+                text: @tr("Message spacing");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
 
             for opt in [
-                { key: "comfortable", label: "Comfortable", hint: "" },
-                { key: "compact", label: "Compact", hint: "Fit more messages and conversations on screen" },
+                { key: "comfortable", label: @tr("message spacing" => "Comfortable"), hint: "" },
+                { key: "compact", label: @tr("message spacing" => "Compact"), hint: @tr("Fit more messages and conversations on screen") },
             ]: Rectangle {
                 property <bool> selected: Appearance.density == opt.key;
                 min-height: Spacing.touch-target-min;
@@ -478,14 +578,14 @@ export component AppearanceSettings inherits VerticalLayout {
                 spacing: Spacing.sm;
 
                 Text {
-                    text: "Search shortcut";
+                    text: @tr("Search shortcut");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                 }
 
                 Text {
-                    text: "Which keys open search";
+                    text: @tr("Which keys open search");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -498,13 +598,13 @@ export component AppearanceSettings inherits VerticalLayout {
                 alignment: center;
 
                 for opt[idx] in [
-                    { key: "k", label: "Ctrl+K" },
-                    { key: "f", label: "Ctrl+F" },
-                    { key: "both", label: "Both" },
+                    { key: "k", label: @tr("Ctrl+K") },
+                    { key: "f", label: @tr("Ctrl+F") },
+                    { key: "both", label: @tr("search shortcut" => "Both") },
                 ]: Rectangle {
                     property <bool> selected: root.search-shortcut == opt.key;
                     accessible-role: button;
-                    accessible-label: "Search shortcut " + opt.label;
+                    accessible-label: @tr("Search shortcut {}", opt.label);
                     accessible-checkable: true;
                     accessible-checked: selected;
                     accessible-action-default => {

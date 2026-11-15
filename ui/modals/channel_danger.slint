@@ -23,7 +23,7 @@ export component ChannelDangerSection inherits VerticalLayout {
     spacing: Spacing.md;
 
     Text {
-        text: "Danger zone";
+        text: @tr("Danger zone");
         color: Colors.error;
         font-size: Typography.lg;
         font-weight: Typography.semibold;
@@ -54,14 +54,14 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
-                text: root.is-private-group ? "Leave group" : "Leave channel";
+                text: root.is-private-group ? @tr("Leave group") : @tr("Leave channel");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
                 height: self.preferred-height;
             }
             Text {
-                text: root.is-private-group ? "The group and its messages are removed from this device" : "You will lose access to this channel's messages";
+                text: root.is-private-group ? @tr("The group and its messages are removed from this device") : @tr("You will lose access to this channel's messages");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -71,7 +71,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
         Button {
             height: Spacing.touch-target-min;
-            text: "Leave";
+            text: @tr("Leave");
             variant: "secondary";
 
             clicked => {
@@ -86,8 +86,8 @@ export component ChannelDangerSection inherits VerticalLayout {
         Text {
             width: parent.width;
             text: root.is-private-group
-                ? "Leave " + root.channel-name + "? You can only come back if a member invites you again."
-                : "Leave #" + root.channel-name + "? You won't get new messages, and an invite-only channel cannot be rejoined on your own.";
+                ? @tr("Leave {}? You can only come back if a member invites you again.", root.channel-name)
+                : @tr("Leave {}? You won't get new messages, and an invite-only channel cannot be rejoined on your own.", "#" + root.channel-name);
             color: Colors.error;
             font-size: Typography.sm;
             wrap: word-wrap;
@@ -99,7 +99,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
             Button {
                 height: Spacing.touch-target-min;
-                text: "Cancel";
+                text: @tr("Cancel");
                 variant: "secondary";
                 clicked => {
                     root.show-leave-confirm = false;
@@ -108,7 +108,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
             Button {
                 height: Spacing.touch-target-min;
-                text: root.is-private-group ? "Leave group" : "Leave channel";
+                text: root.is-private-group ? @tr("Leave group") : @tr("Leave channel");
                 variant: "destructive";
                 clicked => {
                     root.show-leave-confirm = false;
@@ -130,14 +130,14 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
-                text: "Transfer ownership";
+                text: @tr("Transfer ownership");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
                 height: self.preferred-height;
             }
             Text {
-                text: root.is-private-group ? "Make another member the owner to leave." : "Transfer ownership to leave, or delete the channel.";
+                text: root.is-private-group ? @tr("Make another member the owner to leave.") : @tr("Transfer ownership to leave, or delete the channel.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -147,7 +147,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
         Button {
             height: Spacing.touch-target-min;
-            text: "Transfer…";
+            text: @tr("Transfer…");
             variant: "secondary";
 
             clicked => {
@@ -166,7 +166,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
-                text: root.group-blocked ? "Unblock group" : "Block group";
+                text: root.group-blocked ? @tr("Unblock group") : @tr("Block group");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -174,8 +174,8 @@ export component ChannelDangerSection inherits VerticalLayout {
             }
             Text {
                 text: root.group-blocked
-                    ? "Messages from this group are being dropped on this device"
-                    : "Drop everything this group sends, on this device";
+                    ? @tr("Messages from this group are being dropped on this device")
+                    : @tr("Drop everything this group sends, on this device");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -185,7 +185,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
         Button {
             height: Spacing.touch-target-min;
-            text: root.group-blocked ? "Unblock" : "Block";
+            text: root.group-blocked ? @tr("Unblock") : @tr("Block");
             variant: root.group-blocked ? "secondary" : "destructive";
 
             clicked => { root.block-group(!root.group-blocked); }
@@ -201,14 +201,14 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
-                text: root.is-archived ? "Unarchive channel" : "Archive channel";
+                text: root.is-archived ? @tr("Unarchive channel") : @tr("Archive channel");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
                 height: self.preferred-height;
             }
             Text {
-                text: root.is-archived ? "Make channel active again" : "Archive to hide from active channels";
+                text: root.is-archived ? @tr("Make channel active again") : @tr("Archive to hide from active channels");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -218,7 +218,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
         Button {
             height: Spacing.touch-target-min;
-            text: root.is-archived ? "Unarchive" : "Archive";
+            text: root.is-archived ? @tr("Unarchive") : @tr("Archive");
             variant: "secondary";
 
             clicked => {
@@ -243,7 +243,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
-                text: "Delete channel";
+                text: @tr("Delete channel");
                 color: Colors.error;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -251,7 +251,7 @@ export component ChannelDangerSection inherits VerticalLayout {
                 height: self.preferred-height;
             }
             Text {
-                text: "Deletes the channel and all its messages. Can't be undone.";
+                text: @tr("Deletes the channel and all its messages. Can't be undone.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -261,7 +261,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
         Button {
             height: Spacing.touch-target-min;
-            text: "Delete";
+            text: @tr("Delete");
             variant: "destructive";
 
             clicked => {
@@ -275,7 +275,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
         Text {
             width: parent.width;
-            text: "Delete \"" + root.channel-name + "\" permanently? Every message in it goes with it. This cannot be undone.";
+            text: @tr("Delete \"{}\" permanently? Every message in it goes with it. This cannot be undone.", root.channel-name);
             color: Colors.error;
             font-size: Typography.sm;
             wrap: word-wrap;
@@ -290,7 +290,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             // eye and the thumb land on.
             Button {
                 height: Spacing.touch-target-min;
-                text: "Cancel";
+                text: @tr("Cancel");
                 variant: "secondary";
                 clicked => {
                     root.show-delete-confirm = false;
@@ -299,7 +299,7 @@ export component ChannelDangerSection inherits VerticalLayout {
 
             Button {
                 height: Spacing.touch-target-min;
-                text: "Delete channel";
+                text: @tr("Delete channel");
                 variant: "destructive";
                 clicked => {
                     root.show-delete-confirm = false;

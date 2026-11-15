@@ -329,7 +329,7 @@ fn end_bootstrap_placeholder(w: &MainWindow) {
         == BOOTSTRAP_PLACEHOLDER
     {
         w.global::<crate::ChatPane>()
-            .set_composer_placeholder("Type a message...".into());
+            .set_composer_placeholder(chatter_i18n::tr("Type a message...").into());
     }
 }
 
@@ -608,7 +608,9 @@ pub(super) fn handle_message_send_failed(
         // Only our own bubbles at these timestamps, so another open chat is
         // untouched.
         set_own_status_at(&w, &message_timestamps, "failed");
-        w.set_toast_message("Failed to send message. Please try again.".into());
+        w.set_toast_message(
+            chatter_i18n::tr("Failed to send message. Please try again.").into(),
+        );
         w.set_toast_variant("error".into());
         w.set_toast_visible(true);
     });

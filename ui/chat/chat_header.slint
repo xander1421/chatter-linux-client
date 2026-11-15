@@ -178,7 +178,7 @@ export component ChatHeader inherits GlassSurface {
                 plain: true;
                 backdrop-paused: root.backdrop-paused;
                 icon: Icons.chevron-left;
-                label: "Back";
+                label: @tr("Back");
                 clicked => { root.back-clicked(); }
             }
 
@@ -333,7 +333,7 @@ export component ChatHeader inherits GlassSurface {
                         // them floating at the far end, by the call button.
                         alignment: start;
                         Text {
-                            text: root.mobile && root.is-dm ? "Typing" : root.typing-indicator;
+                            text: root.mobile && root.is-dm ? @tr("Typing") : root.typing-indicator;
                             color: Colors.text-secondary;
                             font-size: Typography.xs;
                             min-width: 0px;
@@ -383,7 +383,7 @@ export component ChatHeader inherits GlassSurface {
                             }
                         }
                         Text {
-                            text: "Secret chat";
+                            text: @tr("Secret chat");
                             color: Colors.success;
                             font-size: Typography.xs;
                             overflow: elide;
@@ -439,7 +439,7 @@ export component ChatHeader inherits GlassSurface {
                     y: (parent.height - self.height) / 2 + (Appearance.reduce-motion ? 0px : 2px * Math.sin((animation-tick() / (250ms / Appearance.animation-speed) + i * 0.3) * 360deg));
                 }
                 Text {
-                    text: "Jarvis is thinking...";
+                    text: @tr("Jarvis is thinking...");
                     font-size: Typography.sm;
                     color: Colors.primary;
                     vertical-alignment: center;
@@ -465,7 +465,7 @@ export component ChatHeader inherits GlassSurface {
                     plain: true;
                     backdrop-paused: root.backdrop-paused;
                     icon: Icons.phone;
-                    label: "Voice call";
+                    label: @tr("Voice call");
                     clicked => { root.voice-call-clicked(); }
                 }
                 // Divider — wide screens only. At 411dp it draws a line between
@@ -488,7 +488,7 @@ export component ChatHeader inherits GlassSurface {
                     plain: true;
                     backdrop-paused: root.backdrop-paused;
                     icon: Icons.user-plus;
-                    label: "Invite";
+                    label: @tr("Invite");
                     clicked => { root.invite-clicked(); }
                 }
                 if root.show-more: HeaderButton {
@@ -496,7 +496,7 @@ export component ChatHeader inherits GlassSurface {
                     plain: true;
                     backdrop-paused: root.backdrop-paused;
                     icon: Icons.more-vertical;
-                    label: "More options";
+                    label: @tr("More options");
                     clicked => { root.more-clicked(root.show-calls, root.show-settings); }
                 }
             }
@@ -518,7 +518,7 @@ export component ChatHeader inherits GlassSurface {
                 plain: true;
                 backdrop-paused: root.backdrop-paused;
                 icon: Icons.chevron-left;
-                label: "Back";
+                label: @tr("Back");
                 clicked => { root.back-clicked(); }
             }
         }
@@ -569,12 +569,12 @@ export component ChatHeader inherits GlassSurface {
                     }
                     Text {
                         text: MeshGlobal.active-kind == "dm"
-                            ? (!MeshGlobal.active-reachable ? "Waiting for a carrier"
-                                : MeshGlobal.active-verified ? "Verified ✓" : "Not verified ›")
-                            : MeshGlobal.active-kind == "private-channel" ? "Private group · invited devices"
+                            ? (!MeshGlobal.active-reachable ? @tr("Waiting for a carrier")
+                                : MeshGlobal.active-verified ? @tr("Verified ✓") : @tr("Not verified ›"))
+                            : MeshGlobal.active-kind == "private-channel" ? @tr("Private group · invited devices")
                             : MeshGlobal.active-kind == "geohash"
-                                ? (MeshGlobal.relay-count == 1 ? "1 relay" : MeshGlobal.relay-count + " relays")
-                                : (MeshGlobal.peer-count == 1 ? "1 nearby" : MeshGlobal.peer-count + " nearby");
+                                ? @tr("{n} relay" | "{n} relays" % MeshGlobal.relay-count)
+                                : @tr("{n} nearby" | "{n} nearby" % MeshGlobal.peer-count);
                         color: MeshGlobal.active-kind == "dm" && MeshGlobal.active-verified ? Colors.success : Colors.text-muted;
                         font-size: Typography.xs;
                         overflow: elide;
@@ -586,7 +586,7 @@ export component ChatHeader inherits GlassSurface {
             TouchArea {
                 mouse-cursor: pointer;
                 accessible-role: button;
-                accessible-label: "Open mesh conversation information";
+                accessible-label: @tr("Open mesh conversation information");
                 accessible-action-default => {
                     if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
                     else { MeshGlobal.open-sheet("mesh-info"); }
@@ -603,7 +603,7 @@ export component ChatHeader inherits GlassSurface {
             plain: true;
             backdrop-paused: root.backdrop-paused;
             icon: Icons.info;
-            label: "Conversation info";
+            label: @tr("Conversation info");
             clicked => {
                 if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
                 else { MeshGlobal.open-sheet("mesh-info"); }

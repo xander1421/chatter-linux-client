@@ -60,7 +60,7 @@ export component SessionsModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Active sessions";
+        title: @tr("Active sessions");
         modal-width: 520px;
         max-modal-height: 720px;
         fill-height: true;
@@ -96,7 +96,7 @@ export component SessionsModal inherits Rectangle {
                         font-size: Typography.sm;
                         wrap: word-wrap;
                     }
-                    if root.revoking: Text { text: "Updating sessions..."; color: Colors.text-secondary; }
+                    if root.revoking: Text { text: @tr("Updating sessions..."); color: Colors.text-secondary; }
 
                     // Header: count + actions. On a phone the two buttons do not fit
                     // beside the count (they clipped to "Link new devic" and
@@ -105,7 +105,7 @@ export component SessionsModal inherits Rectangle {
                         spacing: Spacing.md;
 
                         Text {
-                            text: root.loaded ? root.sessions.length + " active session" + (root.sessions.length != 1 ? "s" : "") : "Sessions not loaded";
+                            text: root.loaded ? @tr("{n} active session" | "{n} active sessions" % root.sessions.length) : @tr("Sessions not loaded");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             vertical-alignment: center;
@@ -113,7 +113,7 @@ export component SessionsModal inherits Rectangle {
                         }
 
                         if !root.narrow: Button {
-                            text: "Link new device";
+                            text: @tr("Link new device");
                             variant: "primary";
                             disabled: root.revoking || root.loading;
                             clicked => { root.link-new-device(); }
@@ -122,7 +122,7 @@ export component SessionsModal inherits Rectangle {
                     }
 
                     if root.narrow: Button {
-                        text: "Link new device";
+                        text: @tr("Link new device");
                         variant: "primary";
                         disabled: root.revoking || root.loading;
                         clicked => { root.link-new-device(); }
@@ -150,7 +150,7 @@ export component SessionsModal inherits Rectangle {
                                 spacing: Spacing.xxs;
 
                                 Text {
-                                    text: link.device-name != "" ? link.device-name : "New device";
+                                    text: link.device-name != "" ? link.device-name : @tr("New device");
                                     color: Colors.text-primary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
@@ -158,7 +158,7 @@ export component SessionsModal inherits Rectangle {
                                 }
 
                                 Text {
-                                    text: "Approved, waiting for it to finish linking (until " + link.expires + ")";
+                                    text: @tr("Approved, waiting for it to finish linking (until {})", link.expires);
                                     color: Colors.text-muted;
                                     font-size: Typography.xs;
                                     wrap: word-wrap;
@@ -169,7 +169,7 @@ export component SessionsModal inherits Rectangle {
                                 alignment: center;
 
                                 Button {
-                                    text: "Cancel";
+                                    text: @tr("Cancel");
                                     variant: "ghost";
                                     disabled: root.revoking || root.loading;
                                     clicked => { root.cancel-pending-link(link.uuid); }
@@ -190,7 +190,7 @@ export component SessionsModal inherits Rectangle {
                             height: 100%;
 
                             Text {
-                                text: "No active sessions found";
+                                text: @tr("No active sessions found");
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
@@ -206,7 +206,7 @@ export component SessionsModal inherits Rectangle {
                             height: 100%;
 
                             Text {
-                                text: "Loading sessions...";
+                                text: @tr("Loading sessions...");
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
@@ -281,7 +281,7 @@ export component SessionsModal inherits Rectangle {
                                                     background: Colors.success.with-alpha(0.2);
 
                                                     current-text := Text {
-                                                        text: "This device";
+                                                        text: @tr("This device");
                                                         color: Colors.success;
                                                         font-size: Typography.xs;
                                                         font-weight: Typography.medium;
@@ -310,21 +310,21 @@ export component SessionsModal inherits Rectangle {
                                             // The server stamps last-active at login, so for
                                             // the device in hand it reads stale; it is in use now.
                                             Text {
-                                                text: session.is-current ? "Active now" : "Last active: " + session.last-used;
+                                                text: session.is-current ? @tr("Active now") : @tr("Last active: {}", session.last-used);
                                                 color: Colors.text-muted;
                                                 font-size: Typography.xs;
                                                 wrap: word-wrap;
                                             }
 
                                             Text {
-                                                text: "Since: " + session.created-at;
+                                                text: @tr("Since: {}", session.created-at);
                                                 color: Colors.text-muted;
                                                 font-size: Typography.xs;
                                                 wrap: word-wrap;
                                             }
 
                                             if root.confirm-revoke-id == session.device-id: Text {
-                                                text: "Revoke this device? It must be linked again.";
+                                                text: @tr("Revoke this device? It must be linked again.");
                                                 color: Colors.error;
                                                 font-size: Typography.xs;
                                                 wrap: word-wrap;
@@ -336,7 +336,7 @@ export component SessionsModal inherits Rectangle {
                                             alignment: center;
 
                                             Button {
-                                                text: root.confirm-revoke-id == session.device-id ? "Confirm" : "Revoke";
+                                                text: root.confirm-revoke-id == session.device-id ? @tr("Confirm") : @tr("Revoke");
                                                 variant: root.confirm-revoke-id == session.device-id ? "destructive" : "ghost";
                                                 disabled: root.revoking || root.loading;
                                                 clicked => {
@@ -351,7 +351,7 @@ export component SessionsModal inherits Rectangle {
                                             }
 
                                             if root.confirm-revoke-id == session.device-id: Button {
-                                                text: "Cancel";
+                                                text: @tr("Cancel");
                                                 variant: "ghost";
                                                 disabled: root.revoking || root.loading;
                                                 clicked => { root.confirm-revoke-id = 0; }
@@ -370,7 +370,7 @@ export component SessionsModal inherits Rectangle {
             // button, and asks first (REVIEW-R4 P1-9). Offered only when it
             // can sign something out: the primary is never revocable from here.
             if root.revocable-count > 0 && !root.confirm-revoke-all: Button {
-                text: "Revoke all other sessions";
+                text: @tr("Revoke all other sessions");
                 variant: "ghost";
                 disabled: root.revoking || root.loading;
                 clicked => {
@@ -383,9 +383,7 @@ export component SessionsModal inherits Rectangle {
                 spacing: Spacing.sm;
 
                 Text {
-                    text: root.revocable-count == 1
-                        ? "Sign out the other linked device? It must be linked again to use this account."
-                        : "Sign out all \{root.revocable-count} other linked devices? They must be linked again to use this account.";
+                    text: @tr("Sign out the other linked device? It must be linked again to use this account." | "Sign out all {n} other linked devices? They must be linked again to use this account." % root.revocable-count);
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     wrap: word-wrap;
@@ -396,13 +394,13 @@ export component SessionsModal inherits Rectangle {
                     alignment: end;
 
                     Button {
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "secondary";
                         clicked => { root.confirm-revoke-all = false; }
                     }
 
                     Button {
-                        text: "Revoke all";
+                        text: @tr("Revoke all");
                         variant: "destructive";
                         disabled: root.revoking || root.loading;
                         clicked => {

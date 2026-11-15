@@ -80,7 +80,10 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 w.global::<crate::ModalHostState>()
                                     .get_profile_user_id().as_str() == profile_user_id.as_str()
                             }) {
-                                w.set_toast_message("Could not load the safety number. Try again.".into());
+                                w.set_toast_message(
+                                    chatter_i18n::tr("Could not load the safety number. Try again.")
+                                        .into(),
+                                );
                                 w.set_toast_variant("error".into());
                                 w.set_toast_visible(true);
                             }
@@ -199,7 +202,9 @@ fn show_verification_error(weak: slint::Weak<MainWindow>, profile_user_id: Strin
         }) {
             w.global::<crate::ModalHostState>()
                 .set_profile_verification_pending(false);
-            w.set_toast_message("Could not change verification. Try again.".into());
+            w.set_toast_message(
+                chatter_i18n::tr("Could not change verification. Try again.").into(),
+            );
             w.set_toast_variant("error".into());
             w.set_toast_visible(true);
         }

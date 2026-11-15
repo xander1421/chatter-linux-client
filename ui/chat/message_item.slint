@@ -88,10 +88,10 @@ export component MessageItem inherits Rectangle {
     // What a screen reader says for the body: the text, else what the first
     // attachment is (a voice note or photo has no text to read).
     property <string> attachment-spoken: root.attachment-count == 0 ? ""
-        : root.attachments[0].category == "audio" ? "Voice message, " + root.attachments[0].duration-display
-        : root.attachments[0].is-image ? (root.attachment-count > 1 ? root.attachment-count + " photos" : "Photo")
-        : root.attachments[0].is-video ? "Video"
-        : "File " + root.attachments[0].filename;
+        : root.attachments[0].category == "audio" ? @tr("Voice message, {}", root.attachments[0].duration-display)
+        : root.attachments[0].is-image ? @tr("Photo" | "{n} photos" % root.attachment-count)
+        : root.attachments[0].is-video ? @tr("Video")
+        : @tr("File {}", root.attachments[0].filename);
     property <string> spoken-content: root.content != "" && root.attachment-spoken != ""
         ? root.attachment-spoken + ", " + root.content
         : root.content != "" ? root.content : root.attachment-spoken;
@@ -497,7 +497,7 @@ export component MessageItem inherits Rectangle {
             alignment: root.is-own ? end : start;
 
             Text {
-                text: "Message deleted";
+                text: @tr("Message deleted");
                 color: Colors.text-muted;
                 font-size: Typography.sm;
                 font-italic: true;
@@ -524,7 +524,7 @@ export component MessageItem inherits Rectangle {
                 fallback-text: root.sender-initials;
                 alt-name: root.sender-name;
                 accessible-role: button;
-                accessible-label: "View profile of " + root.sender-name;
+                accessible-label: @tr("View profile of {}", root.sender-name);
                 accessible-action-default => {
                     if root.selection-mode { root.selection-toggled(root.message-id); }
                     else { root.sender-profile-requested(root.sender-id); }
@@ -572,7 +572,7 @@ export component MessageItem inherits Rectangle {
                     y: 0px;
                     property <bool> bubble-hovered: bubble-touch.has-hover;
                     accessible-role: text;
-                    accessible-label: root.is-own ? "Your message: " + root.spoken-content : root.sender-name + " says: " + root.spoken-content;
+                    accessible-label: root.is-own ? @tr("Your message: {}", root.spoken-content) : @tr("{0} says: {1}", root.sender-name, root.spoken-content);
                     // Selecting messages: say which ones are picked.
                     accessible-checkable: root.selection-mode;
                     accessible-checked: root.selected;
@@ -656,7 +656,7 @@ export component MessageItem inherits Rectangle {
                             : Appearance.reduce-motion ? Colors.primary
                             : Colors.primary.transparentize(0.8);
                         accessible-role: progress-indicator;
-                        accessible-label: failed ? "Not sent" : root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
+                        accessible-label: failed ? @tr("Not sent") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
 
                         // One sweep per 1.4s; `animation-tick` only ticks while
                         // this element exists, i.e. while a send is pending
@@ -789,7 +789,7 @@ export component MessageItem inherits Rectangle {
 
                                 ai-text := Text {
                                     x: 4px;
-                                    text: "AI";
+                                    text: @tr("AI");
                                     color: Colors.text-primary;
                                     font-size: Typography.xs;
                                     font-weight: Typography.semibold;
@@ -818,7 +818,7 @@ export component MessageItem inherits Rectangle {
                             }
 
                             Text {
-                                text: "Thread reply";
+                                text: @tr("Thread reply");
                                 color: Colors.accent-purple;
                                 font-size: Typography.xs;
                                 font-italic: true;

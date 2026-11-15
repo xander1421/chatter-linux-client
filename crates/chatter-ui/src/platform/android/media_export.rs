@@ -20,8 +20,10 @@ impl ExportSession {
             let activity = activity::activity()?;
             let name = env
                 .new_string(name)
-                .map_err(|_| "Filename conversion failed")?;
-            let mime = env.new_string(mime).map_err(|_| "Type conversion failed")?;
+                .map_err(|_| chatter_i18n::tr("Filename conversion failed"))?;
+            let mime = env
+                .new_string(mime)
+                .map_err(|_| chatter_i18n::tr("Type conversion failed"))?;
             let result = env.call_method(
                 activity.as_obj(),
                 jni::strings::JNIString::from(if pdf {
@@ -40,7 +42,7 @@ impl ExportSession {
                 Ok(v) if !v.is_null() => v,
                 _ => {
                     let _ = env.exception_clear();
-                    return Err("Media export unavailable".into());
+                    return Err(chatter_i18n::tr("Media export unavailable"));
                 }
             };
             let array = env
@@ -49,11 +51,12 @@ impl ExportSession {
             let mut values = [0i64; 2];
             if array.get_region(env, 0, &mut values).is_err() {
                 let _ = env.exception_clear();
-                return Err("Invalid export descriptor".into());
+                return Err(chatter_i18n::tr("Invalid export descriptor"));
             }
-            let fd = i32::try_from(values[1]).map_err(|_| "Invalid file descriptor")?;
+            let fd = i32::try_from(values[1])
+                .map_err(|_| chatter_i18n::tr("Invalid file descriptor"))?;
             if values[0] <= 0 || fd < 0 {
-                return Err("Invalid export descriptor".into());
+                return Err(chatter_i18n::tr("Invalid export descriptor"));
             }
             // Kotlin detached this descriptor, transferring its sole ownership to Rust.
             let file = unsafe { File::from_raw_fd(fd) };
@@ -97,7 +100,7 @@ fn finish(token: i64, success: bool) -> Result<(), String> {
         if success && !exception {
             Ok(())
         } else {
-            Err("Media export failed".into())
+            Err(chatter_i18n::tr("Media export failed"))
         }
     })
 }
@@ -133,15 +136,17 @@ pub fn save_attachment(
         if client.auth_snapshot().session_revision == revision {
             Ok(())
         } else {
-            Err("Session changed".to_string())
+            Err(chatter_i18n::tr("Session changed"))
         }
     };
     check()?;
-    let attachment = client.get_attachment(id).ok_or("Attachment unavailable")?;
+    let attachment = client
+        .get_attachment(id)
+        .ok_or_else(|| chatter_i18n::tr("Attachment unavailable"))?;
     // Existing helper authenticates ciphertext before a destination is created.
     let reader = client
         .open_attachment_range(id)
-        .map_err(|_| "Authenticated source unavailable")?;
+        .map_err(|_| chatter_i18n::tr("Authenticated source unavailable"))?;
     check()?;
     let mut session = ExportSession::begin(
         &attachment.metadata.name,
@@ -151,7 +156,7 @@ pub fn save_attachment(
     let output = session
         .file
         .as_mut()
-        .ok_or("Export descriptor unavailable")?;
+        .ok_or_else(|| chatter_i18n::tr("Export descriptor unavailable"))?;
     let mut offset = 0;
     while offset < reader.plaintext_size() {
         check()?;
@@ -159,14 +164,16 @@ pub fn save_attachment(
         let mut chunk = reader.read_range(offset, expected);
         if chunk.len() != expected {
             chunk.zeroize();
-            return Err("Incomplete authenticated read".into());
+            return Err(chatter_i18n::tr("Incomplete authenticated read"));
         }
         let result = output.write_all(&chunk);
         chunk.zeroize();
-        result.map_err(|_| "Download write failed")?;
+        result.map_err(|_| chatter_i18n::tr("Download write failed"))?;
         offset += expected;
     }
-    output.sync_all().map_err(|_| "Unable to finish download")?;
+    output
+        .sync_all()
+        .map_err(|_| chatter_i18n::tr("Unable to finish download"))?;
     check()?;
     session.finish()
 }

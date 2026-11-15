@@ -283,16 +283,20 @@ fn dispatch_notification(
             // Local strings on purpose: the server's title/body are not
             // rendered, so a compromised or buggy server cannot put arbitrary
             // text on the user's desktop. The event type is all we need.
-            let (title, body) = match ty {
-                NotificationType::ChannelInvite => ("Chatter", "You were invited to a channel"),
-                NotificationType::FriendRequest => ("Chatter", "New friend request"),
-                NotificationType::FriendAccepted => ("Chatter", "Friend request accepted"),
-                NotificationType::Integration => ("Chatter", "An integration needs your attention"),
-                _ => ("Chatter", "New notification"),
+            let body = match ty {
+                NotificationType::ChannelInvite => {
+                    chatter_i18n::tr("You were invited to a channel")
+                }
+                NotificationType::FriendRequest => chatter_i18n::tr("New friend request"),
+                NotificationType::FriendAccepted => chatter_i18n::tr("Friend request accepted"),
+                NotificationType::Integration => {
+                    chatter_i18n::tr("An integration needs your attention")
+                }
+                _ => chatter_i18n::tr("New notification"),
             };
             if let Err(e) = notifications.show_message(
-                title,
-                body,
+                "Chatter",
+                &body,
                 crate::domain::notification::NotificationPriority::Normal,
             ) {
                 warn!(ty = ?ty, error = %e, "notification_stream: failed to show notification");

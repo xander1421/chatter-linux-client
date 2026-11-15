@@ -83,13 +83,19 @@ pub enum SecretChatGate {
 
 impl SecretChatGate {
     /// The line that replaces the composer.
-    pub fn notice(&self) -> &'static str {
+    pub fn notice(&self) -> String {
         match self {
-            Self::AwaitingOurAnswer => "Secret chat request. Accept it to reply.",
-            Self::AwaitingPeer => "Waiting for them to accept your secret chat request.",
-            Self::Declined => "This secret chat request was declined.",
-            Self::Superseded => "This secret chat ended when a new request arrived.",
-            Self::Blocked => "You blocked this secret chat.",
+            Self::AwaitingOurAnswer => {
+                chatter_i18n::tr("Secret chat request. Accept it to reply.")
+            }
+            Self::AwaitingPeer => {
+                chatter_i18n::tr("Waiting for them to accept your secret chat request.")
+            }
+            Self::Declined => chatter_i18n::tr("This secret chat request was declined."),
+            Self::Superseded => {
+                chatter_i18n::tr("This secret chat ended when a new request arrived.")
+            }
+            Self::Blocked => chatter_i18n::tr("You blocked this secret chat."),
         }
     }
 

@@ -164,7 +164,7 @@ export component Input inherits Rectangle {
                 width: Spacing.touch-target-min;
                 height: 100%;
                 accessible-role: button;
-                accessible-label: root.show-password ? "Hide password" : "Show password";
+                accessible-label: root.show-password ? @tr("Hide password") : @tr("Show password");
                 accessible-enabled: !root.disabled;
                 accessible-action-default => { if !root.disabled { root.show-password = !root.show-password; } }
 

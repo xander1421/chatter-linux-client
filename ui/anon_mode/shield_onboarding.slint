@@ -27,8 +27,8 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
         spacing: Spacing.sm;
 
         Text {
-            text: !AnonMode.shield-available ? "Shield unavailable"
-                : AnonMode.enabled ? "Shield on" : "Shield off";
+            text: !AnonMode.shield-available ? @tr("Shield unavailable")
+                : AnonMode.enabled ? @tr("Shield on") : @tr("Shield off");
             color: AnonMode.enabled ? Colors.primary : Colors.text-secondary;
             animate color { duration: Materials.motion-standard; easing: Materials.glide; }
             font-size: Typography.sm;
@@ -39,8 +39,8 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
             touch: root.touch;
             icon: Icons.onion;
             label: !AnonMode.shield-available
-                ? "Shield unavailable: this build has no Tor onion service"
-                : AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to connect over Tor";
+                ? @tr("Shield unavailable: this build has no Tor onion service")
+                : AnonMode.enabled ? @tr("Shield on - tap to turn off") : @tr("Shield off - tap to connect over Tor");
             active: AnonMode.enabled;
             enabled: AnonMode.shield-available && !root.busy;
             clicked => { AnonMode.toggle-before-login(); }
@@ -76,7 +76,7 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
         hint := Text {
             y: Spacing.xxs;
             width: parent.width;
-            text: "You'll connect over Tor to the server's onion service, so it never sees your IP address. The first connection can take up to a minute.";
+            text: @tr("You'll connect over Tor to the server's onion service, so it never sees your IP address. The first connection can take up to a minute.");
             color: Colors.text-muted;
             font-size: Typography.xxs;
             wrap: word-wrap;

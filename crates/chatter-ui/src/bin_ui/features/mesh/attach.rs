@@ -46,8 +46,11 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
             w.invoke_finish_attachment_picker(true);
         }
         run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
-            "Files are not sent in private mesh conversations — the file packet is not encrypted."
-                .into()
+            chatter_i18n::tr(
+                "Files are not sent in private mesh conversations — \
+                 the file packet is not encrypted.",
+            )
+            .into(),
         ));
         return true;
     }
@@ -88,7 +91,7 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
                 // no server to blame and no retry queue to hide it in, so a
                 // refusal has to be said out loud.
                 tracing::warn!(%error, "mesh: file not sent");
-                let notice = format!("Not sent: {error}");
+                let notice = chatter_i18n::trf("Not sent: {}", &[&error]);
                 run_ui!(weak, |w| w
                     .global::<MeshGlobal>()
                     .set_notice(notice.clone().into()));
@@ -110,7 +113,7 @@ async fn pick_one() -> Vec<PathBuf> {
     use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
 
     let config = FilePickerConfig::new()
-        .with_title("Send over the mesh")
+        .with_title(chatter_i18n::tr("Send over the mesh"))
         .with_filter(FileFilter::all())
         .with_filter(FileFilter::images())
         .with_filter(FileFilter::documents())

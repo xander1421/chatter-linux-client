@@ -63,7 +63,7 @@ export component MessageActions inherits Rectangle {
 
             // Reply button
             IconAction {
-                label: "Reply to message";
+                label: @tr("Reply to message");
                 icon: Icons.reply;
                 clicked => {
                         root.reply-clicked(root.sender-id, root.timestamp-ns);
@@ -72,7 +72,7 @@ export component MessageActions inherits Rectangle {
 
             // React button
             react-btn := IconAction {
-                label: "Add reaction";
+                label: @tr("Add reaction");
                 icon: Icons.smile;
                 clicked => {
                         root.react-clicked(root.sender-id, root.timestamp-ns,
@@ -86,7 +86,7 @@ export component MessageActions inherits Rectangle {
             // the "N replies" badge (rendered `if reply-count > 0`),
             // so a message with no replies could never START a thread.
             if root.can-thread: thread-btn := IconAction {
-                label: "Reply in thread";
+                label: @tr("Reply in thread");
                 icon: Icons.message-circle;
                 clicked => {
                         root.thread-clicked(root.message-id);
@@ -95,7 +95,7 @@ export component MessageActions inherits Rectangle {
 
             // More button
             more-btn := IconAction {
-                label: "More message actions";
+                label: @tr("More message actions");
                 icon: Icons.more-horizontal;
                 clicked => {
                         root.request-menu(more-btn.absolute-position.x,

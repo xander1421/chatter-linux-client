@@ -52,7 +52,10 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.global::<crate::AuthFlow>()
                                 .set_login_identity_reset_available(false);
                             w.global::<crate::AuthFlow>().set_login_error(
-                                "New encryption keys published. Sign in again to continue.".into(),
+                                chatter_i18n::tr(
+                                    "New encryption keys published. Sign in again to continue.",
+                                )
+                                .into(),
                             );
                         } else {
                             w.global::<crate::AuthFlow>()
@@ -134,14 +137,19 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.global::<crate::AuthFlow>()
                 .set_login_identity_reset_available(false);
             w.global::<crate::AnonMode>().set_onboarding_progress(
-                if shield { super::shield::CONNECTING_OVER_TOR } else { "" }.into(),
+                if shield {
+                    super::shield::connecting_over_tor()
+                } else {
+                    String::new()
+                }
+                .into(),
             );
         }
         tokio::spawn(async move {
             // Update server URL and connect if different from current
             if ui_ctx.endpoint() != server_url {
                 if let Err(e) = ui_ctx.set_server_url(&server_url) {
-                    let error_msg = format!("Invalid Server URL: {}", e);
+                    let error_msg = chatter_i18n::trf("Invalid Server URL: {}", &[&e]);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
@@ -173,7 +181,9 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.global::<crate::AnonMode>()
-                            .set_onboarding_progress("Connected over Tor. Signing in…".into());
+                            .set_onboarding_progress(
+                                chatter_i18n::tr("Connected over Tor. Signing in…").into(),
+                            );
                     }
                 });
             }

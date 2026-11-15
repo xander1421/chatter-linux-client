@@ -57,7 +57,10 @@ fn wire_scan(window: &MainWindow) {
             w.global::<crate::AuthFlow>().set_link_approve_error("".into());
             if !permissions::has(permissions::CAMERA) {
                 w.global::<crate::AuthFlow>().set_link_approve_status(
-                    "Chatter uses the camera only to read the QR code on your new device.".into(),
+                    chatter_i18n::tr(
+                        "Chatter uses the camera only to read the QR code on your new device.",
+                    )
+                    .into(),
                 );
             }
         }
@@ -74,8 +77,10 @@ fn wire_scan(window: &MainWindow) {
                     }
                     qr_scanner::ScanOutcome::Cancelled => {}
                     qr_scanner::ScanOutcome::CameraDenied => w.global::<crate::AuthFlow>().set_link_approve_error(
-                        "Camera access is off. Paste the link instead, or allow the camera for Chatter in system settings."
-                            .into(),
+                        chatter_i18n::tr(
+                            "Camera access is off. Paste the link instead, or allow the camera for Chatter in system settings.",
+                        )
+                        .into(),
                     ),
                 }
             });
@@ -182,7 +187,9 @@ fn wire_submit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: Pendin
                 None => {
                     if let Some(w) = weak.upgrade() {
                         w.global::<crate::AuthFlow>()
-                            .set_link_approve_error("Paste a link URL first.".into());
+                            .set_link_approve_error(
+                                chatter_i18n::tr("Paste a link URL first.").into(),
+                            );
                     }
                     return;
                 }
@@ -193,7 +200,7 @@ fn wire_submit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: Pendin
                 w.global::<crate::AuthFlow>()
                     .set_link_approve_error("".into());
                 w.global::<crate::AuthFlow>()
-                    .set_link_approve_status("Authorizing…".into());
+                    .set_link_approve_status(chatter_i18n::tr("Authorizing…").into());
             }
 
             crate::rt_handle().spawn(async move {
@@ -208,17 +215,18 @@ fn wire_submit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: Pendin
                     w.global::<crate::AuthFlow>().set_link_approve_busy(false);
                     match result {
                         Ok(approved) => {
-                            let name = approved
-                                .device_name
-                                .unwrap_or_else(|| "the new device".to_string());
                             // Close and confirm with a toast — the app's pattern
                             // for a finished modal action (create-channel,
                             // forward). Leaving it open on "Linked …" read as
                             // stuck (§138). `close` is a no-op if the user
                             // already left the dialog.
+                            let message = match approved.device_name.as_deref() {
+                                Some(name) => chatter_i18n::trf("Linked {}.", &[&name]),
+                                None => chatter_i18n::tr("Linked the new device."),
+                            };
                             reset(&w, &pending_for_ui);
                             crate::bin_ui::features::back::close(&w, "link-device-approve");
-                            w.set_toast_message(format!("Linked {name}.").into());
+                            w.set_toast_message(message.into());
                             w.set_toast_variant("success".into());
                             w.set_toast_visible(true);
                         }
