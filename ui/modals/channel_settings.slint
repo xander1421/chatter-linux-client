@@ -124,9 +124,9 @@ export component ChannelSettingsModal inherits Rectangle {
     // Private group helper
     property <bool> is-private-group: channel-type == "private-group";
     property <string> member-summary: (root.member-count > 0 || root.invited-count > 0
-        ? root.member-count + (root.member-count == 1 ? " member" : " members") : "")
+        ? @tr("{n} member" | "{n} members" % root.member-count) : "")
         + (root.is-private-group && root.invited-count > 0
-            ? " · " + root.invited-count + " invited" : "");
+            ? " · " + @tr("{n} invited" | "{n} invited" % root.invited-count) : "");
 
     // Channels with a signed membership log get the Access pane.
     property <bool> has-access-pane: root.channel-type == "public" || root.channel-type == "private";
@@ -376,7 +376,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     height: Spacing.touch-target-min;
                                     background: transparent;
                                     Button {
-                                        width: 220px;
+                                        width: min(parent.width, max(220px, self.preferred-width));
                                         height: Spacing.touch-target-min;
                                         x: (parent.width - self.width) / 2;
                                         text: root.is-private-group ? @tr("Edit group info") : @tr("Edit channel info");
@@ -544,7 +544,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             // Disappearing messages. A channel's timer is fixed
                             // when it is created (the server refuses to change
                             // it), so this is information, not a control.
-                            if !root.is-private-group && DisappearingGlobal.active-label != "Off": HorizontalLayout {
+                            if !root.is-private-group && DisappearingGlobal.header-label != "": HorizontalLayout {
                                 spacing: Spacing.sm;
                                 Image {
                                     source: Icons.clock;

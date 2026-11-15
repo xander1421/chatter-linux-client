@@ -292,11 +292,7 @@ pub(crate) async fn refresh_private_requests(
             display_name: peer_name,
             username: "Private".to_string(),
             avatar_bytes: ui_ctx.anon_dm_avatar(&dm),
-            secondary_text: dm
-                .created_at
-                .with_timezone(&chrono::Local)
-                .format("%b %d, %H:%M")
-                .to_string(),
+            secondary_text: chatter_core::util::time::format_date_time(dm.created_at),
         });
     }
 

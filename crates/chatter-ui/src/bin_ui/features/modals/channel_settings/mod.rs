@@ -478,11 +478,7 @@ pub fn open_channel_settings(
             };
 
         let can_leave = ui_ctx.can_leave_channel(&channel_id);
-        let created_at = channel
-            .created_at
-            .with_timezone(&chrono::Local)
-            .format("%b %d, %Y")
-            .to_string();
+        let created_at = chatter_core::util::time::format_date(channel.created_at);
         let channel_type_str = match channel.channel_type {
             ChannelType::Public => "public",
             ChannelType::Private => "private",

@@ -45,10 +45,12 @@ export component NotificationsSettings inherits VerticalLayout {
             toggled(value) => { NotificationDelivery.push-enabled-changed(value); }
 
             Text {
+                width: push-row.label-width;
                 text: @tr("Account push notifications");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: push-row.label-width;
@@ -185,21 +187,23 @@ export component NotificationsSettings inherits VerticalLayout {
     // Sound and vibration. On Android both belong to the
     // OS notification channel, so the row opens its page;
     // on desktop it is a switch the notifier honours.
-    if NotificationSound.mode == "system": Rectangle {
+    if NotificationSound.mode == "system": system-sound-card := Rectangle {
         border-radius: Spacing.radius-lg;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
-        min-height: Spacing.touch-target-min;
+        // The wrapped description needs a width to report its real height.
+        property <length> label-width: max(0px, self.width - Spacing.md * 3 - 18px);
+        min-height: max(Spacing.touch-target-min, system-sound-layout.preferred-height);
         background: sound-touch.has-hover ? Colors.surface-hover : Colors.surface;
         accessible-role: button;
         accessible-label: @tr("Sound and vibration");
         accessible-action-default => { NotificationSound.open-system-settings(); }
         KeyFocus { border-radius: parent.border-radius; activate => { NotificationSound.open-system-settings(); } }
 
-        HorizontalLayout {
+        system-sound-layout := HorizontalLayout {
             padding: Spacing.md;
             spacing: Spacing.md;
 
@@ -208,12 +212,15 @@ export component NotificationsSettings inherits VerticalLayout {
                 spacing: Spacing.xxs;
 
                 Text {
+                    width: system-sound-card.label-width;
+                    wrap: word-wrap;
                     text: @tr("Sound and vibration");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                 }
                 Text {
+                    width: system-sound-card.label-width;
                     text: @tr("Opens this device's settings for message notifications");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -257,10 +264,12 @@ export component NotificationsSettings inherits VerticalLayout {
             toggled(value) => { NotificationSound.enabled-changed(value); }
 
             Text {
+                width: sound-row.label-width;
                 text: @tr("Notification sound");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: sound-row.label-width;

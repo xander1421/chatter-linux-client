@@ -155,12 +155,12 @@ export component MeshPeerSheet inherits Rectangle {
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.share-identity(MeshGlobal.sheet-peer-id); } }
                                 if root.active-dm: Rectangle { height: 1px; background: Colors.divider; }
-                                if root.active-dm: ToggleRow {
+                                if root.active-dm: signal-row := ToggleRow {
                                     checked <=> MeshGlobal.active-signal-enabled;
                                     accessible-text: @tr("Use Signal encryption");
                                     row-padding: Spacing.md;
-                                    Text { text: @tr("Use Signal encryption"); color: Colors.text-primary;
-                                        font-size: Typography.base; }
+                                    Text { width: signal-row.label-width; text: @tr("Use Signal encryption"); color: Colors.text-primary;
+                                        font-size: Typography.base; wrap: word-wrap; }
                                     toggled(value) => { MeshGlobal.toggle-signal-mesh(MeshGlobal.active-scope); }
                                 }
                             }

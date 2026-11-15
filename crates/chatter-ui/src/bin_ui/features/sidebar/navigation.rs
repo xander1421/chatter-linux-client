@@ -253,12 +253,7 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
                                 username: chatter_i18n::tr("Private").into(),
                                 avatar_source: slint::Image::default(),
                                 has_avatar: false,
-                                sent_at: dm
-                                    .created_at
-                                    .with_timezone(&chrono::Local)
-                                    .format("%b %d, %H:%M")
-                                    .to_string()
-                                    .into(),
+                                sent_at: chatter_core::util::time::format_date_time(dm.created_at).into(),
                                 note: "".into(),
                             }
                         })
@@ -307,12 +302,7 @@ pub(crate) fn load_pending_message_requests_count(
                     username: chatter_i18n::tr("Private").into(),
                     avatar_source: slint::Image::default(),
                     has_avatar: false,
-                    sent_at: dm
-                        .created_at
-                        .with_timezone(&chrono::Local)
-                        .format("%b %d, %H:%M")
-                        .to_string()
-                        .into(),
+                    sent_at: chatter_core::util::time::format_date_time(dm.created_at).into(),
                     note: "".into(),
                 }
             })

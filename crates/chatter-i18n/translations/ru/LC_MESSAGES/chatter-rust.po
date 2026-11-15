@@ -3943,3 +3943,7 @@ msgstr "Не удалось выполнить действие с канало�
 #: crates/chatter-core/src/client/channels.rs
 msgid "Channel operation failed: {}"
 msgstr "Не удалось выполнить действие с каналом: {}"
+
+#: crates/chatter-core/src/client/activity.rs
+msgid "Registered"
+msgstr "Зарегистрировано"

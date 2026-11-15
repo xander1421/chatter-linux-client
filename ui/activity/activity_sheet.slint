@@ -143,6 +143,7 @@ export component ActivitySheet inherits Rectangle {
                     accessible-action-default => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } }
                     KeyFocus { border-radius: parent.border-radius; activate => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } } }
                     Text { text: @tr("Mark all read"); color: ActivityGlobal.unread-count > 0 ? Colors.primary : Colors.text-muted;
+                        width: parent.width; wrap: word-wrap;
                         font-size: Typography.xs; font-weight: Typography.semibold;
                         horizontal-alignment: right; vertical-alignment: center; }
                     TouchArea { enabled: ActivityGlobal.unread-count > 0; mouse-cursor: pointer;
@@ -155,7 +156,7 @@ export component ActivitySheet inherits Rectangle {
                 activity-content := VerticalLayout {
                     width: parent.width; spacing: Spacing.lg; padding-bottom: Spacing.xl;
                     VerticalLayout { spacing: Spacing.xs;
-                        Text { text: "STATUS"; color: Colors.text-muted; font-size: Typography.xs;
+                        Text { text: @tr("STATUS"); color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg; clip: true;
                             VerticalLayout {
@@ -168,7 +169,7 @@ export component ActivitySheet inherits Rectangle {
                                 StatusRow { title: root.connection-status == "connected" ? @tr("Connected since") : @tr("Last connected"); value: ActivityGlobal.last-connected; touch: root.touch; tint: Colors.info; }
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: @tr("push notifications" => "Push"); value: ActivityGlobal.push-status; touch: root.touch;
-                                    tint: ActivityGlobal.push-status == "Registered" ? Colors.success : Colors.warning; }
+                                    tint: ActivityGlobal.push-registered ? Colors.success : Colors.warning; }
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: @tr("Mesh"); value: root.mesh-value; touch: root.touch;
                                     tint: !MeshGlobal.enabled || !MeshGlobal.mesh-on ? Colors.text-muted
@@ -190,7 +191,7 @@ export component ActivitySheet inherits Rectangle {
                         }
                     }
                     VerticalLayout { spacing: Spacing.xs;
-                        Text { text: "ACTIVITY"; color: Colors.text-muted; font-size: Typography.xs;
+                        Text { text: @tr("ACTIVITY"); color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         if ActivityGlobal.loading: Text {
                             text: @tr("Loading activity…"); color: Colors.text-muted;

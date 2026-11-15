@@ -30,11 +30,7 @@ fn format_created_at(created_at: u64) -> String {
     let secs = (created_at / 1_000_000_000) as i64;
     let nanos = (created_at % 1_000_000_000) as u32;
     chrono::DateTime::from_timestamp(secs, nanos)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%b %d, %H:%M")
-                .to_string()
-        })
+        .map(chatter_core::util::time::format_date_time)
         .unwrap_or_default()
 }
 

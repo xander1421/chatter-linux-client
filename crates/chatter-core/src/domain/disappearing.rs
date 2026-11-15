@@ -24,9 +24,8 @@ pub fn is_timer_notice(message: &Message) -> bool {
 /// largest unit that divides it exactly.
 #[must_use]
 pub fn timer_label(seconds: u32) -> String {
-    // "Off" is compared in channel_settings.slint (`active-label != "Off"`).
     if seconds == 0 {
-        return "Off".to_string();
+        return chatter_i18n::tr("Off");
     }
     const UNITS: [(u32, &str); 5] = [
         (604_800, "week"),

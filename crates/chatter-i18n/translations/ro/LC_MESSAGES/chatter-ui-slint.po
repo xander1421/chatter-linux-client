@@ -5964,3 +5964,25 @@ msgstr "Chatter nu poate porni"
 #: ui/startup_error.slint:44
 msgid "Hide details"
 msgstr "Ascunde detaliile"
+
+#: ui/chat/chat_header.slint ui/modals/channel_settings.slint
+msgid "{n} member"
+msgid_plural "{n} members"
+msgstr[0] "{n} membru"
+msgstr[1] "{n} membri"
+msgstr[2] "{n} de membri"
+
+#: ui/chat/chat_header.slint ui/modals/channel_settings.slint
+msgid "{n} invited"
+msgid_plural "{n} invited"
+msgstr[0] "{n} invitat"
+msgstr[1] "{n} invitați"
+msgstr[2] "{n} de invitați"
+
+#: ui/activity/activity_sheet.slint
+msgid "STATUS"
+msgstr "STARE"
+
+#: ui/activity/activity_sheet.slint
+msgid "ACTIVITY"
+msgstr "ACTIVITATE"

@@ -394,8 +394,8 @@ export component ChatHeader inherits GlassSurface {
                     if root.typing-indicator == "" && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
                         // The public badge (core-worded) rides on the count
                         // line, so every open public channel says it.
-                        text: (root.member-count == 1 ? "1 member" : "\{root.member-count} members")
-                            + (root.is-private-group && root.invited-count > 0 ? (root.invited-count == 1 ? " · 1 invited" : " · \{root.invited-count} invited") : "")
+                        text: @tr("{n} member" | "{n} members" % root.member-count)
+                            + (root.is-private-group && root.invited-count > 0 ? " · " + @tr("{n} invited" | "{n} invited" % root.invited-count) : "")
                             + (root.is-channel && MembershipGlobal.public-badge != "" ? " \u{b7} " + MembershipGlobal.public-badge : "");
                         color: Colors.text-muted;
                         font-size: Typography.xs;

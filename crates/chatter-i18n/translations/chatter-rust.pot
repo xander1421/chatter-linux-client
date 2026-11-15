@@ -3420,3 +3420,7 @@ msgstr ""
 #: crates/chatter-core/src/client/channels.rs
 msgid "Channel operation failed: {}"
 msgstr ""
+
+#: crates/chatter-core/src/client/activity.rs
+msgid "Registered"
+msgstr ""

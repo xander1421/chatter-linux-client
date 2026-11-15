@@ -343,10 +343,12 @@ export component AppearanceSettings inherits VerticalLayout {
             toggled(value) => { Appearance.glass-effects-changed(value); }
 
             Text {
+                width: glass-effects-row.label-width;
                 text: @tr("Glass effects");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: glass-effects-row.label-width;
@@ -372,10 +374,12 @@ export component AppearanceSettings inherits VerticalLayout {
             toggled(value) => { Appearance.reduce-motion-changed(value); }
 
             Text {
+                width: reduce-motion-row.label-width;
                 text: @tr("Reduce animations");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: reduce-motion-row.label-width;

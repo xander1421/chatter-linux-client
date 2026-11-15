@@ -4009,3 +4009,7 @@ msgstr "Kanalvorgang fehlgeschlagen ({})."
 #: crates/chatter-core/src/client/channels.rs
 msgid "Channel operation failed: {}"
 msgstr "Kanalvorgang fehlgeschlagen: {}"
+
+#: crates/chatter-core/src/client/activity.rs
+msgid "Registered"
+msgstr "Registriert"

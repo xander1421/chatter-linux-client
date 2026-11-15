@@ -12,6 +12,8 @@ use super::ChatterClient;
 /// Device facts for the Activity Center. Never exposes an endpoint path or push topic.
 pub struct ActivityStatus {
     pub push: String,
+    /// Push is registered with the server (the row's "healthy" tint).
+    pub push_registered: bool,
     pub last_connected: Option<chrono::DateTime<chrono::Utc>>,
     pub server_host: String,
     pub tor_bootstrap_percent: Option<u8>,
@@ -22,17 +24,16 @@ impl ChatterClient {
         // The foreground ntfy connection cannot wake a suspended iOS app.
         // Do not present its subscription as native push registration.
         #[cfg(target_os = "ios")]
-        let push = chatter_i18n::tr("Unavailable on iPhone");
+        let (push, push_registered) = (chatter_i18n::tr("Unavailable on iPhone"), false);
         #[cfg(not(target_os = "ios"))]
-        let push = if self.push_url.lock().is_none() {
-            chatter_i18n::tr("Off")
+        let (push, push_registered) = if self.push_url.lock().is_none() {
+            (chatter_i18n::tr("Off"), false)
         } else if self.anon_mode_enabled() {
-            chatter_i18n::tr("Paused in Shield")
+            (chatter_i18n::tr("Paused in Shield"), false)
         } else if self.push_shutdown.lock().is_some() {
-            // Compared with `ActivityGlobal.push-status == "Registered"`.
-            "Registered".to_string()
+            (chatter_i18n::tr("Registered"), true)
         } else {
-            chatter_i18n::tr("Configured, not registered")
+            (chatter_i18n::tr("Configured, not registered"), false)
         };
         let server_host = url::Url::parse(&self.endpoint())
             .ok()
@@ -40,6 +41,7 @@ impl ChatterClient {
             .unwrap_or_else(|| chatter_i18n::tr("Unknown"));
         ActivityStatus {
             push,
+            push_registered,
             last_connected: self.offline_snapshot().last_connected,
             server_host,
             tor_bootstrap_percent: {

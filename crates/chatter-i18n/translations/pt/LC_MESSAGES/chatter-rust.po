@@ -3949,3 +3949,7 @@ msgstr "A operação do canal falhou ({})."
 #: crates/chatter-core/src/client/channels.rs
 msgid "Channel operation failed: {}"
 msgstr "A operação do canal falhou: {}"
+
+#: crates/chatter-core/src/client/activity.rs
+msgid "Registered"
+msgstr "Registrado"

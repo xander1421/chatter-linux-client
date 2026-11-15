@@ -5965,3 +5965,25 @@ msgstr "Chatter не запускається"
 #: ui/startup_error.slint:44
 msgid "Hide details"
 msgstr "Сховати деталі"
+
+#: ui/chat/chat_header.slint ui/modals/channel_settings.slint
+msgid "{n} member"
+msgid_plural "{n} members"
+msgstr[0] "{n} учасник"
+msgstr[1] "{n} учасники"
+msgstr[2] "{n} учасників"
+
+#: ui/chat/chat_header.slint ui/modals/channel_settings.slint
+msgid "{n} invited"
+msgid_plural "{n} invited"
+msgstr[0] "{n} запрошений"
+msgstr[1] "{n} запрошені"
+msgstr[2] "{n} запрошено"
+
+#: ui/activity/activity_sheet.slint
+msgid "STATUS"
+msgstr "СТАН"
+
+#: ui/activity/activity_sheet.slint
+msgid "ACTIVITY"
+msgstr "ПОДІЇ"
