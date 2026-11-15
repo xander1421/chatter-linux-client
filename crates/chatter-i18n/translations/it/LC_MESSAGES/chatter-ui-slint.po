@@ -3871,8 +3871,8 @@ msgid "Share your private code to start a secret chat"
 msgstr "Condividi il tuo codice privato per avviare una chat segreta"
 
 #: ui/modals/friends_friends_tab.slint:60
-msgid "Use the Add friend tab to connect"
-msgstr "Usa la scheda Aggiungi amico per collegarti"
+msgid "Use + to add a friend"
+msgstr "Usa + per aggiungere un amico"
 
 #: ui/modals/friends_friends_tab.slint:200
 msgid "Message {}"

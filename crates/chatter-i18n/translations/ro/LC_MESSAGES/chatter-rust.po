@@ -3939,3 +3939,43 @@ msgstr "Mesaj nou"
 
 msgid "Unavailable on iPhone"
 msgstr "Indisponibil pe iPhone"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel: {}"
+msgstr "Ai fost blocat pe acest canal: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel."
+msgstr "Ai fost blocat pe acest canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel: {}"
+msgstr "Ai fost eliminat din acest canal: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel."
+msgstr "Ai fost eliminat din acest canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were muted in this channel."
+msgstr "Ai fost redus la tăcere pe acest canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were unmuted in this channel."
+msgstr "Poți scrie din nou pe acest canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Your ban was lifted."
+msgstr "Blocarea ta a fost ridicată."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "A moderation action was applied to your account."
+msgstr "Contului tău i s-a aplicat o măsură de moderare."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed ({})."
+msgstr "Operațiunea pe canal a eșuat ({})."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed: {}"
+msgstr "Operațiunea pe canal a eșuat: {}"

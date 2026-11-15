@@ -48,18 +48,18 @@ impl ChatterClient {
     pub fn channel_event_notice(event: ChannelEventNotice<'_>) -> String {
         match event {
             ChannelEventNotice::Moderation { action, reason } => match (action, reason) {
-                ("BAN", Some(r)) => format!("You were banned from this channel: {r}"),
-                ("BAN", None) => "You were banned from this channel.".into(),
-                ("KICK", Some(r)) => format!("You were removed from this channel: {r}"),
-                ("KICK", None) => "You were removed from this channel.".into(),
-                ("MUTE", _) => "You were muted in this channel.".into(),
-                ("UNMUTE", _) => "You were unmuted in this channel.".into(),
-                ("UNBAN", _) => "Your ban was lifted.".into(),
-                _ => "A moderation action was applied to your account.".into(),
+                ("BAN", Some(r)) => chatter_i18n::trf("You were banned from this channel: {}", &[&r]),
+                ("BAN", None) => chatter_i18n::tr("You were banned from this channel."),
+                ("KICK", Some(r)) => chatter_i18n::trf("You were removed from this channel: {}", &[&r]),
+                ("KICK", None) => chatter_i18n::tr("You were removed from this channel."),
+                ("MUTE", _) => chatter_i18n::tr("You were muted in this channel."),
+                ("UNMUTE", _) => chatter_i18n::tr("You were unmuted in this channel."),
+                ("UNBAN", _) => chatter_i18n::tr("Your ban was lifted."),
+                _ => chatter_i18n::tr("A moderation action was applied to your account."),
             },
             ChannelEventNotice::OperationFailed { code, message } => {
-                if message.is_empty() { format!("Channel operation failed ({code}).") }
-                else { format!("Channel operation failed: {message}") }
+                if message.is_empty() { chatter_i18n::trf("Channel operation failed ({}).", &[&code]) }
+                else { chatter_i18n::trf("Channel operation failed: {}", &[&message]) }
             }
         }
     }
