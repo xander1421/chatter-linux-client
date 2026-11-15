@@ -74,6 +74,7 @@ pub fn spawn_session_call_notification_bridge(
     SessionBridge { stop, done }
 }
 
+#[cfg(test)]
 /// Subscribe before reading presentation authority. Broadcast events only
 /// invalidate the projection; their buffered payloads are never replayed.
 #[cfg(feature = "media")]
@@ -196,7 +197,7 @@ fn reconcile(
                 if posted.contains(call.as_str()) { continue; }
                 let title = if *is_video { "Incoming video call" } else { "Incoming call" };
                 let body = match channel_context.as_deref() {
-                    Some(ch) if !ch.is_empty() && notifications.detail_level() == super::notification_service::NotificationDetailLevel::NameAndMessage => format!("{} is calling in {}", peer_name, ch),
+                    Some(ch) if !ch.is_empty() && notifications.effective_detail_level() == super::notification_service::NotificationDetailLevel::NameAndMessage => format!("{} is calling in {}", peer_name, ch),
                     _ => format!("{} is calling", peer_name),
                 };
                 match notifications.show_incoming_call(call.as_str(), title, &body) {

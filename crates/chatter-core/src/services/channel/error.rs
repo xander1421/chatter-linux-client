@@ -51,7 +51,7 @@ impl From<CurrentUserError> for ChannelError {
 impl From<super::membership_log::LogError> for ChannelError {
     fn from(err: super::membership_log::LogError) -> Self {
         use super::membership_log::LogError;
-        use super::verified_state::VerifyError;
+        use crate::domain::verified_state::VerifyError;
         match err {
             LogError::Network(e) => Self::Network(e),
             LogError::Storage(e) => Self::Storage(e),

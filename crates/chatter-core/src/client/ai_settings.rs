@@ -33,6 +33,14 @@ impl ChatterClient {
         Ok(())
     }
 
+    /// Choose the cloud model id (both modes). Blank restores the provider default.
+    pub fn set_cloud_ai_model(&self, model: &str) -> Result<(), crate::error::StorageError> {
+        self.remote_ai().set_cloud_model(model)?;
+        #[cfg(feature = "jarvis")]
+        self.rebuild_cloud_engine();
+        Ok(())
+    }
+
     /// Which silo the user prefers where policy allows a choice.
     pub fn ai_silo_preference(&self) -> crate::ai_policy::channel_ai::SiloPreference {
         self.remote_ai().silo_preference()

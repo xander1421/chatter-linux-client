@@ -856,7 +856,7 @@ fn apply_saved_channel(
     w: &MainWindow,
     ctx: &Arc<ChatterClient>,
     epoch: u64,
-    metadata: crate::bin_ui::features::sidebar::channel::ChannelMetadata,
+    metadata: crate::bin_ui::features::chat::open::channel::ChannelMetadata,
     rows: Vec<chatter_core::ui::sidebar_data::ChatRowSendData>,
 ) {
     if !save_request_current(w, ctx, epoch) {
@@ -971,7 +971,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 let result = result.map(|channel| {
                     let metadata =
-                        crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(
+                        crate::bin_ui::features::chat::open::channel::ChannelMetadata::from_channel(
                             &channel,
                         );
                     let rows = ui_ctx.sidebar_rows();
@@ -991,7 +991,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .set_channel_settings_saving(false);
                             w.global::<crate::ModalHostState>()
                                 .set_channel_settings_error(match &e {
-                                    chatter_core::services::channel::ChannelError::InvalidInput(message) => message.clone().into(),
+                                    chatter_core::client::ChannelError::InvalidInput(message) => message.clone().into(),
                                     _ => e.user_message().into(),
                                 });
                         }
@@ -1266,7 +1266,7 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if let Some(w) = weak.upgrade() {
                                     crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
                                     if ui_ctx.active_conversation().matches_anon_group(&group_id) {
-                                        crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
+                                        crate::bin_ui::features::chat::open::private_group::load_private_group_messages(
                                             &w, &ui_ctx, &group_id.to_string(),
                                         );
                                     }

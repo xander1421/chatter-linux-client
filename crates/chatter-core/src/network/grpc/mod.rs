@@ -18,9 +18,11 @@ pub mod message_client;
 pub mod notification_client;
 #[cfg(feature = "onion")]
 pub mod onion_transport;
+/// `tracing` target of [`onion_transport`], for subscribers that trace the
+/// onion dial. Defined without the `onion` feature so they need no cfg.
+pub const ONION_TRANSPORT_LOG_TARGET: &str = concat!(module_path!(), "::onion_transport");
 pub mod provisioning_client;
 pub mod retry;
-pub mod response_codec;
 pub mod svr_client;
 pub mod transport;
 pub mod user_client;
@@ -34,12 +36,8 @@ pub use client_pool::GrpcClientPool;
 pub use file_client::FileClient;
 pub use gif_client::GifClient;
 pub use integration_client::IntegrationClient;
-pub use interceptors::{AuthInterceptor, AuthMode};
 pub use mailbox_client::MailboxClient;
 pub use message_client::MessageClient;
 pub use notification_client::NotificationClient;
-pub use provisioning_client::{ProvisioningClient, ProvisioningPollResult};
-pub use retry::{RetryConfig, retry_unary};
-pub use svr_client::{FetchBackupResult, SvrClient};
-pub use transport::GrpcTransport;
+pub use svr_client::SvrClient;
 pub use user_client::UserClient;

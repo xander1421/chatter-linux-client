@@ -123,8 +123,8 @@ impl ContentHandoff {
             return Err("earlier secret receive artifact is pending".into());
         }
         if artifact.kind == ReceiveKind::Roster {
-            use crate::proto::content_v1::content::Content as Body;
-            let content = crate::network::validation::protovalidate::decode_inbound_content(
+            use chatter_proto::content_v1::content::Content as Body;
+            let content = chatter_proto::protovalidate::decode_inbound_content(
                 &artifact.content,
                 "secret_roster_journal",
             )
@@ -197,12 +197,12 @@ impl ContentHandoff {
             return Ok(());
         }
         if matches!(artifact.kind, ReceiveKind::JoinAck | ReceiveKind::Profile) {
-            let content = crate::network::validation::protovalidate::decode_inbound_content(
+            let content = chatter_proto::protovalidate::decode_inbound_content(
                 &artifact.content,
                 "secret_control_journal",
             )
             .map_err(|e| e.to_string())?;
-            use crate::proto::content_v1::content::Content as Body;
+            use chatter_proto::content_v1::content::Content as Body;
             match content.content.as_ref() {
                 Some(Body::AnonGroupDecline(decline)) => {
                     let id = crate::domain::anon_group::AnonGroupId::try_from_slice(&decline.group_id)
@@ -525,8 +525,8 @@ impl ContentHandoff {
         // Group posts need the same after-persist acknowledgement as secret DMs.
         // Decode only after apply_blocking has admitted and stored the post.
         if artifact.kind == ReceiveKind::Content && artifact.key.transport == "anon_group" {
-            use crate::proto::content_v1::content::Content as Body;
-            if let Ok(content) = crate::network::validation::protovalidate::decode_inbound_content(
+            use chatter_proto::content_v1::content::Content as Body;
+            if let Ok(content) = chatter_proto::protovalidate::decode_inbound_content(
                 &artifact.content, "secret_group_receipt",
             ) && let Some(Body::AnonGroupMessage(wrapper)) = content.content
                 && let Some(inner) = wrapper.inner_content
@@ -558,7 +558,7 @@ impl ContentHandoff {
         id: &crate::domain::anon_dm::AnonDmId,
         sender: &UserId,
         sender_device: u32,
-        inner: &crate::proto::content_v1::Content,
+        inner: &chatter_proto::content_v1::Content,
     ) -> Result<(), String> {
         let dm = self
             .dm
@@ -600,7 +600,7 @@ impl ContentHandoff {
         artifact: &ReceiveArtifact,
         finish: bool,
     ) -> Result<Option<(crate::domain::anon_dm::AnonDmId, u64)>, String> {
-        use crate::proto::content_v1::content::Content as Body;
+        use chatter_proto::content_v1::content::Content as Body;
         if !artifact.kind.is_content() || artifact.applied {
             return Err("expected pending secret content artifact".into());
         }
@@ -619,7 +619,7 @@ impl ContentHandoff {
             return Self::retire_dropped(repo, artifact, "blocked sender", finish);
         }
         let scope: ChannelId = artifact.key.scope.parse().map_err(|_| "invalid scope")?;
-        let content = crate::network::validation::protovalidate::decode_inbound_content(
+        let content = chatter_proto::protovalidate::decode_inbound_content(
             &artifact.content,
             "secret_data_journal",
         )

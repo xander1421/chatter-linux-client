@@ -43,7 +43,7 @@ mod upload_attachments_tests {
     //! instead of being dropped, which previously left `pointers` empty and
     //! sent attachments-only messages into the empty-content validation path.
     use super::*;
-    use crate::crypto::attachment_crypto::override_max_attachment_size;
+    use chatter_attachment_crypto::override_max_attachment_size;
     use crate::domain::AttachmentId;
     use crate::storage::database::Database;
     use crate::storage::repositories::AttachmentRepository;
@@ -172,6 +172,10 @@ mod transport_switch_tests {
     async fn push_decision_follows_live_atomic_not_stale_param() {
         let (client, _dir) = build_test_client();
         client.anon_mode.store(false, Ordering::Release);
+        // No remembered URL: a build-time CHATTER_NTFY_URL would otherwise
+        // make the rebuild restart push (replacing this listener), which is
+        // the exit-restore path, not the one under test.
+        *client.push_url.lock() = None;
         let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
         *client.push_shutdown.lock() = Some(tx);
 
@@ -306,7 +310,7 @@ mod transport_switch_tests {
     async fn captured_state_respects_deferred_contact_then_explicit_failure() {
         use crate::network::connection::ConnectionState;
         let (client, _dir) = build_test_client();
-        client.set_server_url("http://127.0.0.1:1").unwrap();
+        client.set_server_url("https://127.0.0.1:1").unwrap();
         assert!(
             !client
                 .startup_connect(std::time::Duration::from_secs(1))
@@ -1024,6 +1028,7 @@ mod unread_badge_tests {
             ended_at: None,
             duration: None,
             participant_count: 2,
+            is_video: false,
         });
         client.messages().store_message_local(&call).expect("store");
         assert_eq!(client.unread_conversation_count(), 0);

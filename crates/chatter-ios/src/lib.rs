@@ -39,13 +39,9 @@ fn check_crypto() -> Result<String, String> {
 
 /// SQLCipher open + write + read inside the app sandbox.
 fn check_storage(dir: &PathBuf) -> Result<String, String> {
-    use chatter_core::storage::database::Database;
     let path = dir.join("smoke.db");
     let _ = std::fs::remove_file(&path);
-    let db = Database::open(&path, "smoke-passphrase").map_err(|e| format!("{e:?}"))?;
-    let conn = db.open_reader_connection().map_err(|e| format!("{e:?}"))?;
-    let v: String = conn
-        .query_row("SELECT sqlite_version()", [], |r| r.get(0))
+    let v = chatter_core::system::sqlite_version_at(&path, "smoke-passphrase")
         .map_err(|e| format!("{e:?}"))?;
     Ok(format!(
         "SQLCipher opened at {}, sqlite {v}",
@@ -139,5 +135,8 @@ pub unsafe extern "C" fn chatter_ios_string_free(s: *mut c_char) {
 #[unsafe(no_mangle)]
 pub extern "C" fn chatter_ios_run_ui() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    rt.block_on(chatter_ui::app_main());
+    // UIApplicationMain keeps this block_on poll alive. Match the desktop
+    // entry: Tokio's cooperative budget cannot reset while Slint owns the
+    // thread, so a finite budget eventually makes UI futures spin forever.
+    rt.block_on(tokio::task::unconstrained(chatter_ui::app_main()));
 }

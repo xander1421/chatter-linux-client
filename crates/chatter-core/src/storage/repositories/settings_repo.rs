@@ -135,6 +135,7 @@ pub mod keys {
 
     // UI settings
     pub const SIDEBAR_COLLAPSED: &str = "ui.sidebar_collapsed";
+    pub const SIDEBAR_WIDTH: &str = "ui.sidebar_width";
     pub const SEARCH_SHORTCUT: &str = "ui.search_shortcut";
 
     /// Whether the user enabled the BLE mesh. Absent means off; radio use is opt-in.
@@ -154,6 +155,10 @@ pub mod keys {
     /// Notification detail level: "none", "name_only", "name_and_message"
     /// Default: "none" (just "Chatter: New message" — no sender, no content)
     pub const NOTIFICATION_DETAIL_LEVEL: &str = "notification.detail_level";
+
+    /// App lock record (`services::app_lock`): salt, Argon2id PIN hashes,
+    /// timeout, failed-attempt counter. Local only, never synced.
+    pub const APP_LOCK: &str = "app_lock";
 
     // Local AI settings
     pub const LOCAL_AI_ENABLED: &str = "local_ai.enabled";

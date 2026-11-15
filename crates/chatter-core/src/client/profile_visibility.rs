@@ -202,7 +202,7 @@ impl ChatterClient {
     /// every own-device sync; a device that misses it keeps the old key until
     /// the next change.
     async fn sync_profile_key_to_own_devices(&self) {
-        use crate::proto::content_v1::{Content, ProfileKeySync, content};
+        use chatter_proto::content_v1::{Content, ProfileKeySync, content};
 
         let settings = &self.messages().settings_repo;
         let Some(key) = policy::own_profile_key(settings) else {

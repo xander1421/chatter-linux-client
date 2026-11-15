@@ -28,6 +28,26 @@ impl KeyWrap for AndroidKeystore {
     fn unseal(&self, alias: &str, blob: &[u8]) -> Result<Vec<u8>, String> {
         call("unseal", alias, blob)
     }
+
+    fn destroy(&self, alias: &str) -> Result<(), String> {
+        with_jni_env(|env| {
+            let result = env.with_local_frame(8, |env| -> jni::errors::Result<()> {
+                let class = helper_class(env)?;
+                let j_alias = env.new_string(alias)?;
+                env.call_static_method(
+                    &class,
+                    jni::jni_str!("destroy"),
+                    jni::jni_sig!("(Ljava/lang/String;)V"),
+                    &[JValue::Object(&j_alias)],
+                )?;
+                Ok(())
+            });
+            if result.is_err() {
+                clear_exception(env);
+            }
+            result.map_err(|e| format!("KeyStoreHelper.destroy: {e}"))
+        })
+    }
 }
 
 /// Register the Keystore as chatter-core's key wrapper. Call once at startup.
@@ -54,27 +74,7 @@ fn invoke(
     input: &[u8],
 ) -> jni::errors::Result<Vec<u8>> {
     env.with_local_frame(16, |env| -> jni::errors::Result<Vec<u8>> {
-        let ctx = ndk_context::android_context().context();
-        // SAFETY: ndk_context holds a global ref to the Application for the
-        // process lifetime; we only borrow it.
-        let app = unsafe { JObject::from_raw(&env, ctx.cast()) };
-        let loader = env
-            .call_method(
-                &app,
-                jni::jni_str!("getClassLoader"),
-                jni::jni_sig!("()Ljava/lang/ClassLoader;"),
-                &[],
-            )
-            .and_then(|v| v.l())?;
-        let name = env.new_string(HELPER_CLASS)?;
-        let class: JClass = env
-            .call_method(
-                &loader,
-                jni::jni_str!("loadClass"),
-                jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                &[JValue::Object(&name)],
-            )
-            .and_then(|v| env.cast_local::<JClass>(v.l()?))?;
+        let class = helper_class(env)?;
         let j_alias = env.new_string(alias)?;
         let j_input = env.byte_array_from_slice(input)?;
         let out: JByteArray = env
@@ -94,4 +94,28 @@ fn invoke(
         let _ = out.set_region(env, 0, &zeros_out);
         Ok(bytes)
     })
+}
+
+/// `KeyStoreHelper` through the Application's classloader (see module doc).
+fn helper_class<'local>(env: &mut Env<'local>) -> jni::errors::Result<JClass<'local>> {
+    let ctx = ndk_context::android_context().context();
+    // SAFETY: ndk_context holds a global ref to the Application for the
+    // process lifetime; we only borrow it.
+    let app = unsafe { JObject::from_raw(&env, ctx.cast()) };
+    let loader = env
+        .call_method(
+            &app,
+            jni::jni_str!("getClassLoader"),
+            jni::jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .and_then(|v| v.l())?;
+    let name = env.new_string(HELPER_CLASS)?;
+    env.call_method(
+        &loader,
+        jni::jni_str!("loadClass"),
+        jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+        &[JValue::Object(&name)],
+    )
+    .and_then(|v| env.cast_local::<JClass>(v.l()?))
 }

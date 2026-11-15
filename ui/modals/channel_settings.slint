@@ -582,13 +582,12 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 if root.can-edit: Input {
                                     control-height: Spacing.touch-target-min;
-                                    text: root.channel-name-draft;
+                                    text <=> root.channel-name-draft;
                                     placeholder: root.is-private-group ? "Group name" : "Channel name";
 
                                     error: root.name-invalid;
                                     error-message: root.name-invalid ? "Name must be at least 3 characters" : "";
                                     edited(value) => {
-                                        root.channel-name-draft = value;
                                         root.clear-error();
                                     }
                                 }
@@ -615,11 +614,10 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 if root.can-edit: Input {
                                     control-height: Spacing.touch-target-min;
-                                    text: root.channel-description-draft;
+                                    text <=> root.channel-description-draft;
                                     placeholder: "Add a description...";
 
                                     edited(value) => {
-                                        root.channel-description-draft = value;
                                         root.clear-error();
                                     }
                                 }

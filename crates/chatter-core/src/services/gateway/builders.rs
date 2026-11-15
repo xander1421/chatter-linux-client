@@ -8,7 +8,7 @@
 
 use rand::RngCore;
 
-use crate::proto::content_v1::{
+use chatter_proto::content_v1::{
     AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage, PinMessage,
     Quote, QuotedAttachment, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage, content,
     quote, receipt_message, typing_message,
@@ -22,12 +22,15 @@ use super::CallHangupReason;
 // =============================================================================
 
 /// Group control messages (membership, leave, kick, ephemeral).
+#[cfg(any(test, feature = "testing"))]
 pub const PADDING_GROUP_CONTROL: usize = 160;
 
 /// Standard messages, DM wrappers, ephemeral DM messages.
+#[cfg(any(test, feature = "testing"))]
 pub const PADDING_MESSAGE: usize = 256;
 
 /// Profile updates, call signaling (larger payloads).
+#[cfg(any(test, feature = "testing"))]
 pub const PADDING_LARGE: usize = 512;
 
 /// Generate random NDSS '21 padding.
@@ -217,6 +220,7 @@ pub fn build_delivery_receipt_content_with_channel(
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a Content proto for reaction.
 pub fn build_reaction_content(
     emoji: &str,
@@ -233,6 +237,7 @@ pub fn build_reaction_content(
     )
 }
 
+#[cfg(any(test, feature = "testing"))]
 /// Create a Content proto for reaction with optional channel context.
 pub fn build_reaction_content_with_channel(
     emoji: &str,
@@ -443,7 +448,7 @@ pub fn build_call_key_offer(
     ephemeral_public_key: [u8; 32],
     call_type: &str,
 ) -> Content {
-    use crate::proto::content_v1::CallKeyExchange;
+    use chatter_proto::content_v1::CallKeyExchange;
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -467,7 +472,7 @@ pub fn build_call_key_offer(
 /// * `call_id` - Call ID from the offer
 /// * `ephemeral_public_key` - Callee's ephemeral X25519 public key (32 bytes)
 pub fn build_call_key_answer(call_id: &str, ephemeral_public_key: [u8; 32]) -> Content {
-    use crate::proto::content_v1::CallKeyExchange;
+    use chatter_proto::content_v1::CallKeyExchange;
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -495,7 +500,7 @@ pub fn build_group_call_signal_content(
     signal: crate::domain::call::GroupCallSignal,
 ) -> Content {
     use crate::domain::call::GroupCallSignal;
-    use crate::proto::content_v1::{
+    use chatter_proto::content_v1::{
         GroupCallKeyRequest, GroupCallKeyUpdate, GroupCallRing, group_call_signal,
     };
     let now = TimestampNanos::now().as_u64();
@@ -512,7 +517,7 @@ pub fn build_group_call_signal_content(
     Content {
         timestamp: now,
         content: Some(content::Content::GroupCallSignal(
-            crate::proto::content_v1::GroupCallSignal {
+            chatter_proto::content_v1::GroupCallSignal {
                 call_id: call_id.to_string(),
                 channel_id: channel_id.to_string(),
                 timestamp: now,
@@ -527,7 +532,7 @@ pub fn build_group_call_signal_content(
 ///
 /// This is sent via sealed sender to notify the peer that the call has ended.
 pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Content {
-    use crate::proto::content_v1::{CallHangup, call_hangup};
+    use chatter_proto::content_v1::{CallHangup, call_hangup};
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -561,7 +566,7 @@ pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Con
 /// call message is for the peer's devices only (a synced offer would ring us
 /// with a call from ourselves), so it gets `None`.
 pub fn build_call_self_sync(content: &Content, our_device_id: u32) -> Option<Content> {
-    use crate::proto::content_v1::{CallHangup, call_hangup};
+    use chatter_proto::content_v1::{CallHangup, call_hangup};
     let (call_id, reason) = match &content.content {
         Some(content::Content::CallKey(key)) if !key.is_offer => {
             (&key.call_id, call_hangup::Reason::AcceptedElsewhere)
@@ -588,7 +593,7 @@ pub fn build_call_self_sync(content: &Content, our_device_id: u32) -> Option<Con
 #[cfg(test)]
 mod call_self_sync_tests {
     use super::*;
-    use crate::proto::content_v1::call_hangup::Reason;
+    use chatter_proto::content_v1::call_hangup::Reason;
 
     fn synced(c: &Content) -> Option<(String, i32, u32)> {
         build_call_self_sync(c, 6).map(|s| match s.content {

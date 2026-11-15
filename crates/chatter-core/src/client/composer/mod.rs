@@ -130,6 +130,69 @@ impl ComposerSend {
             queue_ticket: self.queue_ticket.clone(),
         }).collect()
     }
+
+    /// The staged still images whose own bytes the in-flight bubble paints
+    /// (at most the ten tiles an album shows). GIFs animate through their own
+    /// path, and a pre-uploaded pointer has no staged file to read.
+    pub fn inline_preview_files(&self) -> impl Iterator<Item = &PendingAttachment> {
+        self.attachments
+            .iter()
+            .filter(|a| {
+                a.pointer.is_none()
+                    && a.mime_type.starts_with("image/")
+                    && a.mime_type != "image/gif"
+            })
+            .take(10)
+    }
+
+    /// `(stored, staged)`: the staged file each stored attachment of this send
+    /// was uploaded from, so the sender's bubble keeps the pixels it already
+    /// shows instead of falling back to a placeholder while the stored
+    /// thumbnail decodes. The upload keeps staged order and can only drop
+    /// files (cancelled, or unresolvable afterwards); once any was dropped
+    /// the correspondence is unknown and nothing is paired.
+    pub fn staged_sources(&self, stored: &[AttachmentId]) -> Vec<(AttachmentId, AttachmentId)> {
+        if stored.len() != self.attachments.len() {
+            return Vec::new();
+        }
+        stored
+            .iter()
+            .copied()
+            .zip(self.attachments.iter().map(|a| a.id))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn staged_sources_pair_in_order_only_when_nothing_was_dropped() {
+        let staged = |mime: &str| {
+            PendingAttachment::new(AttachmentId::new(), "f".into(), Default::default(), 1, mime.into())
+        };
+        let send = ComposerSend {
+            attempt_id: uuid::Uuid::new_v4(),
+            session_revision: 0,
+            conversation: ActiveConversation::Channel(ChannelId::new()),
+            text: String::new(),
+            reply: None,
+            attachments: vec![staged("image/jpeg"), staged("image/gif"), staged("video/mp4")],
+            queue_ticket: None,
+        };
+        let stored: Vec<_> = (0..3).map(|_| AttachmentId::new()).collect();
+        let pairs = send.staged_sources(&stored);
+        assert_eq!(pairs.len(), 3);
+        for (i, (s, p)) in pairs.into_iter().enumerate() {
+            assert_eq!((s, p), (stored[i], send.attachments[i].id));
+        }
+        // One upload cancelled: which stored file is which is unknown.
+        assert!(send.staged_sources(&stored[..2]).is_empty());
+        // Only the still image is painted from its staged bytes.
+        let painted: Vec<_> = send.inline_preview_files().map(|a| a.id).collect();
+        assert_eq!(painted, vec![send.attachments[0].id]);
+    }
 }
 
 #[cfg(test)]
@@ -190,7 +253,7 @@ impl From<&PendingAttachment> for StagedAttachment {
             size: a.size,
             mime_type: a.mime_type.clone(),
             pointer: a.pointer.as_ref().map(|pointer| {
-                <crate::proto::content_v1::AttachmentPointer as prost::Message>::encode_to_vec(
+                <chatter_proto::content_v1::AttachmentPointer as prost::Message>::encode_to_vec(
                     pointer,
                 )
             }),
@@ -207,7 +270,7 @@ impl StagedAttachment {
     /// here would send the remainder as if it were everything.
     fn into_pending(self) -> PendingAttachment {
         let pointer = self.pointer.and_then(|bytes| {
-            <crate::proto::content_v1::AttachmentPointer as prost::Message>::decode(
+            <chatter_proto::content_v1::AttachmentPointer as prost::Message>::decode(
                 bytes.as_slice(),
             )
             .map_err(|e| {
@@ -608,7 +671,16 @@ impl ChatterClient {
         }
         match self.park_unstarted_queued_send(&send) {
             Ok(false) => {},
-            Ok(true) | Err(()) => return None,
+            // Parked durably (never reached the send journal). Its own
+            // composer still empty and open: hand it straight back, as an
+            // unqueued failure is. Core installs its trays in that transfer,
+            // so the caller must not stage the attachments again.
+            Ok(true) => {
+                let mut back = self.take_parked(composer_empty, Some(send.attempt_id))?;
+                back.attachments.clear();
+                return Some(back);
+            },
+            Err(()) => return None,
         }
         // A completed failed task no longer owns admission. Keeping its
         // recoverable draft must not hold later accepted batches forever.
@@ -638,6 +710,11 @@ impl ChatterClient {
     /// A kept failed send for the active conversation, if the composer has
     /// room for it now. Checked on entering a conversation.
     pub fn take_parked_send(&self, composer_empty: bool) -> Option<ComposerSend> {
+        self.take_parked(composer_empty, None)
+    }
+
+    /// [`Self::take_parked_send`], limited to one attempt when `attempt` is set.
+    fn take_parked(&self, composer_empty: bool, attempt: Option<uuid::Uuid>) -> Option<ComposerSend> {
         let active = self.chat_state().active_conversation();
         if !self.composer_has_room(active, composer_empty) {
             return None;
@@ -654,7 +731,11 @@ impl ChatterClient {
         let revision = self.auth_state().get().session_revision;
         let at = parked
             .iter()
-            .position(|s| s.conversation == active && s.session_revision == revision)?;
+            .position(|s| {
+                s.conversation == active
+                    && s.session_revision == revision
+                    && attempt.is_none_or(|id| s.attempt_id == id)
+            })?;
         let send = parked[at].clone();
         let key = active.channel_id()?.to_string();
         let mut next_drafts = drafts.clone();

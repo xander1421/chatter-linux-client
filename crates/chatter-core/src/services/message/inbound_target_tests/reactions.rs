@@ -29,10 +29,9 @@ use super::*;
     #[tokio::test]
     async fn inbox_reaction_delta_uses_action_time_and_skips_replay() {
         use crate::inbox::events::InboxEvent;
-        use crate::services::inbox_processor::InboxEventProcessor;
 
         let f = fixture();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let mut domain = f.client.event_bus().subscribe_domain();
         let action_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 - 60_000_000_000;
         let target_ns = action_ns - 600_000_000_000;
@@ -93,7 +92,6 @@ use super::*;
         use crate::inbox::{
             events::InboxEvent, polling::device::dispatch_control_content, state::InboxStats,
         };
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
 
@@ -113,11 +111,11 @@ use super::*;
             svc.record_reaction_at(&scope, &f.carol, CH_TS, &f.me, "👍", false, 1)
                 .unwrap()
         );
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let (tx, mut rx) = broadcast::channel(8);
         let mut domain = f.client.event_bus().subscribe_domain();
         let stats = Arc::new(RwLock::new(InboxStats::default()));
-        let reaction = crate::services::build_reaction_content_with_channel(
+        let reaction = crate::services::gateway::builders::build_reaction_content_with_channel(
             "👍",
             false,
             &f.carol.to_string(),

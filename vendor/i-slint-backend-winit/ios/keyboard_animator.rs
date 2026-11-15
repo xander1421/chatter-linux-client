@@ -32,10 +32,15 @@ define_class!(
             if let Some(layer) = unsafe { this.view.layer().presentationLayer() } {
                 (this.callback)(layer.frame());
             }
-            let mut animator_ref = this.animator.borrow_mut();
-            if let Some(false) = animator_ref.as_ref().map(|animator| animator.isRunning()) {
+            let finished = this.animator.borrow().as_ref()
+                .is_some_and(|animator| !animator.isRunning());
+            if finished {
                 display_link.setPaused(true);
-                *animator_ref = None;
+                this.animator.borrow_mut().take();
+                // The presentation layer may disappear on the last tick.
+                // Publish the final frame without holding the animator borrow:
+                // the callback can synchronously trigger another IME request.
+                (this.callback)(this.view.frame());
             }
         }
     }

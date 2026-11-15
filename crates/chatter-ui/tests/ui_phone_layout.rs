@@ -22,6 +22,35 @@ use slint::{ComponentHandle, Model};
 const PHONE_W: f32 = 412.0;
 const PHONE_H: f32 = 891.0;
 
+slint::slint! {
+    // A mounted TextInput for the mid-word wrap fixture's prefix.
+    export component WrapProbe inherits Window {
+        in property <string> probe-text;
+        in property <length> probe-width;
+        in property <length> probe-font-size;
+        in property <string> probe-font-family;
+        in property <int> probe-font-weight;
+        in property <bool> probe-font-italic;
+        in property <length> probe-letter-spacing;
+        width: 2000px;
+        height: 2000px;
+        TextInput {
+            x: 0px;
+            y: 0px;
+            width: root.probe-width;
+            height: self.preferred-height;
+            text: root.probe-text;
+            font-size: root.probe-font-size;
+            font-family: root.probe-font-family;
+            font-weight: root.probe-font-weight;
+            font-italic: root.probe-font-italic;
+            letter-spacing: root.probe-letter-spacing;
+            wrap: word-wrap;
+            single-line: false;
+        }
+    }
+}
+
 fn pump(w: &MainWindow) {
     w.window()
         .set_size(slint::LogicalSize::new(PHONE_W, PHONE_H));
@@ -30,6 +59,42 @@ fn pump(w: &MainWindow) {
     });
     w.show().unwrap();
     slint::run_event_loop().unwrap();
+}
+
+/// Open the phone chat pane and let its push finish. Since 3cf2b504 the pane
+/// mounts offscreen and slides in from a one-frame timer over motion-standard
+/// (320ms at 1x). Mid-slide the composer's trailing controls are still past
+/// the right edge and not instantiated. Under the system-time backend a debug
+/// build renders far fewer frames than that, so wait until the composer stops
+/// moving rather than for a fixed time.
+fn settle_chat_push(w: &MainWindow) {
+    w.window()
+        .set_size(slint::LogicalSize::new(PHONE_W, PHONE_H));
+    w.show().unwrap();
+    let x = |w: &MainWindow| {
+        testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+            .find(|e| e.size().height > 0.0)
+            .map(|e| e.absolute_position().x)
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last = None;
+    loop {
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
+            slint::quit_event_loop().unwrap();
+        });
+        slint::run_event_loop().unwrap();
+        let now = x(w);
+        // On screen (the offscreen mount sits a window-width right) and still.
+        let half = w.window().size().to_logical(w.window().scale_factor()).width / 2.0;
+        if now.is_some_and(|x| x < half) && now == last {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the phone chat push never settled (composer x {now:?})"
+        );
+        last = now;
+    }
 }
 
 fn rect(e: &testing::ElementHandle) -> (f32, f32, f32, f32) {
@@ -225,14 +290,22 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         composer_src.contains("border-radius: Spacing.radius-chrome;"),
         "shell radius"
     );
+    // The field, the reply chip's cancel (649b152a) and the attachment tray's
+    // remove and add-more boxes (ae492dbb) are concentric with the shell. The
+    // chip and tray moved to their own files in e1dde46a; emoji and attach
+    // became free circular droplets in 08e7ca06 and send a circle in 15919403.
+    let concentric = [
+        composer_src,
+        include_str!("../../../ui/chat/composer_reply_preview.slint"),
+        include_str!("../../../ui/chat/composer_attachment_strip.slint"),
+    ]
+    .iter()
+    .map(|src| src.matches("border-radius: Spacing.radius-chrome-inner;").count())
+    .collect::<Vec<_>>();
     assert_eq!(
-        composer_src
-            .matches("border-radius: Spacing.radius-chrome-inner;")
-            .count(),
-        7,
-        "field, emoji, attach and send are concentric with the shell, and so \
-         are the reply chip's cancel (649b152a) and the attachment tray's remove \
-         and add-more boxes (ae492dbb)"
+        concentric,
+        [1, 1, 2],
+        "field, reply cancel, attachment remove and add-more are concentric with the shell"
     );
     w.global::<chatter_ui::ModalHostState>()
         .set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
@@ -244,12 +317,18 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         .set_channel_name("Bob".into());
     w.global::<chatter_ui::SidebarPane>()
         .set_mobile_show_chat(true);
-    pump(&w);
+    settle_chat_push(&w);
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .expect("no MessageComposer on the open chat");
     let (sx, sy, sw, sh) = rect(&shell);
-    let (fx, fy, fw, fh) = rect(&one(&w, "Message input"));
+    // The field box the radius is concentric with (`input-field`), not the
+    // TextInput: since cc4a2aee that sits in a Flickable padded inside it.
+    let (fx, fy, fw, fh) = rect(
+        &testing::ElementHandle::find_by_element_id(&w, "MessageComposer::input-field")
+            .find(|e| e.size().height > 0.0)
+            .expect("no composer field box"),
+    );
     let (bx, _, bw, _) = rect(&one(&w, "Record voice message"));
     // The emoji & GIF toggle leads the row; the field sits one inset after it.
     let (ex, _, ew, _) = rect(&one(&w, "Emoji & GIF picker"));
@@ -274,12 +353,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     w.global::<chatter_ui::ChatPane>()
         .set_composer_text("".into());
     pump_size(&w, PHONE_W, 460.0);
-    let field = one(&w, "Message input");
-    click_at(
-        &w,
-        field.absolute_position().x + 20.0,
-        field.absolute_position().y + 20.0,
-    );
+    click_field(&w);
     // The first real keystroke raises actions without replacing/focusing a
     // different native input; clearing restores the original compact row.
     let original_input = composer_native_item(&w);
@@ -522,10 +596,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         );
         assert_action_geometry(&w, true);
         assert_attachment_strip_geometry(&w);
-        let strip =
-            testing::ElementHandle::find_by_element_id(&w, "MessageComposer::attachment-strip")
-                .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
-                .unwrap();
+        let strip = attachment_strip(&w);
         let (cx, _, cw, _) = rect(&strip);
         let remove = testing::ElementHandle::find_by_accessible_label(&w, "Remove attachment")
             .find(|e| {
@@ -561,12 +632,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         >::new())));
     pump_size(&w, PHONE_W, 460.0);
     assert_action_geometry(&w, false);
-    let field = one(&w, "Message input");
-    click_at(
-        &w,
-        field.absolute_position().x + 20.0,
-        field.absolute_position().y + 20.0,
-    );
+    click_field(&w);
     let preedit_only = "uncommitted native caret words ".repeat(30);
     composition_selection(&w, &preedit_only, Some(0..0));
     pump_size(&w, PHONE_W, 460.0);
@@ -736,7 +802,9 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     );
     pump_size(&w, 360.0, 380.0);
     assert_action_geometry(&w, true);
-    assert_composer_caps(&w, false, 44.0);
+    // The selection's formatting bar: the full 48px touch target since
+    // dad8632e (44px before).
+    assert_composer_caps(&w, false, 48.0);
     assert_eq!(input.anchor_position_byte_offset(), unchanged.len() as i32);
     assert_eq!(input.cursor_position_byte_offset(), cursor);
     assert_native_caret_visible(&w);
@@ -769,12 +837,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     );
     // Direct picker property changes do not invoke the app's keyboard-toggle
     // callback. Focus the actual composer before sending its native IME events.
-    let field = one(&w, "Message input");
-    click_at(
-        &w,
-        field.absolute_position().x + 20.0,
-        field.absolute_position().y + 20.0,
-    );
+    click_field(&w);
     pump_size(&w, PHONE_W, 460.0);
     input.set_selection_offsets(
         &item.window_adapter().unwrap(),
@@ -870,7 +933,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert_eq!(input.preedit_text().as_str(), middle);
     assert_eq!(input.cursor_position_byte_offset(), insertion);
     assert_eq!(input.anchor_position_byte_offset(), insertion);
-    let visual = input.visual_representation(None);
+    let visual = input.visual_representation();
     assert_eq!(
         visual.cursor_position,
         Some(insertion as usize + middle.len())
@@ -885,28 +948,57 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         )
     );
     let mut prefix_wrap_differs = false;
+    let wrap_probe = WrapProbe::new().unwrap();
     for width in (280..=440).step_by(8) {
         pump_size(&w, width as f32, 460.0);
         assert_native_caret_visible(&w);
         let prefix = format!("{}{}", &body[..insertion as usize], middle);
-        let probe = Box::pin(i_slint_core::items::TextInput::default());
-        let probe = probe.as_ref();
-        probe.text.set(prefix.clone().into());
-        probe.width.set(input.width());
-        probe.height.set(input.height());
-        probe.font_family.set(input.font_family());
-        probe.font_size.set(input.font_size());
-        probe.font_weight.set(input.font_weight());
-        probe.font_italic.set(input.font_italic());
-        probe.letter_spacing.set(input.letter_spacing());
-        probe.wrap.set(input.wrap());
-        probe.single_line.set(false);
-        probe.text_cursor_width.set(input.text_cursor_width());
-        let prefix_rect =
-            window
+        // A mounted TextInput of the same width and font holds the prefix
+        // alone. A detached probe borrowing the composer's item no longer
+        // measures its own text under the 1.18.1 fork (7a8e9d5b caches
+        // paragraphs per item). Each caret is read against its own first-line
+        // caret, so the two windows' frames cancel out.
+        // The resolved font, window defaults included (MainWindow's
+        // default-font-family).
+        let font = i_slint_core::item_rendering::HasFont::font_request(input, &item);
+        wrap_probe.set_probe_text(prefix.clone().into());
+        wrap_probe.set_probe_width(input.width().get());
+        wrap_probe.set_probe_font_size(font.pixel_size.expect("composer font size").get());
+        wrap_probe.set_probe_font_family(font.family.unwrap_or_default());
+        wrap_probe.set_probe_font_weight(font.weight.unwrap_or_default());
+        wrap_probe.set_probe_font_italic(font.italic);
+        wrap_probe.set_probe_letter_spacing(font.letter_spacing.map_or(0.0, |l| l.get()));
+        let probe_item = i_slint_core::window::WindowInner::from_pub(wrap_probe.window())
+            .window_item_rc()
+            .unwrap()
+            .visit_descendants(|item| {
+                if item.downcast::<i_slint_core::items::TextInput>().is_some() {
+                    std::ops::ControlFlow::Break(item.clone())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            })
+            .expect("probe TextInput");
+        let probe = probe_item.downcast::<i_slint_core::items::TextInput>().unwrap();
+        let probe = probe.as_pin_ref();
+        assert_eq!(probe.text().as_str(), prefix);
+        let caret = |item: &i_slint_core::item_tree::ItemRc,
+                     text_input: std::pin::Pin<&i_slint_core::items::TextInput>,
+                     offset| {
+            item.window_adapter()
+                .unwrap()
                 .renderer()
-                .text_input_cursor_rect_for_byte_offset(probe, &item, prefix.len(), i_slint_core::items::TextCursorAffinity::default());
-        let full_rect = input.visual_cursor_rect(&window, &item);
+                .text_input_cursor_rect_for_byte_offset(
+                    text_input,
+                    item,
+                    offset,
+                    i_slint_core::items::TextCursorAffinity::default(),
+                )
+        };
+        let mut prefix_rect = caret(&probe_item, probe, prefix.len());
+        prefix_rect.origin.y -= caret(&probe_item, probe, 0).origin.y;
+        let mut full_rect = input.visual_cursor_rect(&window, &item);
+        full_rect.origin.y -= caret(&item, input, 0).origin.y;
         if full_rect.origin.y > prefix_rect.origin.y + full_rect.size.height * 0.5 {
             // Equal caret metrics and a leftward move prove an actual line
             // wrap, rather than an origin shift from a taller fallback font.
@@ -1004,11 +1096,16 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // The recording panel still owns the shell and its controls; ordinary
     // input is disabled without replacing it or consuming the draft.
     let recording = w.global::<chatter_ui::VoiceRecording>();
+    // A recording belongs to one composer since 5349ab7c (main or thread).
+    recording.set_owner("main".into());
     recording.set_active(true);
     pump_size(&w, PHONE_W, 460.0);
-    let panel = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::recording-panel")
-        .find(|e| e.size().height > 0.0)
-        .unwrap();
+    // Its own ComposerRecordingPanel since e1dde46a.
+    let panel = testing::ElementHandle::find_by_element_type_name(&w, "ComposerRecordingPanel")
+        .find(|e| {
+            e.type_name().is_some_and(|t| t == "ComposerRecordingPanel") && e.size().height > 0.0
+        })
+        .expect("recording panel");
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
@@ -1067,12 +1164,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             .as_pin_ref()
             .has_focus()
     );
-    let field = one(&w, "Message input");
-    click_at(
-        &w,
-        field.absolute_position().x + 20.0,
-        field.absolute_position().y + 20.0,
-    );
+    click_field(&w);
     assert!(
         composer_native_item(&w)
             .downcast::<i_slint_core::items::TextInput>()
@@ -1339,6 +1431,22 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             })
             .expect("focused native drawer search")
     };
+    // The drawer moves over motion time at the 1x default speed (15919403);
+    // under this system-time debug backend one 200ms pump can land mid-way.
+    // Read it once it has stopped moving.
+    let settled_drawer = |width: f32, height: f32| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut last = rect(&drawer_element("ChatLayout::picker-drawer"));
+        loop {
+            pump_size(w, width, height);
+            let now = rect(&drawer_element("ChatLayout::picker-drawer"));
+            if now == last {
+                return now;
+            }
+            assert!(std::time::Instant::now() < deadline, "picker drawer never settled");
+            last = now;
+        }
+    };
     // Search owns a visible drawer ABOVE the actual IME. Exercise the real
     // search input and tab callbacks; a zero-height clipped picker cannot pass.
     for (width, height, ime) in [
@@ -1359,7 +1467,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         w.global::<chatter_ui::ChatPane>()
             .set_composer_gif_picker_search("".into());
         pump_size(w, width, height);
-        let baseline = rect(&drawer_element("ChatLayout::picker-drawer"));
+        let baseline = settled_drawer(width, height);
         click_element(w, "Search emoji and GIFs");
         let search_item = focused_search();
         // Focus alone, without actual IME, must keep the bottom baseline.
@@ -1452,7 +1560,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         let first_gif = gif_results.row_data(0).expect("fixture GIF result");
         keyboard(0.0);
         pump_size(w, width, height);
-        let closed = rect(&drawer_element("ChatLayout::picker-drawer"));
+        let closed = settled_drawer(width, height);
         assert!(
             (closed.1 - baseline.1).abs() < 0.5 && (closed.3 - baseline.3).abs() < 0.5,
             "keyboard close must move DOWN to original baseline despite retained focus"
@@ -1784,7 +1892,7 @@ fn assert_native_caret_visible(w: &MainWindow) {
     assert!((input.visual_cursor_height().get() - caret.size.height).abs() < 0.01);
     // Independently query the renderer at its actual drawn visual endpoint.
     // App input is plain text, so no password conversion is needed here.
-    if let Some(drawn_offset) = input.visual_representation(None).cursor_position {
+    if let Some(drawn_offset) = input.visual_representation().cursor_position {
         let drawn = item
             .window_adapter()
             .unwrap()
@@ -1812,6 +1920,7 @@ fn assert_native_caret_visible(w: &MainWindow) {
     );
 }
 
+#[track_caller]
 fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
     let pane = testing::ElementHandle::find_by_element_type_name(w, "ChatLayout")
         .find(|e| e.size().height > 0.0)
@@ -1823,19 +1932,10 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
     let item = composer_native_item(w);
     let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
     let input = input.as_pin_ref();
-    let probe = Box::pin(i_slint_core::items::ComplexText::default());
-    let probe = probe.as_ref();
-    probe.text.set("Mg".into());
-    probe.font_family.set(input.font_family());
-    probe.font_size.set(input.font_size());
-    probe.font_weight.set(input.font_weight());
-    let line_height = item
-        .window_adapter()
-        .unwrap()
-        .renderer()
-        .text_size(probe, &item, None, i_slint_core::items::TextWrap::NoWrap)
-        .height
-        .ceil();
+    // One line is the native caret's height. A free-standing ComplexText
+    // probe measures 0 under the testing renderer, which collapsed the cap to
+    // its 48px floor.
+    let line_height = input.visual_cursor_height().get().ceil();
     let pane_height = pane.size().height;
     let available = pane_height
         - if drawer {
@@ -1865,6 +1965,7 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
 }
 
 /// Check actual controls against the actual field: no duplicate layout model.
+#[track_caller]
 fn assert_action_geometry(w: &MainWindow, raised: bool) {
     // The droplet shell now reaches these endpoint positions through a
     // retargetable spring; inspect the settled frame, not the first key frame.
@@ -1877,7 +1978,12 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
     let (sx, sy, sw, sh) = rect(&shell);
-    let (fx, fy, fw, fh) = rect(&one(w, "Message input"));
+    // The field box, not the TextInput padded inside it since cc4a2aee.
+    let (fx, fy, fw, fh) = rect(
+        &testing::ElementHandle::find_by_element_id(w, "MessageComposer::input-field")
+            .find(|e| e.size().height > 0.0)
+            .expect("no composer field box"),
+    );
     let emoji_label = if w
         .global::<chatter_ui::ChatPane>()
         .get_composer_emoji_picker_visible()
@@ -1908,7 +2014,14 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
         None
     };
     let terminal = terminal_label.map(|label| rect(&one(w, label)));
-    assert!((ex - sx - 4.0).abs() < 0.5);
+    // Resting, the toggle sits one chrome inset in; raised, it pops out as a
+    // free droplet flush with the shell's edge (08e7ca06).
+    let lead = if raised { 0.0 } else { 4.0 };
+    assert!(
+        (ex - sx - lead).abs() < 0.5,
+        "emoji toggle lead {} (raised={raised})",
+        ex - sx
+    );
     assert!(ew >= 48.0 && eh >= 48.0);
     assert!(fx >= sx && fx + fw <= sx + sw + 0.5 && fy + fh <= sy + sh + 0.5);
     if raised {
@@ -1918,42 +2031,49 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             "populated field must reserve the lower Send target and gap"
         );
         // 4px bottom inset + 4px inter-shell gap + 4px field inset.
-        assert!((fy - (ey + eh) - 12.0).abs() < 0.5);
-        // Require primary surface metadata, never an inherited material layer.
-        let surface = |id: &str| {
-            testing::ElementHandle::find_by_element_id(w, id)
-                .find(|e| {
-                    e.type_name().is_some_and(|t| t == "GlassSurface") && e.size().height > 0.0
-                })
-                .expect("raised composer surface")
-        };
-        let (lx, ly, lw, lh) = rect(&surface("MessageComposer::left-action-surface"));
-        let right_surface =
-            attachment_visible.then(|| rect(&surface("MessageComposer::right-action-surface")));
-        let (ix, iy, iw, ih) = rect(&surface("MessageComposer::field-surface"));
-        assert!((ex - lx - 4.0).abs() < 0.5 && (ey - ly - 4.0).abs() < 0.5);
-        assert!((lw - 56.0).abs() < 0.5 && (lh - 56.0).abs() < 0.5);
-        if let Some((rx, ry, rw, rh)) = right_surface {
-            assert!(
-                rx > lx + lw,
-                "button shells must leave a transparent middle"
-            );
-            assert!((rh - 56.0).abs() < 0.5 && (ry - ly).abs() < 0.5);
-            assert!(
-                (rw - 56.0).abs() < 0.5,
-                "top right shell contains Attach only"
-            );
-        }
-        assert!((iy - ly - lh - 4.0).abs() < 0.5);
-        assert!((ix - sx).abs() < 0.5 && (iw - sw).abs() < 0.5);
-        assert!((fx - ix - 4.0).abs() < 0.5 && (fy - iy - 4.0).abs() < 0.5);
-        assert!((ih - fh - 8.0).abs() < 0.5);
+        // Pending files and a reply each add their own row plus a gap between
+        // the lifted controls and the field (message_composer.slint
+        // raised-toolbar-height).
+        let pane = w.global::<chatter_ui::ChatPane>();
+        let rows = if pane.get_pending_attachments().row_count() > 0 { 48.0 + 16.0 + 4.0 } else { 0.0 }
+            + if pane.get_composer_is_replying() {
+                56.0_f32.max(48.0 * w.global::<chatter_ui::Appearance>().get_text_grow()) + 4.0
+            } else {
+                0.0
+            };
+        assert!(
+            (fy - (ey + eh) - 12.0 - rows).abs() < 0.5,
+            "field {} below the lifted row, want {}",
+            fy - (ey + eh),
+            12.0 + rows
+        );
+        // The per-button and field `*-surface` shells were folded into one
+        // liquid silhouette (4fd3d8ea): measure the controls themselves. The
+        // lifted row sits one inset under the top (message_composer.slint
+        // action-y).
+        // Below the edit and formatting bars when shown (idle-composer order).
+        let bars: f32 = ["ComposerEditBar", "ComposerFormatToolbar"]
+            .iter()
+            .flat_map(|t| {
+                testing::ElementHandle::find_by_element_type_name(w, t)
+                    .filter(move |e| e.type_name().is_some_and(|n| n == *t))
+            })
+            .map(|e| e.size().height)
+            .sum();
+        assert!(
+            (ey - sy - bars - 4.0).abs() < 0.5,
+            "lifted row top {} under {bars}px of bars",
+            ey - sy
+        );
     } else {
         assert!((fx - (ex + ew) - 4.0).abs() < 0.5);
         assert!((ey - fy).abs() < 0.5);
+        // Plus one Spacing.xs so falling actions never touch the field
+        // (8bb73216).
         let occupied = 52.0
             + if attachment_visible { 52.0 } else { 0.0 }
-            + if terminal.is_some() { 52.0 } else { 0.0 };
+            + if terminal.is_some() { 52.0 } else { 0.0 }
+            + 4.0;
         assert!(
             (fw - (sw - 8.0 - occupied)).abs() < 0.5,
             "empty field reserves hidden actions"
@@ -1982,7 +2102,9 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
     if attachment_visible {
         let (ax, ay, aw, ah) = rect(&one(w, "Attach file"));
         if raised {
-            assert!((sx + sw - ax - aw - 4.0).abs() < 0.5);
+            // A free droplet flush with the shell's edge (08e7ca06).
+            assert!((sx + sw - ax - aw).abs() < 0.5);
+            assert!(ax > ex + ew, "lifted controls must leave a transparent middle");
         } else if let Some((tx, _, _, _)) = terminal {
             assert!((tx - ax - aw - 4.0).abs() < 0.5);
         } else {
@@ -1998,9 +2120,11 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
         ("Send message", send_visible),
         ("Record voice message", mic_visible),
     ] {
+        // The mic stays mounted, faded and disabled, while Send shows so the
+        // fall can cross-fade them (d18b4ec1): count what can be actioned.
         assert_eq!(
             testing::ElementHandle::find_by_accessible_label(w, label)
-                .filter(|e| e.size().height > 0.0)
+                .filter(|e| e.size().height > 0.0 && e.accessible_enabled() != Some(false))
                 .count(),
             usize::from(expected),
             "unexpected action {label}"
@@ -2013,28 +2137,53 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
     );
 }
 
+/// Tap inside the visible field box. Since cc4a2aee the TextInput scrolls in
+/// a Flickable inside it, so a long draft's TextInput starts above the clip.
+fn click_field(w: &MainWindow) {
+    let (x, y, _, _) = rect(
+        &testing::ElementHandle::find_by_element_id(w, "MessageComposer::input-field")
+            .find(|e| e.size().height > 0.0)
+            .expect("no composer field box"),
+    );
+    click_at(w, x + 20.0, y + 20.0);
+}
+
 fn click_element(w: &MainWindow, label: &str) {
     let (x, y, width, height) = rect(&one(w, label));
     click_at(w, x + width / 2.0, y + height / 2.0);
 }
 
-/// Query the actual clip and surfaces so a tray above the row cannot pass.
+/// The visible attachment row: its own `ComposerAttachmentStrip` since
+/// e1dde46a, in a row of its own under the lifted controls rather than
+/// between per-button surfaces (folded away in 4fd3d8ea).
+fn attachment_strip(w: &MainWindow) -> testing::ElementHandle {
+    testing::ElementHandle::find_by_element_type_name(w, "ComposerAttachmentStrip")
+        .find(|e| {
+            e.type_name().is_some_and(|t| t == "ComposerAttachmentStrip")
+                && e.size().width > 0.0
+                && e.size().height > 0.0
+        })
+        .expect("visible attachment strip")
+}
+
+/// Query the actual clip and controls so a tray inside the action row cannot pass.
 fn assert_attachment_strip_geometry(w: &MainWindow) {
-    let element = |id: &str| {
-        testing::ElementHandle::find_by_element_id(w, id)
-            .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
-            .expect("visible attachment row element")
-    };
-    let (x, y, width, height) = rect(&element("MessageComposer::attachment-strip"));
-    let (lx, ly, lw, lh) = rect(&element("MessageComposer::left-action-surface"));
-    let (rx, ry, _, rh) = rect(&element("MessageComposer::right-action-surface"));
+    let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
+        .unwrap();
+    let (sx, _, sw, _) = rect(&shell);
+    let (x, y, width, height) = rect(&attachment_strip(w));
+    let (_, ey, _, eh) = rect(&one(w, "Emoji & GIF picker"));
     let (_, fy, _, _) = rect(&one(w, "Message input"));
-    assert!((x - lx - lw - 4.0).abs() < 0.5);
-    assert!((rx - x - width - 4.0).abs() < 0.5);
-    assert!((y - ly).abs() < 0.5 && (y - ry).abs() < 0.5);
-    assert!((height - lh).abs() < 0.5 && (height - rh).abs() < 0.5);
+    // One chrome inset in from each side; one inset + Spacing.xs under the
+    // lifted controls (message_composer.slint: y = action-shell-height + xs).
+    assert!((x - sx - 4.0).abs() < 0.5 && (sx + sw - x - width - 4.0).abs() < 0.5);
+    assert!((y - ey - eh - 8.0).abs() < 0.5, "strip {} under the controls", y - ey - eh);
+    assert!((height - 64.0).abs() < 0.5, "attachment band height {height}");
     assert!(width > 0.0 && y + height < fy);
-    let scroll = element("MessageComposer::attachment-scroll");
+    let scroll = testing::ElementHandle::find_by_element_id(w, "ComposerAttachmentStrip::attachment-scroll")
+        .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+        .expect("visible attachment scroll");
     let (cx, cy, cw, ch) = rect(&scroll);
     assert!((cx - x).abs() < 0.5 && (cy - y).abs() < 0.5);
     assert!((cw - width).abs() < 0.5 && (ch - height).abs() < 0.5);
@@ -2046,9 +2195,7 @@ fn assert_attachment_strip_geometry(w: &MainWindow) {
 }
 
 fn scroll_attachment_strip(w: &MainWindow, delta_x: f32) {
-    let strip = testing::ElementHandle::find_by_element_id(w, "MessageComposer::attachment-strip")
-        .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
-        .expect("attachment strip");
+    let strip = attachment_strip(w);
     let (x, y, width, height) = rect(&strip);
     w.window()
         .dispatch_event(slint::platform::WindowEvent::PointerScrolled {

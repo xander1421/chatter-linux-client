@@ -11,7 +11,6 @@ import { ConversationKind } from "../chat/conversation_kind.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
-import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { DMListItem } from "dm_list_item.slint";
 import { ChannelListItem } from "channel_list_item.slint";
@@ -39,7 +38,9 @@ export struct ChatRowData {
     is-pinned: bool,             // local-only pin; core sorts these first
     is-muted: bool,
     can-leave: bool,             // core: `can_leave_channel`; private groups always
-    can-delete: bool,            // channel rows: core's `is_former_channel`
+    can-delete: bool,            // core: row menu offers "Delete chat"
+    can-mute: bool,              // core: `ConversationType::can_mute`
+    can-mute-timed: bool,        // core: `ConversationType::can_mute_timed`
     is-selected: bool,           // Rust-computed selection flag; drives highlight
     arrival-serial: int,         // Nonzero only for a newly inserted or promoted row
 }

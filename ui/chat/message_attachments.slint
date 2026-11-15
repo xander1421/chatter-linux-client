@@ -33,6 +33,7 @@ export component MessageAttachments inherits VerticalLayout {
     in property <string> message-id;
     in property <string> delivery-status;
     in property <string> failure-reason;
+    in property <bool> can-retry;
     in property <bool> is-own;
     in property <bool> is-edited;
     in property <bool> disappearing;
@@ -70,7 +71,7 @@ export component MessageAttachments inherits VerticalLayout {
             width: is-last-odd ? width : side, height: side };
     }
 
-    spacing: root.edge-to-edge ? 0px : Spacing.sm;
+    spacing: root.edge-to-edge ? Spacing.none : Spacing.sm;
 
     if root.album-count >= 2: album := Rectangle {
         width: root.media-width;
@@ -194,7 +195,7 @@ export component MessageAttachments inherits VerticalLayout {
                 x: Spacing.sm; y: Spacing.xs;
                 width: self.preferred-width; height: self.preferred-height;
                 has-reactions: false; overlay-media: true;
-                delivery-status: root.delivery-status; failure-reason: root.failure-reason;
+                delivery-status: root.delivery-status; failure-reason: root.failure-reason; can-retry: root.can-retry;
                 is-edited: root.is-edited; is-own: root.is-own; disappearing: root.disappearing;
                 is-pinned: root.is-pinned; mesh-delivery: root.mesh-delivery;
                 message-id: root.message-id; mobile: root.mobile;
@@ -207,7 +208,7 @@ export component MessageAttachments inherits VerticalLayout {
 
     for index in root.standalone-attachment-indices: HorizontalLayout {
         property <MessageAttachmentData> attachment: root.attachments[index];
-        padding: root.edge-to-edge && root.album-count >= 2 ? Spacing.sm : 0px;
+        padding: root.edge-to-edge && root.album-count >= 2 ? Spacing.sm : Spacing.none;
         // Let the media set the bubble's preferred width. The
         // row may grow with a wider caption, where image and
         // video attachments stay centered.
@@ -394,7 +395,7 @@ export component MessageAttachments inherits VerticalLayout {
                     has-reactions: false;
                     overlay-media: true;
                     delivery-status: root.delivery-status;
-                    failure-reason: root.failure-reason;
+                    failure-reason: root.failure-reason; can-retry: root.can-retry;
                     is-edited: root.is-edited;
                     disappearing: root.disappearing;
                     is-own: root.is-own;

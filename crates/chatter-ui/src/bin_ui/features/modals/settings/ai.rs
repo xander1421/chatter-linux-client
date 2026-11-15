@@ -61,6 +61,27 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
         });
 
+    // The cloud model id. Blank restores the provider default; the field then
+    // shows the model that actually applies.
+    let ui_ctx_model = ui_ctx.clone();
+    let weak_model = window.as_weak();
+    window
+        .global::<crate::SettingsPane>()
+        .on_settings_cloud_ai_model_changed(move |model: SharedString| {
+            let status = match ui_ctx_model.set_cloud_ai_model(model.as_str()) {
+                Ok(()) => "Model saved.".to_string(),
+                Err(e) => {
+                    tracing::error!("Failed to save cloud AI model: {}", e);
+                    format!("Could not save model: {e}")
+                }
+            };
+            if let Some(w) = weak_model.upgrade() {
+                let pane = w.global::<crate::SettingsPane>();
+                pane.set_settings_cloud_ai_model(ui_ctx_model.cloud_ai_settings().model.into());
+                pane.set_settings_cloud_ai_status(status.into());
+            }
+        });
+
     // Store the user's own provider key. Blank clears it.
     let ui_ctx_key = ui_ctx.clone();
     let weak_key = window.as_weak();

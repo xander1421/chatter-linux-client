@@ -30,8 +30,14 @@ impl RemoteAIService {
             .set_string("cloud_ai.mode", mode.as_str())
     }
 
-    /// Persist the model used when the active provider is a cloud one.
+    /// Persist the model used when the active provider is a cloud one. Blank
+    /// clears it, so the provider's default model applies again.
     pub fn set_cloud_model(&self, model: &str) -> Result<(), crate::error::StorageError> {
+        let model = model.trim();
+        if model.is_empty() {
+            self.settings_repo.delete("cloud_ai.model")?;
+            return Ok(());
+        }
         self.settings_repo.set_string("cloud_ai.model", model)
     }
 
@@ -187,6 +193,12 @@ mod tests {
         assert_eq!(settings.api_key.as_deref(), Some("public-test-fixture-key"));
         fresh.set_anthropic_api_key("").unwrap();
         assert!(service.cloud_settings().api_key.is_none());
+        fresh.set_cloud_model("  ").unwrap();
+        assert_eq!(
+            service.cloud_settings().model,
+            crate::cloud_ai::CloudProviderKind::Anthropic.default_model(),
+            "a blank model falls back to the provider default"
+        );
     }
 
     #[test]

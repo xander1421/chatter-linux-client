@@ -20,10 +20,22 @@ ARGS=(--target "$RUST_TARGET" --manifest-path "$REPO/Cargo.toml")
 [ "$PROFILE" = "release" ] && ARGS+=(--release)
 [ -n "${CHATTER_IOS_FEATURES:-}" ] && ARGS+=(--features "$CHATTER_IOS_FEATURES")
 
-# Xcode injects an SDK-specific toolchain env that confuses cargo's cc probing,
-# and a stale OPENSSL_DIR from the desktop shell breaks the iOS sysroot.
+# Cargo builds host tools as well as the iOS library. Xcode's SDK environment
+# must not make host C dependencies compile against iPhone headers (or no
+# sysroot after SDKROOT is cleared). Give cc-rs a separate SDK for each side.
+HOST_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+IOS_SDK="$(xcrun --sdk "${PLATFORM_NAME:-iphoneos}" --show-sdk-path)"
+CLANG="$(xcrun --find clang)"
+CLANGXX="$(xcrun --find clang++)"
+
+# A stale desktop OpenSSL path also breaks the iOS sysroot.
 env -u OPENSSL_DIR -u OPENSSL_LIB_DIR -u OPENSSL_INCLUDE_DIR \
     -u SDKROOT -u CPATH -u LIBRARY_PATH \
+    HOST_CC="$CLANG" HOST_CXX="$CLANGXX" \
+    HOST_CFLAGS="-isysroot $HOST_SDK" HOST_CXXFLAGS="-isysroot $HOST_SDK" \
+    TARGET_CC="$CLANG" TARGET_CXX="$CLANGXX" \
+    TARGET_CFLAGS="-isysroot $IOS_SDK" TARGET_CXXFLAGS="-isysroot $IOS_SDK" \
+    MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}" \
     CARGO_TARGET_DIR="$TARGET_DIR" \
     cargo build -p chatter-ios "${ARGS[@]}"
 

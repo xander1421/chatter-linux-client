@@ -52,7 +52,7 @@ impl UnifiedMessageRepository {
         collect_messages(&mut rows).map(|messages| {
             messages
                 .into_iter()
-                .filter(|message| !crate::services::disappearing::is_timer_notice(message))
+                .filter(|message| !crate::domain::disappearing::is_timer_notice(message))
                 .collect()
         })
     }

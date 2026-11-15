@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use chatter_core::domain::channel::{Channel, ChannelType};
 use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
 use chatter_core::domain::message::{ConversationType, Message, MessageContent};
-use chatter_core::storage::{ChannelRepository, Database, MessageRepository};
+use chatter_core::testing::storage::{ChannelRepository, Database, MessageRepository};
 
 // ============================================================================
 // Test Setup Helpers
@@ -2558,13 +2558,13 @@ fn pending_reactions_same_target_are_consumed_only_by_exact_scope() {
     let (_dir, db) = setup_test_db();
     let repo = MessageRepository::new(db.clone());
     let pending =
-        chatter_core::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+        chatter_core::testing::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
             db.clone(),
         );
     let me = UserId::new();
     let author = UserId::new();
     let ts = next_timestamp_ns();
-    chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db.clone())
+    chatter_core::testing::storage::repositories::settings_repo::SettingsRepository::new(db.clone())
         .set("auth.current_user_id", &me.to_string())
         .unwrap();
     let scope_a = ReactionScope::new(ChannelId::new(), ConversationType::ServerDm);

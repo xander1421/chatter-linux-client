@@ -76,5 +76,4 @@ mod unit_message;
 mod unit_multi_device;
 mod unit_network;
 mod username_lookup_hash_vectors;
-mod validated_ai;
 mod xeddsa_vectors;

@@ -18,7 +18,7 @@ async fn shield_bootstrap_without_cached_devices_is_not_reachable_privately() {
     let ms = client.messages();
 
     let sent = ms
-        .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
+        .send_friend_dm_content(&friend, crate::services::gateway::builders::build_text_content("hi", 1))
         .await;
     assert!(
         matches!(sent, Err(MessageError::NotReachablePrivately(p)) if p == friend),
@@ -33,8 +33,14 @@ async fn shield_bootstrap_without_cached_devices_is_not_reachable_privately() {
     );
 }
 
+/// Through the public core: a Shield send to a peer with no cached device
+/// is refused and releases admission. Once a device is cached the later
+/// send gets past device preparation, but with no pinned server `.onion` it
+/// is refused with `SecretChatNeedsTor` — and that refusal must release
+/// admission too, queue nothing for a later flush, spend no token and leave
+/// a failed (not unconfirmed) row.
 #[tokio::test]
-async fn public_core_shield_refusal_releases_admission_for_later_reachable_preparation() {
+async fn public_core_shield_refusals_release_admission_including_no_tor_route() {
     use crate::state::ActiveConversation;
     let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
     let friend = UserId::from_uuid(uuid::Uuid::max());
@@ -72,11 +78,25 @@ async fn public_core_shield_refusal_releases_admission_for_later_reachable_prepa
         vec![1]
     );
     seed_tokens(client.messages(), 2);
-    // A later public send now reaches actual mailbox bootstrap. The offline
-    // endpoint fails after its boundary, so admission must stay uncertain.
     let later = client.send_text(conversation, "second").await.unwrap();
-    assert_eq!(later.message.unwrap().delivery_status, "sending");
-    assert!(client.ensure_send_available(conversation).is_err());
+    assert!(!later.bootstrap_initiated);
+    // Provably unsent (`SecretChatNeedsTor`, settled like `RequestNotSent`):
+    // a retryable failed bubble with its reason, never an unconfirmed
+    // `sending` row, and no token spent.
+    assert!(later.send_error.is_none(), "got {:?}", later.send_error);
+    let row = later.message.unwrap();
+    assert_eq!(row.delivery_status, "failed");
+    assert_eq!(row.failure_reason.as_deref(), Some(crate::services::message::core::NO_TOR_ROUTE));
+    assert_eq!(client.messages().token_manager.available_token_count().unwrap(), 2);
+    client.ensure_send_available(conversation).unwrap();
+    assert!(
+        client
+            .messages()
+            .pending_dms
+            .drain(&friend)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// Shield uses every cached device, newest first, skipping one the server
@@ -130,7 +150,7 @@ async fn shield_flush_seals_to_the_session_device_without_a_prekey_fetch() {
         &mut auth,
         &friend,
         6,
-        &crate::network::validation::protovalidate::test_plaintext("queued"),
+        &chatter_proto::protovalidate::test_plaintext("queued"),
         &[7u8; 32],
     )
     .await
@@ -150,7 +170,7 @@ async fn shield_send_with_empty_token_batch_fails_without_requesting_tokens() {
     cache_device(ms, &friend, 2, &mut StdRng::seed_from_u64(9)).await;
 
     let sent = ms
-        .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
+        .send_friend_dm_content(&friend, crate::services::gateway::builders::build_text_content("hi", 1))
         .await;
     match sent {
         Err(MessageError::ShieldNotReady) => {}

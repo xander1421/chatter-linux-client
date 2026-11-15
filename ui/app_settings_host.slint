@@ -2,11 +2,9 @@ import { SidebarPane } from "app_sidebar_pane.slint";
 import { SearchPane } from "app_search_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { JarvisPane } from "app_jarvis_pane.slint";
-import { ChatPane } from "app_chat_pane.slint";
 import { AuthFlow } from "app_auth_flow.slint";
 import { SettingsPane } from "app_settings_pane.slint";
 import { Spacing } from "theme/spacing.slint";
-import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SettingsScreen } from "settings/settings_screen.slint";
 
 export component AppSettingsHost inherits Rectangle {
@@ -22,6 +20,7 @@ export component AppSettingsHost inherits Rectangle {
     // opens (Sessions, Link device, Recovery codes, ...) is declared above
     // and has to draw over it.
     if ModalHostState.settings-open: SettingsScreen {
+        active-section <=> SettingsPane.navigation-section;
         z: -1;
         width: parent.width;
         height: parent.height;
@@ -70,6 +69,7 @@ export component AppSettingsHost inherits Rectangle {
         ai-prefer-cloud <=> SettingsPane.settings-ai-prefer-cloud;
         cloud-ai-mode <=> SettingsPane.settings-cloud-ai-mode;
         cloud-ai-api-key <=> SettingsPane.settings-cloud-ai-api-key;
+        cloud-ai-model <=> SettingsPane.settings-cloud-ai-model;
         cloud-ai-configured: SettingsPane.settings-cloud-ai-configured;
         cloud-ai-status: SettingsPane.settings-cloud-ai-status;
         cloud-ai-balance: SettingsPane.settings-cloud-ai-balance;
@@ -166,6 +166,7 @@ export component AppSettingsHost inherits Rectangle {
         ai-prefer-cloud-changed(value) => { SettingsPane.settings-ai-prefer-cloud-changed(value); }
         cloud-ai-mode-changed(mode) => { SettingsPane.settings-cloud-ai-mode-changed(mode); }
         cloud-ai-api-key-changed(key) => { SettingsPane.settings-cloud-ai-api-key-changed(key); }
+        cloud-ai-model-changed(model) => { SettingsPane.settings-cloud-ai-model-changed(model); }
         cloud-ai-refresh-quota => { SettingsPane.settings-cloud-ai-refresh-quota(); }
         ai-open-memory => {
             ModalHostState.nav-push("jarvis-memory");

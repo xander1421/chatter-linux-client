@@ -6,8 +6,8 @@
 use crate::{common, skip_if_no_server};
 
 use chatter_core::error::NetworkError;
-use chatter_core::network::grpc::ChannelClient;
-use chatter_core::proto::chat_v1::ChannelType;
+use chatter_core::testing::network::grpc::ChannelClient;
+use chatter_proto::chat_v1::ChannelType;
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -38,7 +38,7 @@ async fn create_channel_and_wait(
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     // ChannelCreated directly contains the Channel proto
@@ -204,13 +204,13 @@ async fn test_join_leave_channel() {
 /// Run a membership RPC's event stream to its end, failing on OperationFailed.
 async fn drain(
     stream: impl tokio_stream::Stream<
-        Item = Result<chatter_core::proto::chat_v1::ChannelEvent, NetworkError>,
+        Item = Result<chatter_proto::chat_v1::ChannelEvent, NetworkError>,
     >,
 ) {
     tokio::pin!(stream);
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
-        if let Some(chatter_core::proto::chat_v1::channel_event::Event::OperationFailed(e)) =
+        if let Some(chatter_proto::chat_v1::channel_event::Event::OperationFailed(e)) =
             event.event
         {
             panic!("operation failed: {:?}", e.error);
@@ -341,7 +341,7 @@ async fn test_delete_channel() {
         while let Some(result) = delete_stream.next().await {
             let event = result.expect("Stream error");
             if let Some(payload) = event.event {
-                use chatter_core::proto::chat_v1::channel_event::Event;
+                use chatter_proto::chat_v1::channel_event::Event;
                 if let Event::OperationFailed(e) = payload {
                     let msg = e.error.map(|err| err.message).unwrap_or_default();
                     panic!("Delete failed: {}", msg);

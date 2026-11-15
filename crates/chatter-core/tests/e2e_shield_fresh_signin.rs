@@ -43,7 +43,7 @@ async fn shield_dm_after_fresh_signin_delivers_exactly_once() {
     // Phase timings and pagination only: keep cryptographic payloads/keys out
     // of this isolated regression's diagnostics.
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("off,chatter_core::network::grpc::onion_transport=info,chatter_core::inbox::poller=info,chatter_core::inbox::streaming::dm_bootstrap_handler=info,chatter_core::services::message::dm_bootstrap=info")
+        .with_env_filter("off,chatter_core::testing::network::grpc::onion_transport=info,chatter_core::testing::inbox::poller=info,chatter_core::testing::inbox::streaming::dm_bootstrap_handler=info,chatter_core::testing::services::message::dm_bootstrap=info")
         .with_test_writer()
         .try_init();
     let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];

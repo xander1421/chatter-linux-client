@@ -21,7 +21,7 @@ use crate::domain::ids::{ChannelId, UserId};
 use crate::mailbox::group::GroupCoordinator;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::chat_v1::{self, self as pb, channel_event};
+use chatter_proto::chat_v1::{self, self as pb, channel_event};
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::section_repo::SectionRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
@@ -32,7 +32,7 @@ use super::converters::{
 };
 use super::error::ChannelError;
 use super::membership_log::{AuthorBase, MembershipLog, password_invite_key};
-use super::verified_state::{ChannelRole, Policy};
+use crate::domain::verified_state::{ChannelRole, Policy};
 use membership::action;
 
 /// Channel service for all channel operations.
@@ -131,6 +131,15 @@ impl ChannelService {
         check_name_length(trimmed_name)?;
 
         let proto_type = domain_channel_type_to_proto(channel_type);
+        // Encryption follows the access type, never the caller: an open
+        // channel anyone can join is plaintext (server-readable, like the
+        // server's own default), a private one is always end-to-end encrypted.
+        let config = config.map(|mut c| {
+            if matches!(channel_type, ChannelType::Public | ChannelType::Private) {
+                c.require_encryption = channel_type == ChannelType::Private;
+            }
+            c
+        });
         let proto_config = config.as_ref().map(domain_config_to_proto);
         let password = password.filter(|p| !p.is_empty());
 
@@ -142,7 +151,7 @@ impl ChannelService {
             let mut policy = Policy::defaults(channel_type == ChannelType::Public);
             let mut genesis = Vec::new();
             if let Some(p) = password {
-                policy.join = super::verified_state::JoinMode::InviteOnly;
+                policy.join = crate::domain::verified_state::JoinMode::InviteOnly;
                 let key = password_invite_key(&channel_id, p)?;
                 genesis.push(action(Action::CreateInvite(pb::CreateInvite {
                     capability: Some(pb::InviteCapability {

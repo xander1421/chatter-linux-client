@@ -33,13 +33,12 @@ impl InboxEventProcessor {
                 );
                 // Same conversation as a sealed-sender DM; the receipt's
                 // transport is picked by mode in `send_friend_dm_content`.
-                let handle = ConversationHandle::new(
-                    ActiveConversation::ServerDm { peer_id: *peer_id },
-                    self.client.clone(),
-                );
-                let ts = *timestamp;
+                let receipt = self
+                    .facade
+                    .clone()
+                    .send_dm_delivery_receipt(*peer_id, *timestamp);
                 tokio::spawn(async move {
-                    if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
+                    if let Err(e) = receipt.await {
                         tracing::warn!("Failed to send DM delivery receipt: {}", e);
                     }
                 });
@@ -121,15 +120,12 @@ impl InboxEventProcessor {
                 {
                     // Channel receipts are owned by the shared post-commit
                     // listener; this event also carries channel-free friend DMs.
-                    let handle = ConversationHandle::new(
-                        ActiveConversation::ServerDm {
-                            peer_id: *sender_id,
-                        },
-                        self.client.clone(),
-                    );
-                    let ts = *timestamp;
+                    let receipt = self
+                        .facade
+                        .clone()
+                        .send_dm_delivery_receipt(*sender_id, *timestamp);
                     tokio::spawn(async move {
-                        if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
+                        if let Err(e) = receipt.await {
                             tracing::warn!("Failed to send delivery receipt: {}", e);
                         }
                     });
@@ -162,7 +158,7 @@ impl InboxEventProcessor {
                             crate::services::gateway::CallHangupReason::AcceptedElsewhere
                                 | crate::services::gateway::CallHangupReason::DeclinedElsewhere
                         );
-                    let Some(worker) = self.client.call_service().get() else {
+                    let Some(worker) = self.call_service.get() else {
                         return;
                     };
                     match worker
@@ -173,10 +169,8 @@ impl InboxEventProcessor {
                         super::super::call_worker::SignalHangupDisposition::GroupRingWithdrawn(
                             revision,
                         ) => {
-                            if self.client.auth_state().get().session_revision == revision {
-                                self.client
-                                    .call_signaling()
-                                    .drop_ringing_group_call_invite(call_id);
+                            if self.auth_state.get().session_revision == revision {
+                                self.facade.drop_ringing_group_call_invite(call_id);
                             }
                             return;
                         }
@@ -430,18 +424,19 @@ impl InboxEventProcessor {
             InboxEvent::ChannelDeleteForEveryone {
                 channel_id,
                 sender_id,
+                target_author_id,
                 target_sent_timestamp,
-                ..
             } => {
                 match self.message_service.apply_channel_delete(
                     channel_id,
                     sender_id,
+                    target_author_id,
                     *target_sent_timestamp,
                 ) {
                     Ok(Some(msg)) => {
                         self.event_bus.emit_domain(DomainEvent::MessageDeleted {
                             message_id: msg.id,
-                            author_id: *sender_id,
+                            author_id: *target_author_id,
                             channel_id: Some(*channel_id),
                             target_sent_timestamp: *target_sent_timestamp,
                         });
@@ -500,6 +495,7 @@ impl InboxEventProcessor {
                 call_id,
                 phase,
                 duration_secs,
+                is_video,
                 timestamp,
             } => {
                 // Files the row and tells the UI; a non-member's is dropped there.
@@ -509,6 +505,7 @@ impl InboxEventProcessor {
                     call_id,
                     *phase,
                     *duration_secs,
+                    *is_video,
                     *timestamp,
                 ) {
                     tracing::warn!(error = %e, channel_id = %channel_id, "Channel call event not filed");

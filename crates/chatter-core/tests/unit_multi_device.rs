@@ -7,7 +7,7 @@ use crate::framework;
 
 use std::collections::{HashMap, HashSet};
 
-use chatter_core::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     GetPreKeyBundleResponse, PreKeyBundleDeviceList, SignalPreKeyBundle,
     get_pre_key_bundle_response,
 };
@@ -281,7 +281,7 @@ async fn test_valid_device_list_succeeds() {
 
 /// Create a test SignalPreKeyBundle for a device.
 fn create_test_bundle(device_id: u32) -> SignalPreKeyBundle {
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{
         KyberPreKeyRecord, PreKeyRecord, SignedPreKeyRecord,
     };
 

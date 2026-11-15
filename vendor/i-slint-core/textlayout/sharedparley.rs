@@ -50,7 +50,28 @@ impl FontContext {
     pub fn register_static_font(&mut self, data: &'static [u8]) {
         let key = (data.as_ptr() as usize, data.len());
         if self.registered_static_fonts.insert(key) {
-            self.inner.collection.register_fonts(fontique::Blob::new(Arc::new(data)), None);
+            let families =
+                self.inner.collection.register_fonts(fontique::Blob::new(Arc::new(data)), None);
+            // Chatter: a bundled colour-emoji font leads the Emoji generic family.
+            // parley sends every VS16 cluster to that family before the element's
+            // own font-family, so without this each platform drew its system set
+            // (Android 10's 2019 Noto, Segoe on Windows) and call-verification
+            // emoji looked different on each device.
+            let emoji: Vec<_> = families
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|id| {
+                    self.inner.collection.family_name(*id).is_some_and(|n| n.contains("Emoji"))
+                })
+                .collect();
+            // CoreText cannot draw the bundled CBDT/CBLC emoji font. Keep
+            // Apple's system Emoji fallback for mixed text and VS16 clusters,
+            // as well as the explicit Apple Color Emoji family used by UI.
+            if !cfg!(target_vendor = "apple") && !emoji.is_empty() {
+                self.inner
+                    .collection
+                    .append_generic_families(fontique::GenericFamily::Emoji, emoji.into_iter());
+            }
         }
     }
 
@@ -965,6 +986,56 @@ pub use accessibility::CachedTextInputAccessibilityState;
 mod chatter_tests {
     use alloc::format;
     use super::*;
+    #[test]
+    fn bundled_colour_emoji_leads_the_emoji_generic_family() {
+        let mut ctx = FontContext::new(parley::FontContext {
+            collection: fontique::Collection::new(fontique::CollectionOptions {
+                system_fonts: false,
+                ..Default::default()
+            }),
+            source_cache: Default::default(),
+        });
+        ctx.register_static_font(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"));
+        ctx.register_static_font(include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf"));
+        let first = ctx.collection.generic_families(fontique::GenericFamily::Emoji).next();
+        let name = first.and_then(|id| ctx.collection.family_name(id).map(alloc::string::String::from));
+        // Without system fonts, Apple platforms have no usable Emoji fallback here;
+        // registering Noto must not override the native fallback in real UI.
+        let expected = if cfg!(target_vendor = "apple") { None } else { Some("Noto Color Emoji") };
+        assert_eq!(name.as_deref(), expected);
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn mixed_text_emoji_uses_native_drawable_font() {
+        let mut ctx = FontContext::new(parley::FontContext::default());
+        ctx.register_static_font(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"));
+        let noto = include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf");
+        ctx.register_static_font(noto);
+        let builder = LayoutWithoutLineBreaksBuilder::new(
+            Some(FontRequest { family: Some("Inter".into()), ..Default::default() }),
+            TextWrap::NoWrap,
+            None,
+            ScaleFactor::new(1.0),
+        );
+        let text = "Apple QA: mixed text 🚀";
+        let mut layout = builder.build(&mut ctx, text, None, None);
+        layout.break_all_lines(None);
+        let mut found = false;
+        for line in layout.lines() {
+            for run in line.runs() {
+                for cluster in run.clusters() {
+                    if text[cluster.text_range()].contains('🚀') {
+                        found = true;
+                        assert!(run.font().data.as_ref() != noto.as_slice(), "Apple platforms must not shape emoji with bundled Noto");
+                        assert!(cluster.glyphs().all(|glyph| glyph.id != 0));
+                    }
+                }
+            }
+        }
+        assert!(found, "emoji must survive shaping beside ordinary text");
+    }
+
     #[test]
     fn elided_rtl_body_keeps_logical_start_after_ltr_label() {
         let mut font_ctx = parley::FontContext {

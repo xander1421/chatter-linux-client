@@ -1,15 +1,23 @@
 # Development build speed
 
-The workspace enables incremental compilation for development crates. The
-host's former `CARGO_INCREMENTAL=0` shell export has been removed; open a new
-shell or run `unset CARGO_INCREMENTAL` in existing shells. An explicit environment
-override still takes precedence over Cargo profiles.
+## Profiles
 
-The generated `chatter-ui-slint` crate remains non-incremental because prior
-measurements found its incremental memory use erratic. Dependencies remain
-optimized; `chatter-core` stays at O2 to preserve generic attachment-crypto
-throughput. Release profiles are unchanged. These settings are not new timing
-results; incremental compilation helps subsequent edits, not the first build.
+`[profile.dev]` in the workspace `Cargo.toml` builds workspace crates at
+`opt-level = 0`, `debug = 0`, `incremental = true`, `codegen-units = 256`.
+Dependencies (`[profile.dev.package."*"]`) build at `opt-level = 2`. An explicit
+`CARGO_INCREMENTAL` in the environment overrides the profile.
+
+Two per-package exceptions, both explained in `Cargo.toml` comments:
+
+- `chatter-ui-slint` is non-incremental (`incremental = false`). Its incremental
+  memory use was erratic and sccache refuses incremental builds.
+- `chatter-attachment-crypto` builds at `opt-level = 2`, so the attachment
+  AES-CBC/HMAC code instantiated there is not compiled at O0. `chatter-core`
+  builds at O0 like every other member.
+
+Incremental compilation helps rebuilds after an edit, not the first build.
+`.cargo/config.toml` sets `rustc-wrapper = "sccache"` and, on
+`x86_64-unknown-linux-gnu`, links with clang + mold.
 
 ## Opt-in Slint live preview
 
@@ -21,17 +29,18 @@ server are configured:
 tools/ui-live-preview.sh --features mesh,dev-trust-root,dev-auto-register
 ```
 
-This enables `SLINT_LIVE_PREVIEW=1` and `slint/live-preview` on the command line,
-following [Slint's instructions](https://docs.slint.dev/latest/docs/slint/guide/tooling/live-preview/).
-It does not add preview to default features. It uses a separate preview data
-directory by default and disables OS-keyring access. It does not copy existing
-accounts or credentials. Auto-registration additionally requires the existing
-`CHATTER_DEV=1` opt-in; use only with the local development server.
+The script sets `SLINT_LIVE_PREVIEW=1`, `CHATTER_NO_KEYRING=1` and a separate
+`XDG_DATA_HOME` (default `~/.cache/chatter-ui-preview/data`), then runs
+`cargo run -p chatter-ui --bin chatter-ui --features slint/live-preview`
+(see [Slint's live-preview guide](https://docs.slint.dev/latest/docs/slint/guide/tooling/live-preview/)).
+Preview is not a default feature. It does not copy existing accounts or
+credentials. Auto-registration additionally requires the `CHATTER_DEV=1`
+opt-in; use only with the local development server.
 
 The initial build still costs time. Subsequent `.slint` edits can reload in the
-running app. Changes to properties/callbacks used by Rust require rebuilding.
-Compatibility with this repository's patched Backdrop item and renderer has
-not yet been verified in the interpreter. Never package the preview binary.
+running app; changes to properties/callbacks used by Rust require a rebuild.
+Compatibility with this repository's patched Backdrop item and renderer in the
+interpreter is unverified. Never package the preview binary.
 
 ## Test binaries
 
@@ -44,11 +53,8 @@ explicit process-isolating runner and a review of those assumptions first.
 
 ## Avoid invalidating or blocking caches
 
-Keep compiler flags, feature sets and target CPU stable between edits. The RC86
-baseline CPU flag change caused a full desktop dependency rebuild; Android waited
-on the shared Cargo target lock. Build the platforms sequentially when sharing
-that directory. Separate target directories avoid the lock but duplicate large
+Keep compiler flags, feature sets and target CPU stable between edits: changing
+`RUSTFLAGS` (for example the target CPU) rebuilds every dependency. Platforms
+sharing one target directory wait on Cargo's target-directory lock, so build them
+sequentially. Separate target directories avoid the lock but duplicate large
 artifacts and do not create more RAM. Do not clean an active build directory.
-
-Mold remains the linker. Wild, Cranelift, workspace feature unification and an
-AES/protocol crate split are unmeasured experiments, not applied speedups.

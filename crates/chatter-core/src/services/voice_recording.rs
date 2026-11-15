@@ -99,6 +99,11 @@ fn record(
     // something "try again" fixes: say what is missing.
     let mut recorder = AudioRecorder::new().map_err(|e| {
         tracing::warn!(error = %e, "No microphone available for voice recording");
+        if let crate::error::MediaError::RecordingError(ref message) = e {
+            if message == crate::media::audio_recorder::MICROPHONE_PERMISSION_DENIED {
+                return message.clone();
+            }
+        }
         NO_MICROPHONE.to_string()
     })?;
     recorder.start().map_err(|e| e.to_string())?;

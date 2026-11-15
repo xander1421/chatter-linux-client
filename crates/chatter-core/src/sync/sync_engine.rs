@@ -178,7 +178,13 @@ impl SyncEngine {
                 result.channels = channel_result;
 
                 // Step 2: Sync messages for all channels
-                let channel_ids: Vec<ChannelId> = channels.iter().map(|c| c.id).collect();
+                // Private channels have no server timeline (see
+                // ChannelSync::local_timeline_channel_ids).
+                let channel_ids: Vec<ChannelId> = channels
+                    .iter()
+                    .filter(|c| c.channel_type != crate::domain::channel::ChannelType::Private)
+                    .map(|c| c.id)
+                    .collect();
                 result.messages = self.message_sync.sync_all(&channel_ids).await;
                 result.messages_failed = !result.messages.errors.is_empty();
             }
@@ -306,14 +312,6 @@ impl SyncEngine {
         tracing::info!("Sync engine shutting down");
     }
 
-    /// Trigger an immediate sync (e.g., after reconnect). Waits for a cycle
-    /// that started after this call; `None` when another trigger's cycle was
-    /// that one.
-    pub async fn trigger_sync(&self) -> Option<SyncCycleResult> {
-        tracing::info!("Triggered immediate sync");
-        self.sync_if_stale(Duration::ZERO).await
-    }
-
     /// Close the post-subscribe stream gap using only durable messages for
     /// locally joined channels. The periodic full pass owns list and roster
     /// reconciliation; this pass retains each channel's message checkpoint.
@@ -321,7 +319,7 @@ impl SyncEngine {
         let _sync_guard = self.sync_lock.lock().await;
         let channels = self
             .channel_sync
-            .local_channel_ids()
+            .local_timeline_channel_ids()
             .map_err(|e| e.to_string())?;
         let result = self.message_sync.sync_all(&channels).await;
         let _ = self.event_bus.domain_sender().send(DomainEvent::SyncComplete {
@@ -333,19 +331,15 @@ impl SyncEngine {
         Ok(result)
     }
 
-    /// Like [`Self::trigger_sync`], but also skipped when a cycle finished
-    /// within `max_age`.
+    /// Run a sync cycle unless one finished within `max_age`. Waits for a
+    /// cycle that started after this call; `None` when another caller's cycle
+    /// was that one.
     pub async fn sync_if_stale(&self, max_age: Duration) -> Option<SyncCycleResult> {
         let result = self.coalescer.run(max_age, || self.sync_all()).await;
         if result.is_none() {
             tracing::debug!("Sync trigger coalesced into another cycle");
         }
         result
-    }
-
-    /// Check if this is the first sync (no channels synced yet).
-    pub fn is_initial_sync(&self) -> bool {
-        self.channel_sync.last_synced_at().is_none()
     }
 }
 

@@ -24,6 +24,7 @@ impl MessageService {
             message.edited_at = Some(chrono::Utc::now());
             message.updated_at = chrono::Utc::now();
             self.message_repo.update(&message)?;
+            self.message_repo.refresh_reply_quotes(&message)?;
         }
         Ok(())
     }
@@ -276,15 +277,22 @@ impl MessageService {
         Ok(target)
     }
 
-    /// Apply an authenticated channel author's delete in its exact channel scope.
+    /// Apply an authenticated channel delete in its exact channel scope: the
+    /// author's own, or a moderator's of another member's message (the
+    /// sender's role read from the verified state; anyone else is ignored).
     /// Retain a typed tombstone even for a held target, so history replay cannot
     /// resurrect it and collisions in other conversations or types survive.
     pub fn apply_channel_delete(
         &self,
         channel_id: &ChannelId,
+        deleted_by: &UserId,
         sender: &UserId,
         target_sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
+        if deleted_by != sender && !self.group_gate().may_moderate(channel_id, deleted_by) {
+            tracing::warn!(%channel_id, %deleted_by, "Channel delete of another member's message from a non-moderator; ignored");
+            return Ok(None);
+        }
         crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
             self.database.clone(),
         )

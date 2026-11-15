@@ -386,7 +386,7 @@ fn open_conversation(
     // rejects it.
     let opened = ui_ctx
         .call_history_conversation(conversation_type, conversation_id)
-        .is_some_and(|conv| crate::bin_ui::features::sidebar::select_conversation(window, conv));
+        .is_some_and(|conv| crate::bin_ui::features::chat::open::select_conversation(window, conv));
     if !opened {
         tracing::warn!(
             conversation_type,
@@ -671,16 +671,16 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
                 conversation_type: r.conversation_type.into(),
                 private_channel: r.private_channel,
                 name: name.into(),
-                initials: crate::bin_ui::converters::initials_from_name(name).into(),
+                initials: chatter_core::ui::message_row::initials_from_name(name).into(),
                 timestamp: r
                     .started_at
-                    .map(crate::bin_ui::converters::sidebar_time)
+                    .map(chatter_core::ui::format::sidebar_time)
                     .unwrap_or_default()
                     .into(),
                 detail: (if r.in_progress {
                     "In progress".to_string()
                 } else {
-                    crate::bin_ui::converters::call_detail(r.result, r.is_incoming, r.duration_secs)
+                    chatter_core::ui::format::call_detail(r.result, r.is_incoming, r.duration_secs)
                 })
                 .into(),
                 is_missed: r.is_missed,
@@ -808,7 +808,7 @@ mod tests {
             ids::{ChannelId, UserId},
             message::ConversationType,
         };
-        use chatter_core::storage::repositories::{
+        use chatter_core::testing::storage::repositories::{
             CallHistoryRepository, channel_repo::ChannelRepository,
         };
         use slint::Model;
@@ -835,7 +835,7 @@ mod tests {
             .unwrap()
             .database_path();
         let db =
-            Arc::new(chatter_core::storage::Database::open(&path, "calls-icon-fixture").unwrap());
+            Arc::new(chatter_core::testing::storage::Database::open(&path, "calls-icon-fixture").unwrap());
         let channels = ChannelRepository::new(db.clone());
         let calls = CallHistoryRepository::new(db);
         let id = ChannelId::new();

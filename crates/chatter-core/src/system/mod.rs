@@ -34,6 +34,8 @@ pub use antidebug::{
     periodic_check as antidebug_check,
 };
 pub use directories::Directories;
+/// SQLCipher bring-up check for new platform targets (iOS smoke test).
+pub use crate::storage::database::sqlite_version_at;
 pub use keyring::Keyring;
 pub use notification_sink::{NoopNotificationSink, NotificationSink};
 #[cfg(all(

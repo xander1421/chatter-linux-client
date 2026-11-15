@@ -75,6 +75,143 @@ const _: () = {
     assert!(!same, "production update key is the public development key; use a provisioned release-update key");
 };
 
+// ─── Group send endorsement server key ─────────────────────────────────────
+
+/// zkgroup `ServerPublicParams` the development group send seed
+/// (SHA-256("chatter-dev-group-send-params-v1"), deploy/vault/init-and-unseal.sh)
+/// derives to: `go run ./cmd/group-send-params`. Anyone can issue endorsements
+/// under it.
+const DEV_GROUP_SEND_PUBLIC_PARAMS_HEX: &str = "0054dd0b149bef604f602b36a8509175d6e9d8a9a607ec43e71ad45776c2bb124cbed09df326bf18172300b786942349a45ed56afb7eac22c8b5075bf1ff135845b40b8401fa086933c9825624daaf7d64225d64238fa4b925f50ec009552f687a22fd286d689da6dcafd5344c94d13dfdd8129b9763bebe591c713a50b0338b567a8b495cd81d103127e9c3f7f8a65861fba73114e8b7894c813ce3a674e31731a4c75fe758a2ddba8921b647df92d4b7f182964a7cd6a1f9bedd77323bd7a836e8c8d9fb5cde6546391e5144bf1343bdca8b8e40f3990fc1b2ab13ccd7f9367f82db2aa79e2affe043c55fdea5d692e0b79081e3151d469fa45d14e029fb31489466b273f3b0fb9ce47223d3daa7a4ba7b53e412df7b2277b9f9cffa04c6cc22c0abcefc9cfe7782927b1abab1f9462f2760d4aa3bd0c8927a32b2233236105502a52c726407f300e625411d7ca12f07bc43b1f7d37b235c0a15b467ce712001ba8a7e600ce6650dea91eec52addbffa9ec15a2f2a81708ed9bf8d452f1a87558a7101ec07625c8e005d382f7a33a2e7f55f3680d99bb1e2e2c84bf29449a31fb4d2d6caa05d72e3b1850610d765c6f68e09020261eef92276505ccb2ac59e569a8f1a12fce15247b002fd88626ee55ddd45bba1ec1635040f6aec6bb2dcef29a850800e0459cc6390da06c4cada9eeb6d39fb8bcf4c2435cad56b6c92830f2c1440921010ec737e88378bfa6169efa9f246c99fa7194fb9a7176a63572984222ee99ff2971fa98822185e7c15d72d13656f4b5a51166446bb282fab4130b3564ad7453c7ebbb6a1a0a4a9f40dab0ac9b54236da02478209ba1f0712acd18e1a8431b51943e8ee069e4a77ec3177a5745b479141df0f9929b9467ce7715b8b053431d5e5d1f16ad634812532b66a99f57ccd4bfc1990bab1b1698348f476165d";
+
+/// The zkgroup server public params group send endorsements must verify under
+/// (crypto/group_send.rs). Pinned so the server cannot issue one member
+/// endorsements under a key of its own and so tell that member's sends apart.
+#[cfg(feature = "dev-trust-root")]
+pub const GROUP_SEND_PUBLIC_PARAMS_HEX: &str = DEV_GROUP_SEND_PUBLIC_PARAMS_HEX;
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const GROUP_SEND_PUBLIC_PARAMS_HEX: &str =
+    match option_env!("CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX") {
+        Some(hex) => hex,
+        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") =>
+            DEV_GROUP_SEND_PUBLIC_PARAMS_HEX,
+        None => panic!("no group send public params are baked into this build; provision CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX or use --features dev-trust-root for local development"),
+    };
+
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
+const _: () = {
+    let (a, b) = (GROUP_SEND_PUBLIC_PARAMS_HEX.as_bytes(), DEV_GROUP_SEND_PUBLIC_PARAMS_HEX.as_bytes());
+    let mut same = a.len() == b.len();
+    let mut i = 0;
+    while same && i < a.len() {
+        // ASCII case-fold: hex digits compare equal in either case.
+        if a[i] | 0x20 != b[i] | 0x20 {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(!same, "production group send params are the public development params; provision CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX");
+};
+
+// ─── Release transparency (Sigstore Rekor) ─────────────────────────────────
+//
+// Every release artifact must be logged in Rekor before a client installs it
+// (docs/IN-APP-UPDATER.md "Transparency"). Two pins, both uncompressed SEC1
+// P-256 points (65 bytes):
+//
+// - the Rekor LOG key that signs checkpoints and signed entry timestamps. Not a
+//   secret and not provisioned: production pins the public-good instance
+//   rekor.sigstore.dev (fetched from /api/v1/log/publicKey on 2026-11-13);
+//   `dev-trust-root` pins a dev log key whose private scalar is
+//   SHA-256("chatter-dev-rekor-log-v1"), used by `publish-update.py
+//   --test-dev-seed`'s mock log.
+// - the release TRANSPARENCY key that signs the hashedrekord entry. Its scalar
+//   is SHA-256("chatter-release-transparency-p256-v1" || release-update seed),
+//   so it needs no extra Vault secret; pinning it is what lets a monitor find
+//   every Chatter release in the public log by key.
+
+/// rekor.sigstore.dev log key (SPKI SHA-256 = its logID
+/// c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d).
+pub const PUBLIC_GOOD_REKOR_LOG_PUBLIC_KEY: [u8; 65] = decode_hex65(
+    "04d86d98fb6b5a6dd4d5e41706881231d1af5f005c2b9016e62d21ad92ce0bdea5fac98634cee7c19e10bc52bfe2cb9e468563fff40fdb6362e10b7d0cf7e458b7",
+);
+
+/// Dev log key; the private scalar is SHA-256 of a public string.
+pub const DEV_REKOR_LOG_PUBLIC_KEY: [u8; 65] = decode_hex65(
+    "040a37b2ed0b074e38e90ee756402a247b2e7fcd1e1ea9c742d0251b21a65e86098386c5d5664dbee0ca3fca52ac484041d120acb3b200da9f13151372cf53cd53",
+);
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const REKOR_LOG_PUBLIC_KEY: [u8; 65] = PUBLIC_GOOD_REKOR_LOG_PUBLIC_KEY;
+
+#[cfg(feature = "dev-trust-root")]
+pub const REKOR_LOG_PUBLIC_KEY: [u8; 65] = DEV_REKOR_LOG_PUBLIC_KEY;
+
+/// Derived from the development release-update seed.
+const DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY: [u8; 65] = decode_hex65(
+    "045c988a4c22744d60f5bf4ce414a33b51d7f467600ba1fbec3a1fad12d25c70b5ad2478b1ce8b4955dc9d933f1139c82403b3ddec0dab33d6ef10d97ce120cac7",
+);
+
+#[cfg(feature = "dev-trust-root")]
+pub const RELEASE_TRANSPARENCY_PUBLIC_KEY: [u8; 65] = DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY;
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const RELEASE_TRANSPARENCY_PUBLIC_KEY: [u8; 65] = match option_env!(
+    "CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX"
+) {
+    Some(hex) => decode_hex65(hex),
+    None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => {
+        DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY
+    }
+    None => panic!(
+        "no release-transparency public key is baked into this build; provision CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX or use --features dev-trust-root for local development"
+    ),
+};
+
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
+const _: () = {
+    let mut same = true;
+    let mut i = 0;
+    while i < 65 {
+        if RELEASE_TRANSPARENCY_PUBLIC_KEY[i] != DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(
+        !same,
+        "production release-transparency key is the public development key; use the key derived from the provisioned release-update seed"
+    );
+};
+
+const fn decode_hex65(hex: &str) -> [u8; 65] {
+    let bytes = hex.as_bytes();
+    assert!(
+        bytes.len() == 130 && bytes[0] == b'0' && bytes[1] == b'4',
+        "a P-256 anchor must be 130 hex characters: an uncompressed SEC1 point (04 || x || y)"
+    );
+    let mut out = [0u8; 65];
+    let mut i = 0;
+    while i < 65 {
+        out[i] = anchor_nibble(bytes[i * 2]) * 16 + anchor_nibble(bytes[i * 2 + 1]);
+        i += 1;
+    }
+    out
+}
+
+const fn anchor_nibble(c: u8) -> u8 {
+    match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        b'A'..=b'F' => c - b'A' + 10,
+        _ => panic!("a P-256 anchor contains a non-hex character"),
+    }
+}
+
 // ─── Sealed sender trust root ──────────────────────────────────────────────
 
 /// Public half of the development trust root that signed the development

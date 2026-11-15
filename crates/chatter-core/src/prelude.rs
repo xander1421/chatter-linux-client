@@ -14,7 +14,8 @@ pub use crate::services::auth_service::LoginResult;
 // decrypted-buffer handling). Surfaced here so UI code doesn't have to
 // reach into the `crypto::` module — the layering rule is "UI never
 // imports `crypto::`" and that is enforced via the prelude.
-pub use crate::crypto::{SecretString, SecureBuffer};
+pub use crate::crypto::SecretString;
+pub use chatter_attachment_crypto::SecureBuffer;
 
 // Service-level filters that show up in the public façade.
 pub use crate::services::user::FriendRequestFilter;
@@ -41,7 +42,7 @@ pub use crate::domain::{
 pub use crate::events::{DomainEvent, EventBus};
 
 // Conversation operations
-pub use crate::services::conversation::{ConversationError, ConversationHandle};
+pub use crate::client::conversation::{ConversationError, ConversationHandle};
 pub use crate::services::gateway::outgoing::{QuoteIntent, SendError, SendResult};
 
 // State

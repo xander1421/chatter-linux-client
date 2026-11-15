@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
-use chatter_core::storage::{Database, MessageRepository};
+use chatter_core::testing::storage::{Database, MessageRepository};
 
 fn setup() -> (TempDir, Arc<Database>) {
     let temp_dir = TempDir::new().unwrap();

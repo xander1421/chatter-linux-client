@@ -59,7 +59,7 @@ impl KeyRecoveryNeed {
     /// True when the original identity key may still be recoverable, so
     /// minting a replacement would throw away a live key.
     ///
-    /// This is the guard on [`crate::client::ChatterClient::accept_new_identity`]:
+    /// This is the guard on `ChatterClient::accept_new_identity`:
     /// a new identity is a destructive, irreversible act that breaks every
     /// existing session and changes every contact's safety number. It is only
     /// correct once recovery has been *ruled out*, not merely failed once.

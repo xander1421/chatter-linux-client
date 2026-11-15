@@ -43,7 +43,7 @@ pub(super) fn dispatch_secret_chat_bootstrap(
     let event = match inner {
         content::Content::AnonDmRequest(request)
             if request.disappearing_seconds
-                == crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS =>
+                == crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS =>
         {
             InboxEvent::AnonDmRequest {
                 peer_id: sender_id,
@@ -314,15 +314,12 @@ pub fn dispatch_control_content(
                         peer_id: *sender_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
-                } else if delete.target_call_id.is_some()
-                    || delete.destination_user_id.is_some()
-                    || !delete
-                        .target_author_aci
-                        .as_deref()
-                        .is_some_and(|author| author.parse::<UserId>().ok() == Some(*sender_id))
-                {
+                } else if delete.target_call_id.is_some() || delete.destination_user_id.is_some() {
                     return;
-                } else if let Ok(channel_id) = dm.channel_id.parse::<ChannelId>() {
+                } else if let (Ok(channel_id), Some(target_author_id)) = (
+                    dm.channel_id.parse::<ChannelId>(),
+                    delete.target_author_aci.as_deref().and_then(|a| a.parse::<UserId>().ok()),
+                ) {
                     tracing::debug!(
                         sender_id = %sender_id,
                         channel_id = %channel_id,
@@ -332,6 +329,7 @@ pub fn dispatch_control_content(
                     let _ = event_tx.send(InboxEvent::ChannelDeleteForEveryone {
                         channel_id,
                         sender_id: *sender_id,
+                        target_author_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
                 } else {
@@ -428,7 +426,7 @@ pub fn dispatch_control_content(
             stats.write().messages_processed += 1;
         }
         content::Content::CallEvent(ev) => {
-            use crate::proto::content_v1::call_event::Type;
+            use chatter_proto::content_v1::call_event::Type;
             use crate::services::message::ChannelCallPhase;
             let phase = match Type::try_from(ev.r#type) {
                 Ok(Type::Started) => Some(ChannelCallPhase::Started),
@@ -443,6 +441,7 @@ pub fn dispatch_control_content(
                         call_id: ev.call_id,
                         phase,
                         duration_secs: ev.duration_secs,
+                        is_video: ev.is_video,
                         timestamp: if ev.timestamp > 0 {
                             ev.timestamp
                         } else {
@@ -575,7 +574,7 @@ mod call_control_tests {
         let (event_tx, mut event_rx) = broadcast::channel(4);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let caller = UserId::new();
-        let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "");
+        let offer = crate::services::gateway::build_call_key_offer("call-1", [7u8; 32], "");
 
         dispatch_control_content(
             offer.content.unwrap(),
@@ -610,7 +609,7 @@ mod call_control_tests {
     /// a reaction or pin with no timestamp of its own takes the server's.
     #[test]
     fn edits_reactions_and_pins_carry_their_timestamps() {
-        use crate::proto::content_v1::{EditMessage, PinMessage, Reaction};
+        use chatter_proto::content_v1::{EditMessage, PinMessage, Reaction};
         let (event_tx, mut event_rx) = broadcast::channel(8);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let peer = UserId::new();

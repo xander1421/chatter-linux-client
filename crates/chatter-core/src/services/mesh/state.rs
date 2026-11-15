@@ -63,7 +63,7 @@ pub struct LinkStateInner {
     /// Chatter capability learned from encrypted, post-handshake hello frames.
     pub chatter_hello: super::chatter_hello::HelloPeers,
     /// Live transcript-bound proofs await an explicit trust decision in core.
-    pub pending_bindings: BTreeMap<PeerId, super::account_binding::BindingV1>,
+    pub pending_bindings: BTreeMap<PeerId, crate::domain::mesh::account_binding::BindingV1>,
     /// Verified group states awaiting local consent; never persisted.
     pub pending_group_invites: BTreeMap<String, PendingGroupInvite>,
     /// Declined invitation epochs stay suppressed while a creator retries them.
@@ -164,22 +164,15 @@ impl Default for LinkStateInner {
 /// Everything the BLE half of the mesh knows, shared between the radio loop and
 /// the router's transport view of it.
 pub struct MeshState {
-    local_peer: PeerId,
     inner: Mutex<LinkStateInner>,
 }
 
 impl MeshState {
     #[must_use]
-    pub fn new(local_peer: PeerId) -> Self {
+    pub fn new() -> Self {
         Self {
-            local_peer,
             inner: Mutex::new(LinkStateInner::default()),
         }
-    }
-
-    #[must_use]
-    pub fn local_peer(&self) -> &PeerId {
-        &self.local_peer
     }
 
     /// Run `f` under the lock.
@@ -302,7 +295,11 @@ impl MeshState {
                 .filter(|(_, link_state)| link_state.writable)
                 .count();
             MeshStatus {
-                radio_running: state.radio_running,
+                // Android keeps the runtime started while Bluetooth is off so it
+                // can resume on STATE_ON; a radio with no powered adapter is not
+                // running, and reporting it as such hid "Bluetooth is off"
+                // behind "0 devices nearby".
+                radio_running: state.radio_running && state.adapter_powered,
                 adapter_powered: state.adapter_powered,
                 connected_links,
                 connected_peers: state.peers.connected_count(),
@@ -427,6 +424,7 @@ impl NostrState {
         self.with(|state| state.nicknames.get(peer).cloned())
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn joined_cells(&self) -> Vec<String> {
         self.with(|state| state.joined.iter().cloned().collect())
@@ -458,7 +456,7 @@ mod tests {
 
     #[test]
     fn colliding_nicknames_use_stable_fingerprint_suffixes() {
-        let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
+        let state = MeshState::new();
         let first = peer("1111111111111111");
         let second = peer("2222222222222222");
         state.with(|s| {
@@ -498,7 +496,7 @@ mod tests {
 
     #[test]
     fn a_fresh_state_knows_nothing() {
-        let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
+        let state = MeshState::new();
         let other = peer("bbbbbbbbbbbbbbbb");
         assert!(!state.is_connected(&other));
         assert!(!state.is_reachable(&other));
@@ -511,7 +509,7 @@ mod tests {
 
     #[test]
     fn a_bound_link_is_connected_but_only_writable_once_it_says_so() {
-        let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
+        let state = MeshState::new();
         let other = peer("bbbbbbbbbbbbbbbb");
         let link = LinkId::new("/link/1");
 
@@ -537,7 +535,7 @@ mod tests {
     fn candidates_exclude_links_with_no_negotiated_write_ceiling() {
         // Guessing a ceiling means oversized packets the controller drops in
         // silence, so a link that never reported one is not a candidate.
-        let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
+        let state = MeshState::new();
         let link = LinkId::new("/link/1");
         state.with(|inner| {
             inner.links.link_up(link.clone(), LinkRole::Peripheral);
@@ -548,7 +546,7 @@ mod tests {
 
     #[test]
     fn status_reports_only_writable_links() {
-        let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
+        let state = MeshState::new();
         let up = LinkId::new("/link/up");
         let half = LinkId::new("/link/half");
         state.with(|inner| {
@@ -561,6 +559,21 @@ mod tests {
         assert!(status.radio_running);
         assert_eq!(status.connected_links, 1);
         assert_eq!(status.connected_relays, 2);
+    }
+
+    #[test]
+    fn started_radio_with_bluetooth_off_reads_as_bluetooth_off() {
+        let state = MeshState::new();
+        state.with(|inner| {
+            inner.radio_running = true;
+            inner.adapter_powered = false;
+        });
+        let status = state.status(0);
+        assert!(!status.radio_running);
+        assert_eq!(
+            status.radio_down(),
+            Some(crate::services::mesh::events::RadioDown::BluetoothOff)
+        );
     }
 
     #[test]

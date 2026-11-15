@@ -1,7 +1,7 @@
 [package]
 name = "chatter-ios"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "iOS staticlib entry point — links the Rust side into the Xcode app target"
 publish = false
 
@@ -12,8 +12,8 @@ path = "src/lib.rs"
 
 [dependencies]
 chatter-core = { path = "../chatter-core", default-features = false, features = ["ios"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
-tracing = "0.1"
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # chatter-ui is optional so the shell still builds+installs while the
@@ -23,3 +23,8 @@ chatter-ui = { path = "../chatter-ui", default-features = false, features = ["io
 [features]
 default = []
 ui = ["dep:chatter-ui"]
+# Native calling bring-up, separate from the lean messaging build.
+calls = ["ui", "chatter-ui/ios-calls"]
+
+[lints]
+workspace = true

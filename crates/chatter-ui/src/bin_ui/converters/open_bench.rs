@@ -23,9 +23,11 @@ use chatter_core::domain::attachment::{
 use chatter_core::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::domain::user::Profile;
-use chatter_core::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
+use chatter_core::testing::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
 
-use super::{MessageDisplayData, messages_to_display_batch};
+use chatter_core::ui::message_row::messages_to_rows;
+
+use super::{MessageDisplayData, prepare_rows};
 use crate::bin_ui::decode_cache;
 
 const HISTORY: usize = 100;
@@ -218,7 +220,8 @@ fn open(
         .unwrap();
     assert_eq!(page.len(), chatter_core::config::MESSAGE_PAGE_SIZE as usize);
     let started = Instant::now();
-    let display = f._rt.block_on(messages_to_display_batch(
+    let generation = decode_cache::thumbnail_generation();
+    let rows = messages_to_rows(
         &page,
         |ms| client.message_sender_display_names(ms),
         |m| client.message_sender_avatar(m),
@@ -227,7 +230,8 @@ fn open(
         |m| client.reply_parent_missing_for(m),
         |m| client.reply_parent_media(m),
         |m| client.mention_members(&m.conversation_type, &m.conversation_id),
-    ));
+    );
+    let display = f._rt.block_on(prepare_rows(rows, true, generation));
     let me = f.me.to_string();
     let rows: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&me)).collect();
     let model = slint::ModelRc::new(slint::VecModel::from(rows));
@@ -258,7 +262,7 @@ fn conversation_open_stays_fast() {
             // A DM row draws no avatar, so none is resolved or decoded.
             assert!(
                 rows.iter()
-                    .all(|r| r.sender_avatar_bytes.is_none() && r.sender_avatar_decoded.is_none())
+                    .all(|r| r.row.sender_avatar_bytes.is_none() && r.sender_avatar_decoded.is_none())
             );
         } else {
             // One decoded avatar per sender, at row size, shared by its rows.
@@ -271,7 +275,7 @@ fn conversation_open_stays_fast() {
                 assert_eq!(px.width().max(px.height()), decode_cache::AVATAR_PX);
                 let ptr = px.as_bytes().as_ptr() as usize;
                 assert_eq!(
-                    *by_sender.entry(row.sender_id.clone()).or_insert(ptr),
+                    *by_sender.entry(row.row.sender_id.clone()).or_insert(ptr),
                     ptr,
                     "avatar decoded per row"
                 );

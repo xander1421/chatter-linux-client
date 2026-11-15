@@ -304,7 +304,7 @@ fn apply_member(
             ..
         } = &mut *state;
         let ordered = &mut ordering[section_index];
-        let to = chatter_core::services::section_service::replace_section_conversation(
+        let to = chatter_core::ui::replace_section_conversation(
             ordered, from, metadata, mode,
         );
         // Vec storage shifts this range; update only its integer positions.
@@ -1257,7 +1257,7 @@ fn publish_snapshot(
             Vec<SectionSendData>,
             std::collections::HashMap<String, i32>,
         ),
-        chatter_core::services::section_service::SectionError,
+        chatter_core::client::SectionError,
     >,
 ) {
     if !owns_members(window, client) {

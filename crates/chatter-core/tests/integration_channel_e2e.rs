@@ -9,8 +9,8 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{ChannelClient, MessageClient};
-use chatter_core::proto::chat_v1::{
+use chatter_core::testing::network::grpc::{ChannelClient, MessageClient};
+use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
@@ -23,7 +23,7 @@ const NUM_USERS: usize = 5;
 /// Helper struct to hold user pool and clients.
 struct TestUserContext {
     user: TestUser,
-    pool: std::sync::Arc<chatter_core::network::grpc::GrpcClientPool>,
+    pool: std::sync::Arc<chatter_core::testing::network::grpc::GrpcClientPool>,
 }
 
 impl TestUserContext {
@@ -81,7 +81,7 @@ async fn create_channel_and_wait(
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     channel_id = channel.id;
@@ -119,7 +119,7 @@ async fn join_channel_and_wait(
     while let Some(result) = join_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelChange(_) => joined = true,
                 Event::OperationFailed(e) => {
@@ -393,7 +393,7 @@ async fn test_e2e_user_leaves_channel() {
     while let Some(result) = leave_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelChange(_) => tracing::info!("Member left channel"),
                 Event::OperationFailed(e) => {

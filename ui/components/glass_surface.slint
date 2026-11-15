@@ -14,7 +14,9 @@ component GlassMaterial inherits Rectangle {
     in property <color> material-tint;
     in property <int> elevation;
     in property <bool> highlighted;
+    in property <bool> show-edge;
     in property <float> darkening: 1.0;
+    in property <bool> opaque;
     // Keep the same optical treatment while the underlying list scrolls.
     // Disabling the filter during scrolling caused a visible material switch.
 
@@ -45,6 +47,12 @@ component GlassMaterial inherits Rectangle {
         drop-shadow-color: root.elevation >= 5 ? Elevation.modal-contact
             : Elevation.popover-contact;
     }
+    // Opaque chrome that shares a group with glass (the composer's reply and
+    // attachment strips): no backdrop, the same optical edge.
+    if !root.material-enabled && root.opaque: Rectangle {
+        border-radius: root.border-radius;
+        background: Materials.opaque;
+    }
     // SLINT1 builtin integration is intentionally confined to this one element.
     if root.material-enabled: Backdrop {
         border-radius: root.border-radius;
@@ -68,19 +76,21 @@ component GlassMaterial inherits Rectangle {
             border-radius: root.border-radius;
             background: Materials.inner-shade;
         }
-        // The one optical edge. Glass effects off: no blur and no shadow, so
-        // a floating level keeps a flat lit/ink hairline instead.
-        if Appearance.glass-effects || root.elevation >= 3: Rectangle {
-            x: Materials.glass-edge-width / 2;
-            y: self.x;
-            width: max(0px, root.width - Materials.glass-edge-width);
-            height: max(0px, root.height - Materials.glass-edge-width);
-            border-radius: max(0px, root.border-radius - Materials.glass-edge-width / 2);
-            border-width: Materials.glass-edge-width;
-            border-color: Appearance.glass-effects ? Materials.glass-edge : Elevation.flat-rim;
-            opacity: root.highlighted ? 1.0 : 0.72;
-            animate opacity { duration: Materials.motion-standard; easing: Materials.spring; }
-        }
+    }
+    // The one optical edge. Glass effects off: no blur and no shadow, so
+    // a floating level keeps a flat lit/ink hairline instead.
+    // Opaque chrome keeps the full edge it had drawn for itself.
+    if root.show-edge && ((root.material-enabled && (Appearance.glass-effects || root.elevation >= 3))
+        || (!root.material-enabled && root.opaque)): Rectangle {
+        x: Materials.glass-edge-width / 2;
+        y: self.x;
+        width: max(0px, root.width - Materials.glass-edge-width);
+        height: max(0px, root.height - Materials.glass-edge-width);
+        border-radius: max(0px, root.border-radius - Materials.glass-edge-width / 2);
+        border-width: Materials.glass-edge-width;
+        border-color: Appearance.glass-effects || root.opaque ? Materials.glass-edge : Elevation.flat-rim;
+        opacity: root.highlighted || root.opaque ? 1.0 : 0.72;
+        animate opacity { duration: Materials.motion-standard; easing: Materials.spring; }
     }
 }
 
@@ -97,8 +107,12 @@ export component GlassSurface inherits Rectangle {
     in property <bool> backdrop-paused: false;
     // Light catches the existing optical edge on interactive glass controls.
     in property <bool> highlighted: false;
+    in property <bool> show-edge: true;
     // Scales the chrome backdrop darkening; chat chrome uses Materials.chat-darkening.
     in property <float> darkening: 1.0;
+    // With material-enabled false: an opaque fill inside the shared edge
+    // instead of nothing.
+    in property <bool> opaque: false;
     in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
         : material-level == 1 ? Materials.thin
         : material-level == 3 ? Materials.thick
@@ -128,7 +142,9 @@ export component GlassSurface inherits Rectangle {
         material-tint: root.material-tint;
         elevation: root.elevation;
         highlighted: root.highlighted;
+        show-edge: root.show-edge;
         darkening: root.darkening;
+        opaque: root.opaque;
     }
     @children
 }

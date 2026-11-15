@@ -102,7 +102,7 @@ impl UnifiedMessageRepository {
         id: &MessageId,
         sent_at: u64,
     ) -> Result<(), StorageError> {
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         self.write_own_saved_delete(owner, id, sent_at, true)
     }
 
@@ -116,7 +116,7 @@ impl UnifiedMessageRepository {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
         if enqueue {
-            crate::services::gateway::submission::check_send_session()?;
+            crate::state::send_session::check_send_session()?;
         }
         let invalid = || StorageError::InvalidData("Saved deletion identity mismatch".into());
         let current: Option<String> = tx
@@ -195,7 +195,7 @@ impl UnifiedMessageRepository {
             params![owner.to_string(), id.to_string()],
         )?;
         if enqueue {
-            crate::services::gateway::submission::check_send_session()?;
+            crate::state::send_session::check_send_session()?;
         }
         tx.commit()?;
         drop(conn);

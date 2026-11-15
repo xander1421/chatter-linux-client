@@ -8,9 +8,10 @@
 //! has builder functions that construct the correct protobuf envelope.
 //! These are pure functions with no dependencies.
 
-use chatter_core::proto::content_v1::{self, content};
-use chatter_core::services::{
-    CallHangupReason, PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE,
+use chatter_proto::content_v1::{self, content};
+use chatter_core::testing::services::gateway::CallHangupReason;
+use chatter_core::testing::services::gateway::builders::{
+    PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE,
     build_call_hangup_content, build_call_key_answer, build_call_key_offer,
     build_data_message_content, build_delete_for_me_content, build_targeted_delete_content,
     build_delivery_receipt_content, build_edit_content, build_edit_content_with_channel,
@@ -415,7 +416,7 @@ fn test_build_delete_for_everyone() {
 /// Test building a saved message sync content.
 #[test]
 fn test_build_saved_message_sync() {
-    use chatter_core::proto::content_v1::SavedMessageSync;
+    use chatter_proto::content_v1::SavedMessageSync;
     let content = build_saved_message_sync_content(SavedMessageSync {
         text: "Important note".into(),
         message_id: "msg-id-123".into(),
@@ -485,7 +486,7 @@ fn test_build_call_key_answer() {
 #[test]
 fn test_build_group_call_signal() {
     use chatter_core::domain::call::GroupCallSignal;
-    use chatter_core::proto::content_v1::group_call_signal::Signal;
+    use chatter_proto::content_v1::group_call_signal::Signal;
     let key = [55u8; 32];
     let signal_of = |s| match build_group_call_signal_content("group-call-789", "ch-999", s)
         .content
@@ -607,7 +608,7 @@ fn test_content_with_attachment_roundtrip() {
 /// Frozen bytes produced by protoc for Delete, independent of the prost codec.
 #[test]
 fn test_exact_delete_wire_matches_protoc_fixture() {
-    use chatter_core::proto::content_v1::Delete;
+    use chatter_proto::content_v1::Delete;
     use prost::Message;
     let delete = Delete {
         target_sent_timestamp: 12345,
@@ -646,7 +647,7 @@ fn test_exact_delete_wire_matches_protoc_fixture() {
 /// Frozen protoc bytes for the optional call identity, including explicit empty presence.
 #[test]
 fn test_stable_call_delete_wire_matches_protoc_fixture() {
-    use chatter_core::proto::content_v1::Delete;
+    use chatter_proto::content_v1::Delete;
     use prost::Message;
     let delete = Delete {
         target_sent_timestamp: 12345,

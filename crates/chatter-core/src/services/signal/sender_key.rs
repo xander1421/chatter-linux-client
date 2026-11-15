@@ -7,7 +7,7 @@
 use super::SignalService;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::ServiceError;
-use crate::proto::content_v1::{GroupEncrypted, SenderKeyDistribution};
+use chatter_proto::content_v1::{GroupEncrypted, SenderKeyDistribution};
 use crate::util::time::TimestampNanos;
 use libsignal_protocol::{DeviceId, ProtocolAddress};
 
@@ -84,11 +84,14 @@ impl SignalService {
         sender_device_id: u32,
         skdm: &SenderKeyDistribution,
     ) -> Result<(), ServiceError> {
-        // The actor needs no channel (libsignal keys the state by the
-        // distribution id inside the message); a malformed id is still refused.
-        skdm.channel_id
+        // libsignal installs the key under the distribution id INSIDE the
+        // SKDM, not under `skdm.channel_id` (which the caller gated
+        // membership on). Unbound, a member of A could install a key for B.
+        let channel_id = skdm
+            .channel_id
             .parse::<ChannelId>()
             .map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
+        skdm_distribution_bound(&skdm.distribution_message, &channel_id)?;
         let sender_address = ProtocolAddress::new(
             sender_id.to_string(),
             DeviceId::try_from(sender_device_id)
@@ -203,11 +206,14 @@ impl SignalService {
         sender_device_id: u32,
         encrypted: &GroupEncrypted,
     ) -> Result<Vec<u8>, ServiceError> {
-        // A malformed channel id is refused, as for distributions above.
-        encrypted
+        // libsignal picks the key by the distribution id INSIDE the
+        // ciphertext; membership was gated on `encrypted.channel_id`. Bind
+        // the two, or a member of A decrypts into B with B's key.
+        let channel_id = encrypted
             .channel_id
             .parse::<ChannelId>()
             .map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
+        sender_key_message_bound(&encrypted.ciphertext, &channel_id)?;
         let sender_address = ProtocolAddress::new(
             sender_id.to_string(),
             DeviceId::try_from(sender_device_id)
@@ -439,4 +445,82 @@ fn parse_holder(entry: &str) -> Option<SenderKeyHolder> {
     let device = parts.next()?.parse().ok()?;
     let user = parts.next().filter(|u| !u.is_empty())?;
     Some((user.to_string(), device, registration_id))
+}
+
+/// A channel's sender-key distribution id is its UUID
+/// (`actor/runtime.rs` CreateSenderKey / EncryptForGroup).
+fn distribution_mismatch(found: uuid::Uuid, channel_id: &ChannelId) -> Result<(), ServiceError> {
+    if found == channel_id.0 {
+        Ok(())
+    } else {
+        Err(ServiceError::Validation(
+            "sender-key distribution id does not match its channel".into(),
+        ))
+    }
+}
+
+/// Refuse a `SenderKeyMessage` whose embedded distribution id is not `channel_id`.
+pub(crate) fn sender_key_message_bound(
+    ciphertext: &[u8],
+    channel_id: &ChannelId,
+) -> Result<(), ServiceError> {
+    let message = libsignal_protocol::SenderKeyMessage::try_from(ciphertext)
+        .map_err(|e| ServiceError::Validation(format!("malformed sender-key message: {e}")))?;
+    distribution_mismatch(message.distribution_id(), channel_id)
+}
+
+/// Refuse an SKDM whose embedded distribution id is not `channel_id`.
+pub(crate) fn skdm_distribution_bound(
+    skdm_bytes: &[u8],
+    channel_id: &ChannelId,
+) -> Result<(), ServiceError> {
+    let skdm = libsignal_protocol::SenderKeyDistributionMessage::try_from(skdm_bytes)
+        .map_err(|e| ServiceError::Validation(format!("malformed sender-key distribution: {e}")))?;
+    let found = skdm
+        .distribution_id()
+        .map_err(|e| ServiceError::Validation(format!("malformed sender-key distribution: {e}")))?;
+    distribution_mismatch(found, channel_id)
+}
+
+#[cfg(test)]
+mod distribution_binding_tests {
+    use super::*;
+    use libsignal_protocol::{
+        InMemSenderKeyStore, create_sender_key_distribution_message, group_encrypt,
+    };
+
+    async fn skdm_and_message(distribution: uuid::Uuid) -> (Vec<u8>, Vec<u8>) {
+        let mut rng = rand::rng();
+        let mut store = InMemSenderKeyStore::new();
+        let sender = ProtocolAddress::new("alice".into(), DeviceId::try_from(1u32).unwrap());
+        let skdm =
+            create_sender_key_distribution_message(&sender, distribution, &mut store, &mut rng)
+                .await
+                .unwrap();
+        let message = group_encrypt(&mut store, &sender, distribution, b"hi", &mut rng)
+            .await
+            .unwrap();
+        (skdm.serialized().to_vec(), message.serialized().to_vec())
+    }
+
+    /// A member of channel A encrypting under A's distribution and labelling
+    /// the envelope B is refused before libsignal selects any key.
+    #[tokio::test]
+    async fn mismatched_distribution_id_is_refused() {
+        let a = ChannelId::new();
+        let b = ChannelId::new();
+        let (skdm, message) = skdm_and_message(a.0).await;
+
+        assert!(sender_key_message_bound(&message, &a).is_ok());
+        assert!(skdm_distribution_bound(&skdm, &a).is_ok());
+        assert!(matches!(
+            sender_key_message_bound(&message, &b),
+            Err(ServiceError::Validation(_))
+        ));
+        assert!(matches!(
+            skdm_distribution_bound(&skdm, &b),
+            Err(ServiceError::Validation(_))
+        ));
+        assert!(sender_key_message_bound(b"garbage", &a).is_err());
+    }
 }

@@ -797,7 +797,7 @@ pub(crate) fn register_gif_attachment_guarded(
             }
             use image::AnimationDecoder;
             let reader = std::io::BufReader::new(
-                chatter_core::services::attachment::CbcRangeReader::new(range),
+                chatter_core::media::CbcRangeReader::new(range),
             );
             let setup = trace::section(c"chatter.media.gif.decoder_setup");
             let decoder = match chatter_core::media::gif::bounded_gif_decoder(reader) {

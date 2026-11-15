@@ -101,7 +101,7 @@ export component ServerRecordsScreen inherits Rectangle {
                 viewport-height: activity.preferred-height;
                 activity := VerticalLayout {
                     alignment: start;
-                    spacing: 1px;
+                    spacing: Spacing.stroke;
                     for row in ServerRecordsGlobal.notifications: Rectangle {
                         width: inbox.visible-width;
                         height: max(44px + 2 * Spacing.md, inbox-row-content.preferred-height);
@@ -153,7 +153,7 @@ export component ServerRecordsScreen inherits Rectangle {
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                spacing: 2px;
+                                spacing: Spacing.xxs;
                                 HorizontalLayout {
                                     spacing: Spacing.sm;
                                     Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read || row.quiet ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }

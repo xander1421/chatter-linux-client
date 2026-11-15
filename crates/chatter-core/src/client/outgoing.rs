@@ -112,7 +112,7 @@ impl ChatterClient {
         options: Option<SendOptions>,
     ) -> Result<SendResult, (SendError, Option<String>)> {
         let text = text.trim();
-        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let session = crate::state::send_session::SendSession::capture(self.auth_state());
         let key = self.retain_send_attempt(
             attempt,
             conversation,
@@ -122,7 +122,7 @@ impl ChatterClient {
             options.as_ref(),
         )
         .map_err(|error| (error, None))?;
-        let (outcome, started, original_row) = crate::services::gateway::submission::SEND_SESSION
+        let (outcome, started, original_row) = crate::state::send_session::SEND_SESSION
             .scope(
                 session,
                 crate::services::gateway::submission::track_submission(
@@ -144,13 +144,12 @@ impl ChatterClient {
         match outcome {
             Ok(mut result) => {
                 // Shield friend DMs return their stored failed row as Ok.
-                // A mailbox preconnect failure preceded every deposit byte,
-                // even though encryption already started the send journal.
+                // A mailbox preconnect failure or a missing Tor route preceded
+                // every deposit byte, even though encryption already started
+                // the send journal.
                 if matches!(
                     result.send_error.as_ref(),
-                    Some(crate::services::message::MessageError::Network(
-                        crate::error::NetworkError::RequestNotSent(_)
-                    ))
+                    Some(crate::services::message::MessageError::Network(e)) if e.is_provably_unsent()
                 ) {
                     let error = result.send_error.take().unwrap();
                     send_attempt::settle_failure(
@@ -281,7 +280,7 @@ impl ChatterClient {
         )
         .await
         .map_err(|e| SendError::from(e).before_submission())?;
-        crate::services::gateway::submission::check_send_session()
+        crate::state::send_session::check_send_session()
             .map_err(|_| SendError::NotLoggedIn.before_submission())?;
         // Saved Messages resolves its parent and preview itself, scoped to
         // the Saved conversation (`MessageService::save_message`); the
@@ -322,7 +321,12 @@ impl ChatterClient {
             self.channels(),
         )
         .map_err(SendError::before_submission)?;
-        let services = OwnedOutgoingServices::from_client(self);
+        let services = OwnedOutgoingServices {
+            message_service: self.messages().clone(),
+            group_fanout: self.group_fanout().get().cloned(),
+            anon_dm_service: Some(self.anon_dms().clone()),
+            anon_group_service: Some(self.anon_groups().clone()),
+        };
         route_outgoing_owned(intent, &services).await
     }
 
@@ -580,9 +584,9 @@ impl ChatterClient {
         ) {
             return Err(SendError::UnsupportedAction);
         }
-        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let session = crate::state::send_session::SendSession::capture(self.auth_state());
         let (key, attempt) = self.retain_retry_attempt(conversation, &message)?;
-        let (result, route_started, retry_row) = crate::services::gateway::submission::SEND_SESSION
+        let (result, route_started, retry_row) = crate::state::send_session::SEND_SESSION
             .scope(
                 session,
                 crate::services::gateway::submission::track_submission(
@@ -661,9 +665,9 @@ impl ChatterClient {
     ) -> Result<crate::domain::message::Message, SendError> {
         let id = message.id;
         let service = &self.services.message_service;
-        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let session = crate::state::send_session::SendSession::capture(self.auth_state());
         let (key, attempt) = self.retain_retry_attempt(conversation, &message)?;
-        let (result, started, _) = crate::services::gateway::submission::SEND_SESSION.scope(
+        let (result, started, _) = crate::state::send_session::SEND_SESSION.scope(
             session,
             crate::services::gateway::submission::track_submission(
                 self.services.anon_dm_service.retry_failed_message(&message),
@@ -700,7 +704,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         muted: bool,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).mute_conversation(muted)
     }
 
@@ -709,7 +713,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         seconds: Option<u64>,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).mute_for(seconds)
     }
 
@@ -719,14 +723,14 @@ impl ChatterClient {
     pub fn is_conversation_muted(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<bool, crate::services::conversation::ConversationError> {
+    ) -> Result<bool, crate::client::conversation::ConversationError> {
         self.conversation(conv).is_muted()
     }
 
     pub fn conversation_notification_preference(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<crate::domain::channel::NotificationPreference, crate::services::conversation::ConversationError> {
+    ) -> Result<crate::domain::channel::NotificationPreference, crate::client::conversation::ConversationError> {
         self.conversation(conv).notification_preference()
     }
 
@@ -734,7 +738,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         preference: crate::domain::channel::NotificationPreference,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).set_notification_preference(preference)
     }
 
@@ -742,7 +746,7 @@ impl ChatterClient {
     pub async fn leave_conversation(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).leave().await
     }
 
@@ -752,7 +756,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         user: &crate::domain::ids::UserId,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).remove_member(user).await
     }
 
@@ -762,7 +766,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         new_owner: &crate::domain::ids::UserId,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).transfer_ownership(new_owner).await
     }
 
@@ -771,7 +775,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         blocked: bool,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).set_blocked(blocked)
     }
 
@@ -782,7 +786,7 @@ impl ChatterClient {
         conv: ActiveConversation,
         user: &crate::domain::ids::UserId,
         blocked: bool,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).set_member_blocked(user, blocked)
     }
 
@@ -791,7 +795,7 @@ impl ChatterClient {
     pub async fn delete_conversation(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv).delete_conversation().await
     }
 
@@ -803,7 +807,7 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         seconds: u32,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv)
             .set_disappearing_timer(seconds)
             .await
@@ -815,7 +819,7 @@ impl ChatterClient {
         conv: ActiveConversation,
         seconds: u32,
         activation_seconds: u32,
-    ) -> Result<(), crate::services::conversation::ConversationError> {
+    ) -> Result<(), crate::client::conversation::ConversationError> {
         self.conversation(conv)
             .set_disappearing_window(seconds, activation_seconds)
             .await
@@ -838,7 +842,7 @@ impl ChatterClient {
         self.conversation(conv).disappearing_timer()
     }
 
-    /// Whether the user can change `conv`'s timer (friend DMs only).
+    /// Whether the user can change `conv`'s timer (DMs and secret chats).
     pub fn can_set_disappearing_timer(self: &Arc<Self>, conv: ActiveConversation) -> bool {
         self.conversation(conv).can_set_disappearing_timer()
     }
@@ -861,17 +865,33 @@ impl ChatterClient {
             loop {
                 match src.recv().await {
                     Ok(DomainEvent::MessageReceived { message })
-                        if matches!(message.conversation_type, ConversationType::ServerDm | ConversationType::AnonDm) =>
+                        if matches!(
+                            message.conversation_type,
+                            ConversationType::ServerDm
+                                | ConversationType::AnonDm
+                                | ConversationType::AnonGroup
+                        ) =>
                     {
-                        let peer = crate::domain::ids::UserId::from_uuid(
-                            *message.conversation_id.as_uuid(),
-                        );
-                        let now = if message.conversation_type == ConversationType::AnonDm {
-                            let id = crate::domain::anon_dm::AnonDmId::from_uuid(*message.conversation_id.as_uuid());
-                            crate::services::disappearing::anon_dm_state(&settings, &id)
-                                .effective_seconds(crate::util::time::TimestampNanos::now().as_u64())
-                        } else {
-                            crate::services::disappearing::server_dm_timer(&settings, &peer)
+                        use crate::services::disappearing::{SecretChat, secret_chat_state};
+                        let uuid = *message.conversation_id.as_uuid();
+                        let now = crate::util::time::TimestampNanos::now().as_u64();
+                        let now = match message.conversation_type {
+                            ConversationType::AnonDm => secret_chat_state(
+                                &settings,
+                                SecretChat::Dm(crate::domain::anon_dm::AnonDmId::from_uuid(uuid)),
+                            )
+                            .effective_seconds(now),
+                            ConversationType::AnonGroup => secret_chat_state(
+                                &settings,
+                                SecretChat::Group(
+                                    crate::domain::anon_group::AnonGroupId::from_uuid(uuid),
+                                ),
+                            )
+                            .effective_seconds(now),
+                            _ => crate::services::disappearing::server_dm_timer(
+                                &settings,
+                                &crate::domain::ids::UserId::from_uuid(uuid),
+                            ),
                         };
                         let notice = matches!(
                             message.content,

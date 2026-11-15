@@ -27,7 +27,7 @@ use crate::domain::user::{Friendship, FriendshipStatus, Profile, StatusMessage, 
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::user_client::UserClient;
-use crate::proto::chat_v1::{FriendStatus, UserProfile, friend_requests_filter, user_event};
+use chatter_proto::chat_v1::{FriendStatus, UserProfile, friend_requests_filter, user_event};
 use crate::services::current_user::CurrentUserError;
 use crate::storage::repositories::anon_dm_repo::AnonDmRepository;
 use crate::storage::repositories::anon_group_repo::AnonGroupRepository;
@@ -241,9 +241,9 @@ impl UserError {
 
 /// The recipient's account identity key from an all-devices bundle fetch.
 fn friend_request_identity_key(
-    resp: crate::proto::chat_v1::GetPreKeyBundleResponse,
+    resp: chatter_proto::chat_v1::GetPreKeyBundleResponse,
 ) -> Result<Vec<u8>, UserError> {
-    use crate::proto::chat_v1::get_pre_key_bundle_response::Result as BundleResult;
+    use chatter_proto::chat_v1::get_pre_key_bundle_response::Result as BundleResult;
     let key = match resp.result {
         Some(BundleResult::Devices(d)) => d.identity_key,
         Some(BundleResult::Bundle(b)) => b.identity_key,

@@ -69,7 +69,7 @@ rustls-tls-native-roots = [
 rustls-tls-webpki-roots = [
     "dep:tokio-rustls",
     "tokio-tungstenite?/rustls-tls-webpki-roots",
-    "reqwest?/rustls-tls-webpki-roots",
+    "reqwest?/rustls-tls-webpki-roots-no-provider",
 ]
 services-async = [
     "dep:isahc",
@@ -242,7 +242,7 @@ version = "0.26"
 features = [
     "logging",
     "tls12",
-    "ring",
+    "aws_lc_rs",
 ]
 optional = true
 default-features = false

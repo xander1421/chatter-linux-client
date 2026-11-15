@@ -19,8 +19,8 @@ use chatter_core::domain::ids::UserId;
 pub(super) async fn handle_friend_requests_updated(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
-    received: Vec<chatter_core::inbox::events::FriendRequestInfo>,
-    sent: Vec<chatter_core::inbox::events::FriendRequestInfo>,
+    received: Vec<chatter_core::events::FriendRequestInfo>,
+    sent: Vec<chatter_core::events::FriendRequestInfo>,
 ) {
     let weak = window.clone();
     // Requests from someone we blocked stay pending server-side, unseen here.
@@ -39,7 +39,7 @@ pub(super) async fn handle_friend_requests_updated(
     }
     // Core resolves the name — never the server display_name, which is
     // ciphertext without the peer's profile key.
-    let peer_name = |r: &chatter_core::inbox::events::FriendRequestInfo| {
+    let peer_name = |r: &chatter_core::events::FriendRequestInfo| {
         r.user_id
             .parse::<UserId>()
             .map(|u| ui_ctx.friend_request_peer_name(&u, &r.username))
@@ -136,7 +136,7 @@ pub(super) async fn handle_friend_requests_updated(
                         avatar_source,
                         has_avatar,
                         sent_at: if r.created_at_ns > 0 {
-                            crate::bin_ui::converters::server_record_time(r.created_at_ns).into()
+                            chatter_core::ui::format::server_record_time(r.created_at_ns).into()
                         } else {
                             "".into()
                         },
@@ -164,7 +164,7 @@ pub(super) async fn handle_friend_requests_updated(
 /// Decode raw avatar image bytes → RGBA (width, height, pixels) for building a
 /// `slint::Image` on the UI thread. `None` if the bytes don't decode.
 fn decode_avatar_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let img = image::load_from_memory(bytes).ok()?;
+    let img = chatter_core::media::ImageProcessor::decode_untrusted(bytes).ok()?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     Some((w, h, rgba.into_raw()))
@@ -189,6 +189,11 @@ pub(super) fn handle_friend_accepted(
             // Single source of truth: the chat list is rebuilt from core in
             // one pass.
             crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+            // A profile already open on this user still offered "Add friend".
+            let state = w.global::<crate::ModalHostState>();
+            if state.get_profile_user_id().as_str() == friend_id.to_string() {
+                state.set_profile_is_friend(ui_ctx.is_friend(&friend_id));
+            }
             tracing::info!(
                 friend_id = %friend_id,
                 "Friend accepted - refreshed DM sidebar"
@@ -220,7 +225,7 @@ pub(super) fn handle_presence_changed(
 
     let presence_slint: slint::SharedString = presence_str.into();
     let last_seen_label: slint::SharedString = ui_ctx.peer_last_seen(&user_id)
-        .map(|(_, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+        .map(|(_, at)| chatter_core::ui::format::last_seen_label(presence, at))
         .unwrap_or_default()
         .into();
 
@@ -475,14 +480,15 @@ pub(super) fn handle_user_profile_updated(
     let user_id_str = user_id.to_string();
     let stored_name = ui_ctx.display_name(&user_id);
     let display_name_slint: slint::SharedString = stored_name.clone().into();
-    let initials = crate::bin_ui::converters::initials_from_name(&stored_name);
+    let initials = chatter_core::ui::message_row::initials_from_name(&stored_name);
     let client = ui_ctx.clone();
 
     // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
     // is built inside the event-loop closure below, for the own-profile
     // surfaces, the open header and the profile sheet.
     let avatar_decoded: Option<(u32, u32, Vec<u8>)> = avatar_bytes.as_ref().and_then(|b| {
-        image::load_from_memory(b).ok().map(|img| {
+        // Synced bytes: capped like every other received image.
+        chatter_core::media::ImageProcessor::decode_untrusted(b).ok().map(|img| {
             let rgba = img.to_rgba8();
             let (aw, ah) = rgba.dimensions();
             (aw, ah, rgba.into_raw())
@@ -554,7 +560,7 @@ pub(super) fn handle_user_profile_updated(
                 continue;
             };
             row.sender_name = name.clone().into();
-            row.sender_initials = crate::bin_ui::converters::initials_from_name(&name).into();
+            row.sender_initials = chatter_core::ui::message_row::initials_from_name(&name).into();
             (row.content, row.rich_content) = crate::bin_ui::converters::body_fields(&content, &[], false);
             messages.set_row_data(i, row);
         }

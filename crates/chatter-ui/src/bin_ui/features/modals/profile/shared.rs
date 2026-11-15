@@ -278,8 +278,8 @@ fn request_shared_page(
                 .iter()
                 .map(|item| {
                     let (title, subtitle, is_video) =
-                        crate::bin_ui::converters::shared_content_lines(item);
-                    let thumbnail = image::load_from_memory(&item.thumbnail)
+                        chatter_core::ui::format::shared_content_lines(item);
+                    let thumbnail = chatter_core::media::ImageProcessor::decode_untrusted(&item.thumbnail)
                         .ok()
                         .map(|image| {
                             let rgba = image.thumbnail(SHARED_TILE_PX, SHARED_TILE_PX).to_rgba8();
@@ -456,7 +456,7 @@ pub(super) fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 return;
             };
             crate::bin_ui::features::back::reset_to_chats(&w);
-            crate::bin_ui::features::header::jump_to_conversation_message(
+            crate::bin_ui::features::message_list::jump::jump_to_conversation_message(
                 &w,
                 &ui_ctx_jump,
                 conversation,

@@ -74,7 +74,7 @@ impl MessageGateway {
         }
 
         // First try to parse as Content proto (preferred, contains KeyExchange)
-        if let Ok(content_proto) = crate::network::validation::protovalidate::decode_inbound_content(
+        if let Ok(content_proto) = chatter_proto::protovalidate::decode_inbound_content(
             plaintext,
             "identified_sender",
         ) {

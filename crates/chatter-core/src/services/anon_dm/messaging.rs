@@ -2,7 +2,7 @@ use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::proto::content_v1::{
+use chatter_proto::content_v1::{
     self, AnonDmMessage as ProtoAnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content,
     anon_dm_presence,
 };
@@ -37,7 +37,7 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
     ) -> Result<(MessageId, u64), AnonDmError> {
         self.send_with_attachments_and_quote(conversation_id, text, attachments, None)
             .await
@@ -50,7 +50,7 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
         reply_to_sender: &UserId,
         reply_to_timestamp: u64,
     ) -> Result<(MessageId, u64), AnonDmError> {
@@ -92,8 +92,8 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
-        quote: Option<crate::proto::content_v1::Quote>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
+        quote: Option<chatter_proto::content_v1::Quote>,
     ) -> Result<(MessageId, u64), AnonDmError> {
         use crate::services::gateway::shared;
 
@@ -117,7 +117,10 @@ impl AnonDmService {
         let mut inner_content =
             build_data_message_content_with_quote(text, attachments, quote.clone(), sent_at);
         let timer =
-            crate::services::disappearing::anon_dm_state(&self.settings_repo, conversation_id);
+            crate::services::disappearing::secret_chat_state(
+                &self.settings_repo,
+                crate::services::disappearing::SecretChat::Dm(*conversation_id),
+            );
         if let Some(content_v1::content::Content::DataMessage(data)) =
             inner_content.content.as_mut()
         {
@@ -309,7 +312,10 @@ impl AnonDmService {
             .get(&message.id)?
             .map(|armed| armed.ttl.as_secs() as u32);
         let mut timer =
-            crate::services::disappearing::anon_dm_state(&self.settings_repo, &conversation_id);
+            crate::services::disappearing::secret_chat_state(
+                &self.settings_repo,
+                crate::services::disappearing::SecretChat::Dm(conversation_id),
+            );
         timer.seconds = original_ttl.unwrap_or(0);
         // The original timer version is not stored on the row. Preserve its
         // per-message TTL without announcing a possibly newer conversation timer.
@@ -908,7 +914,7 @@ mod reaction_test_fixture;
 mod reaction_outcome_tests {
     use super::*;
     use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
-    use crate::services::conversation::ConversationError;
+    use crate::client::conversation::ConversationError;
     use reaction_test_fixture::{Fixture, assert_encoded_action};
     use std::cell::Cell;
 

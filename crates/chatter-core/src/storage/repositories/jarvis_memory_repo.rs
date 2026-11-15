@@ -80,35 +80,6 @@ impl JarvisMemoryRepository {
         Ok(conversations)
     }
 
-    /// The oldest `limit` conversations in a context (chronological).
-    pub fn get_oldest_conversations(
-        &self,
-        context: &JarvisContext,
-        limit: u32,
-    ) -> Result<Vec<JarvisConversation>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, context_type, context_id, role, content, timestamp, metadata_json, created_at
-             FROM jarvis_conversations
-             WHERE context_type = ?1 AND context_id = ?2
-             ORDER BY timestamp ASC
-             LIMIT ?3",
-        )?;
-
-        let mut rows = stmt.query(params![
-            context.context_type.to_i32(),
-            context.context_id,
-            limit,
-        ])?;
-        let mut conversations = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            conversations.push(row_to_conversation(row)?);
-        }
-
-        Ok(conversations)
-    }
-
     /// Count conversations in a context.
     pub fn count_conversations(&self, context: &JarvisContext) -> Result<u32, StorageError> {
         let conn = self.db.read_connection()?;
@@ -133,32 +104,11 @@ impl JarvisMemoryRepository {
         Ok(rows as u32)
     }
 
-    /// Delete conversations in a range of timestamps.
-    pub fn delete_conversations_in_range(
-        &self,
-        context: &JarvisContext,
-        start_timestamp: u64,
-        end_timestamp: u64,
-    ) -> Result<u32, StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "DELETE FROM jarvis_conversations
-             WHERE context_type = ?1 AND context_id = ?2
-             AND timestamp >= ?3 AND timestamp <= ?4",
-            params![
-                context.context_type.to_i32(),
-                context.context_id,
-                start_timestamp as i64,
-                end_timestamp as i64,
-            ],
-        )?;
-        Ok(rows as u32)
-    }
-
     // ========================================================================
     // Fact CRUD
     // ========================================================================
 
+    #[cfg(feature = "testing")]
     /// Insert or update a fact.
     ///
     /// If a fact with the same subject and predicate exists, reinforces it.
@@ -211,6 +161,7 @@ impl JarvisMemoryRepository {
         }
     }
 
+    #[cfg(feature = "testing")]
     fn insert_fact_row(conn: &rusqlite::Connection, fact: &JarvisFact) -> Result<(), StorageError> {
         conn.execute(
             "INSERT INTO jarvis_facts (id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by)
@@ -256,6 +207,7 @@ impl JarvisMemoryRepository {
         Ok(facts)
     }
 
+    #[cfg(feature = "testing")]
     /// Full history for one (subject, predicate) — superseded rows included,
     /// oldest first. Answers "when was X true".
     pub fn get_fact_history(
@@ -279,6 +231,7 @@ impl JarvisMemoryRepository {
         Ok(facts)
     }
 
+    #[cfg(feature = "testing")]
     /// Get facts about a subject.
     pub fn get_facts_about(
         &self,
@@ -294,26 +247,6 @@ impl JarvisMemoryRepository {
         )?;
 
         let mut rows = stmt.query(params![subject_type.to_i32(), subject_id])?;
-        let mut facts = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            facts.push(row_to_fact(row)?);
-        }
-
-        Ok(facts)
-    }
-
-    /// Get facts by predicate (e.g., all "works_on" facts).
-    pub fn get_facts_by_predicate(&self, predicate: &str) -> Result<Vec<JarvisFact>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by
-             FROM jarvis_facts
-             WHERE predicate = ?1 AND valid_until IS NULL
-             ORDER BY confidence DESC",
-        )?;
-
-        let mut rows = stmt.query(params![predicate])?;
         let mut facts = Vec::new();
 
         while let Some(row) = rows.next()? {
@@ -345,79 +278,9 @@ impl JarvisMemoryRepository {
         Ok(facts)
     }
 
-    /// Apply decay to all facts and delete low-confidence ones.
-    ///
-    /// Computes exponential decay in Rust since SQLite lacks EXP().
-    /// Formula: effective_confidence = confidence * exp(-decay_rate * days_since_reinforced)
-    pub fn apply_decay(&self, threshold: f64) -> Result<u32, StorageError> {
-        let conn = self.db.connection()?;
-
-        // Fetch all facts with their decay parameters
-        let mut stmt = conn.prepare(
-            "SELECT id, confidence, decay_rate, julianday('now') - julianday(last_reinforced_at) AS days_elapsed
-             FROM jarvis_facts",
-        )?;
-
-        let ids_to_delete: Vec<String> = stmt
-            .query_map([], |row| {
-                let id: String = row.get(0)?;
-                let confidence: f64 = row.get(1)?;
-                let decay_rate: f64 = row.get(2)?;
-                let days_elapsed: f64 = row.get(3)?;
-                Ok((id, confidence, decay_rate, days_elapsed))
-            })?
-            .filter_map(|r| r.ok())
-            .filter(|(_, confidence, decay_rate, days)| {
-                confidence * (-decay_rate * days).exp() < threshold
-            })
-            .map(|(id, ..)| id)
-            .collect();
-
-        if ids_to_delete.is_empty() {
-            return Ok(0);
-        }
-
-        let count = ids_to_delete.len() as u32;
-        for id in &ids_to_delete {
-            conn.execute("DELETE FROM jarvis_facts WHERE id = ?1", params![id])?;
-        }
-
-        Ok(count)
-    }
-
-    /// Delete a specific fact.
-    pub fn delete_fact(&self, id: &JarvisFactId) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
-            "DELETE FROM jarvis_facts WHERE id = ?1",
-            params![id.as_str()],
-        )?;
-        Ok(())
-    }
-
     // ========================================================================
     // Summary CRUD
     // ========================================================================
-
-    /// Insert a summary.
-    pub fn insert_summary(&self, summary: &JarvisSummary) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
-            "INSERT INTO jarvis_summaries (id, context_type, context_id, summary, message_range_start, message_range_end, message_count, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                summary.id.as_str(),
-                summary.context_type.to_i32(),
-                summary.context_id,
-                summary.summary,
-                summary.message_range_start as i64,
-                summary.message_range_end as i64,
-                summary.message_count,
-                summary.created_at.to_rfc3339(),
-            ],
-        )?;
-        Ok(())
-    }
 
     /// Get summaries for a context.
     pub fn get_summaries(

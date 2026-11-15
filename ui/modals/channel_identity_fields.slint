@@ -11,6 +11,7 @@ export component ChannelIdentityFields inherits HorizontalLayout {
     in-out property <string> channel-description;
     in property <string> error-message;
     in property <bool> is-private-group;
+    in property <bool> focus-on-show: true;
     in property <image> icon-preview;
     in property <bool> has-icon-preview;
     out property <string> composed-name: name-input.composed-text;
@@ -81,8 +82,8 @@ export component ChannelIdentityFields inherits HorizontalLayout {
         name-input := Input {
             placeholder: root.is-private-group ? "Group name" : "Channel name";
             text <=> root.channel-name;
-            // Created with the Create tab: the name is the first thing to type.
-            init => { self.focus(); }
+            // Touch sheets open without summoning the IME mid-transition.
+            init => { if root.focus-on-show { self.focus(); } }
             error: root.error-message != "" && root.channel-name == "";
             error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
             accepted => {

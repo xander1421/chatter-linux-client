@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::mesh::{MeshConversation, MeshEvent};
+use chatter_core::client::{MeshConversation, MeshEvent};
 
 use crate::{
     MainWindow, MeshConversationData, MeshGlobal, MeshPeerData, PrivateChannelInviteData, run_ui,
@@ -144,7 +144,7 @@ fn close_mesh_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         return;
     }
     clear_active(window);
-    crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
+    crate::bin_ui::features::chat::open::close_open_conversation(window, ui_ctx);
     window
         .global::<crate::SidebarPane>()
         .set_active_tab("mesh".into());
@@ -1045,6 +1045,7 @@ pub fn open_sender_sheet(
         );
         global.set_sheet_binding_label("Self-asserted · peer no longer nearby".into());
         global.set_sheet_fingerprint("".into());
+        global.set_sheet_own_fingerprint(ui_ctx.mesh_fingerprint().into());
         global.set_sheet_comparison_code("".into());
         global.set_sheet_peer_blocked(false);
         global.set_sheet_peer_muted(false);
@@ -1070,6 +1071,7 @@ fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &s
             .into(),
     );
     global.set_sheet_fingerprint(peer.fingerprint.unwrap_or_default().into());
+    global.set_sheet_own_fingerprint(ui_ctx.mesh_fingerprint().into());
     global.set_sheet_comparison_code(
         ui_ctx
             .mesh_comparison_code(peer_id)
@@ -1126,7 +1128,7 @@ fn push_status(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn apply_status(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
-    status: chatter_core::services::mesh::MeshStatus,
+    status: chatter_core::client::MeshStatus,
 ) {
     let global = window.global::<MeshGlobal>();
     // Asked separately, because `MeshStatus` is only about transports — a relay
@@ -1204,7 +1206,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         } => {
             let label = core_api::delivery_label(state);
             let domain_id =
-                chatter_core::services::mesh::mapping::wire_message_id(&message_id).to_string();
+                chatter_core::ui::wire_message_id(&message_id).to_string();
             run_ui!(weak, |w| conversation::apply_delivery(
                 &w, &domain_id, label
             ));

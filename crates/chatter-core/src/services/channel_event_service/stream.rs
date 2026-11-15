@@ -136,7 +136,7 @@ impl ChannelEventService {
     /// merged and yields nothing.
     fn rename_in(
         &self,
-        event: &crate::proto::chat_v1::ChannelEvent,
+        event: &chatter_proto::chat_v1::ChannelEvent,
     ) -> Option<(ChannelId, UserId, String, String)> {
         let Some(channel_event::Event::ChannelUpdated(updated)) = &event.event else {
             return None;
@@ -152,7 +152,7 @@ impl ChannelEventService {
     /// update is merged: (channel, actor).
     fn photo_change_in(
         &self,
-        event: &crate::proto::chat_v1::ChannelEvent,
+        event: &chatter_proto::chat_v1::ChannelEvent,
     ) -> Option<(ChannelId, UserId, Vec<u8>)> {
         let Some(channel_event::Event::ChannelUpdated(updated)) = &event.event else {
             return None;
@@ -554,7 +554,7 @@ impl ChannelEventService {
 
 /// Proto `ChannelModeration.Action` -> stable name for the UI.
 fn proto_moderation_action_name(action: i32) -> &'static str {
-    use crate::proto::chat_v1::channel_moderation::Action;
+    use chatter_proto::chat_v1::channel_moderation::Action;
     match Action::try_from(action) {
         Ok(Action::Kick) => "KICK",
         Ok(Action::Ban) => "BAN",
@@ -567,7 +567,7 @@ fn proto_moderation_action_name(action: i32) -> &'static str {
 
 /// Proto `ChannelError.Code` -> stable name for the UI.
 fn proto_channel_error_code_name(code: i32) -> &'static str {
-    use crate::proto::chat_v1::channel_error::Code;
+    use chatter_proto::chat_v1::channel_error::Code;
     match Code::try_from(code) {
         Ok(Code::Unauthorized) => "UNAUTHORIZED",
         Ok(Code::NotFound) => "NOT_FOUND",

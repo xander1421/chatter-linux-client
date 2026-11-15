@@ -15,19 +15,16 @@ use std::sync::Arc;
 
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::proto::content_v1::DataMessage;
+use chatter_proto::content_v1::DataMessage;
 use crate::services::SignalService;
 use crate::storage::repositories::MessageRepository;
 
 // Re-export inbound types (moved from inline definitions)
 use crate::util::time::TimestampNanos;
-pub use inbound::{DecryptResult, DmContent, RouteResult, SealedSenderResult, content_type_name};
+pub use inbound::{DecryptResult, DmContent, RouteResult, SealedSenderResult};
 
 // Re-export all content builders
 pub use builders::{
-    PADDING_GROUP_CONTROL,
-    PADDING_LARGE,
-    PADDING_MESSAGE,
     // Call hangup
     build_call_hangup_content,
     build_call_key_answer,
@@ -35,36 +32,24 @@ pub use builders::{
     build_call_key_offer,
     build_call_self_sync,
     build_data_message_content,
-    build_data_message_content_with_quote,
     build_delete_for_me_content,
-    build_delivery_receipt_content,
     build_delivery_receipt_content_with_channel,
     build_edit_content,
-    build_edit_content_with_channel,
     // Group call key distribution (pairwise sealed sender)
     build_group_call_signal_content,
     build_pin_content,
     build_pin_content_with_channel,
-    build_reaction_content,
-    build_reaction_content_with_channel,
-    build_read_receipt_content,
     build_read_receipt_content_with_channel,
     build_reply_content,
     build_saved_message_sync_content,
-    // DataMessage builders
-    build_targeted_delete_content,
-    build_text_content,
     // Control message builders
     build_typing_content,
     build_typing_content_with_channel,
-    // Padding
-    generate_padding,
 };
 
 // Re-export outgoing router
 pub use outgoing::{
-    OutgoingIntent, OutgoingServices, OwnedOutgoingServices, QuoteIntent, SendError, SendResult,
-    route_outgoing, route_outgoing_owned,
+    QuoteIntent, SendError, SendResult,
 };
 
 // ============================================================================
@@ -282,7 +267,7 @@ impl MessageGateway {
             // A server channel (sender-key or not) is filed as Channel;
             // anon groups never arrive on this path (they use the mailbox).
             let conversation_type =
-                crate::services::message::conversion::conversation_type_for_channel(
+                crate::storage::repositories::channel_repo::conversation_type_for_channel(
                     &self.channel_repo,
                     &cid,
                 );
@@ -473,11 +458,11 @@ impl MessageGateway {
     /// account can legitimately place an outgoing message in our transcript.
     pub(crate) async fn store_synced_sent_message(
         &self,
-        sync: crate::proto::content_v1::SyncSent,
+        sync: chatter_proto::content_v1::SyncSent,
         sealed_sender_id: UserId,
     ) -> Result<SealedSenderResult, crate::error::ServiceError> {
         use crate::error::ServiceError;
-        use crate::proto::content_v1::sync_sent::Destination;
+        use chatter_proto::content_v1::sync_sent::Destination;
 
         // NOT `Validation`. This is a settings-DB read: a failure here is our
         // disk or a login that has not happened yet, and the inbox ack policy

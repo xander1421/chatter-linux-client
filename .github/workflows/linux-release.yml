@@ -15,7 +15,9 @@ name: Linux Release
 # ~/.chatter-release/offai-anchors.env):
 #   CHATTER_SERVER_URL, CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX,
 #   CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX, CHATTER_KT_VRF_PUBLIC_KEY_HEX,
-#   CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX, CHATTER_TLS_ROOT_CA_PEM,
+#   CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX, CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX,
+#   CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX,
+#   CHATTER_TLS_ROOT_CA_PEM,
 #   CHATTER_NTFY_URL, CHATTER_ONION_ADDR
 
 on:
@@ -32,14 +34,16 @@ on:
       - "v*"
 
 permissions:
-  contents: write   # create the Release + attach the archive on a tag
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write   # attach the archive to the Release on a tag
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The chatter_ui_slint rustc pass peaks ~13-15 GB; the runner has only
       # ~7.7 GB RAM. Reclaim unused toolchains and add a large swap so a serial
@@ -97,20 +101,28 @@ jobs:
           CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
           CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ vars.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
           CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX }}
+          CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX: ${{ vars.CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX }}
+          CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX: ${{ vars.CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX }}
           CHATTER_TLS_ROOT_CA_PEM: ${{ vars.CHATTER_TLS_ROOT_CA_PEM }}
           CHATTER_NTFY_URL: ${{ vars.CHATTER_NTFY_URL }}
           CHATTER_ONION_ADDR: ${{ vars.CHATTER_ONION_ADDR }}
           DEV_TRUST_ROOT: "0"
           DEV_AUTO_REGISTER: "0"
+          # Dispatch inputs go through env, never interpolated into the script.
+          INPUT_VERSION_CODE: ${{ github.event.inputs.version_code }}
+          INPUT_VERSION_NAME: ${{ github.event.inputs.version_name }}
         run: |
           set -euo pipefail
           # Version from the dispatch inputs, or derived from a vNN tag.
-          code="${{ github.event.inputs.version_code }}"
-          name="${{ github.event.inputs.version_name }}"
+          code="${INPUT_VERSION_CODE}"
+          name="${INPUT_VERSION_NAME}"
           if [ -z "$code" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             code="${GITHUB_REF_NAME#v}"
+            [[ "$code" =~ ^[0-9]+$ ]] || { echo "::error::tag must be vNN (digits), got '${GITHUB_REF_NAME}'"; exit 1; }
             name="0.1.$((code-1))"
           fi
+          [[ "$code" =~ ^[0-9]+$ ]] || { echo "::error::version_code must be digits only"; exit 1; }
+          [[ "$name" =~ ^[0-9A-Za-z.-]+$ ]] || { echo "::error::version_name must match ^[0-9A-Za-z.-]+\$"; exit 1; }
           export CHATTER_LINUX_VERSION_CODE="$code"
           export CHATTER_LINUX_VERSION="$name"
           echo "Building Linux archive: version=$name code=$code"
@@ -138,7 +150,7 @@ jobs:
 
       - name: Upload build + memory logs (always)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-build-diagnostics
           path: |
@@ -147,7 +159,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Linux archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: chatter-linux-x86_64
           path: |
@@ -157,7 +169,7 @@ jobs:
 
       - name: Attach to GitHub Release (tag push only)
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.ref_name }}
           files: |

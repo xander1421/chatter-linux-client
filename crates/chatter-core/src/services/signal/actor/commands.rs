@@ -29,13 +29,13 @@ pub(crate) enum SignalCommand {
     /// challenge. Takes typed `Actions`, never bytes. Returns
     /// `(actions_bytes, signature)`.
     SignChannelChange {
-        actions: crate::proto::chat_v1::channel_change::Actions,
+        actions: chatter_proto::chat_v1::channel_change::Actions,
         response: oneshot::Sender<Result<(Vec<u8>, Vec<u8>), ServiceError>>,
     },
     RefreshPrekeys {
         count: u32,
         response: oneshot::Sender<
-            Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError>,
+            Result<Vec<chatter_proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError>,
         >,
     },
     /// Generate `count` one-time Kyber prekeys (PQOPK) signed by the IK and
@@ -46,7 +46,7 @@ pub(crate) enum SignalCommand {
         count: u32,
         response: oneshot::Sender<
             Result<
-                Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>,
+                Vec<chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>,
                 ServiceError,
             >,
         >,
@@ -69,6 +69,15 @@ pub(crate) enum SignalCommand {
         group_id: Option<Vec<u8>>,
         permit: crate::services::gateway::submission::SubmissionPermit,
         response: oneshot::Sender<Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError>>,
+    },
+    /// Seal sender-key `contents` (a GroupEncrypted) once for every
+    /// destination as an SSv2 multi-recipient message.
+    EncryptMultiRecipient {
+        contents: Vec<u8>,
+        sender_cert: SenderCertificate,
+        destinations: Vec<ProtocolAddress>,
+        group_id: Vec<u8>,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
     EncryptIdentified {
         plaintext: Vec<u8>,
@@ -210,8 +219,8 @@ pub(crate) enum SignalCommand {
         response: oneshot::Sender<
             Result<
                 (
-                    crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
-                    crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
+                    chatter_proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
+                    chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
                 ),
                 ServiceError,
             >,

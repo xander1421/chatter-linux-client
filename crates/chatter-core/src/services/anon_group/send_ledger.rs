@@ -17,7 +17,7 @@ struct Ledger {
     held_content: Option<Vec<u8>>,
 }
 
-pub(crate) fn key(owner: &str, group: &str, inner: &crate::proto::content_v1::Content) -> String {
+pub(crate) fn key(owner: &str, group: &str, inner: &chatter_proto::content_v1::Content) -> String {
     let mut hash = Sha256::new();
     hash.update(owner.as_bytes());
     hash.update([0]);
@@ -63,7 +63,7 @@ pub(super) fn hold(
     db: &Database,
     key: &str,
     group: &str,
-    content: &crate::proto::content_v1::Content,
+    content: &chatter_proto::content_v1::Content,
 ) -> Result<Option<String>, StorageError> {
     let first_hold = mutate(db, key, |ledger| {
         if !ledger.initialized {
@@ -83,7 +83,7 @@ pub(super) fn hold(
 pub(super) fn held_posts(
     db: &Database,
     group: &str,
-) -> Result<Vec<(String, crate::proto::content_v1::Content)>, StorageError> {
+) -> Result<Vec<(String, chatter_proto::content_v1::Content)>, StorageError> {
     let conn = db.read_connection()?;
     let mut stmt = conn.prepare(
         "SELECT value FROM settings WHERE key LIKE 'send.group.completion.v1:%' \
@@ -97,7 +97,7 @@ pub(super) fn held_posts(
         if let Some(bytes) = ledger.held_content {
             posts.push((
                 ledger.message_id,
-                crate::proto::content_v1::Content::decode(bytes.as_slice()).map_err(|_| {
+                chatter_proto::content_v1::Content::decode(bytes.as_slice()).map_err(|_| {
                     StorageError::InvalidData("Invalid held anonymous group post".into())
                 })?,
             ));
@@ -233,7 +233,7 @@ mod tests {
             crate::domain::anon_group::AnonGroupRole::Member,
         ))
         .unwrap();
-        let original_content = crate::proto::content_v1::Content {
+        let original_content = chatter_proto::content_v1::Content {
             timestamp: 7,
             ..Default::default()
         }

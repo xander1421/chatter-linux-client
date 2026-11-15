@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 use crate::error::MediaError;
 
+pub const MICROPHONE_PERMISSION_DENIED: &str =
+    "Allow microphone access in iPhone Settings to record a voice message.";
+
 /// Recording state.
 #[derive(Debug, Clone)]
 pub enum RecordingState {
@@ -54,9 +57,20 @@ pub struct AudioRecorder {
     /// Next interleaved input sample to include in the live meter.
     meter_cursor: usize,
     meter_decay: f32,
+    // Declared after the stream so it is released after the stream on Drop.
+    #[cfg(target_os = "ios")]
+    audio_session: Option<super::ios_audio_session::AudioSession>,
 }
 
 impl AudioRecorder {
+    /// Ask before a call acquires its capture locks. The UI stays responsive
+    /// while the user answers the system microphone permission dialog.
+    #[cfg(target_os = "ios")]
+    pub async fn request_microphone_permission() -> Result<(), String> {
+        tokio::task::spawn_blocking(super::ios_audio_session::AudioSession::request_recording_permission)
+            .await.map_err(|e| e.to_string())?
+    }
+
     /// Creates a new audio recorder.
     ///
     /// # Errors
@@ -68,6 +82,9 @@ impl AudioRecorder {
                 "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
             ));
         }
+        #[cfg(target_os = "ios")]
+        let audio_session = super::ios_audio_session::AudioSession::acquire(true)
+            .map_err(MediaError::RecordingError)?;
         let host = cpal::default_host();
 
         let device = host.default_input_device().ok_or_else(|| {
@@ -93,6 +110,8 @@ impl AudioRecorder {
             start_time: None,
             meter_cursor: 0,
             meter_decay: 0.0,
+            #[cfg(target_os = "ios")]
+            audio_session: Some(audio_session),
         })
     }
 
@@ -106,6 +125,12 @@ impl AudioRecorder {
             return Err(MediaError::RecordingError(
                 "recording already in progress".to_string(),
             ));
+        }
+
+        #[cfg(target_os = "ios")]
+        if self.audio_session.is_none() {
+            self.audio_session = Some(super::ios_audio_session::AudioSession::acquire(true)
+                .map_err(MediaError::RecordingError)?);
         }
 
         // Clear any previous samples
@@ -122,6 +147,13 @@ impl AudioRecorder {
         let supported_config = self.device.default_input_config().map_err(|e| {
             MediaError::RecordingError(format!("failed to get input config: {}", e))
         })?;
+        #[cfg(target_os = "ios")]
+        {
+            // Re-activating after Stop can select a different system route.
+            self.config = supported_config.config();
+            self.sample_rate = self.config.sample_rate;
+            self.channels = self.config.channels;
+        }
 
         let err_fn = |err| {
             tracing::error!("Recording stream error: {}", err);
@@ -227,6 +259,8 @@ impl AudioRecorder {
 
         // Stop and drop the stream
         self.stream = None;
+        #[cfg(target_os = "ios")]
+        self.audio_session.take();
 
         let duration = self
             .start_time
@@ -318,6 +352,8 @@ impl AudioRecorder {
     /// Cancels the current recording and discards samples.
     pub fn cancel(&mut self) {
         self.stream = None;
+        #[cfg(target_os = "ios")]
+        self.audio_session.take();
         self.start_time = None;
         self.samples.lock().unwrap().clear();
         self.state = RecordingState::Idle;

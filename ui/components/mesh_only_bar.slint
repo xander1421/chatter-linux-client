@@ -21,11 +21,14 @@ import { Materials } from "../theme/materials.slint";
 
 export component MeshOnlyBar inherits Rectangle {
     in property <bool> signed-in: true;
+    // A phone chat fills the screen and its header sits where this floats;
+    // the chat list (one back away) still shows it.
+    in property <bool> suppressed: false;
 
     callback sign-in();
 
-    visible: !root.signed-in || self.height > 0px;
-    height: !root.signed-in ? Spacing.touch-target-min : 0px;
+    visible: (!root.signed-in && !root.suppressed) || self.height > 0px;
+    height: !root.signed-in && !root.suppressed ? Spacing.touch-target-min : 0px;
     animate height { duration: Materials.motion-standard; easing: Materials.spring; }
     clip: true;
 

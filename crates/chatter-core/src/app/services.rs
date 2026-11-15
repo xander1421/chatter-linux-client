@@ -174,7 +174,6 @@ impl ServiceContainer {
             infra.prekey_manager.clone(),
             infra.user_repo.clone(),
             infra.settings_repo.clone(),
-            infra.key_store.clone(),
             infra.auth_interceptor.clone(),
         ));
 

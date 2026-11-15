@@ -1,3 +1,7 @@
+import { DesktopChrome } from "theme/desktop_chrome.slint";
+export { DesktopChrome }
+import { InputPolicy } from "theme/input_policy.slint";
+export { InputPolicy }
 import { JarvisPane } from "app_jarvis_pane.slint";
 export { JarvisPane }
 import { CallView } from "app_call_view.slint";
@@ -41,6 +45,7 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AiIntegrationGlobal } from "ai/ai_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
+import { AppLockPane } from "app_lock.slint";
 import { MeshGlobal, MeshConversationData, MeshPeerData, PrivateChannelMemberData, PrivateChannelInviteData } from "mesh/mesh_global.slint";
 import { ActivityGlobal, ActivityItemData } from "activity/activity_global.slint";
 import { Appearance } from "theme/appearance.slint";
@@ -61,6 +66,7 @@ export { JarvisGlobal }
 export { AiIntegrationGlobal }
 export { TextFormat }
 export { AnonMode }
+export { AppLockPane }
 export { TorStatus }
 // bitchat mesh: runtime feature flag + the sidebar row shape. Written from
 // `bin_ui::features::mesh`; inert when the `mesh` Cargo feature is off.
@@ -77,3 +83,6 @@ export { MembershipGlobal, InviteLinkRowData, JoinRequestRowData, ServerOperated
 export { Appearance }
 // Settings › Notifications › Sound and vibration. Bound in `bin_ui::features::modals::settings`.
 export { NotificationSound, NotificationDelivery }
+
+import { Typography } from "theme/typography.slint";
+export { Typography }

@@ -61,7 +61,7 @@ impl MessageGateway {
         }
 
         // Try to parse as Content proto first (preferred)
-        if let Ok(content_proto) = crate::network::validation::protovalidate::decode_inbound_content(
+        if let Ok(content_proto) = chatter_proto::protovalidate::decode_inbound_content(
             plaintext.as_slice(),
             "mailbox_dm",
         ) {
@@ -240,7 +240,7 @@ impl MessageGateway {
             }
             Some(content::Content::GroupCallSignal(msg)) => {
                 use crate::domain::call::GroupCallSignal;
-                use crate::proto::content_v1::group_call_signal::Signal;
+                use chatter_proto::content_v1::group_call_signal::Signal;
                 let signal = match msg.signal {
                     Some(Signal::Ring(_)) => GroupCallSignal::Ring,
                     Some(Signal::KeyRequest(_)) => GroupCallSignal::KeyRequest,
@@ -270,7 +270,7 @@ impl MessageGateway {
                 })
             }
             Some(content::Content::CallHangup(hangup)) => {
-                use crate::proto::content_v1::call_hangup;
+                use chatter_proto::content_v1::call_hangup;
                 // Call hangup notification received
                 let reason = match call_hangup::Reason::try_from(hangup.reason) {
                     Ok(call_hangup::Reason::Normal) => CallHangupReason::Normal,
@@ -369,7 +369,7 @@ mod thread_id_tests {
     //! thread reply received over that transport was filed into the main
     //! conversation instead of the open thread panel.
     use super::*;
-    use crate::proto::content_v1::DataMessage;
+    use chatter_proto::content_v1::DataMessage;
 
     /// An edit keeps its own timestamp (`EditMessage.data_message.timestamp`):
     /// edits order and date by it.
@@ -377,7 +377,7 @@ mod thread_id_tests {
     fn parse_content_carries_the_edit_timestamp() {
         let content = Content {
             content: Some(content::Content::Edit(
-                crate::proto::content_v1::EditMessage {
+                chatter_proto::content_v1::EditMessage {
                     target_sent_timestamp: 100,
                     data_message: Some(DataMessage {
                         body: "fixed".into(),
@@ -446,12 +446,12 @@ mod thread_id_tests {
         );
         assert!(
             matches!(
-                crate::network::validation::protovalidate::decode_inbound_content(
+                chatter_proto::protovalidate::decode_inbound_content(
                     &zero.encode_to_vec(),
                     "test"
                 ),
                 Err(
-                    crate::network::validation::protovalidate::ContentValidationError::Violation {
+                    chatter_proto::protovalidate::ContentValidationError::Violation {
                         rule: "uint32.gte",
                         ..
                     }
@@ -463,7 +463,7 @@ mod thread_id_tests {
 
     #[test]
     fn parse_content_refuses_secret_chat_bootstrap_over_friend_dm() {
-        use crate::proto::content_v1::{
+        use chatter_proto::content_v1::{
             AnonDmAccept, AnonDmRequest, AnonGroupInvite, AnonGroupJoinAck,
         };
         for inner in [
@@ -543,7 +543,7 @@ mod null_message_tests {
     fn null_message_parses_as_handled_no_op() {
         let content = Content {
             content: Some(content::Content::NullMessage(
-                crate::proto::content_v1::NullMessage::default(),
+                chatter_proto::content_v1::NullMessage::default(),
             )),
             padding: vec![0; 200],
             ..Default::default()
@@ -561,7 +561,7 @@ mod null_message_tests {
     fn secret_chat_content_in_account_mailbox_is_refused() {
         let content = Content {
             content: Some(content::Content::AnonDmMessage(Box::new(
-                crate::proto::content_v1::AnonDmMessage {
+                chatter_proto::content_v1::AnonDmMessage {
                     conversation_id: vec![7; 16],
                     inner_content: Some(Box::new(Content::default())),
                 },

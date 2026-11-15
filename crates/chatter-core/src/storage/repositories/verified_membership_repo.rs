@@ -1,6 +1,6 @@
 //! Verified channel membership: the state each channel's signed change log
 //! has reached on this device, plus the log itself (migration v082). Written
-//! only with states `services::channel::verified_state` has verified.
+//! only with states `domain::verified_state` has verified.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -9,8 +9,8 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::domain::ids::ChannelId;
 use crate::error::StorageError;
-use crate::proto::chat_v1 as pb;
-use crate::services::channel::verified_state::{
+use chatter_proto::chat_v1 as pb;
+use crate::domain::verified_state::{
     ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus, MembershipState, Policy,
     StateHash, VerificationStatus, VerifiedChange, VerifiedChannel,
 };
@@ -108,9 +108,9 @@ impl VerifiedMembershipRepository {
         )?;
         for (user_id, m) in &st.members {
             tx.execute(
-                "INSERT INTO verified_channel_members (channel_id, user_id, role, status, identity_key)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![cid, user_id, m.role as i32, m.status as i32, m.identity_key.as_slice()],
+                "INSERT INTO verified_channel_members (channel_id, user_id, role, status, identity_key, muted_until)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![cid, user_id, m.role as i32, m.status as i32, m.identity_key.as_slice(), m.muted_until as i64],
             )?;
         }
         tx.execute(
@@ -197,7 +197,7 @@ impl VerifiedMembershipRepository {
 
         let mut members = BTreeMap::new();
         let mut stmt = conn.prepare(
-            "SELECT user_id, role, status, identity_key FROM verified_channel_members WHERE channel_id = ?1",
+            "SELECT user_id, role, status, identity_key, muted_until FROM verified_channel_members WHERE channel_id = ?1",
         )?;
         let rows = stmt.query_map(params![cid], |r| {
             Ok((
@@ -205,10 +205,11 @@ impl VerifiedMembershipRepository {
                 r.get::<_, i64>(1)?,
                 r.get::<_, i32>(2)?,
                 r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, i64>(4)?,
             ))
         })?;
         for row in rows {
-            let (user_id, role, status, key) = row?;
+            let (user_id, role, status, key, muted_until) = row?;
             let status = match MemberStatus::try_from(status) {
                 Ok(
                     s @ (MemberStatus::Active | MemberStatus::Invited | MemberStatus::Requesting),
@@ -221,6 +222,7 @@ impl VerifiedMembershipRepository {
                     role: role_of(role)?,
                     status,
                     identity_key: key_of(key)?,
+                    muted_until: muted_until as u64,
                 },
             );
         }
@@ -303,6 +305,21 @@ impl VerifiedMembershipRepository {
             )
             .optional()?
             .is_some())
+    }
+
+    /// `user_id`'s signed mute in `channel_id` (Unix nanoseconds; 0 = none,
+    /// `u64::MAX` = until unmuted); 0 when not in the verified state. Decoded
+    /// in Rust: `u64::MAX` is stored as the i64 -1, so SQL cannot compare it.
+    pub fn muted_until(&self, channel_id: &ChannelId, user_id: &str) -> Result<u64, StorageError> {
+        let conn = self.db.connection()?;
+        Ok(conn
+            .query_row(
+                "SELECT muted_until FROM verified_channel_members WHERE channel_id = ?1 AND user_id = ?2",
+                params![channel_id.to_string(), user_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map_or(0, |v| v as u64))
     }
 
     /// Channels whose distribution set holds `user_id` (ACTIVE, not excluded):
@@ -430,7 +447,7 @@ impl VerifiedMembershipRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::channel::verified_state::{
+    use crate::domain::verified_state::{
         VerifiedMembership,
         canonical::{CHANGE_DOMAIN, signed_message},
         check_change,
@@ -487,6 +504,47 @@ mod tests {
         };
         let v = VerifiedChange(check_change(cid, prev, &c).unwrap());
         (c, v)
+    }
+
+    /// The signed mute survives storage exactly, `u64::MAX` (stored as the
+    /// i64 -1) included, and is 0 for anyone outside the verified state.
+    #[test]
+    fn muted_until_reads_back_the_signed_mute() {
+        let (_dir, repo) = repo();
+        let channel = ChannelId::new();
+        let cid = channel.to_string();
+        let owner = (uuid::Uuid::new_v4().to_string(), KeyPair::generate(&mut rand::rng()));
+        let bob = (uuid::Uuid::new_v4().to_string(), KeyPair::generate(&mut rand::rng()));
+        let (c1, v1) = change(
+            &cid,
+            None,
+            (&owner.0, &owner.1),
+            vec![
+                Action::Genesis(pb::Genesis {
+                    policy: Some(Policy::defaults(false).to_proto()),
+                    disappearing_seconds: 0,
+                }),
+                Action::AddMember(pb::AddMember {
+                    user_id: bob.0.clone(),
+                    role: ChannelRole::Member as i32,
+                    identity_key: key(&bob.1),
+                    pending: false,
+                }),
+            ],
+        );
+        repo.commit(&channel, &c1, &v1).unwrap();
+        assert_eq!(repo.muted_until(&channel, &bob.0).unwrap(), 0);
+
+        let (c2, v2) = change(
+            &cid,
+            Some(&v1.0.new_state),
+            (&owner.0, &owner.1),
+            vec![Action::SetMuted(pb::SetMuted { user_id: bob.0.clone(), muted_until: u64::MAX })],
+        );
+        repo.commit(&channel, &c2, &v2).unwrap();
+        assert_eq!(repo.muted_until(&channel, &bob.0).unwrap(), u64::MAX);
+        assert!(repo.load(&channel).unwrap().unwrap().state.members[&bob.0].is_muted(u64::MAX - 1));
+        assert_eq!(repo.muted_until(&channel, "00000000-0000-4000-8000-000000000000").unwrap(), 0);
     }
 
     #[test]

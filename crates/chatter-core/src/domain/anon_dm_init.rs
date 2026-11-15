@@ -139,7 +139,7 @@ impl AnonDmInitMessage {
             },
             intro_message: intro_message.into(),
             sender_avatar,
-            disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
+            disappearing_seconds: crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
         }
     }
 
@@ -318,7 +318,7 @@ impl AnonDmInitMessage {
         offset += avatar_len;
         let disappearing_seconds =
             u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap());
-        if disappearing_seconds != crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS {
+        if disappearing_seconds != crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS {
             return Err(InitMessageError::InvalidData(
                 "unsupported secret-chat timer proposal".into(),
             ));

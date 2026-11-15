@@ -38,7 +38,6 @@ export component FindTab inherits VerticalLayout {
     callback scan-code();
     callback connect-via-code(string);
     callback code-edited();
-    callback close-add();
 
     function ensure-code() {
         if (root.my-code == "") { root.generate-code(root.effective-private-mode); }

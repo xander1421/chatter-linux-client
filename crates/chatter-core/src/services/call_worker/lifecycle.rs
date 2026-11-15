@@ -6,7 +6,7 @@ pub(super) async fn initiate_call_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
-    attempt: Option<&crate::client::calls::CallStartAttempt>,
+    attempt: Option<&crate::services::call_signaling::CallStartAttempt>,
     channel_id: ChannelId,
     title: &str,
     call_type: CallType,

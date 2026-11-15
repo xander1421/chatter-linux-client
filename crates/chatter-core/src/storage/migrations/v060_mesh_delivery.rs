@@ -12,7 +12,7 @@
 //! That is the one thing the mesh surfaces must never do: claim an arrival
 //! nobody confirmed.
 //!
-//! `state` holds [`MeshDelivery::as_str`](crate::services::mesh::MeshDelivery::as_str),
+//! `state` holds `MeshDelivery::as_str`,
 //! the mesh's own delivery vocabulary, which is disjoint from the server one on
 //! purpose.
 

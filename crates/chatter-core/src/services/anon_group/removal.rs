@@ -2,7 +2,7 @@
 
 use crate::domain::UserId;
 use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
-use crate::proto::content_v1::{
+use chatter_proto::content_v1::{
     self, AnonGroupKick, AnonGroupLeave, AnonGroupRoleChange, AnonGroupUpdate, Content,
     anon_group_update,
 };
@@ -387,7 +387,7 @@ impl AnonGroupService {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::sync::Arc;
 
     use ed25519_dalek::{Signer, SigningKey};
@@ -398,24 +398,24 @@ mod tests {
         AnonGroup, AnonGroupId, AnonGroupMember, AnonGroupRole, AnonGroupStatus,
     };
     use crate::inbox::handlers::DomainEvent;
-    use crate::proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
+    use chatter_proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
     use crate::services::anon_group::AnonGroupError;
-    use crate::services::conversation::ConversationError;
+    use crate::client::conversation::ConversationError;
     use crate::state::ActiveConversation;
     use crate::storage::repositories::settings_repo::keys;
 
     /// We are a member (role `my_role`) of a group owned by `owner`, whose
     /// mailbox key is `owner_key`; `mallory` is a plain member.
-    struct Fixture {
-        client: Arc<ChatterClient>,
+    pub(in crate::services::anon_group) struct Fixture {
+        pub client: Arc<ChatterClient>,
         _dir: tempfile::TempDir,
-        group_id: AnonGroupId,
-        owner: UserId,
+        pub group_id: AnonGroupId,
+        pub owner: UserId,
         owner_key: SigningKey,
-        mallory: UserId,
+        pub mallory: UserId,
     }
 
-    fn fixture(my_role: AnonGroupRole) -> Fixture {
+    pub(in crate::services::anon_group) fn fixture(my_role: AnonGroupRole) -> Fixture {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
             keyring::set_default_store(crate::system::keyring::test_credential_store());
@@ -517,7 +517,7 @@ mod tests {
 
     /// The owner's member list naming `members` (mailbox keys are dummies).
     fn member_list(f: &Fixture, members: &[UserId]) -> Content {
-        use crate::proto::content_v1::{AnonGroupMemberInfo, AnonGroupMemberList};
+        use chatter_proto::content_v1::{AnonGroupMemberInfo, AnonGroupMemberList};
         Content {
             content: Some(content_v1::content::Content::AnonGroupMemberList(
                 AnonGroupMemberList {
@@ -628,7 +628,7 @@ mod tests {
     }
 
     fn transfer_to(f: &Fixture, to: UserId) -> Content {
-        use crate::proto::content_v1::{AnonGroupRoleChange, AnonGroupUpdate, anon_group_update};
+        use chatter_proto::content_v1::{AnonGroupRoleChange, AnonGroupUpdate, anon_group_update};
         Content {
             content: Some(content_v1::content::Content::AnonGroupUpdate(
                 AnonGroupUpdate {

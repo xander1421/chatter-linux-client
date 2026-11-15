@@ -178,7 +178,7 @@ mod tests {
         let service = AttachmentService::new_local(Arc::new(
             crate::storage::repositories::AttachmentRepository::new(db),
         ));
-        let ids = service.create_from_pointers(&[crate::proto::content_v1::AttachmentPointer {
+        let ids = service.create_from_pointers(&[chatter_proto::content_v1::AttachmentPointer {
             cdn_key: "missing-waveform".into(),
             content_type: "audio/wav".into(),
             ..Default::default()
@@ -196,8 +196,9 @@ mod tests {
                 },
             )
             .unwrap();
+            // Ramp well above the waveform noise floor (0.002 full scale).
             for sample in 0..64_i16 {
-                writer.write_sample(sample).unwrap();
+                writer.write_sample(sample * 256).unwrap();
             }
             writer.finalize().unwrap();
         }

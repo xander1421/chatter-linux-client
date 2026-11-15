@@ -75,7 +75,7 @@ fn artifact(
     clock: u64,
     remove: bool,
 ) -> ReceiveArtifact {
-    use crate::proto::content_v1::{Content, Reaction, content::Content as Body};
+    use chatter_proto::content_v1::{Content, Reaction, content::Content as Body};
     let content = Content {
         content: Some(Body::Reaction(Reaction {
             emoji: emoji.into(),

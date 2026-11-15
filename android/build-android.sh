@@ -175,10 +175,12 @@ else
     [ -z "${CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX"
     [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_VRF_PUBLIC_KEY_HEX"
     [ -z "${CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX"
+    [ -z "${CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_RELEASE_TRANSPARENCY_PUBLIC_KEY_HEX"
+    [ -z "${CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX:-}" ] && missing="$missing CHATTER_GROUP_SEND_PUBLIC_PARAMS_HEX"
     if [ -n "$missing" ]; then
         echo "FATAL: DEV_TRUST_ROOT=0 but unset:$missing"
         echo
-        echo "All four public keys are compile-time pins. Without them the cargo build fails"
+        echo "These public keys are compile-time pins. Without them the cargo build fails"
         echo "(config.rs refuses to fall back to a dev key), so this stops here"
         echo "with a better message than a const-eval panic."
         echo

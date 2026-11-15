@@ -457,25 +457,36 @@ def enclosing_component(text, idx):
 ROOT_CALL_RE = re.compile(r'\broot\.([\w-]+)\s*\(')
 
 
-def helper_hold_path(text, idx, body):
+def helper_hold_path(text, idx, body, scope=None, forwards=None):
     """Resolve component-local press helpers to a timer and the menu action.
 
     Only calls from a pointer-down branch count. Timer expiry must reach an
     action also reachable from the right-click branch; an unrelated timer or
     an uncalled helper does not establish a touch menu path.
+
+    `scope`/`forwards` resolve a child that only raises callbacks: `forwards`
+    maps each child callback to the parent's handler body, and the timer and
+    helpers are looked up in the parent `scope` (see forwarded_hold_path).
     """
-    scope = enclosing_component(text, idx)
+    if scope is None:
+        scope = enclosing_component(text, idx)
+    forwards = forwards or {}
     functions = {}
     for m in re.finditer(r'\bfunction\s+([\w-]+)\s*\([^)]*\)\s*(?:->\s*[\w<>-]+\s*)?\{', scope):
         functions[m.group(1)] = balanced_block(scope, m.end() - 1)
 
-    def expand(code, visited=None):
+    def expand(code, visited=None, child=bool(forwards)):
         visited = set() if visited is None else visited
+        if child:
+            # The child's `root.X(` names its own callbacks, never the
+            # parent's functions: resolve only through the forwarding body.
+            return code + ''.join('\n' + expand(forwards[n], visited, False)
+                                  for n in ROOT_CALL_RE.findall(code) if n in forwards)
         result = code
         for name in ROOT_CALL_RE.findall(code):
             if name in functions and name not in visited:
                 visited.add(name)
-                result += '\n' + expand(functions[name], visited)
+                result += '\n' + expand(functions[name], visited, False)
         return result
 
     def branches(code, guards=()):
@@ -522,10 +533,48 @@ def helper_hold_path(text, idx, body):
         timer = balanced_block(scope, m.end() - 1)
         triggered = re.search(r'\btriggered\s*=>\s*\{', timer)
         if triggered:
-            action = expand(balanced_block(timer, triggered.end() - 1))
+            action = expand(balanced_block(timer, triggered.end() - 1), child=False)
             if menu_calls & set(ROOT_CALL_RE.findall(action)):
                 return True
     return False
+
+
+def forwarded_hold_path(slint_texts, text, idx, body):
+    """A child component (e.g. MessageCall) may raise its press as callbacks
+    the parent forwards to its own hold helpers. Accept it only if EVERY
+    instantiation of the child resolves to a hold path in its parent."""
+    comp = None
+    depth = 0
+    for i in range(idx - 1, -1, -1):
+        if text[i] == '}':
+            depth += 1
+        elif text[i] == '{':
+            if depth:
+                depth -= 1
+            else:
+                head = text[text.rfind('\n', 0, i) + 1:i]
+                m = re.search(r'\bcomponent\s+([\w-]+)(?:\s+inherits\s+[\w-]+)?\s*$', head)
+                if m:
+                    comp = m.group(1)
+                    break
+    if not comp:
+        return False
+    found = False
+    inst_re = re.compile(r'(?:^|[\s:])' + re.escape(comp) + r'\s*\{', re.M)
+    for ptext in slint_texts.values():
+        ptext = slint_code(ptext)
+        for m in inst_re.finditer(ptext):
+            if re.search(r'\bcomponent\s+$', ptext[max(0, m.start() - 20):m.start() + 1]):
+                continue
+            inst = balanced_block(ptext, m.end() - 1)
+            forwards = {}
+            for f in re.finditer(r'\b([\w-]+)\s*\([^)]*\)\s*=>\s*\{', inst):
+                forwards[f.group(1)] = balanced_block(inst, f.end() - 1)
+            scope = enclosing_component(ptext, m.start())
+            if not helper_hold_path(text, idx, body, scope=scope, forwards=forwards):
+                return False
+            found = True
+    return found
 
 
 def right_click_only_areas(slint_texts):
@@ -548,6 +597,8 @@ def right_click_only_areas(slint_texts):
                 continue                      # HoldArea IS the touch path
             if helper_hold_path(text, m.start(), body):
                 continue                      # rolls its own hold timer
+            if forwarded_hold_path(slint_texts, text, m.start(), body):
+                continue                      # parent's hold timer, via callbacks
             out.append((rel, line, "TouchArea with right-click and no hold path"))
     return out
 

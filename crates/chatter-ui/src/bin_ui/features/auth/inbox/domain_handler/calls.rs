@@ -12,7 +12,7 @@ use chatter_core::domain::ids::UserId;
 /// Handle incoming call key offer.
 ///
 /// Deprecated inside this path: the CallOrchestrator bridge
-/// ([`chatter_core::services::call_worker::spawn_call_orchestrator_bridge`])
+/// (core's `spawn_call_orchestrator_bridge`)
 /// now owns the decision to present the incoming-call modal, so we keep
 /// this function as a trace-only stub until the UI dispatcher stops
 /// forwarding `CallKeyOfferReceived` explicitly.
@@ -50,7 +50,7 @@ pub(super) fn handle_call_hangup(
     window: &Weak<MainWindow>,
     call_id: String,
     peer_id: UserId,
-    reason: chatter_core::services::gateway::CallHangupReason,
+    reason: chatter_core::client::calls::CallHangupReason,
 ) {
     let weak = window.clone();
 

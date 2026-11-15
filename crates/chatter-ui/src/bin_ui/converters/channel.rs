@@ -1,10 +1,8 @@
 //! Channel and DM converters.
 
-use crate::bin_ui::converters::initials_from_name;
+use chatter_core::ui::message_row::initials_from_name;
 
-use chatter_core::ui::sidebar_data::{
-    ChatRowLabel, ChatRowSendData, chat_row_accessible_label,
-};
+use chatter_core::ui::sidebar_data::{ChatRowSendData, chat_row_accessible_label};
 
 use super::utils::avatar_bytes_to_image;
 
@@ -35,13 +33,8 @@ impl ChatRowExt for ChatRowSendData {
         };
 
         let initials = initials_from_name(&self.display_name);
-        let display_name = match self.label {
-            ChatRowLabel::Plain => self.display_name,
-            ChatRowLabel::IncomingSecretRequest => format!("\u{1F4E9} {}", self.display_name),
-            ChatRowLabel::OutgoingSecretRequest => {
-                format!("\u{1F4EE} {} (pending)", self.display_name)
-            }
-        };
+        let display_name = self.shown_name();
+        let timestamp = self.timestamp_text();
         let accessible_label_text =
             chat_row_accessible_label(&display_name, self.unread_count, &self.last_message);
         crate::ChatRowData {
@@ -55,11 +48,7 @@ impl ChatRowExt for ChatRowSendData {
             initials: initials.into(),
             last_message: self.last_message.into(),
             draft_preview: self.draft_preview.into(),
-            timestamp: self
-                .timestamp_at
-                .map(super::sidebar_time)
-                .unwrap_or_default()
-                .into(),
+            timestamp: timestamp.into(),
             presence_status: self.presence_status.into(),
             private_channel: self.private_channel,
             member_count: self.member_count as i32,
@@ -71,6 +60,8 @@ impl ChatRowExt for ChatRowSendData {
             is_muted: self.is_muted,
             can_leave: self.can_leave,
             can_delete: self.can_delete,
+            can_mute: self.can_mute,
+            can_mute_timed: self.can_mute_timed,
             is_selected: false,
             arrival_serial: 0,
         }
@@ -130,19 +121,6 @@ impl FriendRequestExt for FriendRequestSendData {
             sent_at: self.secondary_text.into(),
             note: "".into(),
         }
-    }
-}
-
-/// Avatar bytes for a private-group invite candidate: anon-DM peers keep
-/// theirs on the anon DM row, friends on their local profile.
-pub fn invite_candidate_avatar(
-    ctx: &chatter_core::client::ChatterClient,
-    c: &chatter_core::client::AnonGroupInviteCandidate,
-) -> Option<Vec<u8>> {
-    if c.is_anonymous {
-        ctx.anon_dm_peer_avatar(&c.user_id)
-    } else {
-        ctx.user_avatar(&c.user_id)
     }
 }
 

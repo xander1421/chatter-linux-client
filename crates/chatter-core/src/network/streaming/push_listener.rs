@@ -6,9 +6,9 @@
 //!
 //! # Privacy
 //!
-//! The backend sends either content-free ("New activity") or full notifications
-//! depending on the server's `NTFY_PUSH_MODE` setting. The client always wakes
-//! up and pulls actual message content via the encrypted gRPC stream.
+//! Inbox wakes are always content-free (the server ignores `NTFY_PUSH_MODE` for
+//! them, `internal/services/notification/push/wake.go`). The client wakes up and
+//! pulls the actual message content via the encrypted gRPC stream.
 //!
 //! # Architecture
 //!
@@ -221,12 +221,14 @@ impl PushListenerConfig {
         }
     }
 
+    #[cfg(test)]
     /// Set an auth token for topic subscription.
     pub fn with_auth(mut self, token: String) -> Self {
         self.auth_token = Some(token);
         self
     }
 
+    #[cfg(test)]
     /// Override the reconnect tuning. Also updates `reconnect_delay` to the
     /// supplied config's `initial_delay` for consistency.
     pub fn with_reconnect(mut self, reconnect: ReconnectConfig) -> Self {
@@ -534,25 +536,9 @@ impl PushListener {
             "anonymous ntfy wake connecting"
         );
         if url.scheme() == "https" {
-            use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
-            use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-            let pem = crate::config::TLS_ROOT_CA_PEM.ok_or(PushError::Trust)?;
-            let mut roots = RootCertStore::empty();
-            for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
-                roots
-                    .add(cert.map_err(|_| PushError::Trust)?)
-                    .map_err(|_| PushError::Trust)?;
-            }
-            if roots.is_empty() {
-                return Err(PushError::Trust.into());
-            }
-            let config = ClientConfig::builder_with_provider(Arc::new(
-                tokio_rustls::rustls::crypto::ring::default_provider(),
-            ))
-            .with_safe_default_protocol_versions()
-            .map_err(|_| PushError::Trust)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+            use tokio_rustls::rustls::pki_types::ServerName;
+            let config =
+                crate::network::pq_tls::pinned_client_config().map_err(|_| PushError::Trust)?;
             let name = ServerName::try_from(host).map_err(|_| PushError::Endpoint)?;
             let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
             let tls =

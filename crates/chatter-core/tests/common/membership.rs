@@ -10,9 +10,9 @@
 #![allow(dead_code)]
 
 use chatter_core::crypto::signal::identity::sign_channel_change;
-use chatter_core::network::grpc::ChannelClient;
-use chatter_core::proto::chat_v1::{self as pb, channel_action::Action};
-use chatter_core::services::channel::verified_state::{MembershipState, Policy, rules};
+use chatter_core::testing::network::grpc::ChannelClient;
+use chatter_proto::chat_v1::{self as pb, channel_action::Action};
+use chatter_core::domain::verified_state::{MembershipState, Policy, rules};
 use libsignal_protocol::IdentityKeyPair;
 
 use super::fixtures::TestUser;

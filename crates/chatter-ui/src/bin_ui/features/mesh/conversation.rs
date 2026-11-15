@@ -11,10 +11,10 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::mesh::MeshMessage;
+use chatter_core::client::MeshMessage;
 use chatter_core::state::ActiveConversation;
 
-use crate::bin_ui::converters::messages_to_display_batch;
+use chatter_core::ui::message_row::messages_to_rows;
 use crate::{MainWindow, MeshGlobal, MessageItemData};
 
 use super::core_api::{self, MeshRow};
@@ -34,7 +34,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     ui_ctx.select_conversation(ActiveConversation::None);
     window.invoke_refresh_screen_protection();
 
-    crate::bin_ui::features::sidebar::stop_audio_playback();
+    crate::bin_ui::features::chat::open::stop_audio_playback();
     crate::bin_ui::gif_state::clear_inline_gifs();
 
     // The mesh carries no attachments, and the composer hides the attach
@@ -49,7 +49,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
 
     // Reveal the message pane the way every other conversation does; on a
     // phone this is the only thing that leaves the chat list.
-    crate::bin_ui::features::sidebar::show_chat_pane(&window.as_weak());
+    crate::bin_ui::features::chat::open::show_chat_pane(&window.as_weak());
     // The shared opener clears pushed screens; restore the mesh destination
     // so Back from this conversation returns to its own list.
     window.global::<crate::SidebarPane>().set_active_tab("mesh".into());
@@ -104,7 +104,8 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         if !owner.is_current() {
             return;
         }
-        let display = messages_to_display_batch(
+        let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+        let rows = messages_to_rows(
             &messages,
             // Mesh senders, not chatter accounts — see `core_api::sender_display_name`.
             |ms| {
@@ -114,12 +115,13 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             },
             // No chatter profile behind a mesh sender.
             |_| None,
-            crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
+            ui_ctx.attachment_display_resolver(),
             |m| ui_ctx.reply_author_display_name(m),
             |m| ui_ctx.reply_parent_missing_for(m),
             |m| ui_ctx.reply_parent_media(m),
             |_| Vec::new(),
-        ).await;
+        );
+        let display = crate::bin_ui::converters::prepare_rows(rows, true, generation).await;
 
         crate::run_history_ui!(weak, owner, |w| {
             let items: Vec<MessageItemData> = display
@@ -282,18 +284,21 @@ pub(super) fn append_incoming(
         .and_then(|sender| ui_ctx.mesh_sender_display_name(sender))
         .unwrap_or_else(|| message.nickname.clone());
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-    let display = crate::bin_ui::converters::messages_to_display_batch_unprepared(
+    let display: Vec<crate::bin_ui::converters::MessageDisplayData> = messages_to_rows(
         std::slice::from_ref(&message.message),
         // Core supplies collision suffixes; retain the live nickname if the
         // sender has no peer record (for example our own local echo).
         |ms| vec![nickname.clone(); ms.len()],
         |_| None,
-        crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
+        ui_ctx.attachment_display_resolver(),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
         |_| Vec::new(),
-    );
+    )
+    .into_iter()
+    .map(Into::into)
+    .collect();
 
     let local_user = super::local_user_id(ui_ctx);
     for item in display.iter() {
@@ -313,7 +318,7 @@ pub(super) fn append_incoming(
         crate::run_history_ui!(weak, owner, |window| {
             let model = window.global::<crate::ChatPane>().get_messages();
             let items: Vec<MessageItemData> = model.iter().map(|mut row| {
-                if let Some(prepared) = display.iter().find(|d| d.message_id == row.message_id.as_str()) {
+                if let Some(prepared) = display.iter().find(|d| d.row.message_id == row.message_id.as_str()) {
                     crate::bin_ui::converters::hydrate_message_media(&mut row, prepared);
                 }
                 row

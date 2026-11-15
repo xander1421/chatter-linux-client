@@ -173,7 +173,7 @@ export component AppConversationLayout inherits Rectangle {
     callback nav-push(string);
     callback open-message-link(string, string);
     callback paste-image();
-    callback pinned-dismiss-clicked();
+    callback pinned-list-clicked();
     callback pinned-go-to-message();
     callback pinned-next-clicked();
     callback pinned-prev-clicked();
@@ -235,6 +235,7 @@ export component AppConversationLayout inherits Rectangle {
     channel-id: root.channel-id;
     channel-name: root.channel-name;
     conversation-kind: root.conversation-kind;
+    can-thread: ChatPane.can-thread;
     private-channel: root.private-channel;
     privacy-line-override: root.privacy-line-override;
     privacy-line-exposed: root.privacy-line-exposed;
@@ -367,7 +368,7 @@ export component AppConversationLayout inherits Rectangle {
     pinned-prev-clicked => { root.pinned-prev-clicked(); }
     pinned-next-clicked => { root.pinned-next-clicked(); }
     pinned-go-to-message => { root.pinned-go-to-message(); }
-    pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
+    pinned-list-clicked => { root.pinned-list-clicked(); }
     pinned-show-clicked => { root.pinned-show-clicked(); }
     pinned-thumbnail: root.pinned-thumbnail;
     sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }

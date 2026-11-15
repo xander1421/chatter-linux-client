@@ -7,8 +7,8 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
-use chatter_core::proto::chat_v1::{
+use chatter_core::testing::network::grpc::{AuthClient, ChannelClient, MessageClient};
+use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, get_pre_key_bundle_response,
 };
 use common::*;
@@ -121,7 +121,7 @@ async fn test_e2e_channel_message_reaches_device() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(ch) = payload {
                 channel_id = ch.id;
             }
@@ -130,8 +130,8 @@ async fn test_e2e_channel_message_reaches_device() {
 
     // Send a message
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
-    let content = chatter_core::proto::chat_v1::message::Content {
-        r#type: Some(chatter_core::proto::chat_v1::message::content::Type::Text(
+    let content = chatter_proto::chat_v1::message::Content {
+        r#type: Some(chatter_proto::chat_v1::message::content::Type::Text(
             "Hello from e2e test".to_string(),
         )),
     };

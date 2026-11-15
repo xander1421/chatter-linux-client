@@ -22,9 +22,9 @@ mod listener;
 pub use account_keys::is_opaque_notification_key;
 #[cfg(feature = "mesh")]
 pub use listener::spawn_mesh_notification_listener;
-pub use listener::spawn_notification_listener;
+pub(crate) use listener::{is_private_notification, should_notify_message};
 
-use crate::domain::notification::{Notification, NotificationPriority};
+use crate::domain::notification::NotificationPriority;
 use crate::error::SystemError;
 use crate::system::notification_sink::{NoopNotificationSink, NotificationSink};
 use std::collections::HashMap;
@@ -76,6 +76,8 @@ pub struct NotificationService {
     detail_level: std::sync::RwLock<NotificationDetailLevel>,
     account_keys: Option<AccountNotificationKeys>,
     message_notifications: Mutex<HashMap<String, Vec<MessageNotification>>>,
+    /// While it reports locked, every notification is the generic one.
+    app_lock: std::sync::OnceLock<Arc<crate::services::app_lock::AppLock>>,
 }
 
 struct MessageNotification {
@@ -100,6 +102,7 @@ impl NotificationService {
             detail_level: std::sync::RwLock::new(NotificationDetailLevel::None),
             account_keys: None,
             message_notifications: Mutex::new(HashMap::new()),
+            app_lock: std::sync::OnceLock::new(),
         }
     }
 
@@ -132,9 +135,30 @@ impl NotificationService {
         self.sink.set_sound(enabled);
     }
 
-    /// Get the current detail level.
+    /// Get the current detail level setting.
     pub fn detail_level(&self) -> NotificationDetailLevel {
         *self.detail_level.read().unwrap()
+    }
+
+    /// Gate notifications on the app lock.
+    pub fn set_app_lock(&self, lock: Arc<crate::services::app_lock::AppLock>) {
+        let _ = self.app_lock.set(lock);
+    }
+
+    /// Whether the app lock is engaged right now.
+    pub fn app_locked(&self) -> bool {
+        self.app_lock.get().is_some_and(|lock| lock.is_locked())
+    }
+
+    /// The level notifications are rendered at: the setting, or `None` while
+    /// the app is locked (Signal-Android `NotificationItem.getPrimaryTextActual`
+    /// shows "Locked message" while `KeyCachingService.isLocked`). Re-read on
+    /// every post, so a lock that expires in the background applies at once.
+    pub fn effective_detail_level(&self) -> NotificationDetailLevel {
+        if self.app_locked() {
+            return NotificationDetailLevel::None;
+        }
+        self.detail_level()
     }
 
     /// Show `conversation_id`'s notification for an incoming message,
@@ -169,7 +193,7 @@ impl NotificationService {
         message_preview: Option<&str>,
         private: bool,
     ) -> (String, String) {
-        let level = self.detail_level();
+        let level = self.effective_detail_level();
 
         match (level, private) {
             // Sealed sender / secret chat: nothing but "New message", ever
@@ -270,20 +294,6 @@ impl NotificationService {
         Ok(())
     }
 
-    /// Show a notification from a domain Notification object.
-    pub fn show(&self, notification: &Notification) -> Result<(), SystemError> {
-        let level = self.detail_level();
-
-        match level {
-            NotificationDetailLevel::None => self.show_platform_notification(
-                "Chatter",
-                "New notification",
-                NotificationPriority::Normal,
-            ),
-            _ => self.deliver(|sink| sink.show_domain(notification)),
-        }
-    }
-
     // `show_push_event` was removed alongside push_listener's
     // show_push_notification. Rationale: ntfy SSE is a wake-up transport
     // only; user-facing toasts flow via DomainEvent from the typed gRPC
@@ -310,7 +320,7 @@ impl NotificationService {
         title: &str,
         body: &str,
     ) -> Result<(), SystemError> {
-        match self.detail_level() {
+        match self.effective_detail_level() {
             NotificationDetailLevel::None => {
                 self.deliver(|sink| sink.show_incoming_call(call_id, "Chatter", "Incoming call"))
             }

@@ -101,6 +101,7 @@ impl OutboundTransfer {
         self.cursor >= self.manifest.chunk_count && self.requested.is_empty()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn sent_count(&self) -> u32 {
         self.cursor

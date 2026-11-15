@@ -43,6 +43,12 @@ static ANDROID_SERVICES_READY: std::sync::atomic::AtomicBool =
 #[cfg(target_os = "android")]
 static ANDROID_HEADLESS_CONTEXT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 #[cfg(target_os = "android")]
+thread_local! {
+    /// The window on the Slint thread, for the app lock refresh above.
+    static ANDROID_LOCK_WINDOW: std::cell::OnceCell<slint::Weak<MainWindow>> =
+        const { std::cell::OnceCell::new() };
+}
+#[cfg(target_os = "android")]
 static ANDROID_ACTIVITY_VISIBLE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -61,6 +67,16 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeSetAppVisible(
         if let Some(client) = ANDROID_CLIENT.get() {
             let _rt = android_runtime().enter();
             client.set_app_visible(visible);
+            // Cover (or keep covering) the app the moment core says it is
+            // locked — on pause too, so the recents thumbnail is the lock.
+            let client = client.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                ANDROID_LOCK_WINDOW.with(|cell| {
+                    if let Some(window) = cell.get().and_then(slint::Weak::upgrade) {
+                        crate::bin_ui::features::app_lock::refresh(&window, &client);
+                    }
+                });
+            });
         }
         Ok(())
     })
@@ -484,6 +500,12 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                         window.invoke_refresh_screen_protection();
                     }
                 }
+                if let (Some(window), Some(client)) = (
+                    listener_window.get().and_then(slint::Weak::upgrade),
+                    ANDROID_CLIENT.get(),
+                ) {
+                    crate::bin_ui::features::app_lock::refresh(&window, client);
+                }
             },
         )
         .with_refresh_rate_vote(crate::platform::android::activity::set_ui_moving)
@@ -495,7 +517,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // wrapper must be in place before `app_init` builds the client.
     crate::platform::android::keystore::init();
     if let Some(label) = crate::platform::android::activity::device_label() {
-        chatter_core::services::link_device_service::LinkDeviceService::set_platform_device_label(
+        chatter_core::client::ChatterClient::set_platform_device_label(
             label,
         );
     }
@@ -516,6 +538,9 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
         }
     };
     let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
+    ANDROID_LOCK_WINDOW.with(|cell| {
+        let _ = cell.set(slint::ComponentHandle::as_weak(&app_state.window));
+    });
 
     // Safe-area insets (status bar, nav bar, IME) are now bound in `app.slint`
     // directly off the Window's built-in `safe-area-insets` and
@@ -598,7 +623,7 @@ fn init_tracing() {
         let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
             trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
                 *meta.level() <= tracing::Level::DEBUG
-                    && (meta.target() == "chatter_core::network::grpc::onion_transport"
+                    && (meta.target() == chatter_core::client::ONION_TRANSPORT_LOG_TARGET
                         || meta.target().starts_with("tor_dirmgr")
                         || (tor_stage_trace::dial_active()
                             && (meta.target().starts_with("tor_hsclient")
@@ -779,8 +804,27 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
     // Touch platform: touch-sized targets and gestures. The phone layout
     // (single pane, bottom nav) is NOT implied — app.slint's `compact-layout`
     // picks it from the window's logical width, so a tablet gets two panes.
+    #[cfg(target_os = "macos")]
+    window.global::<crate::DesktopChrome>().set_macos(true);
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    window.global::<crate::DesktopChrome>().set_frame_inset(8.0);
     #[cfg(any(target_os = "android", target_os = "ios"))]
     window.set_is_mobile_platform(true);
+    #[cfg(target_os = "ios")]
+    {
+        use i_slint_backend_winit::WinitWindowAccessor;
+        window.global::<crate::InputPolicy>().set_dismiss_after_send(true);
+        window.global::<crate::InputPolicy>().set_keyboard_includes_safe_area(true);
+        let weak = window.as_weak();
+        window.global::<crate::InputPolicy>().on_dismiss_native_keyboard(move || {
+            if let Some(w) = weak.upgrade() {
+                // A destroyed Slint TextInput cannot deliver FocusOut. Resign
+                // UIKit's responder explicitly when its route has gone away.
+                w.window().with_winit_window(|native| native.set_ime_allowed(false));
+            }
+        });
+    }
+
 
     // Let the notification "Accept" activity-intent drive the in-app accept flow.
     #[cfg(target_os = "android")]
@@ -855,7 +899,7 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
         use slint::ComponentHandle;
         window
             .global::<AvatarText>()
-            .on_initials(|name| crate::bin_ui::converters::initials_from_name(&name).into());
+            .on_initials(|name| chatter_core::ui::message_row::initials_from_name(&name).into());
         window
             .global::<EmojiText>()
             .on_jumbo_count(|text| chatter_core::util::emoji::jumbo_count(&text) as i32);
@@ -1226,6 +1270,8 @@ fn dev_auto_register(
 /// Phase 2: Sync event loop (runs OUTSIDE block_on — rt.enter() keeps reactor accessible).
 /// Slint owns the thread. Tokio worker threads handle async I/O.
 fn app_run(state: AppState) {
+    #[cfg(target_vendor = "apple")]
+    state.window.global::<Typography>().set_font_family_emoji("Apple Color Emoji".into());
     // macOS: the native NSWindow only exists once the platform window has
     // actually been created, which needs at least one event-loop iteration
     // after the window is shown (see platform::macos's docs) — in practice a
@@ -1243,6 +1289,13 @@ fn app_run(state: AppState) {
             if crate::platform::macos::apply_unified_titlebar(w.window()) {
                 w.set_macos_titlebar_height(crate::platform::macos::TITLEBAR_HEIGHT);
                 w.set_macos_traffic_lights_width(crate::platform::macos::TRAFFIC_LIGHTS_WIDTH);
+                // AppKit finishes its titlebar layout after the style change.
+                let weak = w.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+                    if let Some(w) = weak.upgrade() {
+                        crate::platform::macos::refresh_window_button_insets(w.window());
+                    }
+                });
                 timer_handle.stop();
             } else {
                 let left = attempts_left.get().saturating_sub(1);

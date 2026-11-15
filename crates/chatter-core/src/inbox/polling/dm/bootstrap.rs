@@ -79,8 +79,8 @@ pub(super) async fn try_parse_bootstrap_response(
 
     // Step 3: Decrypt the Signal Protocol content, against the responder's
     // device — named by the frame, since the Signal layer needs it to open.
-    let frame = match crate::network::validation::protovalidate::decode_inbound::<
-        crate::proto::content_v1::BootstrapResponseFrame,
+    let frame = match chatter_proto::protovalidate::decode_inbound::<
+        chatter_proto::content_v1::BootstrapResponseFrame,
     >(signal_ciphertext.as_slice(), "bootstrap_response_frame")
     {
         Ok(frame) => frame,

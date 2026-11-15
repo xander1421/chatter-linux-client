@@ -32,7 +32,7 @@ impl MessageService {
         channel_id: ChannelId,
         sender_id: UserId,
         device_id: u32,
-        proto_msg: crate::proto::chat_v1::Message,
+        proto_msg: chatter_proto::chat_v1::Message,
     ) {
         // Bound the buffer so an SKDM that never arrives (kicked sender, lost
         // device, malicious peer) can't leak memory. Each message waits
@@ -152,10 +152,10 @@ impl MessageService {
         channel_id: ChannelId,
         sender_id: UserId,
         device_id: u32,
-        proto_msg: crate::proto::chat_v1::Message,
+        proto_msg: chatter_proto::chat_v1::Message,
     ) {
-        use crate::proto::chat_v1::message::content::Type;
-        use crate::proto::content_v1::GroupEncrypted;
+        use chatter_proto::chat_v1::message::content::Type;
+        use chatter_proto::content_v1::GroupEncrypted;
         use prost::Message as _;
 
         let Some(Type::Encrypted(enc)) = proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
@@ -185,8 +185,8 @@ impl MessageService {
         device_id: u32,
     ) {
         use crate::events::DomainEvent;
-        use crate::proto::chat_v1;
-        use crate::proto::content_v1::GroupEncrypted;
+        use chatter_proto::chat_v1;
+        use chatter_proto::content_v1::GroupEncrypted;
         use crate::services::message::conversion::proto_to_domain_message_with_sender;
 
         let Ok(session) = self.receive_session() else { return; };
@@ -209,7 +209,7 @@ impl MessageService {
         let membership = self.database.run_blocking(move || {
             admitted.check()?;
             messages.sync_channel_state_if_behind_received(&channel_id, &admitted)?;
-            Ok(!has_pending || messages.group_gate().admits(&channel_id, &sender_id))
+            Ok(!has_pending || messages.group_gate().admits_content(&channel_id, &sender_id))
         }).await;
         if session.check().is_err() { return; }
         if pending.is_empty() { return; }
@@ -264,6 +264,12 @@ impl MessageService {
                     continue;
                 }
             };
+            // Bound to the channel whose membership was checked above;
+            // `decrypt_from_group` binds the distribution id to this field.
+            if group_encrypted.channel_id.parse::<ChannelId>().ok() != Some(channel_id) {
+                tracing::warn!(%channel_id, "Retry: GroupEncrypted names another channel; dropping");
+                continue;
+            }
             match self
                 .signal_service
                 .decrypt_from_group(&sender_id, device_id, &group_encrypted)
@@ -277,14 +283,14 @@ impl MessageService {
                     // Content silently yielded r#type=None and dropped every
                     // healed message; mirror the stream path exactly instead.
                     let dm =
-                        match crate::network::validation::protovalidate::decode_inbound_content(
+                        match chatter_proto::protovalidate::decode_inbound_content(
                             plaintext.as_slice(),
                             "channel_retry",
                         )
                         .ok()
                         .and_then(|c| c.content)
                         {
-                            Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm,
+                            Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) => dm,
                             _ => {
                                 tracing::warn!(
                                     sender_id = %sender_id,
@@ -355,7 +361,7 @@ impl MessageService {
                         }
                     }
 
-                        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+                        let conv_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
                             &messages.channel_repo, &channel_id,
                         );
                         let mut message = match proto_to_domain_message_with_sender(&patched, Some(sender_id), conv_type) {
@@ -426,7 +432,7 @@ impl MessageService {
         channel_id: &ChannelId,
         target_user_id: &UserId,
     ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{self, SenderKeyRequest, content};
+        use chatter_proto::content_v1::{self, SenderKeyRequest, content};
         use prost::Message;
 
         let mut auth_client = self.auth_client();

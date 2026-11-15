@@ -50,7 +50,7 @@ use tokio::sync::broadcast::Receiver;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::domain::message::Message;
-use chatter_core::services::mesh::{
+use chatter_core::client::{
     MeshConversation, MeshDelivery, MeshError, MeshEvent, MeshStatus,
 };
 
@@ -155,13 +155,13 @@ pub fn row_for(ui_ctx: &Arc<ChatterClient>, id: &str) -> Option<MeshRow> {
     }
 }
 
-fn map_row(row: chatter_core::services::mesh::MeshSidebarRow) -> MeshRow {
+fn map_row(row: chatter_core::client::MeshSidebarRow) -> MeshRow {
     MeshRow {
         kind: row.kind,
         scope: row.scope,
         timestamp: row
             .last_message_at
-            .map(crate::bin_ui::converters::sidebar_time)
+            .map(chatter_core::ui::format::sidebar_time)
             .unwrap_or_default(),
         unread_count: row.unread_count,
         conversation: row.conversation,
@@ -277,7 +277,7 @@ pub fn mark_read(
 /// `MeshGlobal.radio-down`: which of core's radio-down causes applies, as the
 /// token the Slint captions switch on. Core decides; this only spells it.
 pub fn radio_down_label(status: &MeshStatus) -> &'static str {
-    use chatter_core::services::mesh::RadioDown;
+    use chatter_core::client::RadioDown;
     match status.radio_down() {
         None => "",
         Some(RadioDown::BluetoothOff) => "bluetooth-off",

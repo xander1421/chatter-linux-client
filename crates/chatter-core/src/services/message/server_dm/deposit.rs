@@ -176,7 +176,7 @@ impl MessageService {
         };
         if let (Ok(peer), Ok(content)) = (
             recipient_id.parse::<UserId>(),
-            crate::proto::content_v1::Content::decode(plaintext),
+            chatter_proto::content_v1::Content::decode(plaintext),
         ) {
             self.snapshot_dm_content_targets(
                 peer,
@@ -408,7 +408,7 @@ impl MessageService {
         uak: Option<&[u8; 16]>,
         client_request_id: &str,
     ) -> Result<(SendSealedMessageResponse, bool), crate::error::NetworkError> {
-        crate::services::gateway::submission::check_send_session()
+        crate::state::send_session::check_send_session()
             .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
         // A queued DM stores these exact envelopes before the first byte goes.
         super::super::dm_outbox::retain_request(
@@ -455,7 +455,7 @@ impl MessageService {
                 other => return other.map(|response| (response, false)),
             }
         }
-        crate::services::gateway::submission::check_send_session()
+        crate::state::send_session::check_send_session()
             .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
         shield_fence()?;
         message_client

@@ -129,24 +129,14 @@ impl GrpcClientPool {
             .initial_connection_window_size(8 * 1024 * 1024);
 
         // TLS for HTTPS endpoints — Signal-style private-PKI pin (§8): trust ONLY
-        // the provisioned chatter CA, never the system/native roots, so a rogue
-        // or mis-issued public CA cannot MITM this channel. `ClientTlsConfig::new()`
-        // starts with an EMPTY trust store in tonic 0.12; we add just our CA and
-        // never call `with_native_roots()`. Onion endpoints are `http://` over Tor,
-        // pinned by their `.onion` address, and never reach this branch.
+        // the provisioned chatter CA, never the system/native roots, and offer
+        // only post-quantum key exchange. The handshake itself runs in
+        // `pq_tls::grpc_connector` (tonic's TLS cannot restrict key-exchange
+        // groups); validating the CA here keeps the failure at endpoint
+        // creation. Onion endpoints are `http://` over Tor, pinned by their
+        // `.onion` address, and never reach this branch.
         if endpoint.uri().scheme_str() == Some("https") {
-            let ca_pem = crate::config::TLS_ROOT_CA_PEM.ok_or_else(|| {
-                NetworkError::ConnectionFailed(
-                    "no TLS root CA provisioned; refusing to open an unpinned TLS connection \
-                     (build with CHATTER_TLS_ROOT_CA_PEM, or --features dev-trust-root)"
-                        .to_string(),
-                )
-            })?;
-            let tls_config = tonic::transport::ClientTlsConfig::new()
-                .ca_certificate(tonic::transport::Certificate::from_pem(ca_pem));
-            endpoint = endpoint
-                .tls_config(tls_config)
-                .map_err(|e| NetworkError::ConnectionFailed(format!("TLS config error: {}", e)))?;
+            crate::network::pq_tls::pinned_roots().map_err(NetworkError::ConnectionFailed)?;
         }
 
         if let Some(t) = timeout {

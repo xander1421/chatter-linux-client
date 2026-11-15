@@ -41,7 +41,7 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::network::grpc::provisioning_client::{
     ProvisioningClient, ProvisioningPollResult, TransferArchivePoll,
 };
-use crate::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
+use chatter_proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
 use crate::services::auth_service::{AuthError, prove_password};
 use crate::services::message_backup_service::{BackupStats, MessageBackupService};
 use crate::storage::backup_data::ImportSummary;
@@ -139,11 +139,6 @@ impl LinkDeviceService {
                 env!("CARGO_PKG_VERSION")
             ),
         }
-    }
-
-    /// True if a new-device flow is currently running.
-    pub fn has_active_session(&self) -> bool {
-        self.active_uuid.lock().is_some()
     }
 
     /// Whether this install already holds an identity that linking must not

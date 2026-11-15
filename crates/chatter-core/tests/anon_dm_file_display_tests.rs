@@ -16,7 +16,7 @@ use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::events::EventBus;
-use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::testing::inbox::handlers::DomainEvent;
 
 use tokio::sync::broadcast;
 

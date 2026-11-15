@@ -1,7 +1,7 @@
 //! Disappearing messages: live status below the chat header, and independent
 //! message lifetime / activation controls on the contact profile.
 //!
-//! Everything shown comes from `chatter_core::services::disappearing` and the
+//! Everything shown comes from core's disappearing service and the
 //! client facade (`disappearing_timer`, `set_disappearing_timer`); this module
 //! only moves values into `DisappearingGlobal` and the picker's choice back.
 
@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::disappearing::timer_label;
 use chatter_core::domain::ids::UserId;
-use chatter_core::services::disappearing;
+use chatter_core::ui::disappearing;
 use chatter_core::state::ActiveConversation;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
@@ -38,14 +39,13 @@ fn wire_secret_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Ok(seconds) = u32::try_from(seconds) else {
                 return;
             };
-            let ActiveConversation::AnonDm(id) = ctx.active_conversation() else {
+            let conv = ctx.active_conversation();
+            if !matches!(conv, ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_)) {
                 return;
-            };
+            }
             let (ctx, weak) = (ctx.clone(), weak.clone());
             tokio::spawn(async move {
-                let result = ctx
-                    .set_disappearing_timer(ActiveConversation::AnonDm(id), seconds)
-                    .await;
+                let result = ctx.set_disappearing_timer(conv, seconds).await;
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak.upgrade() else { return };
                     refresh_header(&w, &ctx);
@@ -166,7 +166,7 @@ pub fn options() -> Vec<DisappearingOption> {
         .iter()
         .map(|&seconds| DisappearingOption {
             seconds: seconds as i32,
-            label: disappearing::timer_label(seconds).into(),
+            label: timer_label(seconds).into(),
         })
         .collect()
 }
@@ -211,8 +211,8 @@ fn load_for_profile(
             let g = w.global::<DisappearingGlobal>();
             g.set_dm_can_set(can_set);
             g.set_dm_seconds(seconds as i32);
-            g.set_dm_label(disappearing::timer_label(seconds).into());
-            g.set_dm_activation_label(disappearing::timer_label(if state.activation_seconds == 0 {
+            g.set_dm_label(timer_label(seconds).into());
+            g.set_dm_activation_label(timer_label(if state.activation_seconds == 0 {
                 disappearing::DEFAULT_ACTIVATION_SECONDS
             } else {
                 state.activation_seconds
@@ -247,7 +247,7 @@ fn apply_header_state(w: &MainWindow, state: disappearing::DmTimer) {
     let seconds = state.effective_seconds(now);
     let g = w.global::<DisappearingGlobal>();
     g.set_header_label(disappearing::timer_short_label(seconds).into());
-    g.set_active_label(disappearing::timer_label(seconds).into());
+    g.set_active_label(timer_label(seconds).into());
     g.set_status_label(state.status_label(now).into());
 }
 

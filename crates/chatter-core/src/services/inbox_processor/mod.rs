@@ -13,12 +13,10 @@ use crate::inbox::handlers::DomainEvent;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
-use crate::services::conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::message::MessageService;
 use crate::services::signal::SignalService;
 use crate::services::user::UserService;
-use crate::state::ActiveConversation;
 use crate::util::time::TimestampNanos;
 
 /// Processes inbox events and handles protocol-level concerns.
@@ -31,8 +29,31 @@ pub struct InboxEventProcessor {
     user_service: Arc<UserService>,
     attachment_service: Arc<AttachmentService>,
     event_bus: EventBus,
-    /// ChatterClient for ConversationHandle construction.
-    client: Arc<crate::client::ChatterClient>,
+    auth_state: crate::state::AuthState,
+    #[cfg(feature = "media")]
+    call_service: Arc<std::sync::OnceLock<crate::services::CallWorkerHandle>>,
+    /// The façade that owns this processor, held strongly for the processor's
+    /// whole life (as the `ChatterClient` it replaces was).
+    facade: Arc<dyn InboxFacade>,
+}
+
+/// The façade operations the processor needs and cannot reach through a
+/// service: they go through `ChatterClient` (implemented in `client/`).
+pub(crate) trait InboxFacade: Send + Sync {
+    /// Owe a delivery receipt for a received friend DM (`ServerDm`): accepted
+    /// senders only, batched and sent after a random delay
+    /// (`client::delivery_receipt_batch`).
+    fn send_dm_delivery_receipt(
+        self: Arc<Self>,
+        peer_id: UserId,
+        timestamp: u64,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>>;
+    /// Bring up call services before an incoming ring is presented.
+    #[cfg(feature = "media")]
+    fn ensure_call_service(&self);
+    /// Drop a ringing (not yet accepted) group-call invite.
+    #[cfg(feature = "media")]
+    fn drop_ringing_group_call_invite(&self, call_id: &str);
 }
 
 mod anonymous_dm;
@@ -43,24 +64,42 @@ mod protocol;
 pub(crate) mod sync;
 
 impl InboxEventProcessor {
-    /// Create from a CoreServices (convenience constructor).
-    pub fn from_client(client: &Arc<crate::client::ChatterClient>) -> Self {
+    /// Create from the services it uses and the façade that owns it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        message_service: Arc<MessageService>,
+        dm_bootstrap_service: Arc<DmBootstrapService>,
+        anon_dm_service: Arc<AnonDmService>,
+        anon_group_service: Arc<AnonGroupService>,
+        signal_service: Arc<SignalService>,
+        user_service: Arc<UserService>,
+        attachment_service: Arc<AttachmentService>,
+        event_bus: EventBus,
+        auth_state: crate::state::AuthState,
+        #[cfg(feature = "media")] call_service: Arc<
+            std::sync::OnceLock<crate::services::CallWorkerHandle>,
+        >,
+        facade: Arc<dyn InboxFacade>,
+    ) -> Self {
         // Durable reaction intents already in this profile must not wait for
         // network redelivery merely because the target is already stored.
         crate::inbox::reaction_handoff::replay(
-            &client.messages().message_repo,
-            Some(&client.event_bus().domain_sender()),
+            &message_service.message_repo,
+            Some(&event_bus.domain_sender()),
         );
         Self {
-            message_service: client.messages().clone(),
-            dm_bootstrap_service: client.dm_bootstrap().clone(),
-            anon_dm_service: client.anon_dms().clone(),
-            anon_group_service: client.anon_groups().clone(),
-            signal_service: client.signal().clone(),
-            user_service: client.users().clone(),
-            attachment_service: client.attachments().clone(),
-            event_bus: client.event_bus().clone(),
-            client: client.clone(),
+            message_service,
+            dm_bootstrap_service,
+            anon_dm_service,
+            anon_group_service,
+            signal_service,
+            user_service,
+            attachment_service,
+            event_bus,
+            auth_state,
+            #[cfg(feature = "media")]
+            call_service,
+            facade,
         }
     }
 

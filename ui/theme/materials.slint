@@ -63,9 +63,9 @@ export global Materials {
     out property <color> scrim-media: Appearance.dark ? #02050ae6 : #0b1420e0;
     out property <color> hover: Appearance.dark ? #ffffff0c : #15202b0a;
     out property <color> pressed: Appearance.dark ? #ffffff18 : #15202b14;
-    // A small tone shift in one neutral ramp keeps chrome quiet in both themes.
+    // Dark pages share the black canvas used by chats and system bars.
     out property <brush> ambient: Appearance.dark
-        ? @linear-gradient(180deg, #181d1e 0%, #101314 100%)
+        ? #000000
         : @linear-gradient(180deg, #f8f9f9 0%, #f4f5f5 100%);
     out property <length> blur-regular: 34px;
     out property <length> blur-thick: 38px;

@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     ArchiveChannelRequest, ArchiveChannelResponse, BanUserRequest, BannedUser,
     Channel as ChannelProto, ChannelChange, ChannelEvent, ChannelEventRequest, ChannelJoinRequest,
     ChannelSearchRequest, ChannelSearchResponse, ChannelType, CreateChannelRequest,
@@ -357,10 +357,10 @@ impl ChannelClient {
     /// authenticated user.
     pub async fn list_pending_invites(
         &mut self,
-    ) -> Result<crate::proto::chat_v1::ListPendingInvitesResponse, NetworkError> {
+    ) -> Result<chatter_proto::chat_v1::ListPendingInvitesResponse, NetworkError> {
         let response = self
             .inner
-            .list_pending_invites(crate::proto::chat_v1::ListPendingInvitesRequest {})
+            .list_pending_invites(chatter_proto::chat_v1::ListPendingInvitesRequest {})
             .await
             .map_err(|s| NetworkError::from_status(&s))?;
         Ok(response.into_inner())
@@ -474,22 +474,17 @@ impl ChannelClient {
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 
-    /// Mute a channel member for `duration`, or until unmuted when `None`.
-    /// Server-enforced: SpiceDB `send_message` excludes `muted`, and the
-    /// server's expiry sweep lifts a timed mute once it lapses.
+    /// Mute a channel member: the moderator's signed `SetMuted{muted_until > 0}`.
+    /// The server mirrors it into SpiceDB `muted`, and its expiry sweep lifts
+    /// a timed mute once it lapses.
     pub async fn mute_user(
         &mut self,
         channel_id: &str,
-        user_id: &str,
-        duration: Option<std::time::Duration>,
+        change: ChannelChange,
     ) -> Result<(), NetworkError> {
         let request = MuteUserRequest {
             channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
-            duration: duration.map(|d| prost_types::Duration {
-                seconds: d.as_secs() as i64,
-                nanos: d.subsec_nanos() as i32,
-            }),
+            change: Some(change),
         };
         self.inner
             .mute_user(request)
@@ -498,15 +493,15 @@ impl ChannelClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Lift a mute.
+    /// Lift a mute: the moderator's signed `SetMuted{muted_until: 0}`.
     pub async fn unmute_user(
         &mut self,
         channel_id: &str,
-        user_id: &str,
+        change: ChannelChange,
     ) -> Result<(), NetworkError> {
         let request = UnmuteUserRequest {
             channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
+            change: Some(change),
         };
         self.inner
             .unmute_user(request)
@@ -535,8 +530,8 @@ impl ChannelClient {
     pub async fn get_departure(
         &mut self,
         channel_id: &str,
-    ) -> Result<crate::proto::chat_v1::Departure, NetworkError> {
-        let request = crate::proto::chat_v1::GetDepartureRequest {
+    ) -> Result<chatter_proto::chat_v1::Departure, NetworkError> {
+        let request = chatter_proto::chat_v1::GetDepartureRequest {
             channel_id: channel_id.to_string(),
         };
         self.inner
@@ -583,7 +578,7 @@ impl ChannelClient {
     pub async fn get_all_channel_members(
         &mut self,
         channel_id: &str,
-    ) -> Result<Vec<crate::proto::chat_v1::channel::ChannelMember>, NetworkError> {
+    ) -> Result<Vec<chatter_proto::chat_v1::channel::ChannelMember>, NetworkError> {
         const PAGE_SIZE: i32 = 100;
         let mut members = Vec::new();
         let mut offset: i32 = 0;
@@ -682,6 +677,21 @@ impl ChannelClient {
                 channel_id: channel_id.to_string(),
                 revision,
                 invite_pub: invite_pub.to_vec(),
+            })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// The caller's group send endorsements (serialized zkgroup response) and
+    /// the membership revision they were issued for.
+    pub async fn get_group_send_endorsements(
+        &mut self,
+        channel_id: &str,
+    ) -> Result<chatter_proto::chat_v1::GetGroupSendEndorsementsResponse, NetworkError> {
+        self.inner
+            .get_group_send_endorsements(chatter_proto::chat_v1::GetGroupSendEndorsementsRequest {
+                channel_id: channel_id.to_string(),
             })
             .await
             .map(|r| r.into_inner())
@@ -794,7 +804,7 @@ fn fetch_next_members_page(page_len: usize, page_size: i32, fetched: usize, tota
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::chat_v1::ChannelRole;
+    use chatter_proto::chat_v1::ChannelRole;
 
     // Note: Full integration tests require a running server.
     // These tests verify compilation and basic structure.
@@ -869,7 +879,7 @@ mod tests {
     #[test]
     fn test_channel_construction() {
         // Verify Channel struct can be constructed
-        use crate::proto::chat_v1::Channel as ChannelProto;
+        use chatter_proto::chat_v1::Channel as ChannelProto;
 
         let channel = ChannelProto {
             id: "channel-123".to_string(),
@@ -892,7 +902,7 @@ mod tests {
     #[test]
     fn test_channel_config_construction() {
         // Verify Channel.Config struct can be constructed
-        use crate::proto::chat_v1::channel::{Config, config::Persistence};
+        use chatter_proto::chat_v1::channel::{Config, config::Persistence};
 
         let config = Config {
             persistence: Persistence::Persistent as i32,
@@ -910,7 +920,7 @@ mod tests {
     #[test]
     fn test_channel_persistence_values() {
         // Verify Persistence enum values
-        use crate::proto::chat_v1::channel::config::Persistence;
+        use chatter_proto::chat_v1::channel::config::Persistence;
 
         assert_eq!(Persistence::Unspecified as i32, 0);
         assert_eq!(Persistence::Ephemeral as i32, 1);
@@ -920,7 +930,7 @@ mod tests {
     #[test]
     fn test_channel_member_construction() {
         // Verify ChannelMember struct can be constructed
-        use crate::proto::chat_v1::channel::ChannelMember;
+        use chatter_proto::chat_v1::channel::ChannelMember;
 
         let member = ChannelMember {
             user_id: "user-123".to_string(),

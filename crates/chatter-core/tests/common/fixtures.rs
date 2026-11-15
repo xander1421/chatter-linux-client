@@ -10,11 +10,11 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
 
 use chatter_core::error::NetworkError;
-use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
-use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
+use chatter_core::testing::network::grpc::{AuthClient, GrpcClientPool};
+use chatter_proto::chat_v1::signal_pre_key_bundle::{
     KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord, SignedPreKeyRecord,
 };
-use chatter_core::proto::chat_v1::{AuthResponse, SignalPreKeyBundle};
+use chatter_proto::chat_v1::{AuthResponse, SignalPreKeyBundle};
 use libsignal_protocol::{
     GenericSignedPreKey, IdentityKeyPair, KeyPair, KyberPreKeyId, KyberPreKeyRecord, kem,
 };
@@ -92,7 +92,7 @@ pub async fn opaque_login(
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(username);
     let start = opaque::login_start(password).map_err(|e| NetworkError::Unknown(e.to_string()))?;
     // Pays the server's login proof of work when it asks one, as the app does.
-    let started = chatter_core::services::auth_service::login_start_paying_pow(
+    let started = chatter_core::testing::services::auth_service::login_start_paying_pow(
         auth_client,
         &identifier,
         &start.ke1,
@@ -102,7 +102,7 @@ pub async fn opaque_login(
     )
     .await
     .map_err(|e| match e {
-        chatter_core::services::auth_service::AuthError::Network(n) => n,
+        chatter_core::testing::services::auth_service::AuthError::Network(n) => n,
         other => NetworkError::Unknown(other.to_string()),
     })?;
     let done = match opaque::login_finish_async(start, password, started.ke2).await {
@@ -458,7 +458,7 @@ pub fn generate_prekey_bundle() -> (SignalPreKeyBundle, Vec<u8>) {
 /// Pays a registration challenge's proof of work (whatever the transport's
 /// difficulty; 0 on clearnet).
 pub fn solve_registration_pow(
-    challenge: &chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse,
+    challenge: &chatter_proto::chat_v1::RequestRegistrationChallengeResponse,
 ) -> u64 {
     let c = challenge.challenge.as_ref().expect("challenge token");
     chatter_core::crypto::pow::solve(

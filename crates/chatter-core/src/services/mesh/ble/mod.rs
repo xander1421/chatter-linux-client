@@ -64,7 +64,7 @@ use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::sync::{GossipSyncManager, SyncConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use super::account_binding::BindingV1;
+use crate::domain::mesh::account_binding::BindingV1;
 use super::chatter_hello::ChatterHello;
 use super::config::MeshConfig;
 use super::events::{MeshEvent, MeshMessage};
@@ -77,7 +77,8 @@ use super::private_channel::{
     EpochProof, Invite, LeaveNotice, Member, PrivateChannel, PrivateChannelStore,
 };
 use super::router::{RouterCommand, RouterHandle};
-use super::signal_mesh::{self, BundleFrame};
+use super::signal_mesh;
+use crate::domain::mesh::frames::{self, BundleFrame};
 use super::state::{
     LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs,
 };

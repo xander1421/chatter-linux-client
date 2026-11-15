@@ -223,7 +223,7 @@ impl AnonGroupService {
     // A new lower claim can be discarded only before encryption. An existing
     // unknown claim marks upper uncertainty before reaching these helpers.
     fn check_recipient_session(&self, retained: Option<&str>) -> Result<(), AnonGroupError> {
-        crate::services::gateway::submission::check_send_session().map_err(|e| {
+        crate::state::send_session::check_send_session().map_err(|e| {
             if let Some(key) = retained {
                 crate::services::gateway::submission::discard_before_encryption(
                     self.settings_repo.database(),

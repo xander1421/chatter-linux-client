@@ -25,7 +25,7 @@ async fn higher_uuid_without_a_peer_mailbox_waits_for_prefetched_tokens() {
     seed_half_open(ms, &friend, &ours, 5);
 
     let sent = ms
-        .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
+        .send_friend_dm_content(&friend, crate::services::gateway::builders::build_text_content("hi", 1))
         .await;
     assert!(
         matches!(sent, Err(MessageError::ShieldNotReady)),
@@ -70,8 +70,8 @@ async fn half_open_conversation_recovers_by_re_announce() {
     assert_eq!(announced.our_mailbox.public_key, lo_mailbox);
     assert_eq!(announced.our_ephemeral_public, lo_key.our_ephemeral_public);
     let content =
-        crate::proto::content_v1::Content::decode(announced.bootstrap_message.as_slice()).unwrap();
-    let Some(crate::proto::content_v1::content::Content::KeyExchange(kx)) = content.content else {
+        chatter_proto::content_v1::Content::decode(announced.bootstrap_message.as_slice()).unwrap();
+    let Some(chatter_proto::content_v1::content::Content::KeyExchange(kx)) = content.content else {
         panic!("bootstrap MESSAGE is a KeyExchange");
     };
 

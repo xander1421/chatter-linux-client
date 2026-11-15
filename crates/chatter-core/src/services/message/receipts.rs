@@ -122,14 +122,14 @@ impl MessageService {
     pub(crate) fn snapshot_dm_content_targets(
         &self,
         peer: UserId,
-        content: &crate::proto::content_v1::Content,
+        content: &chatter_proto::content_v1::Content,
         devices: &[u32],
     ) -> Result<(), MessageError> {
         let author = self.current_user_id()?;
         if peer == author {
             return Ok(());
         }
-        let Some(crate::proto::content_v1::content::Content::DataMessage(message)) =
+        let Some(chatter_proto::content_v1::content::Content::DataMessage(message)) =
             &content.content
         else {
             return Ok(());
@@ -231,9 +231,9 @@ impl MessageService {
     /// Preserve the originating device's receipt scope in its own-device transcript.
     pub(super) fn populate_sync_receipt_targets(
         &self,
-        content: &mut crate::proto::content_v1::Content,
+        content: &mut chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{
+        use chatter_proto::content_v1::{
             SyncSentReceiptTarget, content::Content, sync_sent::Destination,
         };
         let Some(Content::SyncSent(sync)) = content.content.as_mut() else {
@@ -298,7 +298,7 @@ impl MessageService {
         sent_at: u64,
         auth: &mut crate::network::grpc::auth_client::AuthClient,
     ) {
-        use crate::proto::content_v1::{
+        use chatter_proto::content_v1::{
             Content, DataMessage, SyncSent, content, sync_sent::Destination,
         };
         let sync = Content {
@@ -465,7 +465,7 @@ mod tests {
     #[tokio::test]
     async fn sync_sent_ingestion_preserves_phone_targets_and_applies_tablet_receipts() {
         use crate::domain::message::Message;
-        use crate::proto::content_v1::content;
+        use chatter_proto::content_v1::content;
         use crate::services::gateway::MessageGateway;
 
         keyring::set_default_store(crate::system::keyring::test_credential_store());
@@ -500,7 +500,7 @@ mod tests {
             target.solicited_resends.clone(),
         );
         for (timestamp, early) in [(123, false), (124, true)] {
-            let original = crate::services::build_text_content("phone message", timestamp);
+            let original = crate::services::gateway::builders::build_text_content("phone message", timestamp);
             phone
                 .messages()
                 .snapshot_dm_content_targets(peer, &original, &[1, 2])

@@ -4,8 +4,8 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
-use chatter_core::proto::chat_v1::{
+use chatter_core::testing::network::grpc::{AuthClient, ChannelClient, MessageClient};
+use chatter_proto::chat_v1::{
     ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use libsignal_protocol::{IdentityKeyPair, KeyPair, kem};
@@ -151,8 +151,8 @@ async fn test_upload_prekeys_for_device() {
     // server enforces "all devices for a user share the same identity key"
     // (signal_protocol.go::StoreSignalPreKeyBundle), so a fresh keypair
     // would be rejected with an identity-key-mismatch error.
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{
         KyberPreKeyRecord, PreKeyRecord, SignedPreKeyRecord,
     };
 
@@ -266,7 +266,7 @@ async fn test_messages_visible_across_devices() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(ch) = payload {
                 channel_id = ch.id;
             }
@@ -404,7 +404,7 @@ async fn test_concurrent_device_operations() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
+            use chatter_proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(ch) = payload {
                 channel_id = ch.id;
             }
@@ -506,12 +506,12 @@ async fn test_fetch_prekeys_all_devices() {
             );
 
             match resp.result.unwrap() {
-                chatter_core::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b) => {
+                chatter_proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b) => {
                     // Single device - should have valid device_id
                     assert!(b.device_id > 0, "Device ID should be positive");
                     assert!(!b.identity_key.is_empty(), "Should have identity key");
                 }
-                chatter_core::proto::chat_v1::get_pre_key_bundle_response::Result::Devices(
+                chatter_proto::chat_v1::get_pre_key_bundle_response::Result::Devices(
                     list,
                 ) => {
                     // Multiple devices
@@ -549,7 +549,7 @@ async fn test_prekey_bundles_have_required_fields() {
     let response = auth_client.get_pre_key_bundle(&target.user_id, "1").await;
 
     if let Ok(resp) = response {
-        if let Some(chatter_core::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(
+        if let Some(chatter_proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(
             bundle,
         )) = resp.result
         {

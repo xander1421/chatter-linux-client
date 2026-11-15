@@ -20,7 +20,7 @@ use chatter_core::system::ExternalOpener;
 
 use crate::MainWindow;
 use crate::bin_ui::audio_state;
-use crate::bin_ui::converters::format_file_size;
+use chatter_core::ui::format::format_file_size;
 use crate::bin_ui::preview_state;
 use crate::bin_ui::video_state;
 
@@ -726,7 +726,7 @@ fn play_audio_from_buffer(
 /// Play large audio by streaming decrypted ranges on demand (no full decrypt).
 fn play_audio_from_range(
     weak: slint::Weak<MainWindow>,
-    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
     attachment_id: &str,
     mime_type: &str,
     request: u64,
@@ -918,6 +918,16 @@ fn display_image_from_buffer(
             }
             Err(e) => {
                 tracing::error!("Failed to load image from memory: {:?}", e);
+                // Never leave the viewer on "Decrypting..." forever.
+                show_attachment_error(&weak, request, "Image can't be opened");
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if super::media_viewer::is_current(request) {
+                            w.global::<crate::ChatPane>().set_image_viewer_visible(false);
+                        }
+                    }
+                });
             }
         }
     }
@@ -948,7 +958,7 @@ fn play_video_from_buffer(
 #[cfg(target_os = "android")]
 fn play_video_from_range(
     _weak: slint::Weak<MainWindow>,
-    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
     filename: &str,
     request: u64,
 ) {
@@ -1025,7 +1035,7 @@ fn play_video_from_buffer(
 #[cfg(not(target_os = "android"))]
 fn play_video_from_range(
     weak: slint::Weak<MainWindow>,
-    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
     filename: &str,
     request: u64,
 ) {

@@ -27,6 +27,20 @@ impl GroupStateGate {
         }
     }
 
+    /// Whether `user` may delete other members' messages for everyone in
+    /// `channel_id`: ACTIVE and at least MODERATOR in the verified state (the
+    /// server's old `message#delete = author + channel->moderate`, now judged
+    /// by every receiver from the signed state, since a private channel has no
+    /// server copy to delete). Fails closed on a missing or unhealthy state.
+    pub(crate) fn may_moderate(&self, channel_id: &ChannelId, user: &UserId) -> bool {
+        use crate::domain::verified_state::{ChannelRole, MemberStatus};
+        self.for_distribution(channel_id).is_ok_and(|v| {
+            v.state.members.get(&user.to_string()).is_some_and(|m| {
+                m.status == MemberStatus::Active && m.role >= ChannelRole::Moderator
+            })
+        })
+    }
+
     fn peer_ahead_key(channel_id: &ChannelId) -> String {
         format!("channel_state_peer_ahead:{channel_id}")
     }
@@ -66,6 +80,20 @@ impl GroupStateGate {
             .is_distribution_member(channel_id, &sender.to_string())
             .inspect_err(|e| tracing::warn!(%channel_id, %sender, error = %e, "Verified membership lookup failed"))
             .unwrap_or(false)
+    }
+
+    /// Whether group CONTENT from `sender` is accepted: [`Self::admits`] and
+    /// not muted in the signed state at receipt (mutes live in the signed
+    /// membership so every receiver enforces them, not only the server).
+    /// SKDMs still use `admits`, so an unmuted member needs no new key.
+    /// Fails closed.
+    pub(crate) fn admits_content(&self, channel_id: &ChannelId, sender: &UserId) -> bool {
+        self.admits(channel_id, sender)
+            && self
+                .repo
+                .muted_until(channel_id, &sender.to_string())
+                .inspect_err(|e| tracing::warn!(%channel_id, %sender, error = %e, "Verified mute lookup failed"))
+                .is_ok_and(|until| until <= crate::inbox::ack_policy::now_ns())
     }
 
     /// Check a peer's `(revision, state_hash)` stamp against our verified
@@ -161,7 +189,7 @@ impl GroupStateGate {
 
 /// Stamp our verified `(revision, state_hash)` into a group DataMessage.
 pub(crate) fn stamp_group_data_message(
-    dm: &mut crate::proto::content_v1::DataMessage,
+    dm: &mut chatter_proto::content_v1::DataMessage,
     state: &VerifiedChannel,
 ) {
     dm.group_state_revision = state.revision();
@@ -208,7 +236,7 @@ impl MessageService {
         Ok(())
     }
 
-    pub(crate) fn check_group_stamp_received(&self, channel_id: &ChannelId, dm: &crate::proto::content_v1::DataMessage, session: &crate::state::receive_session::ReceiveSession) -> Result<(), crate::error::StorageError> {
+    pub(crate) fn check_group_stamp_received(&self, channel_id: &ChannelId, dm: &chatter_proto::content_v1::DataMessage, session: &crate::state::receive_session::ReceiveSession) -> Result<(), crate::error::StorageError> {
         self.group_gate().cross_check_admitted(channel_id, true, dm.group_state_revision, &dm.group_state_hash, Some(session))?;
         self.sync_channel_state_if_behind_received(channel_id, session)
     }

@@ -8,7 +8,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::provisioning_v1::{
+use chatter_proto::provisioning_v1::{
     CancelProvisioningRequest, CompleteDeviceLinkingRequest, CompleteDeviceLinkingResponse,
     GetProvisioningMessageRequest, GetProvisioningMessageResponse, GetTransferArchiveRequest,
     ListProvisioningSessionsRequest, ListProvisioningSessionsResponse, ProvisionDeviceRequest,
@@ -16,7 +16,7 @@ use crate::proto::provisioning_v1::{
     StartProvisioningResponse, device_provisioning_service_client::DeviceProvisioningServiceClient,
     get_provisioning_message_response, get_transfer_archive_response,
 };
-use crate::proto::{SignalPreKeyBundle, signal_pre_key_bundle::PreKeyRecord};
+use chatter_proto::{SignalPreKeyBundle, signal_pre_key_bundle::PreKeyRecord};
 
 /// Result of polling for provisioning message.
 #[derive(Debug, Clone)]

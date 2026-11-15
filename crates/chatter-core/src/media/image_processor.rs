@@ -37,6 +37,11 @@ pub const PREVIEW_PIXELS: u64 = 16 * 1024 * 1024;
 pub const PREVIEW_DECODED_BYTES: u64 = 64 * 1024 * 1024;
 pub const PREVIEW_ALLOC_BYTES: u64 = 96 * 1024 * 1024;
 
+/// Edge cap for images a peer hands us to show small (received thumbnails,
+/// avatars, channel icons): anything larger is refused before its canvas is
+/// allocated.
+pub const UNTRUSTED_IMAGE_MAX_EDGE: u32 = 4096;
+
 impl ImageProcessor {
     /// Generate a thumbnail from an image file.
     ///
@@ -317,14 +322,16 @@ impl ImageProcessor {
 
     /// Decode stored sidecars to the inline model's pixel budget.
     pub fn inline_pixels_from_memory(data: &[u8]) -> Result<image::RgbaImage, MediaError> {
-        // Decode the sidecar at its native inline resolution. The sender
-        // generates it at INLINE_THUMBNAIL_MAX_SIZE; decoding to 320 here threw
-        // most of that away, so inline images rendered soft on a HiDPI phone
-        // (bubble ~760px physical) until the full image was fetched on tap.
-        Ok(Self::fit_preview(
-            Self::load_preview_image(data)?,
-            INLINE_THUMBNAIL_MAX_SIZE,
-        ))
+        Ok(Self::inline_pixels(Self::load_preview_image(data)?))
+    }
+
+    /// The one inline-preview pixel bound for every source (sidecar bytes,
+    /// original file on disk, freshly decoded original). The sender generates
+    /// sidecars at INLINE_THUMBNAIL_MAX_SIZE; bounding lower threw most of
+    /// that away, so inline images rendered soft on a HiDPI phone (bubble
+    /// ~760px physical) until the full image was fetched on tap.
+    pub fn inline_pixels(image: DynamicImage) -> image::RgbaImage {
+        Self::fit_preview(image, INLINE_THUMBNAIL_MAX_SIZE)
     }
 
     // These are upper bounds, not target sizes. Enlarging a small sidecar adds
@@ -363,7 +370,7 @@ impl ImageProcessor {
             ));
         }
         Self::decode_preview(std::io::BufReader::new(file))
-            .map(|image| Self::fit_preview(image, 320))
+            .map(Self::inline_pixels)
     }
 
     fn load_preview_image(data: &[u8]) -> Result<DynamicImage, MediaError> {
@@ -375,23 +382,46 @@ impl ImageProcessor {
         Self::decode_preview(Cursor::new(data))
     }
 
+    /// Decode peer-supplied image bytes (received thumbnails, avatars, channel
+    /// icons) under the preview decoder budget, refusing any image wider or
+    /// taller than [`UNTRUSTED_IMAGE_MAX_EDGE`] from its header — an error,
+    /// never an allocation. `image::load_from_memory`'s default limits let a
+    /// few hundred bytes claim a multi-gigabyte canvas.
+    pub fn decode_untrusted(data: &[u8]) -> Result<DynamicImage, MediaError> {
+        if data.len() as u64 > PREVIEW_ENCODED_BYTES {
+            return Err(MediaError::InvalidFormat(
+                "preview byte budget exceeded".into(),
+            ));
+        }
+        Self::decode_preview_capped(Cursor::new(data), UNTRUSTED_IMAGE_MAX_EDGE)
+    }
+
     fn decode_preview<R: std::io::BufRead + std::io::Seek>(
         input: R,
+    ) -> Result<DynamicImage, MediaError> {
+        Self::decode_preview_capped(input, 16384)
+    }
+
+    fn decode_preview_capped<R: std::io::BufRead + std::io::Seek>(
+        input: R,
+        max_edge: u32,
     ) -> Result<DynamicImage, MediaError> {
         let mut reader = ImageReader::new(input)
             .with_guessed_format()
             .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
         let mut initial_limits = image::Limits::default();
         initial_limits.max_alloc = Some(PREVIEW_ALLOC_BYTES);
-        initial_limits.max_image_width = Some(16384);
-        initial_limits.max_image_height = Some(16384);
+        initial_limits.max_image_width = Some(max_edge);
+        initial_limits.max_image_height = Some(max_edge);
         reader.limits(initial_limits);
         let mut decoder = reader
             .into_decoder()
             .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
         use image::ImageDecoder;
         let (width, height) = decoder.dimensions();
-        if u64::from(width) * u64::from(height) > PREVIEW_PIXELS
+        if width > max_edge
+            || height > max_edge
+            || u64::from(width) * u64::from(height) > PREVIEW_PIXELS
             || decoder.total_bytes() > PREVIEW_DECODED_BYTES
         {
             return Err(MediaError::InvalidFormat(
@@ -400,8 +430,8 @@ impl ImageProcessor {
         }
         let mut limits = image::Limits::default();
         limits.max_alloc = Some(PREVIEW_ALLOC_BYTES);
-        limits.max_image_width = Some(16384);
-        limits.max_image_height = Some(16384);
+        limits.max_image_width = Some(max_edge);
+        limits.max_image_height = Some(max_edge);
         decoder
             .set_limits(limits)
             .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
@@ -607,6 +637,54 @@ impl ImageProcessor {
 
 #[cfg(test)]
 mod tests {
+    fn png(image: image::DynamicImage) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        bytes.into_inner()
+    }
+
+    /// A tiny PNG whose IHDR claims `width` x `height` (CRC fixed up).
+    fn png_claiming(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(data: &[u8]) -> u32 {
+            let mut crc = 0xFFFF_FFFFu32;
+            for &byte in data {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                }
+            }
+            !crc
+        }
+        let mut bytes = png(image::DynamicImage::new_rgba8(1, 1));
+        // 8-byte signature, 4-byte length, "IHDR", then width and height.
+        assert_eq!(&bytes[12..16], b"IHDR");
+        bytes[16..20].copy_from_slice(&width.to_be_bytes());
+        bytes[20..24].copy_from_slice(&height.to_be_bytes());
+        let crc = crc32(&bytes[12..29]);
+        bytes[29..33].copy_from_slice(&crc.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn untrusted_decode_refuses_huge_claimed_dimensions_without_allocating() {
+        use super::ImageProcessor;
+        let ok = ImageProcessor::decode_untrusted(&png(image::DynamicImage::new_rgba8(64, 32)))
+            .unwrap();
+        assert_eq!((ok.width(), ok.height()), (64, 32));
+
+        // ~70 bytes claiming a 60000x60000 RGBA canvas (~14 GB).
+        let forged = png_claiming(60_000, 60_000);
+        assert!(forged.len() < 128);
+        assert!(ImageProcessor::decode_untrusted(&forged).is_err());
+        // Over the edge cap even though the pixel count is small.
+        assert!(ImageProcessor::decode_untrusted(&png_claiming(5000, 1)).is_err());
+        assert!(
+            ImageProcessor::decode_untrusted(&png(image::DynamicImage::new_luma8(5000, 1)))
+                .is_err()
+        );
+        assert!(ImageProcessor::decode_untrusted(b"not an image").is_err());
+    }
+
     #[test]
     fn tray_preview_is_small_and_rejects_invalid_images() {
         let source = image::DynamicImage::new_rgba8(640, 320);
@@ -677,8 +755,11 @@ mod webp_roundtrip_tests {
             "center pixel decoded to black — webp round-trip is broken: {:?}",
             px.0
         );
-        // Decoded dims must match the reported thumbnail dims (after the 320 bound).
-        assert!(dw <= 320 && dh <= 320, "unexpected thumbnail size {dw}x{dh}");
+        // Decoded at the sidecar's native inline bound.
+        assert!(
+            dw <= INLINE_THUMBNAIL_MAX_SIZE && dh <= INLINE_THUMBNAIL_MAX_SIZE,
+            "unexpected thumbnail size {dw}x{dh}"
+        );
     }
 
     // Reproduces the cached-preview path exactly: media.rs encodes the derived
@@ -755,14 +836,17 @@ mod preview_budget_tests {
     #[test]
     fn disk_and_memory_previews_have_same_bounded_pixels_and_reject_bad_sources() {
         let mut encoded = Cursor::new(Vec::new());
-        DynamicImage::new_rgb8(640, 320)
+        DynamicImage::new_rgb8(1600, 800)
             .write_to(&mut encoded, ImageFormat::Png)
             .unwrap();
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), encoded.get_ref()).unwrap();
         let memory = ImageProcessor::inline_pixels_from_memory(encoded.get_ref()).unwrap();
         let disk = ImageProcessor::inline_pixels_from_path(file.path()).unwrap();
-        assert_eq!(memory.dimensions(), (320, 160));
+        assert_eq!(
+            memory.dimensions(),
+            (INLINE_THUMBNAIL_MAX_SIZE, INLINE_THUMBNAIL_MAX_SIZE / 2)
+        );
         assert_eq!(memory, disk);
         assert!(ImageProcessor::inline_pixels_from_memory(b"not an image").is_err());
         std::fs::write(file.path(), b"not an image").unwrap();

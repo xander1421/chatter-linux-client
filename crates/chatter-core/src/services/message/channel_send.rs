@@ -7,7 +7,7 @@ use crate::domain::{
     message::{ConversationType, Message},
 };
 use crate::error::{NetworkError, StorageError};
-use crate::proto::chat_v1::SendMessageRequest;
+use chatter_proto::chat_v1::SendMessageRequest;
 use crate::services::gateway::QuoteIntent;
 use crate::storage::database::Database;
 use crate::storage::repositories::settings_repo::keys;
@@ -54,6 +54,7 @@ fn send_request_key(owner: UserId, device: u32, channel: ChannelId, request: &st
     key.finalize().into()
 }
 
+#[cfg(test)]
 /// Whether `post` is the deposit of a send the user deleted before its
 /// canonical id came back: its `send_request_key` is exactly the one a
 /// retained (`unresolved`) journal of `owner` in `channel` sent under, the
@@ -67,7 +68,7 @@ pub(crate) fn settle_cancelled_deposit(
     db: &Database,
     owner: UserId,
     channel: ChannelId,
-    post: &crate::proto::chat_v1::Message,
+    post: &chatter_proto::chat_v1::Message,
 ) -> Result<bool, StorageError> {
     settle_cancelled_deposit_admitted(db, owner, channel, post, None)
 }
@@ -76,7 +77,7 @@ pub(crate) fn settle_cancelled_deposit_admitted(
     db: &Database,
     owner: UserId,
     channel: ChannelId,
-    post: &crate::proto::chat_v1::Message,
+    post: &chatter_proto::chat_v1::Message,
     session: Option<&crate::state::receive_session::ReceiveSession>,
 ) -> Result<bool, StorageError> {
     if let Some(session) = session { session.check()?; }
@@ -226,7 +227,7 @@ pub(super) fn has_channel_queue() -> bool {
     CHANNEL_DEPOSIT.try_with(|_| ()).is_ok()
 }
 pub(super) fn retain_channel_response(
-    proto: &crate::proto::chat_v1::Message,
+    proto: &chatter_proto::chat_v1::Message,
 ) -> Result<(), StorageError> {
     CHANNEL_DEPOSIT.try_with(|deposit| {
         let raw = serde_json::to_string(&proto.encode_to_vec()).map_err(|_|invalid("Cannot retain channel response"))?;
@@ -269,7 +270,7 @@ impl MessageService {
                 "message must have text".into(),
             ));
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         let owner = self.current_user_id()?;
         let mut row = Message::new_text(
             *channel,
@@ -524,7 +525,7 @@ impl MessageService {
                 "Queued channel identity mismatch".into(),
             ));
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         if row.sender_id != Some(self.current_user_id()?)
             || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(entry.device)
         {
@@ -535,12 +536,17 @@ impl MessageService {
             return Err(invalid("Channel send lease expired or message deleted").into());
         }
         crate::services::gateway::submission::mark_submission_started()?;
-        let proto = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.message_client().send_prepared_message(request),
-        )
+        let proto = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            // Only a private channel goes out anonymously; an encrypted
+            // public channel also carries a state hash but posts to the server.
+            if self.is_private_channel(&row.conversation_id) {
+                self.submit_group_request(&request).await
+            } else {
+                Ok(self.message_client().send_prepared_message(request).await?)
+            }
+        })
         .await
-        .unwrap_or(Err(NetworkError::Timeout))?;
+        .unwrap_or(Err(MessageError::Network(NetworkError::Timeout)))?;
         retain_channel_response(&proto)?;
         self.materialize_channel_response(entry, prepared, &proto)
     }
@@ -549,7 +555,7 @@ impl MessageService {
         &self,
         entry: &Entry,
         prepared: &Prepared,
-        proto: &crate::proto::chat_v1::Message,
+        proto: &chatter_proto::chat_v1::Message,
     ) -> Result<Message, MessageError> {
         let row = &entry.row;
         let owner = row.sender_id.ok_or(MessageError::NotLoggedIn)?;
@@ -593,7 +599,7 @@ impl MessageService {
         };
         let result = CHANNEL_DEPOSIT
             .scope(deposit, async {
-                crate::services::gateway::submission::check_send_session()?;
+                crate::state::send_session::check_send_session()?;
                 if row.sender_id != Some(self.current_user_id()?) {
                     return Err(MessageError::NotLoggedIn);
                 }
@@ -602,7 +608,7 @@ impl MessageService {
                     params![journal_key],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
                 if let Some((response,prepared)) = accepted {
                     let bytes: Vec<u8> = serde_json::from_str(&response).map_err(|_|invalid("Invalid accepted response"))?;
-                    let proto = crate::proto::chat_v1::Message::decode(bytes.as_slice()).map_err(|_|invalid("Invalid accepted response protobuf"))?;
+                    let proto = chatter_proto::chat_v1::Message::decode(bytes.as_slice()).map_err(|_|invalid("Invalid accepted response protobuf"))?;
                     let prepared: Prepared = serde_json::from_str(&prepared).map_err(|_|invalid("Invalid accepted request"))?;
                     return self.materialize_channel_response(entry,&prepared,&proto);
                 }
@@ -647,7 +653,7 @@ impl MessageService {
             .await;
         match result {
             Ok(mut sent) => {
-                crate::services::gateway::submission::check_send_session()?;
+                crate::state::send_session::check_send_session()?;
                 {
                     let mut conn = self.database.connection()?;
                     let tx = conn.transaction()?;
@@ -777,7 +783,7 @@ impl MessageService {
                 );
                 // A later preconnect miss does not undo an earlier ambiguous
                 // deposit. Keep replaying its exact request in that case.
-                let transient = crate::services::gateway::submission::check_send_session().is_err()
+                let transient = crate::state::send_session::check_send_session().is_err()
                     || if request_not_sent {
                         !first_attempt
                     } else {
@@ -868,22 +874,29 @@ impl MessageService {
             )?;
             tx.commit()?;
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         if owner != self.current_user_id()?
             || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(target.device)
         {
             tracing::warn!(message_id=%server_id, "Channel delete-for-everyone sender changed; deletion retained");
             return retain();
         }
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.message_client().delete_message(
-                &server_id.to_string(),
-                &target.channel.to_string(),
-            ),
-        )
-        .await
-        .unwrap_or(Err(NetworkError::Timeout))
+        // A private channel's message has no server copy to delete; the
+        // delete-for-everyone control reaches the members end to end.
+        let remote = if self.is_private_channel(&target.channel) {
+            Ok(())
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.message_client().delete_message(
+                    &server_id.to_string(),
+                    &target.channel.to_string(),
+                ),
+            )
+            .await
+            .unwrap_or(Err(NetworkError::Timeout))
+        };
+        match remote
         {
             Ok(()) | Err(NetworkError::NotFound(_)) => {
                 self.database.connection()?.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?;
@@ -925,8 +938,8 @@ impl MessageService {
 
 /// One bounded, session-scoped worker. Leases survive restart; a new generation
 /// fences a suspended old future at the actual deposit boundary.
-pub(crate) fn spawn_channel_send_recovery(
-    client: &Arc<crate::client::ChatterClient>,
+pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
+    client: &Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
     let mut connectivity = client.offline_state().subscribe();
@@ -960,7 +973,7 @@ pub(crate) fn spawn_channel_send_recovery(
             previous_session = Some((owner, state.session_revision));
             let messages = client.messages();
             let session =
-                crate::services::gateway::submission::SendSession::capture(client.auth_state());
+                crate::state::send_session::SendSession::capture(client.auth_state());
             if let Err(error) = messages.adopt_proven_unsent_channels(owner) {
                 tracing::warn!(%error,"Legacy predeposit channel recovery awaits storage");
             }
@@ -1064,7 +1077,7 @@ pub(crate) fn spawn_channel_send_recovery(
                 let entry = match job {
                     Due::Send(entry) => entry,
                     Due::Delete(target) => {
-                        crate::services::gateway::submission::SEND_SESSION
+                        crate::state::send_session::SEND_SESSION
                             .scope(
                                 session.clone(),
                                 messages.delete_channel_entry(&key, &generation, owner, &target),
@@ -1073,7 +1086,7 @@ pub(crate) fn spawn_channel_send_recovery(
                         continue;
                     }
                 };
-                let result = crate::services::gateway::submission::SEND_SESSION
+                let result = crate::state::send_session::SEND_SESSION
                     .scope(session.clone(), async {
                         messages.message_repo.insert_or_ignore(&entry.row)?;
                         messages
@@ -1128,7 +1141,7 @@ mod tests {
         let state = crate::state::AuthState::new();
         state.set_logged_in(owner, 3, "fixture".into());
         let session = crate::state::receive_session::ReceiveSession::capture(&state).unwrap();
-        let post = crate::proto::chat_v1::Message {
+        let post = chatter_proto::chat_v1::Message {
             id: MessageId::new().to_string(), channel_id: channel.to_string(), author_id: owner.to_string(),
             author_device_id: 3, send_request_key: send_request_key(owner, 3, channel, &request.to_string()).to_vec(),
             ..Default::default()
@@ -1188,7 +1201,7 @@ mod tests {
                 ],
             )
             .unwrap();
-        let post = |author: &str, device: u32, key: [u8; 32]| crate::proto::chat_v1::Message {
+        let post = |author: &str, device: u32, key: [u8; 32]| chatter_proto::chat_v1::Message {
             id: MessageId::new().to_string(),
             channel_id: channel.to_string(),
             author_id: author.into(),
@@ -1196,7 +1209,7 @@ mod tests {
             send_request_key: key.to_vec(),
             ..Default::default()
         };
-        let settles = |p: &crate::proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, p).unwrap();
+        let settles = |p: &chatter_proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, p).unwrap();
         let exact = send_request_key(me, 3, channel, &request.to_string());
         // Another send of ours in the same channel, at the same moment.
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, channel, &MessageId::new().to_string()))));
@@ -1245,7 +1258,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let post = |request: MessageId| crate::proto::chat_v1::Message {
+        let post = |request: MessageId| chatter_proto::chat_v1::Message {
             id: MessageId::new().to_string(),
             channel_id: channel.to_string(),
             author_id: me.to_string(),

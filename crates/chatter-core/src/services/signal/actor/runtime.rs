@@ -99,7 +99,7 @@ impl SignalActorHandle {
                             let prekeys = prekeys.unwrap();
 
                             let proto_prekeys = prekeys.iter().filter_map(|pk| {
-                                Some(crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord {
+                                Some(chatter_proto::chat_v1::signal_pre_key_bundle::PreKeyRecord {
                                     id: u32::from(pk.id().ok()?),
                                     public_key: pk.public_key().ok()?.serialize().to_vec(),
                                 })
@@ -122,7 +122,7 @@ impl SignalActorHandle {
                                     let kpk = prekey_manager.generate_kyber_prekey(id, &identity)
                                         .map_err(ServiceError::Crypto)?;
 
-                                    let proto = crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+                                    let proto = chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
                                         id: u32::from(kpk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
                                         public_key: kpk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
                                         signature: kpk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
@@ -160,6 +160,26 @@ impl SignalActorHandle {
 
                         SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, permit, response } => {
                             let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), &store, &permit).await;
+                            let _ = response.send(res);
+                        }
+
+                        SignalCommand::EncryptMultiRecipient { contents, sender_cert, destinations, group_id, response } => {
+                            let local_address = match local_protocol_address(&settings_repo) {
+                                Ok(a) => a,
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
+                            let res = async {
+                                let usmc = SealedSenderManager::create_content(
+                                    libsignal_protocol::CiphertextMessageType::SenderKey,
+                                    sender_cert,
+                                    contents,
+                                    libsignal_protocol::ContentHint::Resendable,
+                                    Some(group_id),
+                                )?;
+                                SealedSenderManager::encrypt_multi_recipient(&usmc, &destinations, &local_address, &store).await
+                            }
+                            .await
+                            .map_err(ServiceError::Crypto);
                             let _ = response.send(res);
                         }
 
@@ -519,7 +539,7 @@ impl SignalActorHandle {
                                 let spk = prekey_manager.generate_signed_prekey(&mut rng, spk_id, &identity)
                                     .map_err(ServiceError::Crypto)?;
 
-                                let spk_proto = crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord {
+                                let spk_proto = chatter_proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord {
                                     id: u32::from(spk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
                                     public_key: spk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
                                     signature: spk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
@@ -533,7 +553,7 @@ impl SignalActorHandle {
                                 let kpk = prekey_manager.generate_kyber_prekey(kpk_id, &identity)
                                     .map_err(ServiceError::Crypto)?;
 
-                                let kpk_proto = crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+                                let kpk_proto = chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
                                     id: u32::from(kpk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
                                     public_key: kpk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
                                     signature: kpk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),

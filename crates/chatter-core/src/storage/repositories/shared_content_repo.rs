@@ -62,6 +62,7 @@ impl SharedContentRepository {
         Self { db }
     }
 
+    #[cfg(test)]
     /// Local, global filename/URL lookup for unified search. The caller
     /// applies the active mode's conversation visibility before presentation.
     /// A blank query browses recent shared content within the selected tab.
@@ -170,6 +171,7 @@ impl SharedContentRepository {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    #[cfg(test)]
     /// One page of a conversation's tab, newest first.
     ///
     /// `offset` pages backwards through the same ordering. Keyset paging
@@ -289,6 +291,7 @@ impl SharedContentRepository {
         Ok(indexed)
     }
 
+    #[cfg(test)]
     /// Item count per category for one conversation, so the tab strip can hide
     /// tabs that would open onto an empty list.
     ///

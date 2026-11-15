@@ -119,7 +119,7 @@ fn spawn_request_stream(
                             if bytes.is_empty() {
                                 return None;
                             }
-                            image::load_from_memory(bytes).ok().map(|img| {
+                            chatter_core::media::ImageProcessor::decode_untrusted(bytes).ok().map(|img| {
                                 let rgba = img.to_rgba8();
                                 let (w, h) = rgba.dimensions();
                                 (rgba.into_raw(), w, h)
@@ -235,7 +235,7 @@ fn spawn_request_stream(
                     // Use sender_display_name from the init message
                     // Do NOT use user_service - these are strangers
                     let sender_name = if sender_display_name.is_empty() {
-                        chatter_core::services::user::friend_display_name_placeholder(&sender_id)
+                        chatter_core::ui::friend_display_name_placeholder(&sender_id)
                     } else {
                         sender_display_name.clone()
                     };
@@ -269,7 +269,7 @@ fn spawn_request_stream(
                     let avatar_bytes = ui_ctx.anon_dm_avatar_for_peer(&sender_id, sender_avatar);
                     let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
                         avatar_bytes.as_ref().and_then(|bytes| {
-                            image::load_from_memory(bytes).ok().map(|img| {
+                            chatter_core::media::ImageProcessor::decode_untrusted(bytes).ok().map(|img| {
                                 let rgba = img.to_rgba8();
                                 let (w, h) = rgba.dimensions();
                                 (rgba.into_raw(), w, h)
@@ -362,7 +362,7 @@ fn spawn_action_stream(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             match event {
-                chatter_core::inbox::DomainEvent::MessageReceived { ref message }
+                chatter_core::events::DomainEvent::MessageReceived { ref message }
                     if message.conversation_type
                         == chatter_core::domain::message::ConversationType::AnonDm =>
                 {
@@ -416,7 +416,7 @@ fn spawn_action_stream(
                 // =============================================================
                 // Anonymous DM Action Events (typing, reactions, pins, etc.)
                 // =============================================================
-                chatter_core::inbox::DomainEvent::TypingStarted {
+                chatter_core::events::DomainEvent::TypingStarted {
                     channel_id,
                     user_id,
                     timestamp,
@@ -430,7 +430,7 @@ fn spawn_action_stream(
                         true,
                     );
                 }
-                chatter_core::inbox::DomainEvent::TypingStopped {
+                chatter_core::events::DomainEvent::TypingStopped {
                     channel_id,
                     user_id,
                     timestamp,
@@ -446,12 +446,12 @@ fn spawn_action_stream(
                 }
                 // ReactionAdded/ReactionRemoved are handled by domain_handler::handle_reaction_update
                 // (which handles all conversation types). Handling them here too caused double-counting.
-                chatter_core::inbox::DomainEvent::ReactionAdded { .. }
-                | chatter_core::inbox::DomainEvent::ReactionRemoved { .. } => {}
+                chatter_core::events::DomainEvent::ReactionAdded { .. }
+                | chatter_core::events::DomainEvent::ReactionRemoved { .. } => {}
                 // Anonymous DM pins only: a channel, DM or Saved pin is the
                 // domain handler's, and this `Channel` source would otherwise
                 // take a Saved pin for the same-id view (an alias).
-                chatter_core::inbox::DomainEvent::MessagePinned {
+                chatter_core::events::DomainEvent::MessagePinned {
                     message_id,
                     channel_id,
                     conversation_type: chatter_core::domain::message::ConversationType::AnonDm,
@@ -472,7 +472,7 @@ fn spawn_action_stream(
                         true, // is_pinned = true
                     );
                 }
-                chatter_core::inbox::DomainEvent::MessageUnpinned {
+                chatter_core::events::DomainEvent::MessageUnpinned {
                     message_id,
                     channel_id,
                     conversation_type: chatter_core::domain::message::ConversationType::AnonDm,
@@ -496,7 +496,7 @@ fn spawn_action_stream(
                 // (author, sent timestamp) bubble in the conversation on
                 // screen. A timestamp-only copy here let a peer rewrite or
                 // blank another sender's bubble by reusing its timestamp.
-                chatter_core::inbox::DomainEvent::MessagesRead {
+                chatter_core::events::DomainEvent::MessagesRead {
                     message_timestamps,
                     channel_id,
                     ..
@@ -526,7 +526,7 @@ fn spawn_action_stream(
                         }
                     });
                 }
-                chatter_core::inbox::DomainEvent::MessagesDelivered {
+                chatter_core::events::DomainEvent::MessagesDelivered {
                     message_timestamps, ..
                 } => {
                     // For anon DM receipts, check if we're viewing an anon DM

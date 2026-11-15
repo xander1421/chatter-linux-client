@@ -136,7 +136,7 @@ impl ActiveConversation {
         use crate::domain::message::ConversationType;
         match self {
             Self::Channel(id) => Some(
-                crate::services::message::conversion::conversation_type_for_channel(
+                crate::storage::repositories::channel_repo::conversation_type_for_channel(
                     channel_repo,
                     id,
                 ),

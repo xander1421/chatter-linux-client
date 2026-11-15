@@ -855,15 +855,45 @@ fn notification_pref_from_i32(value: i32) -> NotificationPreference {
     }
 }
 
+/// Derive the `ConversationType` for a given channel ID via
+/// `ChannelType::conversation_type()`. Defaults to `Channel` when the row
+/// isn't available yet (channel sync race). Use at RPC boundaries that
+/// hand proto Messages to `proto_to_domain_message_with_sender` —
+/// prevents every caller from repeating the same lookup boilerplate and
+/// keeps the mapping logic in one place.
+pub fn conversation_type_for_channel(
+    repo: &ChannelRepository,
+    channel_id: &ChannelId,
+) -> crate::domain::message::ConversationType {
+    match repo.get_channel_type(channel_id) {
+        Ok(Some(kind)) => kind.conversation_type(),
+        Ok(None) => {
+            tracing::debug!(
+                channel_id = %channel_id,
+                "conversation_type_for_channel: channel row missing, defaulting to Channel"
+            );
+            crate::domain::message::ConversationType::Channel
+        }
+        Err(e) => {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "conversation_type_for_channel: repo error, defaulting to Channel"
+            );
+            crate::domain::message::ConversationType::Channel
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::storage::Database;
     use tempfile::tempdir;
 
-    // Use the real schema and repository: the older hand-written fixture below
-    // intentionally omits columns needed by the full channel projection.
-    fn create_channel_type_repo() -> (ChannelRepository, tempfile::TempDir) {
+    // Every test runs on the real migrated schema; a hand-copied fixture
+    // drifts from the migrations (it lacked `thread_id`).
+    fn create_test_repo() -> (ChannelRepository, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::open(&dir.path().join("types.db"), "test-passphrase").unwrap());
         db.run_migrations().unwrap();
@@ -873,9 +903,8 @@ mod tests {
     #[test]
     fn channel_type_lookup_matches_full_mapping_and_observes_updates() {
         use crate::domain::message::ConversationType;
-        use crate::services::message::conversion::conversation_type_for_channel;
 
-        let (repo, _dir) = create_channel_type_repo();
+        let (repo, _dir) = create_test_repo();
         let id = ChannelId::new();
         assert_eq!(repo.get_channel_type(&id).unwrap(), None);
         assert_eq!(
@@ -947,9 +976,8 @@ mod tests {
     #[test]
     fn channel_type_lookup_errors_still_fall_back_in_message_conversion() {
         use crate::domain::message::ConversationType;
-        use crate::services::message::conversion::conversation_type_for_channel;
 
-        let (repo, _dir) = create_channel_type_repo();
+        let (repo, _dir) = create_test_repo();
         let channel = make_channel(ChannelId::new());
         repo.insert(&channel).unwrap();
         // SQLite permits a nonnumeric value in this INTEGER-affinity column.
@@ -982,9 +1010,8 @@ mod tests {
     #[test]
     fn channel_type_lookup_does_not_parse_irrelevant_metadata() {
         use crate::domain::message::ConversationType;
-        use crate::services::message::conversion::conversation_type_for_channel;
 
-        let (repo, _dir) = create_channel_type_repo();
+        let (repo, _dir) = create_test_repo();
         let mut channel = make_channel(ChannelId::new());
         channel.channel_type = ChannelType::SavedMessages;
         repo.insert(&channel).unwrap();
@@ -1009,7 +1036,7 @@ mod tests {
 
     #[test]
     fn channel_type_lookup_query_plan_is_an_indexed_channel_search_only() {
-        let (repo, _dir) = create_channel_type_repo();
+        let (repo, _dir) = create_test_repo();
         let channel = make_channel(ChannelId::new());
         repo.insert(&channel).unwrap();
         let conn = repo.db.connection().unwrap();
@@ -1037,61 +1064,6 @@ mod tests {
         );
     }
 
-    fn create_test_repo() -> (ChannelRepository, tempfile::TempDir) {
-        let temp_dir = tempdir().expect("Failed to create temp directory");
-        let db_path = temp_dir.path().join("test.db");
-        let db = Database::open(&db_path, "test-passphrase").expect("Failed to open test database");
-
-        {
-            let conn = db.connection().expect("Failed to get connection");
-            conn.execute_batch(
-                r#"
-                CREATE TABLE IF NOT EXISTS channels (
-                    id TEXT PRIMARY KEY,
-                    channel_type INTEGER NOT NULL DEFAULT 0,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    icon BLOB,
-                    owner_id TEXT NOT NULL,
-                    persistence INTEGER NOT NULL DEFAULT 0,
-                    max_members INTEGER,
-                    default_ttl_seconds INTEGER,
-                    allow_reactions INTEGER NOT NULL DEFAULT 1,
-                    allow_threads INTEGER NOT NULL DEFAULT 1,
-                    allow_attachments INTEGER NOT NULL DEFAULT 1,
-                    require_encryption INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    archived INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS memberships (
-                    channel_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    role INTEGER NOT NULL DEFAULT 0,
-                    joined_at TEXT NOT NULL,
-                    last_read_message_id TEXT,
-                    is_muted INTEGER NOT NULL DEFAULT 0,
-                    muted_until TEXT,
-                    notification_preference INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (channel_id, user_id)
-                );
-                CREATE TABLE IF NOT EXISTS messages (
-                    id TEXT PRIMARY KEY,
-                    conversation_type TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    is_read INTEGER NOT NULL DEFAULT 0,
-                    is_deleted INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL
-                );
-                "#,
-            )
-            .expect("Failed to create tables");
-        }
-
-        let repo = ChannelRepository::new(Arc::new(db));
-        (repo, temp_dir)
-    }
-
     fn make_channel(id: ChannelId) -> Channel {
         Channel::new(
             id,
@@ -1108,6 +1080,7 @@ mod tests {
         let (repo, _dir) = create_test_repo();
         let channel = ChannelId::new();
         let user = UserId::new();
+        repo.insert(&make_channel(channel)).unwrap();
         repo.insert_membership(&make_membership(channel, user))
             .unwrap();
         let mut again = make_membership(channel, user);
@@ -1272,7 +1245,7 @@ mod tests {
             conn.execute_batch("CREATE TABLE IF NOT EXISTS verified_channel_state(channel_id TEXT PRIMARY KEY);
                 CREATE TRIGGER reject_channel_delete BEFORE DELETE ON channels BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END;").unwrap();
             for target in [id, other] {
-                conn.execute("INSERT INTO messages(id,conversation_type,conversation_id,created_at) VALUES(?1,'channel',?2,?3)", params![uuid::Uuid::new_v4().to_string(), target.to_string(), Utc::now().to_rfc3339()]).unwrap();
+                conn.execute("INSERT INTO messages(id,conversation_type,conversation_id,content_type,content_json,created_at,updated_at) VALUES(?1,'channel',?2,0,'{}',?3,?3)", params![uuid::Uuid::new_v4().to_string(), target.to_string(), Utc::now().to_rfc3339()]).unwrap();
             }
         }
         assert!(repo.remove_confirmed_deleted_channel(&id).is_err());

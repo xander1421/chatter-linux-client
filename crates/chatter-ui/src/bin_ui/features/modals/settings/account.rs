@@ -155,10 +155,10 @@ pub(super) fn wire_profile_and_deletion(window: &MainWindow, ui_ctx: &Arc<Chatte
                     Err(e) => {
                         tracing::error!("Account deletion failed");
                         let msg = match e {
-                            chatter_core::services::account_service::AccountError::InvalidPassword => {
+                            chatter_core::client::AccountError::InvalidPassword => {
                                 "Incorrect password. Try again."
                             }
-                            chatter_core::services::account_service::AccountError::NotLoggedIn => {
+                            chatter_core::client::AccountError::NotLoggedIn => {
                                 "Your session ended. Sign in again before deleting your account."
                             }
                             _ => "Could not delete your account. Check your connection and try again.",

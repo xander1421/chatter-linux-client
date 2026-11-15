@@ -42,7 +42,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{KT_TREE_HEAD_PUBLIC_KEY_BYTES, KT_VRF_PUBLIC_KEY_BYTES};
 use crate::crypto::vrf::vrf_verify;
-use crate::proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
+use chatter_proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
 
 /// Domain separator for deriving a user's sparse-Merkle tree key.
 /// Mirrors `keytransparency.leafKeyDomain` (log.go).
@@ -329,7 +329,10 @@ fn log_leaf_hash(prefix_root: &[u8; 32], update_hash: &[u8; 32]) -> [u8; 32] {
 /// Verify an RFC 6962 audit path: that `leaf` sits at `index` in a log of `size`
 /// leaves whose Merkle Tree Hash is `root`. Port of `crypto.VerifyLogInclusion`
 /// (logtree.go), which follows RFC 6962-bis §2.1.3.2 verbatim.
-fn verify_log_inclusion(
+/// `interior` is the node hash: KT's [`log_interior`] (0x03 prefix), or
+/// RFC 6962's 0x01 node for Sigstore Rekor (`update/rekor.rs`).
+pub(crate) fn verify_log_inclusion(
+    interior: fn(&[u8; 32], &[u8; 32]) -> [u8; 32],
     leaf: &[u8; 32],
     index: u64,
     size: u64,
@@ -346,13 +349,13 @@ fn verify_log_inclusion(
             return false;
         }
         if fnv & 1 == 1 || fnv == sn {
-            r = log_interior(p, &r);
+            r = interior(p, &r);
             while fnv & 1 == 0 && fnv != 0 {
                 fnv >>= 1;
                 sn >>= 1;
             }
         } else {
-            r = log_interior(&r, p);
+            r = interior(&r, p);
         }
         fnv >>= 1;
         sn >>= 1;
@@ -364,12 +367,15 @@ fn verify_log_inclusion(
 /// Merkle Tree Hash `old_root` was EXTENDED — not rewritten — into a log of
 /// `new_size` leaves with hash `new_root`. Port of `crypto.VerifyLogConsistency`
 /// (logtree.go), which follows RFC 6962-bis §2.1.4.2 verbatim.
+/// `interior` is the node hash: KT's [`log_interior`] (0x03 prefix), or
+/// RFC 6962's 0x01 node for Sigstore Rekor (`update/rekor.rs`).
 ///
 /// BOTH roots are reconstructed from the path, which is what makes every way of
 /// breaking history detectable: change a committed value, drop an entry, or
 /// reorder entries and the reconstructed old root stops matching the one the
 /// caller supplied.
-fn verify_log_consistency(
+pub(crate) fn verify_log_consistency(
+    interior: fn(&[u8; 32], &[u8; 32]) -> [u8; 32],
     old_size: u64,
     new_size: u64,
     old_root: &[u8; 32],
@@ -403,14 +409,14 @@ fn verify_log_consistency(
             return false;
         }
         if fnv & 1 == 1 || fnv == sn {
-            fr = log_interior(c, &fr);
-            sr = log_interior(c, &sr);
+            fr = interior(c, &fr);
+            sr = interior(c, &sr);
             while fnv & 1 == 0 && fnv != 0 {
                 fnv >>= 1;
                 sn >>= 1;
             }
         } else {
-            sr = log_interior(&sr, c);
+            sr = interior(&sr, c);
         }
         fnv >>= 1;
         sn >>= 1;
@@ -508,6 +514,7 @@ pub fn verify_proof(
     // The newest log leaf is the one sealing the map we just verified against,
     // so its index is the last one.
     if !verify_log_inclusion(
+        log_interior,
         &log_leaf_hash(prefix_root, update_hash),
         sth.tree_size - 1,
         sth.tree_size,
@@ -615,6 +622,7 @@ pub fn verify_consistency_proof(response: &GetConsistencyProofResponse) -> Resul
     // reconstructed old root.
     let path = hashes32(&proof.path, "consistency path entry is not 32 bytes")?;
     if !verify_log_consistency(
+        log_interior,
         old_sth.tree_size,
         new_sth.tree_size,
         &old_root,
@@ -927,12 +935,12 @@ mod tests {
             let path = unhex_list(path);
             let leaf = vec_leaf(index as u8);
             assert!(
-                verify_log_inclusion(&leaf, index, size, &path, &root),
+                verify_log_inclusion(log_interior, &leaf, index, size, &path, &root),
                 "Go's audit path for leaf {index} of {size} must verify here"
             );
             // A forged leaf at the same position must not.
             assert!(
-                !verify_log_inclusion(&vec_leaf(200), index, size, &path, &root),
+                !verify_log_inclusion(log_interior, &vec_leaf(200), index, size, &path, &root),
                 "a forged leaf verified at {index} of {size}"
             );
         }
@@ -995,7 +1003,7 @@ mod tests {
             let new_root = unhex(GO_ROOTS[new as usize]);
             let path = unhex_list(path);
             assert!(
-                verify_log_consistency(old, new, &old_root, &new_root, &path),
+                verify_log_consistency(log_interior, old, new, &old_root, &new_root, &path),
                 "Go's consistency proof {old}->{new} must verify here"
             );
         }
@@ -1017,6 +1025,7 @@ mod tests {
             "fc52510871fd8cc7ba5aaf99e47b991b7f47073f4ee935f3458dbdc856c0ad6d",
         ]);
         assert!(verify_log_consistency(
+            log_interior,
             5,
             16,
             &unhex(GO_ROOTS[5]),
@@ -1040,6 +1049,7 @@ mod tests {
         // Old root the device never saw (a rewritten history reconstructs to a
         // different old root, which is exactly this shape).
         assert!(!verify_log_consistency(
+            log_interior,
             5,
             16,
             &unhex(GO_ROOTS[6]),
@@ -1048,6 +1058,7 @@ mod tests {
         ));
         // New root that is not the head being offered.
         assert!(!verify_log_consistency(
+            log_interior,
             5,
             16,
             &unhex(GO_ROOTS[5]),
@@ -1056,6 +1067,7 @@ mod tests {
         ));
         // Truncation / reordering shows up as a size that does not fit the path.
         assert!(!verify_log_consistency(
+            log_interior,
             5,
             15,
             &unhex(GO_ROOTS[5]),
@@ -1067,9 +1079,9 @@ mod tests {
     #[test]
     fn log_consistency_rejects_degenerate_ranges() {
         let r = unhex(GO_ROOTS[4]);
-        assert!(!verify_log_consistency(0, 4, &r, &r, &[]));
-        assert!(!verify_log_consistency(4, 4, &r, &r, &[]));
-        assert!(!verify_log_consistency(5, 4, &r, &r, &[]));
+        assert!(!verify_log_consistency(log_interior, 0, 4, &r, &r, &[]));
+        assert!(!verify_log_consistency(log_interior, 4, 4, &r, &r, &[]));
+        assert!(!verify_log_consistency(log_interior, 5, 4, &r, &r, &[]));
     }
 
     #[test]

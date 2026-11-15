@@ -214,6 +214,37 @@ async fn a_failure_is_restored_only_into_its_own_empty_composer() {
     assert!(client.recover_composer_send(back, true).is_some());
 }
 
+/// A queued send refused before the journal claimed it is parked durably
+/// (b867d2ed) — and, failing while its own composer is still empty, handed
+/// straight back like any other failure, its files staged exactly once.
+#[tokio::test]
+async fn an_unstarted_queued_failure_in_an_empty_composer_is_restored_at_once() {
+    let (client, _dir) = client();
+    let a = ChannelId::new();
+    open(&client, a);
+    client.chat_state().add_pending_attachment(staged("a.png"));
+    let send = client.begin_composer_send("caption".into(), None).unwrap();
+    assert!(send.queue_ticket.is_some(), "a composed send is queued");
+    assert!(client.pending_attachments().is_empty());
+
+    let back = client
+        .recover_composer_send(send, true)
+        .expect("its own composer is empty: restored at once");
+    assert_eq!(back.text, "caption");
+    assert!(
+        back.attachments.is_empty(),
+        "core already re-staged the files; the caller must not add them again"
+    );
+    let staged: Vec<_> = client
+        .pending_attachments()
+        .into_iter()
+        .map(|a| a.filename)
+        .collect();
+    assert_eq!(staged, ["a.png"]);
+    assert!(client.parked_sends.lock().is_empty());
+    assert!(client.take_parked_send(true).is_none(), "restored twice");
+}
+
 #[tokio::test]
 async fn a_failure_while_elsewhere_waits_for_its_conversation() {
     let (client, _dir) = client();
@@ -552,7 +583,7 @@ async fn staged_files_survive_a_restart_in_their_own_conversation_only() {
             "fun.gif".into(),
             9,
             "image/gif".into(),
-            crate::proto::content_v1::AttachmentPointer {
+            chatter_proto::content_v1::AttachmentPointer {
                 cdn_key: "k".into(),
                 ..Default::default()
             },

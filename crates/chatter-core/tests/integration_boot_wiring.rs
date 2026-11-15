@@ -32,7 +32,7 @@ async fn test_appcontext_three_tier_initialization() {
     let start = Instant::now();
     let data_dir = test_data_dir("appcontext_init");
 
-    let ctx = chatter_core::app::AppContext::with_config(
+    let ctx = chatter_core::app::context::AppContext::with_config(
         Some("https://localhost:50051".to_string()),
         Some(data_dir),
     );

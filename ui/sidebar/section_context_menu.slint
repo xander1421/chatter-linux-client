@@ -384,8 +384,8 @@ export component SectionContextMenu inherits Rectangle {
     // Channel rows: core's `can_leave_channel` (a member, not the owner).
     // Private-group rows: always (any member may leave).
     in property <bool> can-leave: false;
-    // Channel rows: core's `is_former_channel` (we are no longer in it).
-    in property <bool> can-delete-channel: false;
+    // Core's row `can_delete`: DMs, former channels, removed groups.
+    in property <bool> can-delete: false;
 
     // Available sections
     in property <[CustomSectionData]> sections: [];
@@ -408,9 +408,6 @@ export component SectionContextMenu inherits Rectangle {
     callback leave-conversation(/* conv-id */ string, /* conv-type */ ConversationKind);
     callback close();
 
-    property <bool> can-delete: root.conversation-type == ConversationKind.server-dm
-        || root.conversation-type == ConversationKind.anon-dm
-        || root.can-delete-channel;
     property <bool> is-group: root.conversation-type == ConversationKind.anon-group;
     // Delete asks once, inside the menu; reset whenever the menu closes.
     property <bool> confirm-delete: false;
@@ -420,14 +417,11 @@ export component SectionContextMenu inherits Rectangle {
     // opened near the top were clipped at the window's bottom edge).
     changed confirm-leave => { if (self.confirm-leave) { leave-reveal.start(); leave-reveal.restart(); } }
     private property <int> focus-index: -1;
-    private property <bool> has-mute: root.conversation-type == ConversationKind.server-dm
-        || root.conversation-type == ConversationKind.anon-dm
-        || root.conversation-type == ConversationKind.anon-group
-        || root.conversation-type == ConversationKind.channel;
+    private property <bool> has-mute: root.target-row.can-mute;
     private property <bool> has-unread: root.target-row.unread-count > 0;
     // Mute opens its durations in place (anon groups mute by status, no timer).
     property <bool> choose-mute: false;
-    private property <bool> timed-mute: root.has-mute && root.conversation-type != ConversationKind.anon-group;
+    private property <bool> timed-mute: root.target-row.can-mute-timed;
     private property <int> mute-choices: root.choose-mute ? 4 : 0;
     private property <int> read-index: 2 + (root.has-mute ? 1 : 0) + root.mute-choices;
     private property <int> section-start: root.read-index + 1;

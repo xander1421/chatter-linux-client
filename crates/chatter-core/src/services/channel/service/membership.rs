@@ -14,11 +14,11 @@ use crate::domain::channel::{MemberRole, Membership};
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::NetworkError;
 use crate::network::grpc::channel_client::ChannelClient;
-use crate::proto::chat_v1::{self as pb, ChannelEvent, channel_event};
+use chatter_proto::chat_v1::{self as pb, ChannelEvent, channel_event};
 use crate::services::channel::membership_log::{
     AuthorBase, IntentContext, InviteLink, LogError, invite_pub_of, password_invite_key,
 };
-use crate::services::channel::verified_state::{ChannelRole, MemberStatus, UnsignedEvent};
+use crate::domain::verified_state::{ChannelRole, MemberStatus, UnsignedEvent};
 
 use crate::services::channel::converters::{domain_role_to_proto, proto_to_domain_membership};
 use crate::services::channel::error::ChannelError;
@@ -70,7 +70,7 @@ fn status_of(ctx: &IntentContext<'_>, user: &str) -> Option<MemberStatus> {
 
 fn intent_error(msg: &str) -> LogError {
     LogError::Intent(
-        crate::services::channel::verified_state::VerifyError::InvalidAction(msg.to_string()),
+        crate::domain::verified_state::VerifyError::InvalidAction(msg.to_string()),
     )
 }
 
@@ -268,7 +268,7 @@ impl ChannelService {
     pub async fn leave_channel(
         &self,
         channel_id: &ChannelId,
-    ) -> Result<crate::proto::content_v1::SenderKeyDistribution, ChannelError> {
+    ) -> Result<chatter_proto::content_v1::SenderKeyDistribution, ChannelError> {
         if let Err(e) = self.signal_service.block_channel_send(channel_id) {
             tracing::error!(%channel_id, error = %e, "Failed to block channel send before leave");
         }

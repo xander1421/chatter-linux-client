@@ -1,12 +1,11 @@
 //! Ownership of a history request includes its queued UI publication.
 use chatter_core::{
-    client::{ChatterClient, ConversationGuard, SessionGuard},
+    client::{ChatterClient, ConversationPage, IncomingUpdate, ResultScope, SessionGuard},
     domain::ids::MessageId,
     state::ActiveConversation,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static MAIN: AtomicU64 = AtomicU64::new(1);
 static OLDER: AtomicU64 = AtomicU64::new(1);
 static THREAD: AtomicU64 = AtomicU64::new(1);
 
@@ -26,11 +25,12 @@ impl SessionOwner {
     }
 }
 
+/// A conversation load: core's [`ResultScope`] (session, conversation and
+/// load generation) plus the UI-only fences — mesh selection, older-page
+/// admission and the thread panel.
 #[derive(Clone)]
 pub(crate) struct HistoryOwner {
-    session: SessionGuard,
-    selection: ConversationGuard,
-    epoch: u64,
+    scope: ResultScope,
     mesh_epoch: Option<u64>,
     thread: Option<(MessageId, u64)>,
     older: Option<u64>,
@@ -40,16 +40,14 @@ impl HistoryOwner {
     pub fn begin(client: &ChatterClient, conversation: ActiveConversation) -> Self {
         let mut owner = Self::capture(client, conversation);
         if owner.is_current() {
-            owner.epoch = MAIN.fetch_add(1, Ordering::SeqCst) + 1;
+            owner.scope.begin_load();
         }
         owner
     }
     /// Older pages and internal loaders share the owning selection/reload epoch.
     pub fn capture(client: &ChatterClient, conversation: ActiveConversation) -> Self {
         Self {
-            session: client.session_guard(),
-            selection: client.conversation_guard(conversation),
-            epoch: MAIN.load(Ordering::SeqCst),
+            scope: client.view_scope(conversation),
             // Mesh scopes all use ActiveConversation::None. Their independent
             // selection epoch also fences captures and queued publications.
             mesh_epoch: if matches!(conversation, ActiveConversation::None) {
@@ -82,10 +80,13 @@ impl HistoryOwner {
         owner.thread = Some((root, epoch));
         owner
     }
+    /// The core scope a page loaded for this owner carries. Opens only:
+    /// it leaves out the mesh, older-page and thread fences.
+    pub fn scope(&self) -> ResultScope {
+        self.scope.clone()
+    }
     pub fn is_current(&self) -> bool {
-        self.session.is_current()
-            && self.selection.is_current()
-            && MAIN.load(Ordering::SeqCst) == self.epoch
+        self.scope.is_current()
             && self
                 .mesh_epoch
                 .is_none_or(|epoch| mesh_epoch() == Some(epoch))
@@ -93,7 +94,7 @@ impl HistoryOwner {
                 .older
                 .is_none_or(|epoch| OLDER.load(Ordering::SeqCst) == epoch)
             && self.thread.is_none_or(|(root, epoch)| {
-                THREAD.load(Ordering::SeqCst) == epoch && self.selection.shows_thread(root)
+                THREAD.load(Ordering::SeqCst) == epoch && self.scope.shows_thread(root)
             })
     }
 }
@@ -107,6 +108,43 @@ fn mesh_epoch() -> Option<u64> {
     {
         None
     }
+}
+
+/// A core result that knows where it belongs.
+pub(crate) trait Scoped {
+    fn scope(&self) -> &ResultScope;
+}
+impl Scoped for ConversationPage {
+    fn scope(&self) -> &ResultScope {
+        &self.scope
+    }
+}
+impl Scoped for IncomingUpdate {
+    fn scope(&self) -> &ResultScope {
+        &self.scope
+    }
+}
+
+/// Apply `result` on the UI thread, unless the session or conversation load
+/// it was made for has ended — checked before queuing and again inside the
+/// Slint callback, like [`run_history_ui!`].
+pub(crate) fn apply_if_current<R: Scoped + Send + 'static>(
+    weak: &slint::Weak<crate::MainWindow>,
+    result: R,
+    apply: impl FnOnce(crate::MainWindow, R) + Send + 'static,
+) {
+    if !result.scope().is_current() {
+        return;
+    }
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if !result.scope().is_current() {
+            return;
+        }
+        if let Some(window) = weak.upgrade() {
+            apply(window, result);
+        }
+    });
 }
 
 /// Check immediately before queuing and again inside the actual Slint callback.
@@ -214,7 +252,7 @@ mod tests {
         display: crate::bin_ui::converters::AttachmentDisplayData,
         client: &std::sync::Arc<ChatterClient>,
     ) {
-        super::super::sidebar::apply_pinned_ui_owned(
+        super::super::chat::open::apply_pinned_ui_owned(
             &w.as_weak(),
             client,
             vec!["00000000-0000-0000-0000-000000000001".parse().unwrap()],

@@ -18,8 +18,8 @@ use async_trait::async_trait;
 use libsignal_protocol::{KeyPair, PrivateKey};
 use rand::TryRngCore;
 
-use super::verified_state::canonical::{INVITE_DOMAIN, signed_message};
-use super::verified_state::{
+use crate::domain::verified_state::canonical::{INVITE_DOMAIN, signed_message};
+use crate::domain::verified_state::{
     self as vs, CachedKtVerifier, IdentityKeyVerifier, KeyBytes, MemberStatus, MembershipState,
     UnsignedDisposition, UnsignedEvent, VerificationStatus, VerifiedChange, VerifiedChannel,
     VerifyError, rules,
@@ -28,7 +28,7 @@ use crate::domain::ids::ChannelId;
 use crate::error::{NetworkError, ServiceError, StorageError};
 use crate::network::grpc::channel_client::is_change_conflict;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::chat_v1 as pb;
+use chatter_proto::chat_v1 as pb;
 use crate::services::signal::SignalService;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository;

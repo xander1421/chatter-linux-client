@@ -57,7 +57,7 @@ pub(crate) fn group_failure_decision(
 }
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
 use crate::mailbox::group::fanout::GroupPollOutcome;
-use crate::proto::chat_v1::SealedSenderMessage;
+use chatter_proto::chat_v1::SealedSenderMessage;
 use crate::services::attachment::AttachmentService;
 use crate::services::gateway::{MessageGateway, SealedSenderResult};
 use crate::storage::{AttachmentRepository, ChannelRepository};
@@ -607,6 +607,12 @@ async fn process_sealed_sender_group_message(
         // queued would re-deliver it on every poll for as long as the block
         // stands. Blocking a person does not remove them from a shared group,
         // so this arm is reachable in ordinary use, unlike the two above.
+        // Anonymous private-channel sends arrive in the device inbox, never in
+        // an anonymous group's mailbox.
+        SealedSenderResult::SealedGroupMessage { .. } => {
+            tracing::warn!(group_id = %group_id, message_id = %message_id,
+                "Private-channel sender-key message in a group mailbox (unexpected); dropped");
+        }
         SealedSenderResult::DroppedBlockedSender { sender_id } => {
             tracing::info!(
                 group_id = %group_id,

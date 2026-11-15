@@ -48,7 +48,7 @@
     /// Own devices are the ones with a bundle; a response without any is none.
     #[test]
     fn own_devices_are_the_bundle_holders() {
-        use crate::proto::chat_v1::{
+        use chatter_proto::chat_v1::{
             GetPreKeyBundleResponse, SignalPreKeyBundle, get_pre_key_bundle_response::Result,
         };
         let b = |device_id| SignalPreKeyBundle {
@@ -57,7 +57,7 @@
         };
         let many = GetPreKeyBundleResponse {
             result: Some(Result::Devices(
-                crate::proto::chat_v1::PreKeyBundleDeviceList {
+                chatter_proto::chat_v1::PreKeyBundleDeviceList {
                     bundles: vec![b(2), b(6), b(7), b(8)],
                     ..Default::default()
                 },
@@ -212,9 +212,9 @@
         channel_id: ChannelId,
         revision: u64,
         members: &[UserId],
-    ) -> crate::services::channel::verified_state::StateHash {
-        use crate::proto::chat_v1 as pb;
-        use crate::services::channel::verified_state::{
+    ) -> crate::domain::verified_state::StateHash {
+        use chatter_proto::chat_v1 as pb;
+        use crate::domain::verified_state::{
             ChannelRole, Member, MemberStatus, MembershipState, PendingChange, Policy,
             VerifiedChange,
         };
@@ -230,6 +230,7 @@
                             role: ChannelRole::Member,
                             status: MemberStatus::Active,
                             identity_key: [5; 33],
+                            muted_until: 0,
                         },
                     )
                 })
@@ -324,8 +325,7 @@
             reaction::ReactionScope,
         };
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::proto::content_v1;
-        use crate::services::inbox_processor::InboxEventProcessor;
+        use chatter_proto::content_v1;
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
         use prost::Message as _;
         let t = two_members();
@@ -357,8 +357,8 @@
             .prepare_encrypted_content(
                 &t.channel_id,
                 &plaintext,
-                crate::proto::chat_v1::message::Content {
-                    r#type: Some(crate::proto::chat_v1::message::content::Type::Text(
+                chatter_proto::chat_v1::message::Content {
+                    r#type: Some(chatter_proto::chat_v1::message::content::Type::Text(
                         "bold target".into(),
                     )),
                 },
@@ -367,7 +367,7 @@
             )
             .await
             .unwrap();
-        let Some(crate::proto::chat_v1::message::content::Type::Encrypted(ciphertext)) =
+        let Some(chatter_proto::chat_v1::message::content::Type::Encrypted(ciphertext)) =
             encrypted.r#type
         else {
             panic!("production send must encrypt");
@@ -390,9 +390,9 @@
             .unwrap();
         // Plain public messages already use the server's accepted row clock.
         let plain = super::super::conversion::proto_to_outgoing_channel_message(
-            &crate::proto::chat_v1::Message {
-                content: Some(crate::proto::chat_v1::message::Content {
-                    r#type: Some(crate::proto::chat_v1::message::content::Type::Text(
+            &chatter_proto::chat_v1::Message {
+                content: Some(chatter_proto::chat_v1::message::Content {
+                    r#type: Some(chatter_proto::chat_v1::message::content::Type::Text(
                         "public".into(),
                     )),
                 }),
@@ -454,7 +454,7 @@
             .record_reaction_at(&scope, &t.alice_id, sent, &t.alice_id, "😂", false, 2)
             .unwrap();
         for (receiver, actor) in [(&t.alice, t.bob_id), (&t.bob, t.bob_id)] {
-            let content = crate::services::build_reaction_content_with_channel(
+            let content = crate::services::gateway::builders::build_reaction_content_with_channel(
                 "😂",
                 false,
                 &t.alice_id.to_string(),
@@ -472,12 +472,12 @@
                 &tx,
                 &stats,
             );
-            InboxEventProcessor::from_client(receiver)
+            receiver.inbox_event_processor()
                 .process(&rx.try_recv().unwrap())
                 .await;
         }
         for client in [&t.alice, &t.bob] {
-            let snapshot = crate::services::conversation::ConversationHandle::new(
+            let snapshot = crate::client::conversation::ConversationHandle::new(
                 crate::state::ActiveConversation::Channel(t.channel_id),
                 client.clone(),
             )
@@ -538,9 +538,9 @@
         t: &TwoMembers,
         id: &crate::domain::ids::MessageId,
         ts: u64,
-        ge: &crate::proto::content_v1::GroupEncrypted,
-    ) -> crate::proto::chat_v1::Message {
-        use crate::proto::chat_v1;
+        ge: &chatter_proto::content_v1::GroupEncrypted,
+    ) -> chatter_proto::chat_v1::Message {
+        use chatter_proto::chat_v1;
         use prost::Message as _;
         chat_v1::Message {
             id: id.to_string(),

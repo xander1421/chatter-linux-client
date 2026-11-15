@@ -258,7 +258,7 @@ pub fn start_video_from_memory_guarded_async<G, F>(
 }
 
 pub fn start_video_from_range_async<F>(
-    dec: Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: Arc<chatter_core::media::CbcRangeDecryptor>,
     filename: String,
     on_ready: F,
 ) where
@@ -268,7 +268,7 @@ pub fn start_video_from_range_async<F>(
 }
 
 pub fn start_video_from_range_guarded_async<G, F>(
-    dec: Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: Arc<chatter_core::media::CbcRangeDecryptor>,
     filename: String,
     still_current: G,
     on_ready: F,
@@ -316,7 +316,7 @@ pub fn start_video_from_range_guarded_async<G, F>(
 }
 
 fn start_software_range<F>(
-    dec: Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    dec: Arc<chatter_core::media::CbcRangeDecryptor>,
     filename: String,
     request: LoadRequest,
     on_ready: F,
@@ -328,7 +328,7 @@ fn start_software_range<F>(
 
 enum SoftwareSource {
     Memory(Vec<u8>),
-    Range(Arc<chatter_core::services::attachment::CbcRangeDecryptor>),
+    Range(Arc<chatter_core::media::CbcRangeDecryptor>),
 }
 
 fn start_video_software<F>(data: Vec<u8>, filename: String, request: LoadRequest, on_ready: F)

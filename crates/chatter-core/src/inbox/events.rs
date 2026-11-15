@@ -5,8 +5,8 @@
 
 use crate::domain::UserId;
 use crate::domain::ids::ChannelId;
-use crate::proto::content_v1::AttachmentPointer;
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::content_v1::AttachmentPointer;
+use chatter_proto::mailbox_v1::EnvelopeType;
 
 /// Events emitted by the inbox system for monitoring and coordination.
 #[derive(Debug, Clone)]
@@ -188,7 +188,7 @@ pub enum InboxEvent {
         /// Sender (must be our own user).
         sender_id: UserId,
         /// The snapshot, applied whole by `MessageService::apply_saved_message_sync`.
-        sync: crate::proto::content_v1::SavedMessageSync,
+        sync: chatter_proto::content_v1::SavedMessageSync,
     },
     /// Snapshot already durably applied before acknowledging its envelope.
     SavedSnapshotApplied {
@@ -281,6 +281,8 @@ pub enum InboxEvent {
         phase: crate::services::message::ChannelCallPhase,
         /// Ended only: seconds the call ran.
         duration_secs: u32,
+        /// A video call: the row reads "video call".
+        is_video: bool,
         /// Sender's timestamp, else the server's (epoch nanos).
         timestamp: u64,
     },
@@ -305,6 +307,9 @@ pub enum InboxEvent {
         channel_id: ChannelId,
         /// User who deleted.
         sender_id: UserId,
+        /// Author of the deleted message: the sender, or another member when
+        /// the sender moderates the channel (checked on apply).
+        target_author_id: UserId,
         /// Target message timestamp.
         target_sent_timestamp: u64,
     },
@@ -312,19 +317,19 @@ pub enum InboxEvent {
     /// sealed sender: only our own user may mark our messages read.
     ReadSync {
         sender_id: UserId,
-        sync: crate::proto::content_v1::ReadSync,
+        sync: chatter_proto::content_v1::ReadSync,
     },
     /// Our profile key and its visibility from another of our devices
     /// (`ProfileKeySync`). Only our own user may send one.
     ProfileKeySync {
         sender_id: UserId,
-        sync: crate::proto::content_v1::ProfileKeySync,
+        sync: chatter_proto::content_v1::ProfileKeySync,
     },
     /// Our privacy settings from another of our devices
     /// (`ConfigurationSync`). Only our own user may send one.
     ConfigurationSync {
         sender_id: UserId,
-        sync: crate::proto::content_v1::ConfigurationSync,
+        sync: chatter_proto::content_v1::ConfigurationSync,
     },
     /// Delete-for-me from another of our devices (DM or channel).
     /// `sender_id` is the sealed sender: only our own user may send one.
@@ -522,7 +527,7 @@ pub enum InboxEvent {
         /// Inviter's encrypted display name.
         encrypted_display_name: Option<Vec<u8>>,
         /// Pointer to the inviter's avatar upload.
-        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: Option<chatter_proto::content_v1::AttachmentPointer>,
     },
     /// Anonymous group join acknowledgment received.
     AnonGroupJoinAck {
@@ -542,7 +547,7 @@ pub enum InboxEvent {
         /// Joiner's encrypted display name.
         encrypted_display_name: Option<Vec<u8>>,
         /// Pointer to the joiner's avatar upload.
-        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: Option<chatter_proto::content_v1::AttachmentPointer>,
     },
     /// Anonymous group member list received.
     AnonGroupMemberList {
@@ -551,7 +556,7 @@ pub enum InboxEvent {
         /// Group ID.
         group_id: Vec<u8>,
         /// Member information.
-        members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+        members: Vec<chatter_proto::content_v1::AnonGroupMemberInfo>,
         /// Timestamp.
         timestamp: u64,
     },
@@ -584,7 +589,7 @@ pub enum InboxEvent {
         /// Group ID.
         group_id: Vec<u8>,
         /// Update payload.
-        update: crate::proto::content_v1::AnonGroupUpdate,
+        update: chatter_proto::content_v1::AnonGroupUpdate,
         /// Timestamp.
         timestamp: u64,
     },
@@ -595,7 +600,7 @@ pub enum InboxEvent {
         /// Group ID.
         group_id: Vec<u8>,
         /// Inner message content.
-        inner_content: Box<crate::proto::content_v1::Content>,
+        inner_content: Box<chatter_proto::content_v1::Content>,
     },
     // =========================================================================
     // Anonymous DM Events (NDSS'21 style stranger messaging)
@@ -618,7 +623,7 @@ pub enum InboxEvent {
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
         /// Pointer to the peer's avatar upload (fetched over Tor).
-        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: Option<chatter_proto::content_v1::AttachmentPointer>,
         /// Timestamp.
         timestamp: u64,
     },
@@ -638,7 +643,7 @@ pub enum InboxEvent {
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
         /// Pointer to the peer's avatar upload (fetched over Tor).
-        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
+        avatar: Option<chatter_proto::content_v1::AttachmentPointer>,
         /// Timestamp.
         timestamp: u64,
     },
@@ -649,7 +654,7 @@ pub enum InboxEvent {
         /// Conversation ID.
         conversation_id: Vec<u8>,
         /// Inner message content.
-        inner_content: Box<crate::proto::content_v1::Content>,
+        inner_content: Box<chatter_proto::content_v1::Content>,
     },
 }
 

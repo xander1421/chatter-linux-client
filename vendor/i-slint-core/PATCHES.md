@@ -109,3 +109,24 @@ this, including each node of an Android accessibility snapshot.
 Repeater child traversal takes an ephemeral ownership snapshot before callbacks: up to four slots use inline storage; larger snapshots reserve one Vec. Holes, order, complete traversal, dependency registration and callback-driven model replacement remain intact. No child or message cache is added. Generated init-driven reset/refill cases cover both storage paths. Non-FFI repeated child ensuring calls the concrete component method; FFI retains the erased helper for its original unwind boundary. Full core suite345tests passed; device latency improvement is not established.
 
 Android compact diagnostics are opt-in via exact debug.chatter.compact_trace=1, cached once by this helper. They suppress core diagnostic scopes/counters only, without gating model/layout/traversal work. The three participating crates cache independently; changing the property requires restarting the process.
+
+## Form text replacement (2026-11-11)
+
+`items/text.rs` builds selection replacements from one text snapshot and publishes
+only the resulting text, rather than exposing an intermediate deletion before
+inserting the replacement. Undo still records the removed and inserted spans.
+Cursor-qualified composition events that clear a field now emit `edited` after
+the final cursor update; previously callback-backed forms kept their old draft.
+`crates/chatter-ui/tests/ui_edit_text_replacement.rs` exercises Android-style
+whole-field snapshots against callback-backed and linked fields, masked inputs,
+multiline text, deletion, clearing and Unicode.
+
+Bundled colour emoji (2026-11-13): `textlayout/sharedparley.rs`
+`FontContext::register_static_font` appends any registered family whose name
+contains "Emoji" to fontique's `GenericFamily::Emoji`. Registered generics are
+consulted before the system ones, and parley's VS16 path
+(`vendor/parley/src/shape/mod.rs`) asks the Emoji generic before the element's
+`font-family`, so the bundled `assets/fonts/NotoColorEmoji.ttf` now draws
+emoji on every platform instead of each OS's own set (call-verification emoji
+looked different between devices). Test:
+`cargo test --manifest-path vendor/i-slint-core/Cargo.toml --features shared-parley,std --lib chatter_tests`.

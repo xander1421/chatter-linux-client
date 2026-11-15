@@ -32,7 +32,7 @@ impl MessageGateway {
         sender_id: &UserId,
         sender_device_id: u32,
         channel_id: &crate::domain::ids::ChannelId,
-        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+        skdm: &chatter_proto::content_v1::SenderKeyDistribution,
     ) -> Result<Option<bool>, ServiceError> {
         let gate = crate::services::message::GroupStateGate::new(&self.settings_repo);
         let is_member = gate.admits(channel_id, sender_id);
@@ -78,7 +78,7 @@ impl MessageGateway {
     /// - `Err(_)` - Other error
     pub async fn process_group_encrypted_message(
         &self,
-        encrypted_data: &crate::proto::chat_v1::EncryptedData,
+        encrypted_data: &chatter_proto::chat_v1::EncryptedData,
         sender_id: &UserId,
         sender_device_id: u32,
     ) -> Result<DecryptResult, ServiceError> {
@@ -144,9 +144,9 @@ impl MessageGateway {
         // (Signal drops group messages from non-members); checked before
         // decrypting so a non-member cannot draw a SenderKeyRequest either.
         let gate = crate::services::message::GroupStateGate::new(&self.settings_repo);
-        if !gate.admits(&channel_id, sender_id) {
+        if !gate.admits_content(&channel_id, sender_id) {
             tracing::warn!(%channel_id, %sender_id,
-                "[MSG_RECV] Group message from a sender outside the verified membership; dropped");
+                "[MSG_RECV] Group message from a sender outside the verified membership or muted; dropped");
             return Err(ServiceError::Validation(
                 "group message from a sender outside the verified channel membership".into(),
             ));
@@ -163,7 +163,7 @@ impl MessageGateway {
                 // ahead is recorded; `MessageService::sync_channel_state_if_behind`
                 // has the channel service fetch the changes.
                 if let Some(content::Content::DataMessage(dm)) =
-                    crate::network::validation::protovalidate::decode_inbound_content(
+                    chatter_proto::protovalidate::decode_inbound_content(
                         plaintext.as_slice(),
                         "sender_key",
                     )

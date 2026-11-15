@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 
 use crate::domain::UserId;
 use crate::domain::anon_group::AnonGroupId;
-use crate::proto::content_v1::Content;
+use chatter_proto::content_v1::Content;
 
 /// Posts held per group; past it the oldest is dropped.
 pub(crate) const HOLD_CAP: usize = 64;
@@ -38,7 +38,7 @@ impl HeldPosts {
         group: &AnonGroupId,
         sender: &UserId,
     ) -> Option<u64> {
-        use crate::proto::content_v1::content::Content;
+        use chatter_proto::content_v1::content::Content;
 
         let now = Instant::now();
         self.0.lock().get(group).and_then(|queue| {

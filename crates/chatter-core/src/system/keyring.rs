@@ -114,6 +114,11 @@ impl Keyring {
 
         // 1. Unique ID for this DB
         let path_str = db_path.to_string_lossy();
+        // iOS relocates an app's data container when installing an update.
+        // The relative database location remains stable, and Keychain already
+        // isolates this app's credentials from other apps.
+        #[cfg(target_os = "ios")]
+        let path_str = ios_database_identity(&path_str);
         let mut hasher = Sha256::new();
         hasher.update(path_str.as_bytes());
         let hash = hasher.finalize();
@@ -314,18 +319,18 @@ impl Keyring {
         Err(SystemError::Keyring("Failed to store in keyring".into()))
     }
 
-    /// Removes the database passphrase from the keyring.
-    ///
-    /// Use this during logout or account reset.
+    /// Removes the database passphrase from the keyring. An absent entry is
+    /// already removed.
     ///
     /// # Errors
     ///
-    /// Returns `SystemError::Keyring` if:
-    /// - The passphrase doesn't exist
-    /// - The keyring service is unavailable
-    /// - Access is denied
+    /// Returns `SystemError::Keyring` if the keyring service is unavailable or
+    /// access is denied.
     pub fn delete_passphrase(&self) -> Result<(), SystemError> {
-        self.entry()?.delete_credential().map_err(map_keyring_error)
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(map_keyring_error(e)),
+        }
     }
 
     /// Checks if a passphrase exists in the keyring or environment.
@@ -338,6 +343,14 @@ impl Keyring {
         }
         self.get_passphrase().is_ok()
     }
+}
+
+#[cfg(any(target_os = "ios", test))]
+fn ios_database_identity(path: &str) -> &str {
+    path.split_once("/Containers/Data/Application/")
+        .and_then(|(_, relative)| relative.split_once('/'))
+        .map(|(_, relative)| relative)
+        .unwrap_or(path)
 }
 
 // Note: No Default impl - Keyring requires a database path
@@ -435,7 +448,8 @@ pub(crate) fn test_credential_store() -> std::sync::Arc<keyring::CredentialStore
 mod tests {
     /// A desktop dependency must not switch shared blocking zbus to Tokio:
     /// keyring/notification calls from async app code would nest runtimes.
-    #[cfg(target_os = "linux")]
+    /// Only the desktop keyring store pulls in zbus's blocking API.
+    #[cfg(all(target_os = "linux", feature = "desktop-system"))]
     #[tokio::test]
     async fn blocking_dbus_inside_async_runtime_reports_connection_error() {
         // A unique absent socket avoids the user's bus, keyring and prompts.
@@ -457,6 +471,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn ios_database_identity_survives_container_relocation() {
+        let old = "/private/var/mobile/Containers/Data/Application/OLD/Library/Application Support/com.chatter.chatter/chatter.db";
+        let new = "/private/var/mobile/Containers/Data/Application/NEW/Library/Application Support/com.chatter.chatter/chatter.db";
+        assert_eq!(ios_database_identity(old), ios_database_identity(new));
+        assert_ne!(ios_database_identity(old), ios_database_identity(&new.replace("chatter.db", "other.db")));
+        assert_eq!(ios_database_identity("/tmp/test.db"), "/tmp/test.db");
+    }
 
     // Note: These tests require a running Secret Service (GNOME Keyring/KWallet).
     // They may fail in CI environments without a keyring daemon.

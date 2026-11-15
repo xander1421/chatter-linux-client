@@ -92,12 +92,11 @@
     #[tokio::test]
     async fn dm_delete_connected_processor_emits_actual_author_and_rejects_other_scope() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         for (author, ts) in [(f.me, DM_TS), (f.carol, DM_TS)] {
             let target = if author == f.me {
                 let msg = Message::new_text(
@@ -122,7 +121,7 @@
             );
             let bytes = prost::Message::encode_to_vec(&wire);
             let decoded =
-                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                <chatter_proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
                     .unwrap();
             assert!(
                 matches!(crate::services::gateway::MessageGateway::parse_content(decoded.clone()).unwrap(), crate::services::gateway::DmContent::DeleteForEveryone { target_author_aci: Some(value), .. } if value == author.to_string())
@@ -227,12 +226,11 @@
     #[tokio::test]
     async fn self_device_dm_delete_carries_destination_through_production_processor() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let (tx, mut rx) = broadcast::channel(16);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         for (ts, author) in [(910, f.me), (911, f.carol)] {
@@ -269,7 +267,7 @@
             let copy = super::dm::own_device_copy(&f.carol, &wire, 1).unwrap();
             let bytes = prost::Message::encode_to_vec(&copy);
             let decoded =
-                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                <chatter_proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
                     .unwrap();
             assert!(
                 matches!(crate::services::gateway::MessageGateway::parse_content(decoded.clone()).unwrap(),
@@ -335,7 +333,7 @@
                 author.as_deref(),
                 None,
             );
-            if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+            if let Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) =
                 &mut content.content
             {
                 dm.delete.as_mut().unwrap().destination_user_id = destination;
@@ -432,13 +430,12 @@
     #[tokio::test]
     async fn channel_delete_dispatch_is_exact_and_retains_typed_late_arrival_tombstone() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
 
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let (tx, mut rx) = broadcast::channel(16);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let other_channel = ChannelId::new();
@@ -517,16 +514,19 @@
         }
     }
 
+    /// A channel delete naming another member's message is dispatched (a
+    /// moderator may send one) but only applied when the sender moderates the
+    /// channel in the verified state; Carol does not, so nothing is deleted,
+    /// no tombstone is left and nothing is announced.
     #[tokio::test]
     async fn channel_delete_dispatch_rejects_forged_author_and_destination_without_tombstone() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-        use crate::services::inbox_processor::InboxEventProcessor;
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
 
         let f = fixture();
         let svc = f.client.messages();
-        let processor = InboxEventProcessor::from_client(&f.client);
+        let processor = f.client.inbox_event_processor();
         let (tx, mut rx) = broadcast::channel(16);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         for (index, author, destination) in [
@@ -559,7 +559,7 @@
                 author.as_deref(),
                 Some(&f.channel.to_string()),
             );
-            if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+            if let Some(chatter_proto::content_v1::content::Content::DataMessage(dm)) =
                 &mut content.content
             {
                 dm.delete.as_mut().unwrap().destination_user_id = destination;
@@ -573,9 +573,8 @@
                 &tx,
                 &stats,
             );
-            if let Ok(event) = rx.try_recv() {
+            while let Ok(event) = rx.try_recv() {
                 processor.process(&event).await;
-                panic!("forged channel delete reached the processor");
             }
             assert!(domain.try_recv().is_err());
             for row in targets {
@@ -587,8 +586,11 @@
         }
     }
 
+    /// Authorization of another member's message moved to apply time
+    /// (`apply_channel_delete`, the verified-state moderator check): dispatch
+    /// carries the named author through instead of reading it as the sender.
     #[test]
-    fn channel_delete_rejects_forged_target_author_before_event() {
+    fn channel_delete_names_its_target_author() {
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
         use parking_lot::RwLock;
         use tokio::sync::broadcast;
@@ -611,7 +613,13 @@
             &tx,
             &stats,
         );
-        assert!(rx.try_recv().is_err());
+        match rx.try_recv() {
+            Ok(crate::inbox::InboxEvent::ChannelDeleteForEveryone { sender_id, target_author_id, .. }) => {
+                assert_eq!(sender_id, sender);
+                assert_eq!(target_author_id, victim);
+            }
+            other => panic!("expected a channel delete event, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -781,7 +789,7 @@
             );
             let bytes = prost::Message::encode_to_vec(&wire);
             let content =
-                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                <chatter_proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
                     .unwrap();
             assert!(
                 anon.process_incoming_content(&dm.id, &f.bob, &content)
@@ -958,7 +966,7 @@
                 Some(&f.me.to_string()),
                 None,
             );
-        if let Some(crate::proto::content_v1::content::Content::DataMessage(data)) =
+        if let Some(chatter_proto::content_v1::content::Content::DataMessage(data)) =
             &mut destination_claim.content
         {
             data.delete.as_mut().unwrap().destination_user_id = Some(f.bob.to_string());
@@ -974,7 +982,7 @@
                 .unwrap()
                 .is_some()
         );
-        let catchup = crate::services::gateway::build_text_content("late peer", 804);
+        let catchup = crate::services::gateway::builders::build_text_content("late peer", 804);
         let events = anon
             .process_incoming_content(&dm.id, &f.carol, &catchup)
             .unwrap();
@@ -1077,7 +1085,7 @@
         );
         svc.message_repo.insert(&channel).unwrap();
         assert!(
-            svc.apply_channel_delete(&f.channel, &f.carol, 806)
+            svc.apply_channel_delete(&f.channel, &f.carol, &f.carol, 806)
                 .unwrap()
                 .is_none()
         );
@@ -1088,7 +1096,60 @@
 #[path = "reactions.rs"]
 mod reactions;
 
+#[path = "early_modifiers.rs"]
+mod early_modifiers;
+
 #[cfg(feature = "media")]
 mod stable_call_delete_tests {
     include!("../stable_call_delete_tests.rs");
+}
+
+/// A private channel has no server copy to delete, so a moderator's delete of
+/// another member's message is honoured by every receiver that sees the
+/// moderator's role in the verified state, and only then.
+#[tokio::test]
+async fn channel_moderator_delete_needs_the_verified_role() {
+    use crate::domain::verified_state::{
+        ChannelRole, Member, MemberStatus, MembershipState, PendingChange, Policy, VerifiedChange,
+    };
+    let f = fixture();
+    let svc = f.client.messages();
+    let moderator = UserId::new();
+    let seed = |role: ChannelRole, revision: u64| {
+        let mut members = std::collections::BTreeMap::new();
+        for (u, r) in [(f.me, ChannelRole::Owner), (f.carol, ChannelRole::Member), (moderator, role)] {
+            members.insert(u.to_string(), Member { role: r, status: MemberStatus::Active, identity_key: [5; 33], muted_until: 0 });
+        }
+        let state = MembershipState {
+            channel_id: f.channel.to_string(),
+            revision,
+            members,
+            policy: Policy::defaults(false),
+            invites: Default::default(),
+            disappearing_seconds: 0,
+        };
+        let hash = state.hash();
+        crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository::new(svc.database.clone())
+            .commit(
+                &f.channel,
+                &chatter_proto::chat_v1::ChannelChange { actions: vec![revision as u8], signature: vec![], invite_proof: vec![] },
+                &VerifiedChange(PendingChange { author_user_id: f.me.to_string(), author_identity_key: [5; 33], timestamp: 0, new_state: state, new_state_hash: hash }),
+            )
+            .unwrap();
+    };
+    let post = |ts: u64| {
+        let m = Message::new_text(f.channel, ConversationType::Channel, Some(f.carol), "spam".into(), ts);
+        svc.message_repo.insert(&m).unwrap();
+        m
+    };
+
+    seed(ChannelRole::Member, 1);
+    let first = post(970);
+    assert!(svc.apply_channel_delete(&f.channel, &moderator, &f.carol, 970).unwrap().is_none());
+    assert!(svc.message_repo.get(&first.id).unwrap().is_some(), "a plain member cannot delete Carol's post");
+
+    seed(ChannelRole::Moderator, 2);
+    let second = post(971);
+    assert!(svc.apply_channel_delete(&f.channel, &moderator, &f.carol, 971).unwrap().is_some());
+    assert!(svc.message_repo.get(&second.id).unwrap().is_none(), "a verified moderator can");
 }

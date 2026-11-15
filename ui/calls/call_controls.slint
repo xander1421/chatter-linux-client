@@ -1,4 +1,3 @@
-import { Colors } from "../theme/colors.slint";
 import { IconAction } from "../components/icon_action.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Call control bar with mute, video, screen share, and end call buttons
@@ -7,70 +6,6 @@ import { GlassSurface } from "../components/glass_surface.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
-
-// A device-route button with its own device-select caret to the LEFT of the
-// circle (outside it — owner 2026-11-06: the caret overlapping the button top
-// edge read as part of the circle). Tapping the circle runs `clicked` (mute /
-// speaker); tapping the caret runs `select`, which opens that category's list.
-component DeviceButton inherits Rectangle {
-    in property <image> icon;
-    in property <string> label;
-    in property <string> select-label;
-    in property <bool> active;
-    in property <bool> enabled: true;
-    callback clicked();
-    callback select();
-    // caret column (18) + the circle (44).
-    width: 18px + 44px;
-    height: 48px;
-    IconAction {
-        width: 44px;
-        height: 48px;
-        // Pushed right so the caret sits clear to its left.
-        x: parent.width - self.width;
-        icon: root.icon;
-        label: root.label;
-        active: root.active;
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-    }
-    // Selector caret, its own tap target, to the left of the circle.
-    caret := Rectangle {
-        width: 16px;
-        height: 26px;
-        x: 0;
-        y: (parent.height - self.height) / 2;
-        border-radius: 8px;
-        background: ctouch.pressed ? Materials.pressed : Colors.fill-secondary;
-        border-width: key.has-focus ? 2px : 0px;
-        border-color: Colors.focus-ring;
-        accessible-role: button;
-        accessible-label: root.select-label;
-        accessible-action-default => { root.select(); }
-        key := FocusScope {
-            key-pressed(event) => {
-                if event.text == Key.Space || event.text == Key.Return {
-                    root.select();
-                    return accept;
-                }
-                return reject;
-            }
-        }
-        Image {
-            source: Icons.chevron-left;
-            transform-rotation: 90deg;
-            width: 12px;
-            height: 12px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            colorize: Colors.text-primary;
-        }
-        ctouch := TouchArea {
-            mouse-cursor: pointer;
-            clicked => { root.select(); }
-        }
-    }
-}
 
 export component CallControls inherits GlassSurface {
     material-level: 3;
@@ -88,9 +23,6 @@ export component CallControls inherits GlassSurface {
     in property <bool> is-video-enabled: true;
     in property <bool> is-screen-sharing: false;
     in property <bool> is-video-call: true;
-    // Camera-lens swap (front/back). Only mobile has a second facing, so the
-    // parent gates this on the platform + the camera being on.
-    in property <bool> show-camera-swap: false;
     // Phones show linked microphone/output routes; desktop shows independent devices.
     // `speaker-on` reflects the communication route acknowledged by Android.
     in property <bool> speaker-toggle: false;
@@ -100,7 +32,6 @@ export component CallControls inherits GlassSurface {
 
     callback toggle-mute();
     callback toggle-video();
-    callback swap-camera();
     callback toggle-screen-share();
     callback end-call();
     callback show-audio-input();
@@ -110,29 +41,52 @@ export component CallControls inherits GlassSurface {
     height: 48px;
     HorizontalLayout {
         alignment: center;
-        spacing: 0px;
-        padding: 0px;
-        // Microphone: body toggles mute, caret opens the input-device list.
-        DeviceButton {
+        spacing: Spacing.none;
+        padding: Spacing.none;
+        // Each audio route is a pair of shared targets: the device-select
+        // caret to the LEFT of the circle (outside it — owner 2026-11-06: a
+        // caret overlapping the button top edge read as part of the circle),
+        // then the circle. Both are full 44px targets (owner 2026-11-13).
+        // Microphone: the caret opens the input-device list, the circle
+        // toggles mute.
+        IconAction {
+            size: button-size;
+            width: 44px;
+            height: 48px;
+            icon: Icons.chevron-down;
+            label: root.speaker-toggle ? "Select microphone, linked audio route" : "Select microphone";
+            clicked => { root.show-audio-input(); }
+        }
+        IconAction {
+            size: button-size;
+            width: 44px;
+            height: 48px;
             icon: root.is-muted ? Icons.mic-off : Icons.mic;
             label: root.is-muted ? "Unmute microphone" : "Mute microphone";
-            select-label: root.speaker-toggle ? "Select microphone, linked audio route" : "Select microphone";
             active: root.is-muted;
             clicked => { root.toggle-mute(); }
-            select => { root.show-audio-input(); }
         }
-        // Output: body toggles speaker (phone) or opens output list (desktop);
-        // caret always opens the output-device list.
-        DeviceButton {
+        // Output: the caret always opens the output-device list; the circle
+        // toggles speaker (phone) or opens the output list (desktop).
+        IconAction {
+            size: button-size;
+            width: 44px;
+            height: 48px;
+            icon: Icons.chevron-down;
+            label: root.speaker-toggle ? "Select output, linked audio route" : "Select output";
+            clicked => { root.show-audio-output(); }
+        }
+        IconAction {
+            size: button-size;
+            width: 44px;
+            height: 48px;
             icon: Icons.volume-2;
             label: root.speaker-toggle ? "Toggle speaker" : "Select audio output";
-            select-label: root.speaker-toggle ? "Select output, linked audio route" : "Select output";
             active: root.speaker-toggle && root.speaker-on;
             clicked => {
                 if root.speaker-toggle { root.toggle-speaker(); }
                 else { root.show-audio-output(); }
             }
-            select => { root.show-audio-output(); }
         }
 
         // Video toggle — always available so the user can turn the camera on
@@ -147,18 +101,6 @@ export component CallControls inherits GlassSurface {
             label: root.is-video-enabled ? "Turn camera off" : "Turn camera on";
             active: is-video-enabled;
             clicked => { toggle-video(); }
-        }
-
-        // Swap front/back camera. Mobile-only (desktop has one camera); shown
-        // via `if` so it reserves no row space on desktop.
-        if root.show-camera-swap: IconAction {
-            size: button-size;
-            width: 44px;
-            height: 48px;
-            enabled: root.is-connected;
-            icon: Icons.rotate-ccw;
-            label: "Switch camera";
-            clicked => { swap-camera(); }
         }
 
         // Screen share toggle (system consent is requested on Android).

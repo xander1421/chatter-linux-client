@@ -43,7 +43,7 @@ impl CallWorkerHandle {
     pub(crate) fn for_dm_answer(
         &self,
         call: CallHandle,
-        attempt: Option<crate::client::calls::CallStartAttempt>,
+        attempt: Option<crate::services::call_signaling::CallStartAttempt>,
     ) -> Self {
         let mut worker = self.clone();
         worker.answer_scope = Some(DmAnswerScope {
@@ -509,7 +509,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::InitiateCall {
-                attempt: crate::client::calls::START_ATTEMPT
+                attempt: crate::services::call_signaling::START_ATTEMPT
                     .try_with(Clone::clone)
                     .ok(),
                 channel_id,

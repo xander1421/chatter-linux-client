@@ -1,8 +1,8 @@
 //! Durable receipt evidence, scoped by message, recipient and authenticated device.
 use chatter_core::domain::ids::{ChannelId, DeviceId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
-use chatter_core::storage::repositories::message_receipt_repo::MessageReceiptRepository;
-use chatter_core::storage::{Database, MessageRepository};
+use chatter_core::testing::storage::repositories::message_receipt_repo::MessageReceiptRepository;
+use chatter_core::testing::storage::{Database, MessageRepository};
 use std::sync::Arc;
 
 #[test]
@@ -289,7 +289,7 @@ fn public_channel_receipt_waits_for_server_timestamp_binding() {
 
 #[test]
 fn phone_send_and_linked_tablet_receipts_converge_in_either_order() {
-    use chatter_core::proto::content_v1::{
+    use chatter_proto::content_v1::{
         DataMessage, SyncSent, SyncSentReceiptTarget, sync_sent::Destination,
     };
     use prost::Message as _;

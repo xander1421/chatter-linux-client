@@ -38,7 +38,7 @@ fn service_with_radio_factory(
 ) -> MeshService {
     let identity = Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
     let config = Arc::new(MeshConfig::default());
-    let state = Arc::new(MeshState::new(identity.peer_id()));
+    let state = Arc::new(MeshState::new());
     let nostr_state = Arc::new(NostrState::new());
     let timeline = timeline::temp_timeline();
     let identity_store = timeline::temp_identity_store();

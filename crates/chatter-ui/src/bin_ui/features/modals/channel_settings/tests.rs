@@ -1,7 +1,7 @@
 use super::*;
 use crate::bin_ui::converters::ChatRowExt;
-use chatter_core::services::channel::ChannelError;
-use chatter_core::storage::repositories::{
+use chatter_core::client::ChannelError;
+use chatter_core::testing::storage::repositories::{
     channel_repo::ChannelRepository,
     settings_repo::{SettingsRepository, keys},
 };
@@ -189,7 +189,7 @@ fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() 
     assert!(
         w.global::<crate::ModalHostState>()
             .get_channel_settings_error()
-            .contains("Couldn't open channel icon")
+            .contains("Couldn't open that image")
     );
     assert_eq!(
         w.global::<crate::ModalHostState>()
@@ -232,7 +232,8 @@ fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() 
     assert!(
         w.global::<crate::ModalHostState>()
             .get_channel_settings_error()
-            .contains("fixture read failed")
+            // The cause is logged; the user gets plain copy (fb46b93b).
+            .contains("Couldn't open that image")
     );
     let old_session = begin_icon_request(&w, &client).unwrap();
     client.clear_composer_session();
@@ -272,7 +273,7 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
         .unwrap()
         .database_path();
     let db =
-        Arc::new(chatter_core::storage::Database::open(&path, "channel-save-fixture").unwrap());
+        Arc::new(chatter_core::testing::storage::Database::open(&path, "channel-save-fixture").unwrap());
     let me = UserId::new();
     SettingsRepository::new(db.clone())
         .set_string(keys::CURRENT_USER_ID, &me.to_string())
@@ -313,11 +314,16 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
             &w,
             &client,
             epoch,
-            crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(&channel),
+            crate::bin_ui::features::chat::open::channel::ChannelMetadata::from_channel(&channel),
             rows,
         );
     };
     complete(epoch);
+    // The header shows the saved icon as is; sidebar rows render avatars
+    // through the shared decode cache, which fits them to AVATAR_PX on the
+    // long edge, so the row shows the 3x2 icon as 128x85.
+    let px = crate::bin_ui::decode_cache::AVATAR_PX;
+    let saved_icon_px = (px, px * 2 / 3);
     assert_eq!(
         w.global::<crate::ChatPane>().get_channel_name().as_str(),
         "Saved name"
@@ -353,7 +359,7 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
             row.avatar_source.size().width,
             row.avatar_source.size().height
         ),
-        (3, 2)
+        saved_icon_px
     );
     assert_ne!(w.get_active_modal().as_str(), "channel-settings");
 
@@ -432,7 +438,7 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
         .unwrap()
         .database_path();
     let db =
-        Arc::new(chatter_core::storage::Database::open(&path, "channel-delete-fixture").unwrap());
+        Arc::new(chatter_core::testing::storage::Database::open(&path, "channel-delete-fixture").unwrap());
     let me = UserId::new();
     SettingsRepository::new(db.clone())
         .set_string(keys::CURRENT_USER_ID, &me.to_string())

@@ -26,9 +26,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
     border-radius: Spacing.radius-chrome;
     clip: true;
     material-enabled: false;
-    background: Materials.opaque;
-    border-width: Materials.glass-edge-width;
-    border-color: Materials.glass-edge;
+    opaque: true;
 
     attachment-scroll := Flickable {
         width: 100%;
@@ -80,7 +78,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
 
                 HorizontalLayout {
                     padding-left: root.row-padding;
-                    padding-right: 0px;
+                    padding-right: Spacing.none;
                     spacing: Spacing.xs;
 
                     // Center the preview in the full-height card row.

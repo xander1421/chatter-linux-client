@@ -12,8 +12,9 @@ use chatter_core::crypto::ecies::{
     IdentityHpkeUse, OVERHEAD, open_with_identity, seal_to_identity,
 };
 use chatter_core::crypto::profile_crypto;
-use chatter_core::crypto::{AttachmentCrypto, KEY_SET_LENGTH, decrypt_dm_bytes, encrypt_dm_bytes};
-use chatter_core::services::{
+use chatter_attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
+use chatter_core::crypto::{decrypt_dm_bytes, encrypt_dm_bytes};
+use chatter_core::testing::services::gateway::builders::{
     PADDING_MESSAGE, build_data_message_content, build_text_content, build_typing_content,
     generate_padding,
 };
@@ -365,7 +366,7 @@ fn test_content_type_padding_profiles() {
     let text_size = text.encode_to_vec().len();
 
     // Message with attachment
-    let attachment = chatter_core::proto::content_v1::AttachmentPointer {
+    let attachment = chatter_proto::content_v1::AttachmentPointer {
         cdn_key: "cdn-key-long-uuid-value".to_string(),
         content_type: "image/jpeg".to_string(),
         plaintext_size: 1024 * 1024,

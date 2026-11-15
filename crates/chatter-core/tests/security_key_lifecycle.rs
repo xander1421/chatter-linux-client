@@ -10,10 +10,11 @@
 //!   - SVR PIN-based key derivation (section 2)
 
 use chatter_core::crypto::signal::sealed_sender::{PROFILE_KEY_LENGTH, UAK_LENGTH};
+use chatter_attachment_crypto::SecureBuffer;
 use chatter_core::crypto::svr;
 use chatter_core::crypto::{
     DeviceCredentials, DeviceToken, EphemeralCallKey, SecretKey32, SecretKey64, SecretString,
-    SecureBuffer, derive_call_key, derive_uak, generate_group_call_key,
+    derive_call_key, derive_uak, generate_group_call_key,
 };
 
 // ===========================================================================

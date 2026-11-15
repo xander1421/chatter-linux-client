@@ -63,6 +63,7 @@ export component MessageItem inherits Rectangle {
     in property <length> cache-viewport-height: 0px;
     in property <bool> can-thread: true;  // Threads are a channel feature
     in property <string> failure-reason: "";
+    in property <bool> can-retry: false;
     in property <string> delivery-status: "";  // "sending", "unconfirmed", "sent", "failed", "delivered", "read" for own messages
     /// Whether this message went over the mesh. Set by the caller rather than
     /// inferred from the status string: "sent" is a mesh state too — in fact the
@@ -80,6 +81,7 @@ export component MessageItem inherits Rectangle {
     callback sender-profile-requested(string);
     in property <string> call-type: "";
     in property <string> call-duration: "";
+    in property <bool> call-is-video: false;
 
     // Attachments
     in property <bool> has-attachments: false;
@@ -460,6 +462,7 @@ export component MessageItem inherits Rectangle {
         // Call message (card style, aligned based on direction)
         if root.is-call: MessageCall {
             call-duration: root.call-duration;
+            call-is-video: root.call-is-video;
             call-type: root.call-type;
             hold-tier: root.hold-tier;
             is-anonymous: root.is-anonymous;
@@ -756,15 +759,15 @@ export component MessageItem inherits Rectangle {
                         y: 0;
                         width: root.photo-message ? root.photo-width : self.preferred-width;
                         height: self.preferred-height;
-                        padding: root.photo-message ? 0px : Spacing.sm + Spacing.xxs;
-                        padding-left: root.photo-message ? 0px : root.is-ai ? Spacing.sm + Spacing.sm : Spacing.sm + Spacing.xxs;
-                        spacing: root.photo-message ? 0px : Spacing.xs;
+                        padding: root.photo-message ? Spacing.none : Spacing.sm + Spacing.xxs;
+                        padding-left: root.photo-message ? Spacing.none : root.is-ai ? Spacing.sm + Spacing.sm : Spacing.sm + Spacing.xxs;
+                        spacing: root.photo-message ? Spacing.none : Spacing.xs;
 
                         // Sender name + timestamp (only in channels for others, hidden in continuations)
                         if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: HorizontalLayout {
                             spacing: Spacing.sm;
                             alignment: start;
-                            padding: root.photo-message ? Spacing.sm : 0px;
+                            padding: root.photo-message ? Spacing.sm : Spacing.none;
 
                             Text {
                                 text: root.sender-name;
@@ -802,7 +805,7 @@ export component MessageItem inherits Rectangle {
                         if root.is-thread-reply: HorizontalLayout {
                             spacing: Spacing.xs;
                             alignment: start;
-                            padding: root.photo-message ? Spacing.sm : 0px;
+                            padding: root.photo-message ? Spacing.sm : Spacing.none;
 
                             VerticalLayout {
                                 alignment: center;
@@ -825,7 +828,7 @@ export component MessageItem inherits Rectangle {
                         // Quote / reply-to bubble
                         if root.is-reply: HorizontalLayout {
                             width: root.photo-message ? root.photo-width : self.preferred-width;
-                            padding: root.photo-message ? Spacing.sm : 0px;
+                            padding: root.photo-message ? Spacing.sm : Spacing.none;
                             MessageQuote {
                                 audio-elapsed: root.audio-elapsed;
                                 audio-progress: root.audio-progress;
@@ -897,6 +900,7 @@ export component MessageItem inherits Rectangle {
                             message-id: root.message-id;
                             delivery-status: root.delivery-status;
                             failure-reason: root.failure-reason;
+                            can-retry: root.can-retry;
                             is-own: root.is-own;
                             is-edited: root.is-edited;
                             disappearing: root.disappearing;
@@ -934,7 +938,7 @@ export component MessageItem inherits Rectangle {
                         // through pointer-event (vendored core/compiler patch).
                         if root.photo-message && root.content != "": HorizontalLayout {
                             width: root.photo-message ? root.photo-width : self.preferred-width;
-                            padding: root.photo-message ? Spacing.sm : 0px;
+                            padding: root.photo-message ? Spacing.sm : Spacing.none;
                             MessageBody {
                                 width: root.photo-message ? root.photo-width - Spacing.sm * 2 : self.preferred-width;
                                 bubble-right: bubble.absolute-position.x + bubble.width;
@@ -966,11 +970,12 @@ export component MessageItem inherits Rectangle {
                         if !root.photo-only || root.has-reactions: MessageFooter {
                             width: root.photo-message ? root.photo-width : self.preferred-width;
                             show-meta: !root.photo-only;
-                            padding-left: root.photo-message ? Spacing.sm : 0px;
-                            padding-right: root.photo-message ? Spacing.sm : 0px;
-                            padding-bottom: root.photo-message ? Spacing.sm : 0px;
+                            padding-left: root.photo-message ? Spacing.sm : Spacing.none;
+                            padding-right: root.photo-message ? Spacing.sm : Spacing.none;
+                            padding-bottom: root.photo-message ? Spacing.sm : Spacing.none;
                             delivery-status: root.delivery-status;
                             failure-reason: root.failure-reason;
+                            can-retry: root.can-retry;
                             has-reactions: root.has-reactions;
                             is-edited: root.is-edited;
                             disappearing: root.disappearing;

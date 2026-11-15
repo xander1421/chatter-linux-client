@@ -169,7 +169,7 @@ pub fn handle_pin(
                     preview = if text.is_empty() {
                         "[Pinned message]".to_string()
                     } else {
-                        chatter_core::services::gateway::shared::truncate_preview(&text)
+                        chatter_core::ui::truncate_preview(&text)
                     };
 
                     let mut updated_msg = msg.clone();

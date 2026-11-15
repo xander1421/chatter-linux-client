@@ -25,4 +25,3 @@ mod establish;
 mod kt;
 mod receive;
 
-pub use encrypt::DeviceCiphertext;

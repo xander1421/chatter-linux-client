@@ -54,6 +54,11 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak_mb_export.clone();
             let passphrase = passphrase.to_string();
             tokio::spawn(async move {
+                #[cfg(target_os = "ios")]
+                {
+                    let _ = (ui_ctx, passphrase);
+                    set_message_backup_status(&weak, "File backup export is not available on iPhone yet.".into());
+                }
                 #[cfg(target_os = "android")]
                 {
                     use crate::platform::android::backup_document;
@@ -87,7 +92,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         Err(_) => set_message_backup_status(&weak, "Could not open the backup destination.".into()),
                     }
                 }
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
                     let Some(path) = FilePicker::save_file(
@@ -131,6 +136,11 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak_mb_import.clone();
             let passphrase = passphrase.to_string();
             tokio::spawn(async move {
+                #[cfg(target_os = "ios")]
+                {
+                    let _ = (ui_ctx, passphrase);
+                    set_message_backup_status(&weak, "File backup restore is not available on iPhone yet.".into());
+                }
                 #[cfg(target_os = "android")]
                 {
                     use crate::platform::android::backup_document;
@@ -145,7 +155,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         Err(_) => set_message_backup_status(&weak, "Could not open the backup file.".into()),
                     }
                 }
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
                     let Some(path) = FilePicker::pick_file(

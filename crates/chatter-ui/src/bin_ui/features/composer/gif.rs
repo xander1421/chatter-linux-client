@@ -612,9 +612,9 @@ fn spawn_previews(
                     gif.preview = first_image.clone();
                     gif.failed = false;
                 });
-                if !w.global::<crate::Appearance>().get_reduce_motion() {
-                    crate::bin_ui::gif_state::register_picker_gif(decoded.id, decoded.frames);
-                }
+                // Animates regardless of Reduce animations, like GIFs in the chat:
+                // the motion is the content being picked, not UI chrome.
+                crate::bin_ui::gif_state::register_picker_gif(decoded.id, decoded.frames);
             });
         });
     }

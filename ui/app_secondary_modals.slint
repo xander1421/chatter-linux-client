@@ -11,17 +11,15 @@ import { Spacing } from "theme/spacing.slint";
 import { SecretTimerModal } from "chat/secret_timer_modal.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { CallView } from "app_call_view.slint";
-import { FriendData } from "modals/friends.slint";
-import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
-import { SessionsModal, SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
+import { ForwardMessageModal } from "modals/forward_message.slint";
+import { SessionsModal } from "modals/sessions.slint";
 import { ChannelSettingsModal } from "modals/channel_settings.slint";
-import { ChannelMemberData, BannedMemberData } from "modals/channel_member_types.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
-import { UnifiedSearch, QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
+import { UnifiedSearch } from "components/unified_search.slint";
 import { CreateMenu, NewChatPicker } from "sidebar/create_menu.slint";
 import { ChatHeaderMenu } from "chat/chat_header_menu.slint";
-import { PinnedMessagesModal, PinnedItem } from "modals/pinned_messages.slint";
-import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
+import { PinnedMessagesModal } from "modals/pinned_messages.slint";
+import { JarvisMemoryModal } from "modals/jarvis_memory.slint";
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 import { KeyboardShortcutsDialog } from "modals/keyboard_shortcuts.slint";
 import { LicensesModal } from "modals/licenses.slint";
@@ -39,6 +37,7 @@ export component AppSecondaryModals inherits Rectangle {
     in property <string> presented-modal;
     in property <length> safe-area-top;
     in property <bool> sidebar-is-rail;
+    in property <length> sidebar-panel-width;
     in property <length> window-height;
     callback submit-anon-mode-pin(string);
     function is-presented(name: string) -> bool {
@@ -112,7 +111,7 @@ export component AppSecondaryModals inherits Rectangle {
         show: SearchPane.unified-search-open;
         source-x: root.compact-layout ? Spacing.sm : 0px;
         source-y: root.macos-titlebar-height;
-        source-width: root.compact-layout ? root.width - 2 * Spacing.sm : root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
+        source-width: root.compact-layout ? root.width - 2 * Spacing.sm : root.sidebar-panel-width;
         conversations: SearchPane.unified-search-conversations;
         messages: SearchPane.unified-search-messages;
         discover-channels: SearchPane.unified-search-discover-channels;
@@ -344,7 +343,7 @@ export component AppSecondaryModals inherits Rectangle {
         show-video-call: ChatPane.chat-menu-video;
         show-settings: ChatPane.chat-menu-settings;
         show-secret-chat: ChatPane.chat-menu-secret-chat;
-        show-disappearing: ChatPane.conversation-kind == ConversationKind.anon-dm;
+        show-disappearing: ChatPane.can-set-disappearing-from-menu;
         show-pinned: true;
         pinned => { ModalHostState.nav-close("chat-menu"); ChatPane.pinned-show-clicked(); }
         show-invite: ChatPane.header-can-invite;
@@ -406,6 +405,7 @@ export component AppSecondaryModals inherits Rectangle {
     }
 
     if root.is-presented("create-section"): CreateSectionModal {
+        touch: root.is-mobile-platform;
         show-modal: root.active-modal == "create-section";
         rename-mode: ModalHostState.create-section-rename-mode;
         section-name <=> ModalHostState.create-section-name;
@@ -437,7 +437,7 @@ export component AppSecondaryModals inherits Rectangle {
     }
 
     // Jarvis memory browser (centered modal over the backdrop)
-    if root.is-presented("jarvis-memory"): Rectangle {
+    if JarvisGlobal.enabled && root.is-presented("jarvis-memory"): Rectangle {
         property <bool> shown: root.active-modal == "jarvis-memory";
         width: root.width;
         height: root.window-height;
@@ -447,7 +447,7 @@ export component AppSecondaryModals inherits Rectangle {
         visible: self.shown || self.opacity > 0;
         TouchArea { enabled: parent.shown; clicked => { ModalHostState.nav-close("jarvis-memory"); } }
     }
-    if root.is-presented("jarvis-memory"): JarvisMemoryModal {
+    if JarvisGlobal.enabled && root.is-presented("jarvis-memory"): JarvisMemoryModal {
         show: root.active-modal == "jarvis-memory";
         width: min(860px, parent.width - 32px);
         height: min(560px, parent.height - 48px);

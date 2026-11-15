@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     AddIntegrationToChannelRequest, AddIntegrationToChannelResponse, CreateIntegrationRequest,
     CreateIntegrationResponse, DeleteIntegrationRequest, DeleteIntegrationResponse,
     DisableIntegrationRequest, DisableIntegrationResponse, EnableIntegrationRequest,
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_register_webhook_request_construction() {
-        use crate::proto::chat_v1::WebhookEvent;
+        use chatter_proto::chat_v1::WebhookEvent;
 
         let events = vec![
             WebhookEvent {

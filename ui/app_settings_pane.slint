@@ -1,6 +1,7 @@
 
 // Settings and AI presentation state and actions.
 export global SettingsPane {
+    in-out property <string> navigation-section: "account";
     // Settings properties
     in property <string> settings-username: "";
     in property <int> settings-session-count: 0;
@@ -48,6 +49,7 @@ export global SettingsPane {
     in-out property <bool> settings-ai-prefer-cloud: false;
     in-out property <string> settings-cloud-ai-mode: "direct-anthropic";
     in-out property <string> settings-cloud-ai-api-key: "";
+    in-out property <string> settings-cloud-ai-model: "";
     in property <bool> settings-cloud-ai-configured: false;
     in property <string> settings-cloud-ai-status: "";
     in property <string> settings-cloud-ai-balance: "";
@@ -87,6 +89,7 @@ export global SettingsPane {
     callback settings-ai-prefer-cloud-changed(bool);
     callback settings-cloud-ai-mode-changed(string);
     callback settings-cloud-ai-api-key-changed(string);
+    callback settings-cloud-ai-model-changed(string);
     callback settings-cloud-ai-refresh-quota();
 
 }

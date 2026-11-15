@@ -147,15 +147,15 @@ pub async fn page(
             let mut items = response.notifications;
             items.sort_by_key(|n| std::cmp::Reverse(n.created_at));
             let notifications = items.into_iter().map(|n| {
-                let kind = match crate::proto::chat_v1::NotificationType::try_from(n.r#type) {
-                    Ok(crate::proto::chat_v1::NotificationType::FriendRequest) => "friend-request",
-                    Ok(crate::proto::chat_v1::NotificationType::FriendAccepted) => "friend-accepted",
-                    Ok(crate::proto::chat_v1::NotificationType::ChannelInvite) => "channel-invite",
-                    Ok(crate::proto::chat_v1::NotificationType::Message) => "message",
-                    Ok(crate::proto::chat_v1::NotificationType::Mention) => "mention",
-                    Ok(crate::proto::chat_v1::NotificationType::Reply) => "reply",
-                    Ok(crate::proto::chat_v1::NotificationType::Reaction) => "reaction",
-                    Ok(crate::proto::chat_v1::NotificationType::DeviceLinked) => "device-linked",
+                let kind = match chatter_proto::chat_v1::NotificationType::try_from(n.r#type) {
+                    Ok(chatter_proto::chat_v1::NotificationType::FriendRequest) => "friend-request",
+                    Ok(chatter_proto::chat_v1::NotificationType::FriendAccepted) => "friend-accepted",
+                    Ok(chatter_proto::chat_v1::NotificationType::ChannelInvite) => "channel-invite",
+                    Ok(chatter_proto::chat_v1::NotificationType::Message) => "message",
+                    Ok(chatter_proto::chat_v1::NotificationType::Mention) => "mention",
+                    Ok(chatter_proto::chat_v1::NotificationType::Reply) => "reply",
+                    Ok(chatter_proto::chat_v1::NotificationType::Reaction) => "reaction",
+                    Ok(chatter_proto::chat_v1::NotificationType::DeviceLinked) => "device-linked",
                     _ => "other",
                 };
                 let (body, device_id) = if kind == "device-linked" {
@@ -257,9 +257,9 @@ pub async fn page(
                 rows: calls
                     .into_iter()
                     .map(|c| {
-                        let status = match crate::proto::chat_v1::CallStatus::try_from(c.status) {
-                            Ok(crate::proto::chat_v1::CallStatus::Active) => "Active",
-                            Ok(crate::proto::chat_v1::CallStatus::Ended) => "Ended",
+                        let status = match chatter_proto::chat_v1::CallStatus::try_from(c.status) {
+                            Ok(chatter_proto::chat_v1::CallStatus::Active) => "Active",
+                            Ok(chatter_proto::chat_v1::CallStatus::Ended) => "Ended",
                             _ => "Unknown status",
                         };
                         RecordRow {
@@ -300,7 +300,7 @@ pub async fn detail(
                 .notification
                 .ok_or_else(|| NetworkError::InvalidRequest("Notification is unavailable".into()))?;
             let (body, device_id) = if notification.r#type
-                == crate::proto::chat_v1::NotificationType::DeviceLinked as i32
+                == chatter_proto::chat_v1::NotificationType::DeviceLinked as i32
             {
                 device_linked_details(&notification.body, &notification.metadata)
             } else {
@@ -319,9 +319,9 @@ pub async fn detail(
         }
         "calls" => {
             let call = pool.call_client().get_call_info(id).await?;
-            let status = match crate::proto::chat_v1::CallStatus::try_from(call.status) {
-                Ok(crate::proto::chat_v1::CallStatus::Active) => "In progress",
-                Ok(crate::proto::chat_v1::CallStatus::Ended) => "Ended",
+            let status = match chatter_proto::chat_v1::CallStatus::try_from(call.status) {
+                Ok(chatter_proto::chat_v1::CallStatus::Active) => "In progress",
+                Ok(chatter_proto::chat_v1::CallStatus::Ended) => "Ended",
                 _ => "Unknown status",
             };
             let participants = call

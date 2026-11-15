@@ -74,7 +74,8 @@ fn swipe_reply_requires_horizontal_threshold() {
     window.show().unwrap();
     let incoming = find_bubble_press(&window, false);
 
-    drag(&window, incoming, 40., 0.);
+    // Below the 36px reply threshold (a8bc5527 shortened it from the old one).
+    drag(&window, incoming, 30., 0.);
     assert_eq!(window.get_replies(), 0, "short drag must not reply");
 
     drag(&window, incoming, 0., 100.);

@@ -184,7 +184,7 @@ fn queue_image_preview(
     owner: crate::bin_ui::features::history_owner::HistoryOwner,
     attachment_key: String,
     conversation: String,
-    preview: chatter_core::services::attachment::ImagePreview,
+    preview: chatter_core::media::ImagePreview,
 ) {
     if !owner.is_current() {
         return;
@@ -264,7 +264,7 @@ fn handle_video(
                             height as i32,
                             &conv_id,
                         );
-                        crate::bin_ui::features::header::refresh_pinned_ui(&window, &ui_ctx_video);
+                        crate::bin_ui::features::message_list::pinned_bar::refresh_pinned_ui(&window, &ui_ctx_video);
                     }
                     Err(e) => {
                         tracing::error!(cdn_key = %cdn_key, error = ?e, "Failed to create video thumbnail image");
@@ -487,7 +487,7 @@ mod tests {
                 owner,
                 key.clone(),
                 a.channel_id().unwrap().to_string(),
-                chatter_core::services::attachment::ImagePreview {
+                chatter_core::media::ImagePreview {
                     pixels: image::RgbaImage::new(320, 160),
                     width: 2048,
                     height: 1024,

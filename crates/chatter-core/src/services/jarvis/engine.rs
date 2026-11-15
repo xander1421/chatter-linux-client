@@ -4,7 +4,9 @@
 use std::sync::{Arc, RwLock};
 
 use crate::ai_policy::policy::{AiAccess, Silo as AiSilo};
-use crate::ai_protocol::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
+#[cfg(any(test, feature = "local-ai"))]
+use crate::ai_protocol::ChatRole;
+use crate::ai_protocol::{ChatMessage, GenerateParams, LocalAIBackend};
 use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
 #[cfg(feature = "local-ai")]
 use crate::local_ai::providers::{AnyBackend, ProviderKind};
@@ -220,11 +222,6 @@ impl SharedJarvisEngine {
         }
     }
 
-    /// Swap the local engine (settings change).
-    pub fn set(&self, engine: JarvisEngine) {
-        *self.local.write().expect("engine lock poisoned") = Arc::new(engine);
-    }
-
     /// Install (or clear, with `None`) the cloud engine.
     pub fn set_cloud(&self, engine: Option<JarvisEngine>) {
         *self.cloud.write().expect("engine lock poisoned") = engine.map(Arc::new);
@@ -244,26 +241,6 @@ impl SharedJarvisEngine {
             }
         }
         self.local.read().expect("engine lock poisoned").clone()
-    }
-
-    /// Single-shot completion gated by a conversation's AI policy.
-    ///
-    /// For extraction and summarisation, which run over message content.
-    pub async fn complete_gated(
-        &self,
-        access: AiAccess,
-        prompt: String,
-        params: SampleParams,
-    ) -> Result<String, JarvisError> {
-        self.complete_conversation_gated(
-            access,
-            vec![ChatMessage {
-                role: ChatRole::User,
-                content: prompt,
-            }],
-            params,
-        )
-        .await
     }
 
     /// Gated completion that also *selects* the silo.
@@ -288,30 +265,6 @@ impl SharedJarvisEngine {
         // Belt and braces: the selected engine must itself be permitted. A
         // cloud engine reaching a local-only conversation is the failure this
         // whole design exists to prevent.
-        if !access.permits_cloud(engine.is_cloud()) {
-            return Err(JarvisError::NotPermitted(format!(
-                "{access:?} conversation cannot use the active engine ({})",
-                if engine.is_cloud() { "cloud" } else { "local" }
-            )));
-        }
-
-        engine.complete(messages, params).await
-    }
-
-    /// Completion gated by a conversation's AI policy.
-    ///
-    /// The enforcement point for the conversation AI policy: refuses before any
-    /// content is sent when the active engine is a cloud provider and the
-    /// conversation only permits local inference (DMs, anon transports), or
-    /// when AI is denied outright (mesh-delivered traffic).
-    pub async fn complete_conversation_gated(
-        &self,
-        access: AiAccess,
-        messages: Vec<ChatMessage>,
-        params: SampleParams,
-    ) -> Result<String, JarvisError> {
-        let engine = self.local.read().expect("engine lock poisoned").clone();
-
         if !access.permits_cloud(engine.is_cloud()) {
             return Err(JarvisError::NotPermitted(format!(
                 "{access:?} conversation cannot use the active engine ({})",
@@ -358,18 +311,6 @@ mod tests {
         assert_eq!(shared.describe(), "ollama (qwen3:4b)");
     }
 
-    /// Build a cloud-backed engine (no network touched by construction).
-    fn anthropic_engine() -> SharedJarvisEngine {
-        let settings = CloudSettings {
-            api_key: Some("sk-ant-test".into()),
-            ..CloudSettings::default()
-        };
-        let engine = JarvisEngine::from_cloud_settings(&settings)
-            .expect("configured cloud silo yields an engine");
-        assert!(engine.is_cloud());
-        SharedJarvisEngine::new(engine)
-    }
-
     #[test]
     fn the_local_silo_can_never_produce_a_cloud_engine() {
         // Structural silo check: whatever the local settings say, the local
@@ -394,85 +335,6 @@ mod tests {
     #[test]
     fn an_unconfigured_cloud_silo_yields_no_engine() {
         assert!(JarvisEngine::from_cloud_settings(&CloudSettings::default()).is_none());
-    }
-
-    fn user(text: &str) -> Vec<ChatMessage> {
-        vec![ChatMessage {
-            role: ChatRole::User,
-            content: text.into(),
-        }]
-    }
-
-    #[tokio::test]
-    async fn dm_refuses_a_cloud_engine_before_sending_anything() {
-        let shared = anthropic_engine();
-
-        let err = shared
-            .complete_conversation_gated(
-                AiAccess::LocalOnly,
-                user("private message text"),
-                SampleParams::default(),
-            )
-            .await
-            .expect_err("a DM must not reach a cloud provider");
-
-        assert!(matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn mesh_denies_even_a_local_engine() {
-        let settings = LocalAISettings::default(); // ollama, local
-        let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
-        assert!(!engine.is_cloud());
-        let shared = SharedJarvisEngine::new(engine);
-
-        let err = shared
-            .complete_conversation_gated(
-                AiAccess::Denied,
-                user("mesh-delivered text"),
-                SampleParams::default(),
-            )
-            .await
-            .expect_err("mesh traffic gets no inference at all");
-
-        assert!(matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn a_channel_lets_the_cloud_engine_through_the_gate() {
-        let shared = anthropic_engine();
-
-        // The key is fake, so this must fail at the provider — not at the gate.
-        // Anything other than NotPermitted proves the request got past policy.
-        let err = shared
-            .complete_conversation_gated(
-                AiAccess::LocalOrCloud,
-                user("hi"),
-                SampleParams::default(),
-            )
-            .await
-            .expect_err("fake key cannot succeed");
-
-        assert!(
-            !matches!(err, JarvisError::NotPermitted(_)),
-            "channel access must not be blocked by policy, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn local_engine_is_allowed_in_a_dm() {
-        // Ollama on a DM: permitted by policy. Without a running Ollama this
-        // fails at transport, which still proves the gate let it through.
-        let settings = LocalAISettings::default();
-        let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
-        let shared = SharedJarvisEngine::new(engine);
-
-        if let Err(err) = shared
-            .complete_conversation_gated(AiAccess::LocalOnly, user("hi"), SampleParams::default())
-            .await
-        {
-            assert!(!matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
-        }
     }
 
     #[test]
@@ -504,27 +366,6 @@ mod tests {
             JarvisEngine::strip_reasoning("no tags at all".into()),
             "no tags at all"
         );
-    }
-
-    #[test]
-    fn hot_swap_changes_engine() {
-        let settings = LocalAISettings::default();
-        let shared = SharedJarvisEngine::new(JarvisEngine::from_settings(
-            &settings,
-            LocalAIActorHandle::spawn(),
-        ));
-        assert_eq!(shared.describe(), "ollama (qwen3:4b)");
-
-        let lm = LocalAISettings {
-            active_provider: ProviderKind::LmStudio,
-            chat_model: "qwen2.5-7b".into(),
-            ..LocalAISettings::default()
-        };
-        shared.set(JarvisEngine::from_settings(
-            &lm,
-            LocalAIActorHandle::spawn(),
-        ));
-        assert_eq!(shared.describe(), "lm-studio (qwen2.5-7b)");
     }
 }
 

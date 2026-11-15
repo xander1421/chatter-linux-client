@@ -19,6 +19,18 @@ use crate::storage::repositories::settings_repo::SettingsRepository;
 use super::{ChatterClient, ClientError};
 
 impl ChatterClient {
+    /// Record the platform's device label (manufacturer, model, OS version)
+    /// before login/register/link; see
+    /// [`LinkDeviceService::set_platform_device_label`].
+    pub fn set_platform_device_label(label: String) {
+        LinkDeviceService::set_platform_device_label(label);
+    }
+
+    /// Name this install reports to the server (shown in Active Sessions).
+    pub fn current_device_name() -> String {
+        LinkDeviceService::current_device_name()
+    }
+
     /// Lazy accessor for the device-linking service.
     ///
     /// Constructed on first use because the deps (settings repo, key store)

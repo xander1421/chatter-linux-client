@@ -21,7 +21,7 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::prelude::SecretString;
-use chatter_core::services::link_device_service::PendingDeviceLink;
+use chatter_core::prelude::PendingDeviceLink;
 
 use crate::MainWindow;
 

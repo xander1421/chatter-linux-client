@@ -11,7 +11,7 @@ use std::str::FromStr;
 use crate::domain::UserId;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::proto::content_v1::{self, AttachmentPointer, Content, receipt_message, typing_message};
+use chatter_proto::content_v1::{self, AttachmentPointer, Content, receipt_message, typing_message};
 
 use super::DomainEvent;
 

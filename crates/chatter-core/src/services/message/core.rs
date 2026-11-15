@@ -10,8 +10,8 @@ use crate::mailbox::group::GroupFanout;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1;
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::chat_v1;
+use chatter_proto::content_v1::AttachmentPointer;
 use crate::services::attachment::AttachmentService;
 
 use super::{MessageError, MessageService};
@@ -21,6 +21,8 @@ use super::{MessageError, MessageService};
 pub(crate) const DELIVERY_UNCONFIRMED: &str = "Delivery unconfirmed";
 pub(crate) const SHIELD_WAITING_FOR_TOKENS: &str =
     "Shield is getting ready — will send automatically";
+/// A secret-chat send refused locally: no Tor route (`SecretChatNeedsTor`).
+pub(crate) const NO_TOR_ROUTE: &str = "No Tor route";
 pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
 impl MessageError {
@@ -34,6 +36,7 @@ impl MessageError {
         use crate::error::NetworkError;
         match self {
             Self::Network(NetworkError::RequestNotSent(_)) => Some("Message not submitted"),
+            Self::Network(NetworkError::SecretChatNeedsTor(_)) => Some(NO_TOR_ROUTE),
             Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
             Self::Network(NetworkError::MismatchedDevices { .. }) => None,
             // SpiceDB down answers PermissionDenied. That is a delivery miss,
@@ -41,6 +44,7 @@ impl MessageError {
             Self::Network(NetworkError::PermissionDenied) => Some("Not delivered"),
             Self::ShieldNotReady => Some(SHIELD_WAITING_FOR_TOKENS),
             Self::NotAuthor => Some("Not allowed"),
+            Self::Muted => Some("You are muted"),
             Self::Network(NetworkError::InvalidRequest(reason))
                 if reason.contains("too large") => Some("Message too long"),
             Self::InvalidContent(reason) if reason.contains("too large") => {
@@ -177,7 +181,7 @@ impl MessageService {
 
         let plaintext_bytes = {
             use prost::Message as _;
-            let mut dm = crate::proto::content_v1::DataMessage {
+            let mut dm = chatter_proto::content_v1::DataMessage {
                 body: trimmed_text.to_string(),
                 attachments: attachment_pointers.clone(),
                 channel_id: channel_id.to_string(),
@@ -207,11 +211,14 @@ impl MessageService {
                 super::group::stamp_group_data_message(&mut dm, state);
                 dm.profile_key = self.group_profile_key(state);
             }
-            let wrap = crate::proto::content_v1::Content {
+            let mut wrap = chatter_proto::content_v1::Content {
                 timestamp: dm.timestamp,
-                content: Some(crate::proto::content_v1::content::Content::DataMessage(dm)),
+                content: Some(chatter_proto::content_v1::content::Content::DataMessage(dm)),
                 ..Default::default()
             };
+            // Same bucket padding as every pairwise Content: the sender-key
+            // ciphertext length otherwise tells the server the body length.
+            Self::pad_content_to_bucket(&mut wrap);
             wrap.encode_to_vec()
         };
 
@@ -275,7 +282,15 @@ impl MessageService {
             request,
             group_state.as_ref().map(|state| state.state_hash.to_vec()),
         )?;
-        let proto_message = message_client.send_prepared_message(request).await?;
+        // A private channel goes out anonymously to every member device
+        // (group_send.rs). A public channel posts to the server, encrypted
+        // (sender keys, so `group_state` is set) or not: the server issues
+        // group send endorsements for private channels only.
+        let proto_message = if self.is_private_channel(channel_id) {
+            self.submit_group_request(&request).await?
+        } else {
+            message_client.send_prepared_message(request).await?
+        };
         super::channel_send::retain_channel_response(&proto_message)?;
         crate::services::gateway::submission::bind_original_row(proto_message.id.clone())?;
         tracing::info!(
@@ -297,7 +312,7 @@ impl MessageService {
         // Derive ConversationType from the channel row so identified
         // channels don't get mistagged as AnonGroup.
         let conv_type =
-            super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+            crate::storage::repositories::channel_repo::conversation_type_for_channel(&self.channel_repo, channel_id);
         let mut message = super::conversion::proto_to_outgoing_channel_message(
             &proto_message,
             sender_id,
@@ -453,7 +468,7 @@ impl MessageService {
             Err(error) => {
                 let mut message = Message::new_text(
                     *channel_id,
-                    super::conversion::conversation_type_for_channel(
+                    crate::storage::repositories::channel_repo::conversation_type_for_channel(
                         &self.channel_repo,
                         channel_id,
                     ),
@@ -598,7 +613,7 @@ impl MessageService {
     pub(crate) fn pointers_for_resend(
         &self,
         attachment_ids: &[AttachmentId],
-    ) -> Result<Vec<crate::proto::content_v1::AttachmentPointer>, MessageError> {
+    ) -> Result<Vec<chatter_proto::content_v1::AttachmentPointer>, MessageError> {
         attachment_ids
             .iter()
             .map(|id| {
@@ -733,7 +748,7 @@ impl MessageService {
         auth_client: &mut AuthClient,
         _channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         _group_fanout: Option<&GroupFanout>,
     ) -> Result<(), MessageError> {
         let _ = self.settings_repo.current_user_id()?;
@@ -746,7 +761,7 @@ impl MessageService {
     pub async fn send_control(
         &self,
         channel_id: &ChannelId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
         group_fanout: Option<&GroupFanout>,
     ) -> Result<(), MessageError> {
         let mut message_client = self.message_client();
@@ -779,7 +794,7 @@ impl MessageService {
         &self,
         auth_client: &mut AuthClient,
         channel_id: &ChannelId,
-        content: &crate::proto::content_v1::Content,
+        content: &chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         use crate::storage::repositories::settings_repo::keys;
         use prost::Message as _;
@@ -930,11 +945,13 @@ impl MessageService {
             }
         }
 
-        // Call server: SpiceDB authorizes us as the message's author.
-        let mut message_client = self.message_client();
-        message_client
-            .delete_message(&message_id.to_string(), &channel_id.to_string())
-            .await?;
+        // Call server: SpiceDB authorizes us as the message's author. A private
+        // channel's message has no server copy.
+        if !self.is_private_channel(channel_id) {
+            self.message_client()
+                .delete_message(&message_id.to_string(), &channel_id.to_string())
+                .await?;
+        }
 
         // Soft delete locally - keep for history/sync
         let mut message = existing;
@@ -976,7 +993,9 @@ impl MessageService {
             }
             targets.push((id.to_string(), channel_id.to_string()));
         }
-        self.message_client().delete_messages(targets).await?;
+        if !self.is_private_channel(channel_id) {
+            self.message_client().delete_messages(targets).await?;
+        }
         self.message_repo.soft_delete_batch(message_ids)?;
         Ok(())
     }
@@ -989,7 +1008,7 @@ impl MessageService {
     pub(super) fn build_wire_quote(
         &self,
         quote: Option<&crate::services::gateway::QuoteIntent>,
-    ) -> Option<crate::proto::content_v1::Quote> {
+    ) -> Option<chatter_proto::content_v1::Quote> {
         let quote = quote?;
         let original = self
             .message_repo
@@ -1119,7 +1138,7 @@ impl MessageService {
     ) -> Result<
         (
             chat_v1::message::Content,
-            Option<crate::proto::content_v1::SenderKeyDistribution>,
+            Option<chatter_proto::content_v1::SenderKeyDistribution>,
         ),
         MessageError,
     > {
@@ -1205,9 +1224,7 @@ impl MessageService {
 }
 
 // Re-export proto conversion functions from conversion module
-pub use super::conversion::{
-    proto_content_to_domain, proto_to_domain_message, proto_to_domain_message_with_sender,
-};
+pub use super::conversion::proto_to_domain_message_with_sender;
 
 #[cfg(test)]
 mod send_failure_tests {

@@ -15,9 +15,9 @@ pub(crate) fn group_destination_matches(actual: ChannelId, claimed: &[u8]) -> bo
 pub(crate) fn decode_artifact_reaction(
     artifact: &ReceiveArtifact,
     scope: &ReactionScope,
-) -> Option<(UserId, crate::proto::content_v1::Reaction)> {
-    use crate::proto::content_v1::content::Content as Body;
-    let mut content = crate::network::validation::protovalidate::decode_inbound_content(
+) -> Option<(UserId, chatter_proto::content_v1::Reaction)> {
+    use chatter_proto::content_v1::content::Content as Body;
+    let mut content = chatter_proto::protovalidate::decode_inbound_content(
         artifact.content.as_slice(),
         "reaction_journal",
     )
@@ -141,7 +141,7 @@ pub(crate) fn replay(
 mod tests {
     use super::*;
     use crate::domain::message::Message as ChatMessage;
-    use crate::proto::content_v1::{self, content::Content as Body};
+    use chatter_proto::content_v1::{self, content::Content as Body};
     use crate::storage::{
         Database,
         receive_artifact::{self, ReceiveKey},

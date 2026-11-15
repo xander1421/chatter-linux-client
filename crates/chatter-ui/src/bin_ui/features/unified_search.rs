@@ -10,7 +10,8 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
-use chatter_core::services::search::{SearchQuery, preview_fragments};
+use chatter_core::client::SearchQuery;
+use chatter_core::ui::preview_fragments;
 
 use crate::{CalendarDay, MainWindow, QuickSwitcherItem, SearchResult, SearchResultChannel};
 
@@ -256,7 +257,7 @@ fn person_query(q: &str) -> &str {
 /// True when `q` is resolvable to a person: a full handle OR a pasted
 /// `chatter://u/…` username link (shape check lives in core).
 fn resolvable_person_query(q: &str) -> bool {
-    chatter_core::services::user::is_lookup_handle(q)
+    chatter_core::ui::is_lookup_handle(q)
         || chatter_core::domain::UsernameLink::is_username_link(q)
 }
 
@@ -1104,7 +1105,7 @@ fn jump_once_open(
             return;
         }
         if !w.global::<crate::ChatPane>().get_loading_messages() {
-            crate::bin_ui::features::header::jump_to_message(&w, &ui_ctx, &message_id);
+            crate::bin_ui::features::message_list::jump::jump_to_message(&w, &ui_ctx, &message_id);
         } else if tries > 0 {
             jump_once_open(weak, ui_ctx, message_id, session, tries - 1);
         }
@@ -1120,7 +1121,7 @@ use requests::{PersonRow, SearchRequests};
 /// Jump-to rows for `query`: core builds them from the mode-filtered sidebar
 /// sources (folders included) and ranks them; this only converts.
 fn conversation_items(
-    entries: Vec<chatter_core::services::quick_switcher::QuickSwitcherEntry>,
+    entries: Vec<chatter_core::client::QuickSwitcherEntry>,
 ) -> Vec<QuickSwitcherItem> {
     entries
         .into_iter()
@@ -1189,18 +1190,20 @@ fn search_messages(
             sender_name: hit.sender_name.into(),
             content_preview: hit.preview.into(),
             // The chat list's short date: today's hits read "23:04".
-            timestamp: crate::bin_ui::converters::sidebar_time(hit.created_at).into(),
+            timestamp: chatter_core::ui::format::sidebar_time(hit.created_at).into(),
             highlight_start: start,
             highlight_end: end,
             preview_before: before.into(),
             preview_match: matched.into(),
             preview_after: after.into(),
         });
+        // The same sidecar the chat bubble shows; one inline pixel bound.
         thumbnails.push(
             hit.thumbnail
                 .as_deref()
-                .and_then(|bytes| image::load_from_memory(bytes).ok())
-                .map(|image| image.thumbnail(320, 320).to_rgba8())
+                .and_then(|bytes| {
+                    chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes).ok()
+                })
                 .map(|rgba| SearchThumbnail {
                     width: rgba.width(),
                     height: rgba.height(),

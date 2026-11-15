@@ -3,12 +3,12 @@
 use crate::media::performance_trace as trace;
 use memmap2::Mmap;
 
-use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
-use crate::crypto::attachment_crypto_fast::decrypt_zero_copy;
-use crate::crypto::secure_buffer::SecureBuffer;
-use crate::crypto::streaming_decrypt::StreamingDecryptor;
 use crate::domain::attachment::ContentLocation;
 use crate::domain::ids::AttachmentId;
+use chatter_attachment_crypto::KEY_SET_LENGTH;
+use chatter_attachment_crypto::SecureBuffer;
+use chatter_attachment_crypto::StreamingDecryptor;
+use chatter_attachment_crypto::decrypt_zero_copy;
 
 use super::{AttachmentError, AttachmentService, attachment_file_path};
 

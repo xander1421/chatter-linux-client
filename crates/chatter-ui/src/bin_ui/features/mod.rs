@@ -11,6 +11,7 @@
 //!
 //! Services encapsulate all repository access - UI code never touches repos directly.
 
+pub mod app_lock;
 pub mod auth;
 pub mod activity;
 pub(crate) mod avatar_defaults;
@@ -22,7 +23,6 @@ pub mod chat;
 pub mod chat_actions;
 pub mod composer;
 pub mod connection;
-pub mod header;
 pub(crate) mod history_owner;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
@@ -30,6 +30,7 @@ pub mod jarvis;
 /// always compiled and stays inert until `MeshGlobal.enabled` is flipped here.
 #[cfg(feature = "mesh")]
 pub mod mesh;
+pub mod message_list;
 pub mod modals;
 pub mod navigation;
 pub mod server_records;
@@ -51,13 +52,14 @@ use chatter_core::client::ChatterClient;
 pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     static_images::wire(window, ui_ctx);
     auth::wire(window, ui_ctx);
+    app_lock::wire(window, ui_ctx);
     activity::wire(window, ui_ctx);
     back::wire(window);
     navigation::wire(window, ui_ctx);
     chat::wire(window, ui_ctx);
     sidebar::wire(window, ui_ctx);
     chat_actions::wire(window, ui_ctx);
-    header::wire(window, ui_ctx);
+    message_list::wire(window, ui_ctx);
     composer::wire(window, ui_ctx);
     modals::wire(window, ui_ctx);
     thread::wire(window, ui_ctx);

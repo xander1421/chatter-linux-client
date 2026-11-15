@@ -76,7 +76,7 @@ impl PinService {
         let mut pinned_data = Vec::with_capacity(pinned_messages.len());
 
         for msg in &pinned_messages {
-            if crate::services::disappearing::is_timer_notice(msg) {
+            if crate::domain::disappearing::is_timer_notice(msg) {
                 continue;
             }
             // Resolve attachments for preview generation
@@ -118,7 +118,7 @@ impl PinService {
 
         let preview = Self::generate_preview(&message, &attachments);
 
-        if crate::services::disappearing::is_timer_notice(&message) {
+        if crate::domain::disappearing::is_timer_notice(&message) {
             return Ok(None);
         }
         Ok(Some(PinnedMessageData {
@@ -127,24 +127,6 @@ impl PinService {
             has_attachments: !attachments.is_empty(),
             thumbnail: Self::thumbnail(&attachments),
         }))
-    }
-
-    /// Pin a message.
-    pub async fn pin_message(
-        &self,
-        _channel_id: &ChannelId,
-        message_id: &MessageId,
-    ) -> PinResult<()> {
-        // Update message as pinned in database
-        self.message_service.set_message_pinned(message_id, true)?;
-        Ok(())
-    }
-
-    /// Unpin a message.
-    pub async fn unpin_message(&self, message_id: &MessageId) -> PinResult<()> {
-        // Update message as unpinned in database
-        self.message_service.set_message_pinned(message_id, false)?;
-        Ok(())
     }
 
     fn thumbnail(attachments: &[Attachment]) -> Vec<u8> {

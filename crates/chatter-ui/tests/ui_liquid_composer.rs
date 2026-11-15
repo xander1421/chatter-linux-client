@@ -119,6 +119,16 @@ fn rect(window: &LiquidHarness, id: &str) -> (f32, f32, f32, f32) {
     (p.x, p.y, s.width, s.height)
 }
 
+/// A visible element by accessible label (the shared controls carry no id).
+fn visible(window: &LiquidHarness, label: &str) -> (f32, f32, f32, f32) {
+    let element = testing::ElementHandle::find_by_accessible_label(window, label)
+        .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+        .unwrap_or_else(|| panic!("missing visible {label}"));
+    let p = element.absolute_position();
+    let s = element.size();
+    (p.x, p.y, s.width, s.height)
+}
+
 fn native_input(window: &LiquidHarness) -> i_slint_core::item_tree::ItemRc {
     use std::ops::ControlFlow;
     let root = i_slint_core::window::WindowInner::from_pub(window.window())
@@ -178,36 +188,22 @@ fn droplets_rise_retarget_and_fall_around_the_same_input() {
         frame(&window, &format!("{theme}-04-wobble.png"));
         advance(280);
         frame(&window, &format!("{theme}-05-raised-connected.png"));
-        let (_, neck_y, neck_w, neck_h) = rect(&window, "MessageComposer::left-neck");
-        let (_, field_y, _, _) = rect(&window, "MessageComposer::field-surface");
-        assert!(neck_w >= 45.0 && neck_h >= 5.0 && neck_y + neck_h >= field_y);
-        if theme == "dark" {
-            // Check the rendered meniscus, not just its Path item bounds.
-            // A square viewbox with aspect-preserving fit made this six pixels wide.
-            let pixels = window.window().take_snapshot().unwrap();
-            let bytes = pixels.as_bytes();
-            let row = (field_y as usize - 4) * pixels.width() as usize * 4;
-            let base = &bytes[row..row + 3];
-            let (left_x, _, left_w, _) = rect(&window, "MessageComposer::left-action-surface");
-            let filled = ((left_x + 8.0) as usize..(left_x + left_w - 8.0) as usize)
-                .filter(|&x| {
-                    let at = row + x * 4;
-                    (0..3)
-                        .map(|c| bytes[at + c].abs_diff(base[c]) as usize)
-                        .sum::<usize>()
-                        > 18
-                })
-                .count();
-            assert!(filled >= 20, "rendered meniscus narrowed to {filled}px");
-        }
+        // The connected-droplet meniscus (left-neck/field-surface, 4fd3d8ea)
+        // was reverted in fef77328; since 08e7ca06 emoji and attach rise as
+        // free droplets. Raised means clear above the field.
+        let (_, emoji_y, _, emoji_h) = visible(&window, "Emoji & GIF picker");
+        let (_, field_y, _, _) = rect(&window, "MessageComposer::input-scroll");
+        assert!(emoji_y + emoji_h <= field_y + 0.5, "{theme}: emoji did not rise above the field");
         window.set_replying(true);
         advance(600);
         frame(&window, &format!("{theme}-06-reply-chip.png"));
-        let (chip_x, chip_y, chip_w, chip_h) = rect(&window, "MessageComposer::reply-chip");
-        let (right_x, right_y, _, _) = rect(&window, "MessageComposer::right-action-surface");
-        assert!(chip_w > 100.0 && chip_x + chip_w < right_x);
-        let (_, left_y, _, left_h) = rect(&window, "MessageComposer::left-action-surface");
-        assert!(chip_y >= 0.0 && chip_y + chip_h <= 270.0);
+        // The reply chip sits between the raised droplets and the field.
+        let (chip_x, chip_y, chip_w, chip_h) = visible(&window, "Cancel reply");
+        let (right_x, right_y, _, _) = visible(&window, "Attach file");
+        let (_, field_y, _, _) = rect(&window, "MessageComposer::input-scroll");
+        let (_, left_y, _, left_h) = visible(&window, "Emoji & GIF picker");
+        assert!(chip_x + chip_w <= 420.0 && right_x + 0.5 >= 0.0);
+        assert!(chip_y >= left_y + left_h - 0.5 && chip_y + chip_h <= field_y + 0.5);
         assert!(left_y >= 0.0 && left_y + left_h <= 270.0 && right_y >= 0.0);
         window.set_replying(false);
         window.set_draft("".into());
@@ -225,12 +221,12 @@ fn droplets_rise_retarget_and_fall_around_the_same_input() {
 
     window.set_draft("A".into());
     advance(64);
-    let rise_gap = rect(&window, "MessageComposer::field-surface").1
-        - rect(&window, "MessageComposer::left-action-surface").1;
+    let rise_gap = rect(&window, "MessageComposer::input-scroll").1
+        - visible(&window, "Emoji & GIF picker").1;
     window.set_draft("".into());
     advance(128);
-    let reverse_gap = rect(&window, "MessageComposer::field-surface").1
-        - rect(&window, "MessageComposer::left-action-surface").1;
+    let reverse_gap = rect(&window, "MessageComposer::input-scroll").1
+        - visible(&window, "Emoji & GIF picker").1;
     assert!(rise_gap > reverse_gap);
     assert!(native_input(&window) == original_input);
 

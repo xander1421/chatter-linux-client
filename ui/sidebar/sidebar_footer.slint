@@ -1,3 +1,5 @@
+import { DesktopChrome } from "../theme/desktop_chrome.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { ActivityUi } from "../activity/activity_bell.slint";
 import { ActivityGlobal } from "../activity/activity_global.slint";
@@ -19,6 +21,9 @@ export component SidebarFooter inherits GlassSurface {
     in property <bool> mesh-available;
     in property <string> active-tab;
     in property <int> rail-button-count;
+    in property <length> rail-gap;
+    in property <length> rail-divider-height;
+    in property <length> rail-footer-height;
     in property <length> rail-icon-size;
     in property <length> rail-slot-size;
     in property <length> rail-slot-radius;
@@ -42,33 +47,30 @@ export component SidebarFooter inherits GlassSurface {
             width: root.panel-width;
             y: root.panel-height - self.height;
             material-level: 2;
-            elevation: 3;
+            material-enabled: !DesktopChrome.macos;
+            show-edge: !DesktopChrome.macos;
+            elevation: DesktopChrome.macos ? 0 : 3;
 
-            // Derived, not a magic number: this was hardcoded at 140px, which
-            // fit the three 32px buttons the rail used to have and silently
-            // clipped everything past them off the bottom of the screen once
-            // the cluster grew. 8px inter-item spacing + 8px padding-bottom,
-            // matching the layout below.
+            // The list reservation and footer use the same stack height.
             height: root.collapsed
-                ? root.rail-button-count * root.rail-icon-size
-                    + (root.rail-button-count - 1) * 8px + 16px
-                    // The 13px divider between the tabs and the tools, and its gap.
-                    + 13px + 8px
-                : 44px;
+                ? DesktopChrome.macos ? root.rail-footer-height
+                    : root.rail-button-count * root.rail-icon-size
+                        + (root.rail-button-count - 1) * 8px + 16px + Spacing.md + 8px
+                : DesktopChrome.macos ? 48px : 44px;
 
             // Top edge only — the one side that separates this strip from the
             // list. The four-sided border it replaces doubled up against the
             // panel's own left/right edges and closed a box around the footer.
 
 
-            // Expanded view: Profile + Jarvis + Settings on same row
+            // Expanded view: Profile and Settings on the same row
             // No `alignment` — under any alignment other than stretch, Slint
             // sizes every child to its PREFERRED width and ignores
             // horizontal-stretch, so the display name pushed the icons past the
             // right edge and the last one (collapse) was clipped away entirely.
             // Stretching lets the name elide and keeps the buttons on screen.
             if !root.collapsed: HorizontalLayout {
-                padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm;
+                padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: DesktopChrome.macos ? Spacing.xs : Spacing.sm;
                 // Profile moved to the bottom tab bar's rightmost tab on mobile,
                 // where it carries the user's avatar — a name-and-avatar strip
                 // wedged between the last conversation and the tab bar was
@@ -143,6 +145,8 @@ export component SidebarFooter inherits GlassSurface {
                             width: 7px; height: 7px; border-radius: 3.5px;
                             border-width: 1px; border-color: Colors.surface;
                             background: root.server-unreachable ? Colors.error : Colors.primary;
+                            accessible-role: text;
+                            accessible-label: root.server-unreachable ? "Server unreachable" : "New activity";
                         }
                         bell-touch := TouchArea { clicked => { ActivityUi.open(); } }
                     }
@@ -170,7 +174,7 @@ export component SidebarFooter inherits GlassSurface {
                 // There is no rail on mobile to collapse into — the list either
                 // is the screen or the conversation is — so the control has
                 // nothing to do there.
-                if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                if root.touch: VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
@@ -188,7 +192,7 @@ export component SidebarFooter inherits GlassSurface {
 
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
-                alignment: end; spacing: Spacing.sm; padding-bottom: Spacing.sm;
+                alignment: end; spacing: root.rail-gap; padding-bottom: Spacing.sm;
                 // Ungated, like the expanded header shield.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
@@ -203,7 +207,7 @@ export component SidebarFooter inherits GlassSurface {
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                         background: AnonMode.enabled ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        Image { source: Icons.onion; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
                         // Tor status dot: green=connected, amber=CONNECTING ONLY,
                         // red=error, muted=off. See the expanded shield above.
@@ -220,10 +224,9 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.anon-mode-clicked(); } }
                     } }
                 }
-                // Bottom cluster, in order: AI, Chats, Mesh, expand, Settings.
-                // The expand chevron lives here rather than in the panel header
-                // so the list destinations stay beside the other shortcuts.
-                TooltipArea {
+                // Bottom cluster, in order: AI, Chats, Mesh, Activity, then
+                // profile, Settings, expand.
+                if JarvisGlobal.enabled && JarvisGlobal.opted-in: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -234,27 +237,10 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.channel-selected("00000000-0000-0000-0000-000000000000"); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.jarvis; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         // The virtual assistant channel's fixed id is the nil UUID
                         // (chatter-core client/jarvis.rs jarvis_channel_id).
                         TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
-                    } }
-                }
-
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "Chats"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Chats";
-                        accessible-action-default => { root.tab-selected("chats"); }
-                        border-width: rail-chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        rail-chats-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("chats"); return accept; } return reject; }
-                        }
-                        height: root.rail-slot-size; border-radius: root.rail-slot-radius;
-                        background: root.active-tab == "chats" ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.message-circle; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        TouchArea { clicked => { root.tab-selected("chats"); } }
                     } }
                 }
 
@@ -269,7 +255,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("mesh"); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.active-tab == "mesh" ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        Image { source: Icons.radio; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: !MeshGlobal.radio-running ? Colors.warning
                                 : MeshGlobal.peer-count > 0 ? Colors.primary
                                 : Colors.text-secondary; }
@@ -290,7 +276,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { ActivityUi.open(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.bell; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.bell; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         if ActivityGlobal.unread-count > 0: Rectangle {
                             x: parent.width - self.width - 4px; y: 4px;
                             width: 8px; height: 8px; border-radius: 4px;
@@ -307,7 +293,7 @@ export component SidebarFooter inherits GlassSurface {
                 // block; a hairline plus extra breathing room lets the eye
                 // parse two small groups instead, without hiding anything.
                 Rectangle {
-                    height: 13px;
+                    height: root.rail-divider-height;
                     Rectangle {
                         y: parent.height / 2;
                         width: root.rail-slot-size * 0.6;
@@ -317,23 +303,24 @@ export component SidebarFooter inherits GlassSurface {
                     }
                 }
 
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Expand sidebar";
-                        accessible-action-default => { root.toggle-collapsed(); }
-                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
-                        border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
+                // Same order as the expanded footer (profile … settings,
+                // collapse): the chevron is last in both, so it does not jump
+                // to the middle of the cluster when the panel collapses.
+                Rectangle {
+                    height: root.rail-icon-size;
+                    accessible-role: button; accessible-label: "Profile";
+                    accessible-action-default => { root.profile-clicked(); }
+                    border-width: rail-profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                    rail-profile-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
+                    }
+                    TouchArea { clicked => { root.profile-clicked(); } }
+                    HorizontalLayout { alignment: center;
+                        Avatar { size: DesktopChrome.macos ? 32px : 40px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
+                            presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                         }
-                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        TouchArea { clicked => { root.toggle-collapsed(); } }
-                    } }
+                    }
                 }
-
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -345,7 +332,7 @@ export component SidebarFooter inherits GlassSurface {
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                        Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        Image { source: Icons.settings; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         if root.server-unreachable: Rectangle {
                             x: parent.width - self.width - 1px; y: 1px;
                             width: 7px; height: 7px; border-radius: 3.5px;
@@ -357,20 +344,21 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }
-                Rectangle {
-                    height: root.rail-icon-size;
-                    accessible-role: button; accessible-label: "Profile";
-                    accessible-action-default => { root.profile-clicked(); }
-                    border-width: rail-profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                    rail-profile-keys := FocusScope { width: 0px; height: 0px;
-                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
-                    }
-                    TouchArea { clicked => { root.profile-clicked(); } }
-                    HorizontalLayout { alignment: center;
-                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
-                            presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
+                if root.touch: TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Expand sidebar";
+                        accessible-action-default => { root.toggle-collapsed(); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
+                        border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
                         }
-                    }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        TouchArea { clicked => { root.toggle-collapsed(); } }
+                    } }
                 }
 
             }

@@ -15,6 +15,31 @@ fn pump(w: &MainWindow) {
     w.run().unwrap();
 }
 
+/// Pump until `probe` finds an element and it has stopped moving. Phone panes
+/// and sheets slide in at the 1x default speed (15919403), the chat pane from
+/// a one-frame timer (3cf2b504), and are not instantiated while offscreen;
+/// under this system-time backend a debug build renders far fewer frames
+/// than the animation has, so a fixed sleep is not enough.
+fn settle_on(w: &MainWindow, what: &str, probe: impl Fn(&MainWindow) -> Option<(f32, f32)>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last = None;
+    loop {
+        pump(w);
+        let now = probe(w);
+        if now.is_some() && now == last {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "{what} never settled ({now:?})");
+        last = now;
+    }
+}
+
+fn settled_label(w: &MainWindow, label: &str) -> Option<(f32, f32)> {
+    ElementHandle::find_by_accessible_label(w, label)
+        .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+        .map(|e| (e.absolute_position().x, e.absolute_position().y))
+}
+
 fn click(w: &MainWindow, element: &ElementHandle) {
     // mock_single_click advances the mock clock and cannot be combined with
     // the system-time integration backend. Use real production pointer events.
@@ -42,16 +67,28 @@ fn scroll_to_label(w: &MainWindow, label: &str) {
         pump(w);
     };
     scroll(10000.0);
+    // Wholly on screen: a control cut by the window edge takes no tap there.
+    let bottom = w.window().size().to_logical(w.window().scale_factor()).height;
     for _ in 0..20 {
-        if ElementHandle::find_by_accessible_label(w, label)
-            .next()
-            .is_some()
-        {
+        if ElementHandle::find_by_accessible_label(w, label).any(|e| {
+            let y = e.absolute_position().y;
+            y >= 0.0 && y + e.size().height <= bottom
+        }) {
             return;
         }
         scroll(-160.0);
     }
     panic!("account section did not expose {label} after bounded scrolling");
+}
+
+/// The view handoff (app_view_transition.slint) holds a window-sized
+/// stray-tap blocker for motion-standard + 40ms after `current-view` changes:
+/// 360ms at the default animation speed since 15919403 (120ms before).
+fn finish_view_handoff(w: &MainWindow) {
+    slint::Timer::single_shot(std::time::Duration::from_millis(500), || {
+        slint::quit_event_loop().unwrap();
+    });
+    w.run().unwrap();
 }
 
 #[test]
@@ -77,7 +114,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         .unwrap()
         .database_path();
     let db =
-        chatter_core::storage::Database::open(&db_path, "settings-affordance-fixture").unwrap();
+        chatter_core::testing::storage::Database::open(&db_path, "settings-affordance-fixture").unwrap();
     // Reproduce repository failure without mocking the setters or corrupting a DB.
     db.connection()
         .unwrap()
@@ -128,6 +165,8 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         .set_mobile_show_chat(true);
     w.window().set_size(slint::LogicalSize::new(360.0, 740.0));
     w.show().unwrap();
+    finish_view_handoff(&w);
+    settle_on(&w, "the phone chat push", |w| settled_label(w, "Message input"));
     w.set_toast_visible(false);
     w.global::<chatter_ui::ChatPane>()
         .set_composer_gif_picker_visible(true);
@@ -143,7 +182,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     let witness = callbacks.clone();
     w.global::<chatter_ui::ChatPane>()
         .on_gif_clicked(move || witness.set(witness.get() + 1));
-    pump(&w);
+    settle_on(&w, "the emoji & GIF drawer", |w| settled_label(w, "GIFs"));
     let tab = ElementHandle::find_by_accessible_label(&w, "GIFs")
         .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
         .expect("visible GIF tab");
@@ -204,14 +243,24 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         .set_channel_settings_member_count(1);
     w.global::<chatter_ui::ModalHostState>()
         .set_channel_settings_can_manage_members(false);
+    let member = ChannelMemberData {
+        display_name: "Conversation-scoped alias".into(),
+        role: "member".into(),
+        ..Default::default()
+    };
     w.global::<chatter_ui::ModalHostState>()
-        .set_channel_settings_members(ModelRc::new(VecModel::from(vec![ChannelMemberData {
-            display_name: "Conversation-scoped alias".into(),
-            role: "member".into(),
-            ..Default::default()
-        }])));
+        .set_channel_settings_members(ModelRc::new(VecModel::from(vec![member.clone()])));
+    // The roster renders the virtualized rows (d95948e5), not the member list.
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_roster_rows(ModelRc::new(VecModel::from(vec![
+            chatter_ui::ChannelRosterRowData {
+                kind: "member".into(),
+                member,
+                ..Default::default()
+            },
+        ])));
     chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
-    pump(&w);
+    settle_on(&w, "the channel settings sheet", |w| settled_label(w, "Group settings"));
     assert!(
         ElementHandle::find_by_accessible_label(&w, "Group settings")
             .next()
@@ -230,8 +279,21 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     );
     for theme in ["light", "dark"] {
         w.global::<chatter_ui::Appearance>().set_theme(theme.into());
+        // A private group is a secret group: it shows the anonymous-ringed
+        // avatar, not a vector fallback (b87703a4).
+        w.global::<chatter_ui::ModalHostState>()
+            .set_channel_settings_type("private-group".into());
+        pump(&w);
+        assert!(
+            ElementHandle::find_by_accessible_label(&w, "Group icon").next().is_none(),
+            "a secret group drew the vector fallback"
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&w, "Avatar for Scoped group")
+                .any(|e| (e.size().width - 80.0).abs() < 0.5),
+            "secret group avatar"
+        );
         for (kind, label) in [
-            ("private-group", "Group icon"),
             ("private", "Private channel icon"),
             ("public", "Channel icon"),
         ] {
@@ -245,8 +307,10 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             assert!((icon.size().height - 36.0).abs() < 0.5);
         }
     }
+    // A private channel: unlike a secret group (b87703a4) it has a vector
+    // fallback for the attribution check below to fall back to.
     w.global::<chatter_ui::ModalHostState>()
-        .set_channel_settings_type("private-group".into());
+        .set_channel_settings_type("private".into());
     w.global::<chatter_ui::Appearance>()
         .set_theme("light".into());
     w.global::<chatter_ui::ChatPane>()
@@ -266,7 +330,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         "configured conversation icon must replace the generic fallback"
     );
     assert!(
-        ElementHandle::find_by_accessible_label(&w, "Group icon")
+        ElementHandle::find_by_accessible_label(&w, "Private channel icon")
             .next()
             .is_none()
     );
@@ -274,11 +338,13 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         .set_channel_id("different-conversation".into());
     pump(&w);
     assert!(
-        ElementHandle::find_by_accessible_label(&w, "Group icon")
+        ElementHandle::find_by_accessible_label(&w, "Private channel icon")
             .next()
             .is_some(),
         "an unrelated active conversation avatar must not be attributed to this settings screen"
     );
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_type("private-group".into());
     w.global::<chatter_ui::ChatPane>()
         .set_channel_id("settings-identity-fixture".into());
     w.global::<chatter_ui::ChatPane>()
@@ -308,6 +374,13 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
     chatter_ui::bin_ui::features::back::push(&w, "settings");
     pump(&w);
+    // The closed sheet fades out on top for sheet-duration + 40ms
+    // (app_modal_transitions.slint) and covers the page's scroll until then.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while ElementHandle::find_by_element_type_name(&w, "ChannelSettingsModal").next().is_some() {
+        assert!(std::time::Instant::now() < deadline, "channel settings never unmounted");
+        pump(&w);
+    }
     // Android file backup goes through the system document picker (SAF).
     scroll_to_label(&w, "File backup passphrase");
     assert!(
@@ -336,7 +409,8 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     pump(&w);
     // Grouped Settings rows move these actions below the initial viewport.
     // Scroll to each action and verify it can be used once a passphrase exists.
-    for label in ["Export to File…", "Restore from File…"] {
+    // Sentence-case labels since 7f3946de.
+    for label in ["Export to file…", "Restore from file…"] {
         scroll_to_label(&w, label);
         let action = ElementHandle::find_by_accessible_label(&w, label)
             .next()
@@ -364,13 +438,19 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             delta_x: scroll,
             delta_y: 0.0,
         });
-    pump(&w);
+    let strip = |e: &ElementHandle| {
+        let e = e.clone();
+        move |_: &MainWindow| Some((e.absolute_position().x, e.absolute_position().y))
+    };
+    // The strip's viewport-x animates over motion-standard (d0f09a26) at the
+    // 1x default speed (15919403): read positions once it has stopped.
+    settle_on(&w, "the tab strip", strip(&notifications));
     assert!(
         notifications.absolute_position().x < back_right,
         "precondition: Notifications must be partly clipped at the leading edge"
     );
     click(&w, &notifications);
-    pump(&w);
+    settle_on(&w, "the tab strip", strip(&notifications));
     assert!(
         notifications.absolute_position().x >= back_right,
         "selected Notifications must be brought clear of fixed Back"
@@ -385,7 +465,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             delta_x: 10000.0,
             delta_y: 0.0,
         });
-    pump(&w);
+    settle_on(&w, "the tab strip", strip(&notifications));
     let selected = ElementHandle::find_by_accessible_label(&w, "Privacy")
         .find(|e| e.type_name().is_some_and(|name| name == "Button"))
         .expect("compact Privacy tab");
@@ -397,7 +477,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
     w.window()
         .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
-    pump(&w);
+    settle_on(&w, "the tab strip", strip(&selected));
     let left = selected.absolute_position().x;
     let right = left + selected.size().width;
     assert!(
@@ -407,9 +487,22 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
 
     chatter_ui::bin_ui::features::back::close(&w, "settings");
     w.set_is_mobile_platform(true);
+    // Signed out, the floating mesh-only strip (main_status_notices.slint)
+    // covers the phone header's ⋯.
+    w.global::<chatter_ui::AuthFlow>().set_is_signed_in(true);
     w.global::<chatter_ui::ChatPane>()
         .set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
-    pump(&w);
+    // The header shows what core's conversation_actions decides (eeef4563),
+    // which needs stored conversations this fixture does not have.
+    w.global::<chatter_ui::ChatPane>()
+        .set_header_can_open_settings(true);
+    // It collapses over motion-standard; wait until it is gone.
+    settle_on(&w, "the mesh-only strip", |w| {
+        let h: f32 = ElementHandle::find_by_element_type_name(w, "MeshOnlyBar")
+            .map(|e| e.size().height)
+            .sum();
+        (h == 0.0).then_some((0.0, 0.0))
+    });
     let more = ElementHandle::find_by_accessible_label(&w, "More options")
         .find(|e| e.size().width > 0.0)
         .expect("header menu button");

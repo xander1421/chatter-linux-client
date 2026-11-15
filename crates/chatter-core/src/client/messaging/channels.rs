@@ -62,7 +62,7 @@ impl ChatterClient {
     /// PENDING + unexpired). Best-effort — empty on failure.
     pub async fn list_pending_channel_invites(
         &self,
-    ) -> Vec<crate::proto::chat_v1::PendingChannelInvite> {
+    ) -> Vec<chatter_proto::chat_v1::PendingChannelInvite> {
         let mut client = self.services.grpc_pool.channel_client();
         match client.list_pending_invites().await {
             Ok(mut resp) => {
@@ -103,7 +103,7 @@ impl ChatterClient {
                     channel_id: invite.channel_id,
                     channel_name,
                     private_channel: invite.channel_type
-                        == crate::proto::chat_v1::ChannelType::ChannelPrivate as i32,
+                        == chatter_proto::chat_v1::ChannelType::ChannelPrivate as i32,
                     invited_by,
                     created_at: invite.created_at,
                     note: invite.message,

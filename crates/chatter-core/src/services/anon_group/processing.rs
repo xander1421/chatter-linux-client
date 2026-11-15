@@ -12,7 +12,7 @@ use crate::inbox::handlers::DomainEvent;
 use crate::inbox::handlers::base_anon::{
     AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
 };
-use crate::proto::content_v1::{AttachmentPointer, Content};
+use chatter_proto::content_v1::{AttachmentPointer, Content};
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -180,7 +180,7 @@ impl AnonGroupService {
         peer_id: &UserId,
         inner_content: &Content,
     ) -> Result<Vec<DomainEvent>, AnonGroupError> {
-        use crate::proto::content_v1::content::Content as ContentType;
+        use chatter_proto::content_v1::content::Content as ContentType;
 
         // Block lists, fail closed: a store error counts as blocked.
         // A blocked group is ignored entirely. A member blocked in this group
@@ -238,9 +238,50 @@ impl AnonGroupService {
             return Ok(vec![]);
         }
 
+        // The group's disappearing timer, as every post and timer update
+        // states it (same version rule as a secret 1:1 chat).
+        let mut timer_events = Vec::new();
+        if let Some(ContentType::DataMessage(data)) = &inner_content.content {
+            if let Some(stated) = crate::services::disappearing::stated_timer(data) {
+                if let Some(notice) = crate::services::disappearing::adopt_secret_chat_timer(
+                    &self.settings_repo,
+                    &self.message_service.message_repo,
+                    crate::services::disappearing::SecretChat::Group(*group_id),
+                    peer_id,
+                    stated,
+                    inner_content.timestamp,
+                )? {
+                    timer_events.push(DomainEvent::MessageReceived { message: notice });
+                }
+            }
+            if crate::services::disappearing::is_timer_update(data) {
+                return Ok(timer_events);
+            }
+        }
+
         // Common content types first.
         match dispatch_common_content(group_id, peer_id, inner_content, self.as_ref()) {
-            CommonDispatchOutcome::Handled(events) => return Ok(events),
+            CommonDispatchOutcome::Handled(events) => {
+                if let Some(ContentType::DataMessage(data)) = &inner_content.content {
+                    if data.ephemeral && data.ephemeral_ttl_seconds > 0 {
+                        let ephemeral =
+                            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                                self.settings_repo.database().clone(),
+                            );
+                        for event in &events {
+                            // Arm stored rows only (a pending delete stores none).
+                            if let DomainEvent::MessageReceived { message } = event {
+                                if self.message_service.message_repo.get(&message.id)?.is_some() {
+                                    ephemeral
+                                        .insert_armed(&message.id, data.ephemeral_ttl_seconds)?;
+                                }
+                            }
+                        }
+                    }
+                }
+                timer_events.extend(events);
+                return Ok(timer_events);
+            }
             CommonDispatchOutcome::Dropped => return Ok(vec![]),
             CommonDispatchOutcome::NotHandled => {}
             CommonDispatchOutcome::Failed(error) => return Err(error.into()),

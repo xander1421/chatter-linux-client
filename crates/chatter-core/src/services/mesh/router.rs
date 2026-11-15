@@ -775,7 +775,7 @@ mod tests {
         let identity = MeshIdentity::generate(&mut os_rng());
         let recipient = MeshIdentity::generate(&mut os_rng());
         let envelope = seal_for_drop(
-            &MeshState::new(identity.peer_id()),
+            &MeshState::new(),
             &identity,
             "meet at the bridge",
             "m1",
@@ -807,7 +807,7 @@ mod tests {
         let recipient = MeshIdentity::generate(&mut os_rng());
         let stranger = MeshIdentity::generate(&mut os_rng());
         let envelope = seal_for_drop(
-            &MeshState::new(identity.peer_id()),
+            &MeshState::new(),
             &identity,
             "secret",
             "m1",

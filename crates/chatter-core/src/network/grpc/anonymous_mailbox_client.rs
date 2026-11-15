@@ -26,7 +26,7 @@
 use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
-use crate::proto::mailbox_v1::{
+use chatter_proto::mailbox_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
     CreateEphemeralMailboxResponse, DeleteEphemeralMailboxRequest,
     GetBlindSignaturePublicKeyRequest, GetBlindSignaturePublicKeyResponse,

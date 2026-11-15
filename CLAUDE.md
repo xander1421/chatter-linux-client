@@ -1,7 +1,8 @@
-# CLAUDE.md — Chatter Linux Client
+# CLAUDE.md — Chatter Client
 
-Rust + Slint client. Linux/Windows/Android targets. This is the only Chatter
-client; `android-client/` was deleted and `ios-client/` is empty.
+Rust + Slint client. This is the only Chatter client; it ships on Linux,
+Windows and Android. `ios/` + `crates/chatter-ios` and `macos/` hold the Apple
+target scaffolding.
 
 ## Build & Run
 
@@ -12,32 +13,44 @@ cargo run -p chatter-ui
 Agents never launch it bare (a bare run pops a keyring prompt on the desktop):
 `CHATTER_NO_KEYRING=1 XDG_DATA_HOME=$(mktemp -d) timeout 120 cargo run -p chatter-ui`.
 
-Use `cargo run` for verification, not `cargo build` / `cargo check` — Slint codegen + linker errors only surface at run.
+`cargo check` type-checks (including Slint codegen, which runs in
+`chatter-ui-slint/build.rs`) but does not link; link errors surface only in
+`cargo build` / `cargo run`. The generated `chatter-ui-slint` crate is the
+expensive compile (measurements in the workspace `Cargo.toml` comment above
+`[profile.dev.package.chatter-ui-slint]`; see `docs/BUILD_SPEED.md`).
+
+Android: `android/build-android.sh [install]`. Release packaging (Android, Linux):
+`packaging/README.md`.
 
 ## Workspace
 
-Eleven crates (`Cargo.toml` `[workspace]`):
+Thirteen crates (`Cargo.toml` `[workspace] members`):
 
 - `chatter-core` — headless SDK: crypto, network, storage, services, inbox
 - `chatter-ui` — Slint app + glue (desktop binary and Android library)
-- `chatter-ui-slint` — generated Slint components
+- `chatter-ui-slint` — generated Slint components (compiles `ui/main.slint`)
+- `chatter-proto` — generated protobuf / gRPC client code (`make proto-gen` in the server repo)
+- `chatter-attachment-crypto` — attachment AES-256-CBC + HMAC-SHA256, its own crate so it builds at dev `opt-level = 2`
 - `chatter-ios` — iOS staticlib entry point
 - `chatter-mesh` — sans-IO bitchat wire format
 - `chatter-mesh-noise` — Noise XX session layer
 - `chatter-mesh-link` — peer registry, ingress guard, announce policy
-- `chatter-mesh-ble`, `chatter-mesh-android` — BLE transports
+- `chatter-mesh-ble`, `chatter-mesh-android` — BLE transports (BlueZ / JNI)
 - `chatter-mesh-nostr` — Nostr relay transport
 - `chatter-mesh-store` — mesh outbox / courier / archive
+
+`crates/chatter-core/fuzz` is excluded from the workspace (nightly
+`cargo fuzz`; see its README).
 
 The mesh crates are wired into `chatter-core` (`services/mesh/`) with UI in
 `ui/mesh/`, **behind the `mesh` cargo feature, which is off by default**. The
 chatter-mesh* crates are optional dependencies of `chatter-core`, and
 `services::mesh`, `storage::mesh_store` and `storage::mesh_identity_store` are
-`#[cfg(feature = "mesh")]`, so a default build links none of them
-(`cargo tree -p chatter-ui -e normal | grep chatter-mesh` is empty). Builds that
+`#[cfg(feature = "mesh")]`, so a default build links none of them. Builds that
 need it opt in: `android/build-android.sh` (on unless `MESH=0`), `dev-run.sh`,
-`make test-rust`, `make check-features-mesh`. Mesh rows in
-`tests/production_wiring.rs` are checked only with `--features mesh`.
+`make test-rust`, `make check-features-mesh` (server-repo `Makefile`). Mesh rows
+in `crates/chatter-core/tests/production_wiring.rs` are checked only with
+`--features mesh`.
 
 ## Architecture Rules
 
@@ -46,39 +59,34 @@ need it opt in: `android/build-android.sh` (on unless `MESH=0`), `dev-run.sh`,
 
 ## Before trusting a security claim in this crate
 
-Some controls that read as implemented are not reachable from production code.
-Check for callers before citing any of them.
+A control that reads as implemented may have no production caller. Check for
+callers before citing one.
 
-`crates/chatter-core/tests/production_wiring.rs` now holds this list as an
-executable table and fails when an entry changes in either direction — a wired
-control losing its last caller, or a dead one gaining its first. Prefer it over
-this prose, which has already gone stale once.
+`crates/chatter-core/tests/production_wiring.rs` is the executable list: it
+strips tests and comments from the crate sources, counts real call sites, and
+fails when an entry changes in either direction — a wired control losing its
+last caller, or a dead one gaining its first. Trust it over prose.
 
-- **CORRECTED (was wrong here):** the announce trust policy
-  (`chatter-mesh-link/src/announce.rs`: `preflight_announce`,
-  `evaluate_announce_trust`, `evaluate_announce`) **is** wired now —
-  `services/mesh/ble.rs:922` calls `evaluate_announce`, which drives the other
-  two. Mesh peers are authenticated on the live path, including the
-  sender-ID-equals-`SHA256(noise key)[..8]` derivation check.
-- Announce authentication on that path is `verify_packet`
-  (`chatter-mesh-noise/src/sign.rs`). The unused announce-specific preimage
-  (`sign_announce` / `verify_announce` / `canonical_announce_bytes`) and the
-  announce-back planner (`plan_announce_response`, `announce_back_dedup_id`)
-  were removed. `ANNOUNCE_CONTEXT` stays so the domain strings remain
+Wired controls it pins include:
+
+- **Mesh announce trust policy** — `services/mesh/ble/announces.rs` calls
+  `evaluate_announce` (`chatter-mesh-link/src/announce.rs`), including the
+  sender-ID-equals-`SHA256(noise key)[..8]` derivation check. Announce
+  authentication is `verify_packet` (`chatter-mesh-noise/src/sign.rs`);
+  `ANNOUNCE_CONTEXT` (`chatter-mesh-noise/src/lib.rs`) keeps the domain strings
   prefix-free of one another.
-- **CORRECTED:** `crypto/keytransparency.rs::verify_consistency_proof` is wired
-  as of 2026-08-03. `services/signal/kt_anchor.rs` pins the highest tree head
-  this device has accepted and requires a consistency proof before advancing;
-  `session.rs` calls it on every KT-verified send, so forks and rollbacks are
-  now rejected rather than invisible.
-- **CORRECTED (was wrong here, in the dangerous direction):**
-  `services/signal/identity.rs::accept_peer_identity_change` **is** wired now,
-  end to end: `ui/chat/identity_change_bar.slint:35` → `chat_layout.slint:316`
-  → `app.slint:1734` → `features/chat/identity_change.rs:75,84` →
-  `client/mod.rs:994` → `identity.rs:380`. A peer reinstalling no longer wedges
-  the conversation permanently. `production_wiring.rs` pins both directions.
+- **KT append-only check** — `services/signal/kt_anchor.rs` pins the highest
+  tree head this device has accepted and calls
+  `crypto/keytransparency.rs::verify_consistency_proof` before advancing it;
+  `services/signal/session/kt.rs` runs it via `check_tree_head_consistency` /
+  `hold_head_locked`.
+- **Peer identity change** — `ui/chat/identity_change_bar.slint` →
+  `ui/chat/chat_layout.slint` → `bin_ui/features/chat/identity_change.rs`
+  (`wire_accept`) → `ChatterClient::accept_peer_identity_change`
+  (`client/trust.rs`) → `services/signal/identity.rs`.
 
-The full list, with citations, is `docs/OPEN-ITEMS.md` in the server repo.
+Open security items, with citations, live in `docs/OPEN-ITEMS.md` in the
+server repo.
 
 ## Coding Guidelines
 

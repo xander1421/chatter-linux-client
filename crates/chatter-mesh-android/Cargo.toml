@@ -1,12 +1,12 @@
 [package]
 name = "chatter-mesh-android"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 authors = ["xander1421"]
 description = "Android (JNI) implementation of MeshLink for the bitchat mesh"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.99"
+rust-version.workspace = true
 
 [lib]
 name = "chatter_mesh_android"
@@ -26,7 +26,7 @@ jni = "0.22.4"
 ndk-context = "0.1"
 # Channels only. Bluetooth callbacks arrive on binder threads and must hand off
 # without blocking: a blocked binder callback stalls the whole Bluetooth stack.
-tokio = { version = "1", features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 
 # Unconditional dev-dependencies so the logic tests run on the host.
 #
@@ -38,4 +38,7 @@ tokio = { version = "1", features = ["rt", "sync"] }
 [dev-dependencies]
 jni = "0.22.4"
 ndk-context = "0.1"
-tokio = { version = "1", features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[lints]
+workspace = true

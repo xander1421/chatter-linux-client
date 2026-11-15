@@ -99,7 +99,7 @@ impl AnonGroupService {
     pub(crate) async fn avatar_pointer(
         &self,
         avatar: &[u8],
-    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+    ) -> Option<chatter_proto::content_v1::AttachmentPointer> {
         crate::services::secret_avatar::pointer_for(
             &self.settings_repo,
             &self.secret_attachments(),
@@ -111,7 +111,7 @@ impl AnonGroupService {
     /// The avatar a member's pointer names; `current` is what we hold for them.
     pub(crate) async fn resolve_member_avatar(
         &self,
-        pointer: Option<&crate::proto::content_v1::AttachmentPointer>,
+        pointer: Option<&chatter_proto::content_v1::AttachmentPointer>,
         current: Option<Vec<u8>>,
     ) -> Option<Vec<u8>> {
         crate::services::secret_avatar::resolve_once(&self.secret_attachments(), pointer, current)
@@ -122,7 +122,7 @@ impl AnonGroupService {
     /// `delays`; `Err` when every fetch failed.
     pub(crate) async fn fetch_member_avatar(
         &self,
-        pointer: &crate::proto::content_v1::AttachmentPointer,
+        pointer: &chatter_proto::content_v1::AttachmentPointer,
         current: Option<Vec<u8>>,
         delays: &[std::time::Duration],
     ) -> Result<Option<Vec<u8>>, crate::services::attachment::AttachmentError> {
@@ -136,7 +136,7 @@ impl AnonGroupService {
     /// Our avatar's pointer.
     pub(crate) async fn my_avatar_pointer(
         &self,
-    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+    ) -> Option<chatter_proto::content_v1::AttachmentPointer> {
         self.avatar_pointer(&self.get_my_avatar()?).await
     }
 
@@ -154,6 +154,15 @@ impl AnonGroupService {
         // 1. Create group locally
         let group = AnonGroup::new_as_owner(name, current_user);
         self.anon_group_repo.insert_group(&group)?;
+        // A new private group starts at the secret-chat default timer, like a
+        // secret 1:1 chat. Members adopt it from the first post, which states it.
+        crate::services::disappearing::initialize_secret_chat_timer(
+            &self.settings_repo,
+            &self.message_service.message_repo,
+            crate::services::disappearing::SecretChat::Group(group.id),
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         // 2. Create our mailbox for this group
         let mailbox = self.create_group_mailbox(&group.id).await?;
@@ -218,6 +227,15 @@ impl AnonGroupService {
         // 1. Create group locally
         let group = AnonGroup::new_as_owner(name, current_user);
         self.anon_group_repo.insert_group(&group)?;
+        // A new private group starts at the secret-chat default timer, like a
+        // secret 1:1 chat. Members adopt it from the first post, which states it.
+        crate::services::disappearing::initialize_secret_chat_timer(
+            &self.settings_repo,
+            &self.message_service.message_repo,
+            crate::services::disappearing::SecretChat::Group(group.id),
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         // 2. Create our mailbox for this group
         let mailbox = self.create_group_mailbox(&group.id).await?;

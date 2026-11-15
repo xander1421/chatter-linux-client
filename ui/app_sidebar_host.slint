@@ -6,10 +6,8 @@ import { CallView } from "app_call_view.slint";
 import { AuthFlow } from "app_auth_flow.slint";
 import { Sidebar } from "sidebar/sidebar.slint";
 import { Spacing } from "theme/spacing.slint";
-import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ChatPane } from "app_chat_pane.slint";
-import { FriendRequestData } from "modals/friends.slint";
 
 // Sidebar wiring and list navigation for the main conversation shell.
 export component AppSidebarHost inherits Rectangle {
@@ -24,6 +22,7 @@ export component AppSidebarHost inherits Rectangle {
     in property <bool> server-unreachable;
     in property <string> connection-status;
     in property <bool> sidebar-is-rail;
+    in property <length> sidebar-panel-width;
     in-out property <bool> sidebar-user-collapsed;
     in property <length> window-width;
     callback toggle-anon-mode();
@@ -31,6 +30,7 @@ export component AppSidebarHost inherits Rectangle {
 
         background: transparent;
     Sidebar {
+        width: root.compact-layout ? parent.width : root.sidebar-panel-width;
         height: parent.height;
     x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
         // Keep the list mounted for the reverse push, but do not
@@ -135,11 +135,18 @@ export component AppSidebarHost inherits Rectangle {
         }
         friends-clicked => {
             // The row says "Friends" (the list) or, in Shield, "Add Contact".
-            ModalHostState.friends-modal-tab = AnonMode.enabled ? "find" : "friends";
+            if (AnonMode.enabled) {
+                // Already open: init will not run again, so show the sheet here.
+                ModalHostState.friends-modal-tab = SidebarPane.active-tab == "contacts" ? "friends" : "find";
+                ModalHostState.friends-show-add = true;
+            } else {
+                ModalHostState.friends-modal-tab = "friends";
+            }
             SidebarPane.active-tab = "contacts";
         }
         add-friend-clicked => {
-            ModalHostState.friends-modal-tab = "find";
+            ModalHostState.friends-modal-tab = SidebarPane.active-tab == "contacts" ? "friends" : "find";
+            ModalHostState.friends-show-add = true;
             SidebarPane.active-tab = "contacts";
         }
         // Wide-layout entry to the Calls screen — the same modal and
@@ -257,9 +264,6 @@ export component AppSidebarHost inherits Rectangle {
         settings-clicked => {
             ModalHostState.nav-push("settings");
             SidebarPane.settings-clicked();
-        }
-        mesh-setup-clicked => {
-            ModalHostState.nav-push("mesh-setup");
         }
         tab-selected(tab) => {
             SidebarPane.active-tab = tab;

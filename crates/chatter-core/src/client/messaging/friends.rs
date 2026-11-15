@@ -52,7 +52,7 @@ impl ChatterClient {
     ///
     /// Not the picker's list on its own: the secret-chat rules depend on the
     /// messages being forwarded, so the picker asks
-    /// [`crate::services::conversation::ConversationHandle::forward_destinations`].
+    /// [`crate::client::conversation::ConversationHandle::forward_destinations`].
     pub(crate) fn forward_destinations(&self, query: &str) -> Vec<ForwardDestination> {
         use crate::domain::message::ConversationType as CT;
 
@@ -63,6 +63,7 @@ impl ChatterClient {
                 kind: dm.kind,
                 id: dm.id,
                 name: dm.display_name,
+                private_channel: false,
             });
         }
         for channel in self
@@ -73,6 +74,8 @@ impl ChatterClient {
             out.push(ForwardDestination {
                 kind: CT::Channel,
                 id: channel.id.to_string(),
+                private_channel: channel.channel_type
+                    == crate::domain::channel::ChannelType::Private,
                 name: channel.name,
             });
         }
@@ -84,11 +87,22 @@ impl ChatterClient {
                 kind: CT::AnonGroup,
                 id: group.id.to_string(),
                 name: group.name,
+                private_channel: false,
             });
         }
         for section in self.list_sections_with_conversations().unwrap_or_default() {
             for conv in section.conversations {
+                let private_channel = conv.conversation_type == CT::Channel
+                    && conv
+                        .conversation_id
+                        .parse::<crate::domain::ids::ChannelId>()
+                        .ok()
+                        .and_then(|id| self.get_channel_local(&id))
+                        .is_some_and(|c| {
+                            c.channel_type == crate::domain::channel::ChannelType::Private
+                        });
                 out.push(ForwardDestination {
+                    private_channel,
                     kind: conv.conversation_type,
                     id: conv.conversation_id,
                     name: conv.display_name,
@@ -105,6 +119,7 @@ impl ChatterClient {
                     kind: CT::SavedMessages,
                     id: channel_id.to_string(),
                     name: "Saved messages".to_string(),
+                    private_channel: false,
                 });
             }
         }

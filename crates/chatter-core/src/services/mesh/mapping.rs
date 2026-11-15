@@ -297,6 +297,7 @@ pub fn outbound_file_message(
     message
 }
 
+#[cfg(test)]
 /// Extract the plain text of a mapped message, for callers that only want the
 /// body back out.
 #[must_use]

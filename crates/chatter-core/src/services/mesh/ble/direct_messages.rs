@@ -175,7 +175,7 @@ impl BleRuntime {
     }
 
     pub(super) async fn send_signal_carrier(&mut self, peer: &PeerId, bytes: Vec<u8>) {
-        let Some(frame) = signal_mesh::CarrierFrame::decode(&bytes, now_secs()) else {
+        let Some(frame) = frames::CarrierFrame::decode(&bytes, now_secs()) else {
             return;
         };
         let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() else {
@@ -194,7 +194,7 @@ impl BleRuntime {
             state.chatter_hello.get(peer).is_some_and(|hello| {
                 hello.compatible()
                     && hello.capabilities & super::super::chatter_hello::SIGNAL_MESH != 0
-                    && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32
+                    && hello.max_carrier_bytes >= frames::MAX_CARRIER as u32
             })
         });
         if !self.state.can_write_to(peer) || !compatible {

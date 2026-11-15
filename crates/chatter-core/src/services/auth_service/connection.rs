@@ -8,7 +8,6 @@ impl AuthService {
         prekey_manager: Arc<PreKeyManager>,
         user_repo: Arc<UserRepository>,
         settings_repo: Arc<SettingsRepository>,
-        key_store: Arc<KeyStore>,
         auth_interceptor: AuthInterceptor,
     ) -> Self {
         Self {
@@ -17,7 +16,6 @@ impl AuthService {
             prekey_manager,
             user_repo,
             settings_repo,
-            key_store,
             auth_interceptor,
             recovery_login_grant: parking_lot::Mutex::new(None),
         }
@@ -35,16 +33,6 @@ impl AuthService {
     /// Update the server URL. Disconnects any existing connection.
     pub fn set_server_url(&self, url: &str) -> Result<(), NetworkError> {
         self.grpc_pool.set_url(url)
-    }
-
-    /// Check if connected to the server.
-    pub fn is_connected(&self) -> bool {
-        self.grpc_pool.is_connected()
-    }
-
-    /// Connect to the server.
-    pub async fn connect(&self) -> Result<(), NetworkError> {
-        self.grpc_pool.connect().await
     }
 
     /// Disconnect from the server.
@@ -183,14 +171,6 @@ impl AuthService {
         );
 
         true
-    }
-
-    /// Get current identity from the server.
-    pub async fn get_my_identity(
-        &self,
-    ) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, AuthError> {
-        let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
-        client.get_my_identity().await.map_err(AuthError::Network)
     }
 
     /// Read the sealed-sender RECEIVING policy (allow_from_anyone) from the server.

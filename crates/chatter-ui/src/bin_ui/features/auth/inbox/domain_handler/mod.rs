@@ -494,7 +494,7 @@ pub async fn handle_domain_event(
             ..
         } => {
             anon::handle_dm_request_accepted(window, ui_ctx, conversation_id, peer_id);
-            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+            crate::bin_ui::features::chat::open::dm::refresh_open_anon_dm(
                 window,
                 ui_ctx,
                 conversation_id,
@@ -518,7 +518,7 @@ pub async fn handle_domain_event(
         // The peer declined our request; core marked it Declined.
         // The list row too, or it keeps "(pending) Waiting for response".
         DomainEvent::AnonDmDeclined { conversation_id } => {
-            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+            crate::bin_ui::features::chat::open::dm::refresh_open_anon_dm(
                 window,
                 ui_ctx,
                 conversation_id,
@@ -594,7 +594,7 @@ pub async fn handle_domain_event(
             let metadata = ui_ctx
                 .get_channel_local(&channel_id)
                 .as_ref()
-                .map(crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel);
+                .map(crate::bin_ui::features::chat::open::channel::ChannelMetadata::from_channel);
             let rows = ui_ctx.sidebar_rows();
             let weak = window.clone();
             let ctx = ui_ctx.clone();
@@ -649,7 +649,7 @@ pub async fn handle_domain_event(
             bio,
             timestamp,
         } => {
-            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+            crate::bin_ui::features::chat::open::dm::refresh_open_anon_dm(
                 window,
                 ui_ctx,
                 conversation_id,
@@ -731,6 +731,7 @@ pub async fn handle_domain_event(
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
                 w.global::<crate::CallView>().set_missed_call_count(missed);
+                #[cfg(feature = "call-ui")]
                 crate::bin_ui::features::calls::history::refresh_in_place(&w, &ui_ctx);
             });
         }

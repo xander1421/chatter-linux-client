@@ -146,7 +146,8 @@ mod shield_mode_tests {
     async fn fixture_keeps_database_available_to_new_readers() {
         let (dir, client) = build_test_client();
         let db = client.messages().database();
-        let readers: Vec<_> = (0..3).map(|_| db.read_connection().unwrap()).collect();
+        // One under the reader pool size (2), so the next reader is opened anew.
+        let readers: Vec<_> = (0..1).map(|_| db.read_connection().unwrap()).collect();
         assert!(dir.path().exists());
         let reader = db
             .read_connection()
@@ -792,5 +793,45 @@ mod section_row_tests {
             .search_channel_invite_candidates(&channel, "alice.", || true)
             .await;
         assert_eq!(cands.map(|c| c.len()), Some(0));
+    }
+}
+
+mod result_scope_tests {
+    //! A result is current only for the session and conversation load it
+    //! was made for.
+    use crate::client::ChatterClient;
+    use crate::domain::ids::{ChannelId, UserId};
+    use crate::state::ActiveConversation;
+
+    #[tokio::test]
+    async fn view_scope_ends_with_its_selection_or_a_reload() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let a = ActiveConversation::Channel(ChannelId::new());
+        let b = ActiveConversation::ServerDm { peer_id: UserId::new() };
+        client.select_conversation(a);
+
+        let session = client.session_scope();
+        let first = client.view_scope(a);
+        assert!(first.is_current());
+
+        // A reload of the same conversation retires the earlier load.
+        let mut reload = client.view_scope(a);
+        reload.begin_load();
+        assert!(!first.is_current());
+        assert!(reload.is_current());
+
+        // Leaving the conversation retires the view, not the session.
+        client.select_conversation(b);
+        assert!(!reload.is_current());
+        assert!(session.is_current());
     }
 }

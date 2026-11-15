@@ -33,6 +33,7 @@ export component ChatLayout inherits Rectangle {
     in property <string> channel-id: "";
     in property <string> channel-name: "";
     in property <ConversationKind> conversation-kind;
+    in property <bool> can-thread: true;
     in property <bool> private-channel: false;
     // Core's own statement of where this conversation's messages go, for the
     // conversations whose kind cannot say it (the Jarvis channel: local or
@@ -264,7 +265,7 @@ export component ChatLayout inherits Rectangle {
     callback pinned-prev-clicked();
     callback pinned-next-clicked();
     callback pinned-go-to-message();
-    callback pinned-dismiss-clicked();
+    callback pinned-list-clicked();
     callback sender-profile-requested(string);
     in property <image> pinned-thumbnail;
     callback pinned-show-clicked();  // Re-show dismissed pinned bar
@@ -362,7 +363,7 @@ export component ChatLayout inherits Rectangle {
         mobile: root.mobile;
         is-dm: root.is-dm;
                     is-anonymous: root.is-anonymous;
-        can-thread: root.conversation-kind == ConversationKind.channel;
+        can-thread: root.can-thread;
         is-mesh: MeshGlobal.active-id != "";
         // A mesh room and a geohash cell are plaintext broadcasts. Only a
         // mesh DM runs over Noise, so only it keeps the lock.
@@ -463,7 +464,9 @@ export component ChatLayout inherits Rectangle {
         // Level-3 chrome floats: on a phone it is inset from the screen edges
         // so its shadow and rim show on all sides and messages visibly pass
         // underneath it (theme/elevation.slint).
-        padding-left: root.mobile ? Spacing.sm : Spacing.none;
+        // Desktop: a hairline gap so the island does not butt against the
+        // sidebar panel beside it (or the window edge on the other side).
+        padding-left: root.mobile ? Spacing.sm : Spacing.xs;
         padding-right: self.padding-left;
         padding-top: root.mobile ? Spacing.xs : Spacing.none;
         spacing: root.mobile ? Spacing.xs : Spacing.none;
@@ -529,7 +532,11 @@ export component ChatLayout inherits Rectangle {
                 padding-right: Spacing.md;
                 spacing: Spacing.sm;
                 Text {
-                    text: "Call in progress · " + root.active-channel-call-participants + " participants";
+                    // A live call has at least its starter, so a 0 means the
+                    // count has not arrived, not an empty call.
+                    text: root.active-channel-call-participants > 0
+                        ? "Call in progress · " + (root.active-channel-call-participants == 1 ? "1 participant" : root.active-channel-call-participants + " participants")
+                        : "Call in progress";
                     color: Colors.text-primary;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
@@ -577,25 +584,32 @@ export component ChatLayout inherits Rectangle {
         }
 
         // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
-        if root.has-pinned-messages: PinnedBar {
-            backdrop-paused: message-list.scrolling;
-            thumbnail: root.pinned-thumbnail;
-            message-preview: root.pinned-message-preview;
-            current-index: root.pinned-current-index;
-            total-count: root.pinned-total-count;
-            has-multiple: root.pinned-total-count > 1;
+        if root.has-pinned-messages && !root.hide-header && !root.mobile: Rectangle {
+            height: Spacing.xs;
+        }
+        if root.has-pinned-messages: HorizontalLayout {
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+            PinnedBar {
+                backdrop-paused: message-list.scrolling;
+                thumbnail: root.pinned-thumbnail;
+                message-preview: root.pinned-message-preview;
+                current-index: root.pinned-current-index;
+                total-count: root.pinned-total-count;
+                has-multiple: root.pinned-total-count > 1;
 
-            prev-clicked => {
-                root.pinned-prev-clicked();
-            }
-            next-clicked => {
-                root.pinned-next-clicked();
-            }
-            go-to-message => {
-                root.pinned-go-to-message();
-            }
-            dismiss-clicked => {
-                root.pinned-dismiss-clicked();
+                prev-clicked => {
+                    root.pinned-prev-clicked();
+                }
+                next-clicked => {
+                    root.pinned-next-clicked();
+                }
+                go-to-message => {
+                    root.pinned-go-to-message();
+                }
+                list-clicked => {
+                    root.pinned-list-clicked();
+                }
             }
         }
 
@@ -610,7 +624,7 @@ export component ChatLayout inherits Rectangle {
         width: root.width;
         height: self.preferred-height;
         y: root.height - self.height - root.drawer-occupied-height;
-        padding-left: root.mobile ? Spacing.sm : Spacing.none;
+        padding-left: root.mobile ? Spacing.sm : Spacing.xs;
         padding-right: self.padding-left;
         // Floating composer — placed directly in VerticalLayout so its
         // explicit height drives the layout slot. A wrapping plain Rectangle

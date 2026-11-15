@@ -7,9 +7,9 @@
 //! - Edge cases: empty data, large files, boundary conditions
 //! - Cross-platform: deterministic test vectors
 
-use chatter_core::crypto::attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
-use chatter_core::crypto::attachment_crypto_fast::decrypt_zero_copy;
-use chatter_core::error::CryptoError;
+use chatter_attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
+use chatter_attachment_crypto::decrypt_zero_copy;
+use chatter_attachment_crypto::AttachmentCryptoError;
 
 // =============================================================================
 // CORRECTNESS TESTS
@@ -210,7 +210,7 @@ fn test_digest_mismatch_rejected() {
         encrypted.plaintext_size,
     );
 
-    assert!(matches!(result, Err(CryptoError::AttachmentDigestMismatch)));
+    assert!(matches!(result, Err(AttachmentCryptoError::AttachmentDigestMismatch)));
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn test_hmac_mismatch_rejected() {
         encrypted.plaintext_size,
     );
 
-    assert!(matches!(result, Err(CryptoError::AttachmentMacMismatch)));
+    assert!(matches!(result, Err(AttachmentCryptoError::AttachmentMacMismatch)));
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn test_iv_tampering_rejected() {
     );
 
     // IV tampering causes HMAC mismatch (HMAC covers IV)
-    assert!(matches!(result, Err(CryptoError::AttachmentMacMismatch)));
+    assert!(matches!(result, Err(AttachmentCryptoError::AttachmentMacMismatch)));
 }
 
 #[test]
@@ -279,7 +279,7 @@ fn test_hmac_tampering_rejected() {
     );
 
     // HMAC tampering causes HMAC mismatch
-    assert!(matches!(result, Err(CryptoError::AttachmentMacMismatch)));
+    assert!(matches!(result, Err(AttachmentCryptoError::AttachmentMacMismatch)));
 }
 
 #[test]
@@ -320,7 +320,7 @@ fn test_extended_ciphertext_rejected() {
     );
 
     // Should fail due to HMAC mismatch
-    assert!(matches!(result, Err(CryptoError::AttachmentMacMismatch)));
+    assert!(matches!(result, Err(AttachmentCryptoError::AttachmentMacMismatch)));
 }
 
 #[test]
@@ -340,7 +340,7 @@ fn test_wrong_mac_key_rejected() {
     );
 
     // Should fail due to HMAC mismatch (different MAC key)
-    assert!(matches!(result, Err(CryptoError::AttachmentMacMismatch)));
+    assert!(matches!(result, Err(AttachmentCryptoError::AttachmentMacMismatch)));
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn test_ciphertext_too_short() {
 
     assert!(matches!(
         result,
-        Err(CryptoError::AttachmentDecryptionFailed(_))
+        Err(AttachmentCryptoError::AttachmentDecryptionFailed(_))
     ));
 }
 
@@ -394,7 +394,7 @@ fn test_plaintext_size_too_large() {
 
     assert!(matches!(
         result,
-        Err(CryptoError::AttachmentDecryptionFailed(_))
+        Err(AttachmentCryptoError::AttachmentDecryptionFailed(_))
     ));
 }
 
@@ -526,7 +526,7 @@ fn test_fast_decrypt_hmac_mismatch() {
         encrypted.plaintext_size,
     );
 
-    assert!(matches!(result, Err(CryptoError::AttachmentMacMismatch)));
+    assert!(matches!(result, Err(AttachmentCryptoError::AttachmentMacMismatch)));
 }
 
 // =============================================================================

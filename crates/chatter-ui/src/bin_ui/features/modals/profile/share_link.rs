@@ -38,7 +38,9 @@ pub(super) fn wire_share_link(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             spawn_create_link(weak_window.clone(), ui_ctx_reset.clone(), true);
         });
 
-    // Copy: same clipboard strategy as the friend-code copy (wl-copy → xclip).
+    // Copy: the shared clipboard writer (platform::clipboard). Android's
+    // ClipboardManager wants the main thread (the UI thread there); the desktop
+    // path spawns wl-copy / xclip, so it runs off the UI thread.
     let weak_window = window.as_weak();
     window
         .global::<crate::ModalHostState>()
@@ -51,27 +53,15 @@ pub(super) fn wire_share_link(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 if url.is_empty() {
                     return;
                 }
-                std::thread::spawn(move || {
-                    let result = std::process::Command::new("wl-copy")
-                        .arg(&url)
-                        .status()
-                        .or_else(|_| {
-                            std::process::Command::new("xclip")
-                                .args(["-selection", "clipboard"])
-                                .stdin(std::process::Stdio::piped())
-                                .spawn()
-                                .and_then(|mut child| {
-                                    use std::io::Write;
-                                    if let Some(stdin) = child.stdin.as_mut() {
-                                        stdin.write_all(url.as_bytes())?;
-                                    }
-                                    child.wait()
-                                })
-                        });
-                    if let Err(e) = result {
+                let copy = move || {
+                    if let Err(e) = crate::platform::clipboard::set_text("Username link", &url, false) {
                         tracing::error!("Failed to copy username link: {}", e);
                     }
-                });
+                };
+                #[cfg(target_os = "android")]
+                copy();
+                #[cfg(not(target_os = "android"))]
+                std::thread::spawn(copy);
                 w.global::<crate::ModalHostState>()
                     .set_profile_share_status("Link copied to clipboard".into());
             }

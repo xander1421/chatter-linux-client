@@ -113,16 +113,16 @@ pub struct CallSignalingService {
     #[cfg(feature = "media")]
     start_groups: Arc<Mutex<std::collections::HashSet<String>>>,
     #[cfg(feature = "media")]
-    inflight_start: Arc<Mutex<Option<crate::client::calls::CallStartAttempt>>>,
+    inflight_start: Arc<Mutex<Option<crate::services::call_signaling::CallStartAttempt>>>,
     #[cfg(feature = "media")]
     start_attempts:
-        Arc<Mutex<std::collections::HashMap<String, crate::client::calls::CallStartAttempt>>>,
+        Arc<Mutex<std::collections::HashMap<String, crate::services::call_signaling::CallStartAttempt>>>,
 }
 
 /// The setup gate serializes these owners; dropping one can never remove a
 /// replacement's token. Session teardown can cancel it before a call id exists.
 #[cfg(feature = "media")]
-pub(crate) struct StartAttemptOwner(Arc<Mutex<Option<crate::client::calls::CallStartAttempt>>>);
+pub(crate) struct StartAttemptOwner(Arc<Mutex<Option<crate::services::call_signaling::CallStartAttempt>>>);
 #[cfg(feature = "media")]
 impl Drop for StartAttemptOwner {
     fn drop(&mut self) {
@@ -193,6 +193,11 @@ mod ending;
 mod group;
 mod invites;
 mod start_attempts;
+#[cfg(feature = "media")]
+pub use start_attempts::CallStartAttempt;
+#[cfg(feature = "media")]
+pub(crate) use start_attempts::START_ATTEMPT;
+pub(crate) use start_attempts::start_cancelled;
 
 pub(crate) use invites::GroupCallInvites;
 pub use invites::PendingGroupCallKey;

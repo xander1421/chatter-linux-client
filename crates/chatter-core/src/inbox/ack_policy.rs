@@ -72,7 +72,7 @@ use tokio::sync::broadcast;
 use crate::domain::UserId;
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
-use crate::error::{CryptoError, ServiceError, StorageError};
+use crate::error::{CryptoError, ServiceError};
 use crate::inbox::handlers::DomainEvent;
 use crate::storage::MessageRepository;
 
@@ -499,6 +499,7 @@ impl RetryBudget {
         self.attempts.lock().remove(envelope_id);
     }
 
+    #[cfg(test)]
     /// How many envelopes are currently being retained.
     #[must_use]
     pub fn tracked(&self) -> usize {
@@ -654,17 +655,10 @@ pub fn dm_target(peer: UserId, envelope_ts_ns: u64) -> MarkerTarget {
     }
 }
 
-/// Storage errors are the one class the marker path itself can hit; keep the
-/// mapping visible so a future variant is classified rather than defaulted.
-#[must_use]
-pub fn classify_storage(_e: &StorageError) -> Durability {
-    Durability::Transient
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::IdentityChangeSource;
+    use crate::error::{IdentityChangeSource, StorageError};
 
     #[test]
     fn a_changed_identity_key_is_permanent_and_gets_its_own_marker() {

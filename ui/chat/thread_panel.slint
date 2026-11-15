@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { KeyFocus } from "../components/key_focus.slint";
 // Thread panel component for viewing replies to a message
 //
 // Displays as a right-side panel with root message preview, reply list, and composer.
@@ -38,12 +39,12 @@ export component ThreadPanel inherits Rectangle {
     changed visible => {
         root.entered = false;
         root.panel-progress = Appearance.reduce-motion && root.visible ? 1 : 0;
-        if root.visible && !root.touch { composer.focus-reply-input(); }
+        if root.visible && !root.touch && !root.pinned-mode { composer.focus-reply-input(); }
     }
     // Asked again once the panel has entered: opened from a message menu,
     // the first request landed while the menu was closing and focus ended
     // nowhere, so typing and Esc did nothing until a click (desktop).
-    changed entered => { if root.entered && root.visible && !root.touch { composer.focus-reply-input(); } }
+    changed entered => { if root.entered && root.visible && !root.touch && !root.pinned-mode { composer.focus-reply-input(); } }
     // The app keeps this panel mounted while hidden. A visibility binding can
     // settle after initialization, so clear a premature entrance before the
     // next open even if no change callback fired during mounting.
@@ -58,9 +59,16 @@ export component ThreadPanel inherits Rectangle {
         triggered => { root.entered = true; root.panel-progress = 1; }
     }
     // Root message data
+    // Lists the chat's pinned messages instead of a thread: counted title,
+    // no root strip, no composer, an "Unpin all" action.
+    in property <bool> pinned-mode: false;
+    callback unpin-all();
     in property <string> root-message-id;
     in property <string> root-sender-name;
     in property <string> root-content-preview;
+    // First image/video preview of the root message, when it has one.
+    in property <image> root-thumbnail;
+    in property <bool> root-has-thumbnail: false;
     in property <int> reply-count: 0;
     in property <string> channel-name;
     // Same kind as ChatHeader's. Only channels get the "#":
@@ -204,6 +212,9 @@ export component ThreadPanel inherits Rectangle {
         // the two panes share one top row instead of stepping.
         GlassSurface {
             material-level: 2;
+            material-tint: root.pinned-mode ? Materials.chat-chrome : Materials.regular;
+            darkening: root.pinned-mode ? Materials.chat-darkening : 1.0;
+            show-edge: !root.pinned-mode;
             elevation: 3;
 
             height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
@@ -234,7 +245,9 @@ export component ThreadPanel inherits Rectangle {
                         alignment: start;
 
                         Text {
-                            text: "Thread";
+                            text: !root.pinned-mode ? "Thread"
+                                : root.replies.length == 1 ? "1 pinned message"
+                                : root.replies.length + " pinned messages";
                             color: Colors.text-primary;
                             font-size: Typography.base;
                             font-weight: 600;
@@ -242,7 +255,7 @@ export component ThreadPanel inherits Rectangle {
                         }
 
                         // Reply count badge
-                        if root.reply-count > 0: Rectangle {
+                        if root.reply-count > 0 && !root.pinned-mode: Rectangle {
                             width: badge-text.preferred-width + Spacing.sm;
                             height: Spacing.badge-md;
                             y: (parent.height - self.height) / 2;
@@ -287,7 +300,9 @@ export component ThreadPanel inherits Rectangle {
         // Root message preview (64px max)
         Rectangle {
             x: (1 - root.panel-progress) * 12px;
-            height: 64px;
+            height: root.pinned-mode ? 0px : 64px;
+            visible: !root.pinned-mode;
+            clip: true;
             background: Colors.surface-hover;
             transform-scale-x: root-preview-touch.pressed ? 98% : 100%;
             transform-scale-y: root-preview-touch.pressed ? 96% : 100%;
@@ -305,8 +320,24 @@ export component ThreadPanel inherits Rectangle {
                 }
             }
 
+            if root.root-has-thumbnail: Rectangle {
+                x: Spacing.sm;
+                y: Spacing.sm;
+                width: 48px;
+                height: 48px;
+                border-radius: Spacing.radius-sm;
+                clip: true;
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.root-thumbnail;
+                    image-fit: cover;
+                }
+            }
+
             VerticalLayout {
                 padding: Spacing.sm;
+                padding-left: root.root-has-thumbnail ? Spacing.sm + 48px + Spacing.sm : Spacing.sm;
                 spacing: Spacing.xxs;
 
                 // Sender name
@@ -392,7 +423,7 @@ export component ThreadPanel inherits Rectangle {
                     }
 
                     Text {
-                        text: "No replies yet";
+                        text: root.pinned-mode ? "No pinned messages" : "No replies yet";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
@@ -627,6 +658,7 @@ export component ThreadPanel inherits Rectangle {
                         highlighted: item.message-id == root.highlighted-id;
                         delivery-status: item.delivery-status;
                         failure-reason: item.failure-reason;
+                        can-retry: item.can-retry;
                         can-thread: false;
                         has-avatar: item.has-avatar;
                         sender-avatar-source: item.sender-avatar-source;
@@ -686,9 +718,30 @@ export component ThreadPanel inherits Rectangle {
             }
         }
 
+        if root.pinned-mode && root.replies.length > 0: Rectangle {
+            height: Spacing.touch-target-min + Spacing.sm;
+            background: unpin-all-touch.pressed ? Materials.pressed : unpin-all-touch.has-hover ? Colors.surface-hover : Colors.surface;
+            accessible-role: button;
+            accessible-label: unpin-all-label.text;
+            accessible-action-default => { root.unpin-all(); }
+            KeyFocus { activate => { root.unpin-all(); } }
+            unpin-all-label := Text {
+                width: 100%;
+                height: 100%;
+                text: root.replies.length == 1 ? "Unpin message" : "Unpin all " + root.replies.length + " messages";
+                color: Colors.primary;
+                font-size: Typography.sm;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            unpin-all-touch := TouchArea { mouse-cursor: pointer; clicked => { root.unpin-all(); } }
+        }
+
         composer := MessageComposer {
             width: 100%;
             vertical-stretch: 0;
+            collapsed: root.pinned-mode;
             // The platform, not the layout: a narrow desktop window covers the
             // chat with the thread (`mobile`) but still has a keyboard, and the
             // composer's Up-to-edit and hover affordances follow `mobile`.

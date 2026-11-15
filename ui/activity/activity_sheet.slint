@@ -101,12 +101,13 @@ export component ActivitySheet inherits Rectangle {
         : root.connection-status == "reconnecting" ? "Reconnecting (attempt " + root.connection-reconnect-attempt + ")"
         : root.connection-status == "connecting" ? "Connecting…"
         : root.connection-status == "connected" ? "Connected" : "Disconnected";
+    property <string> relays: MeshGlobal.relay-count == 1 ? "1 relay" : MeshGlobal.relay-count + " relays";
     property <string> mesh-value: !MeshGlobal.enabled ? "Unavailable"
         : !MeshGlobal.mesh-on ? "Off"
         : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off"
         : !MeshGlobal.running ? "Unavailable"
-        : !MeshGlobal.radio-running ? "Radio unavailable · " + MeshGlobal.relay-count + " relays"
-        : "On · " + MeshGlobal.peer-count + " nearby · " + MeshGlobal.relay-count + " relays";
+        : !MeshGlobal.radio-running ? "Radio unavailable · " + root.relays
+        : "On · " + MeshGlobal.peer-count + " nearby · " + root.relays;
     property <bool> update-available: UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular"
         || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "ready";
 
@@ -217,7 +218,7 @@ export component ActivitySheet inherits Rectangle {
                                 color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
                         }
                         for item[i] in ActivityGlobal.items: VerticalLayout {
-                            spacing: 0px;
+                            spacing: Spacing.none;
                             if i == 0 || item.section != ActivityGlobal.items[i - 1].section: Text {
                                 text: item.section; color: Colors.text-muted; font-size: Typography.xs;
                                 font-weight: Typography.semibold; height: 28px; vertical-alignment: center; }

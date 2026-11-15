@@ -227,7 +227,7 @@ component MsgRow inherits Rectangle {
             }
         }
         HorizontalLayout {
-            spacing: 0px;
+            spacing: Spacing.none;
             before-text := Text { text: root.preview-before; color: Colors.text-secondary; font-size: Typography.sm;
                 width: min(self.preferred-width, parent.width * 0.55); wrap: no-wrap; overflow: elide; }
             match-text := Text { text: root.preview-match; color: Colors.primary; font-size: Typography.sm; font-weight: Typography.semibold;
@@ -798,6 +798,10 @@ export component UnifiedSearch inherits Rectangle {
             // People — exact-handle resolution (resolve-on-Enter, no enumeration).
             if root.query-is-handle || root.person-status != "": VerticalLayout {
                 spacing: Spacing.xxs;
+                // Content height only: stretching with the list below pushed
+                // the row far under its header.
+                vertical-stretch: 0;
+                alignment: start;
                 Text {
                     text: "People";
                     color: Colors.text-muted;

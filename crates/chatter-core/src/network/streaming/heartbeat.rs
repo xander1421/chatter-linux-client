@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 
-use crate::proto::chat_v1;
+use chatter_proto::chat_v1;
 
 /// The server's nominal heartbeat interval (`streamheartbeat.Interval`).
 pub const SERVER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);

@@ -808,7 +808,7 @@ async fn link_secondary_device(
     uid: UserId,
 ) -> u32 {
     use chatter_core::crypto::SecretString;
-    use chatter_core::services::link_device_service::LinkProgress;
+    use chatter_core::testing::services::link_device_service::LinkProgress;
 
     let mut rx = client_s
         .link_device_run()
@@ -4349,7 +4349,7 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
 #[tokio::test]
 async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
     use chatter_core::crypto::SessionManager;
-    use chatter_core::network::grpc::AuthClient;
+    use chatter_core::testing::network::grpc::AuthClient;
     use libsignal_protocol::{
         DeviceId, IdentityKey, IdentityKeyPair, IdentityKeyStore, InMemSignalProtocolStore,
         KeyPair, PreKeyBundle, ProtocolAddress, kem,
@@ -5142,7 +5142,7 @@ async fn v16_fresh_contact_wrapped_cap_refusal_then_decrypted_send() {
         assert!(
             matches!(
                 refused.send_error,
-                Some(chatter_core::services::message::MessageError::InvalidContent(_))
+                Some(chatter_core::testing::services::message::MessageError::InvalidContent(_))
             ),
             "fresh wrapped envelope must refuse locally with typed InvalidContent"
         );
@@ -5278,8 +5278,8 @@ async fn v16_message_roundtrip_fidelity() {
         assert!(
             matches!(
                 r,
-                Err(chatter_core::services::gateway::SendError::Message(
-                    chatter_core::services::message::MessageError::InvalidContent(_)
+                Err(chatter_core::testing::services::gateway::SendError::Message(
+                    chatter_core::testing::services::message::MessageError::InvalidContent(_)
                 ))
             ),
             "[{name}] expected InvalidContent rejection at send, got {outcome}"
@@ -5477,7 +5477,7 @@ async fn v16_message_roundtrip_fidelity() {
     assert!(
         matches!(
             refused.send_error,
-            Some(chatter_core::services::message::MessageError::InvalidContent(_))
+            Some(chatter_core::testing::services::message::MessageError::InvalidContent(_))
         ),
         "actual sealed envelope must be refused before submission"
     );
@@ -6767,7 +6767,7 @@ async fn v22_attachment_binary_fidelity() {
     // NEGATIVE HALF: the ciphertext at rest (the exact object the server/RustFS
     // holds — a presigned GET returns the stored bytes verbatim) must not reveal
     // the plaintext marker.
-    let cpath = chatter_core::services::attachment::attachment_file_path(&att_id);
+    let cpath = chatter_core::testing::services::attachment::attachment_file_path(&att_id);
     let ciphertext = std::fs::read(&cpath).expect("read ciphertext-at-rest");
     println!(
         "  ciphertext-at-rest: {} bytes at {}",
@@ -6935,7 +6935,7 @@ async fn v22_attachment_binary_fidelity() {
     );
     // The stored blob is named by the server CDN key (the attachment id), NOT by
     // the filename — the filename never touches any storage path.
-    let trav_enc = chatter_core::services::attachment::attachment_file_path(&trav_id);
+    let trav_enc = chatter_core::testing::services::attachment::attachment_file_path(&trav_id);
     assert!(
         trav_enc.to_string_lossy().contains("attachments")
             && trav_enc
@@ -7326,8 +7326,8 @@ async fn v23_message_ordering_reorder_and_gap() {
 // ============================================================================
 #[tokio::test]
 async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
-    use chatter_core::services::SignalService;
-    use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
+    use chatter_core::testing::services::SignalService;
+    use chatter_core::testing::storage::{Database, KeyStore, SettingsRepository, settings_keys};
     use libsignal_protocol::{
         DeviceId, IdentityKey, IdentityKeyPair, KeyPair, ProtocolAddress, kem,
     };
@@ -7378,11 +7378,11 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
         signer: &IdentityKeyPair,
         device_id: u32,
         rng: &mut StdRng,
-    ) -> chatter_core::proto::chat_v1::GetPreKeyBundleResponse {
-        use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
+    ) -> chatter_proto::chat_v1::GetPreKeyBundleResponse {
+        use chatter_proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord, SignedPreKeyRecord,
         };
-        use chatter_core::proto::chat_v1::{
+        use chatter_proto::chat_v1::{
             GetPreKeyBundleResponse, SignalPreKeyBundle, get_pre_key_bundle_response,
         };
 
@@ -9907,7 +9907,7 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
 // (channel-free DM), i.e. DM read receipts DO round-trip, not only channels.
 //
 // MUTATION CHECK: delete the gate in ConversationHandle::send_read_receipt
-// (services/conversation.rs) → the disabled half sends anyway → B's second
+// (client/conversation) → the disabled half sends anyway → B's second
 // message flips to "read" → this test FAILS (RED). That is what makes the
 // gate assertion non-vacuous.
 // ============================================================================
@@ -10096,7 +10096,7 @@ async fn v39_read_receipt_toggle_gates_the_send() {
 //   - typing DISABLED: A typing → B receives NO TypingStarted for A.
 //
 // MUTATION CHECK: delete the gate in ConversationHandle::send_typing
-// (services/conversation.rs) → the disabled half emits typing → B gets
+// (client/conversation) → the disabled half emits typing → B gets
 // TypingStarted → this test FAILS (RED).
 // ============================================================================
 
@@ -11604,7 +11604,7 @@ async fn v48_username_link_resolves_privately_end_to_end() {
 
 /// One SELECT tuple of the marker row — the byte-exactness witness.
 fn marker_message_row(db_path: &std::path::Path, marker: &str) -> Vec<String> {
-    let db = chatter_core::storage::Database::open(db_path, "validated-harness-passphrase")
+    let db = chatter_core::testing::storage::Database::open(db_path, "validated-harness-passphrase")
         .expect("open sqlcipher db for verification");
     let conn = db.connection().expect("db conn");
     let mut stmt = conn
@@ -11742,7 +11742,7 @@ async fn v50_local_message_backup_round_trips_encrypted() {
         .import_message_backup(&backup_path, "Wr0ng!Pass77")
         .await;
     assert!(err.is_err(), "restore with WRONG passphrase must fail");
-    let wrong_db = chatter_core::storage::Database::open(
+    let wrong_db = chatter_core::testing::storage::Database::open(
         &dir_wrong.path().join("data/chatter.db"),
         "validated-harness-passphrase",
     )
@@ -12153,7 +12153,7 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     };
     assert_eq!(
         need,
-        chatter_core::services::key_recovery::KeyRecoveryNeed::NoBackup,
+        chatter_core::testing::services::key_recovery::KeyRecoveryNeed::NoBackup,
         "the server knows this account has no backup; the user must be told that, \
          not left guessing at their PIN"
     );
@@ -12386,7 +12386,7 @@ async fn channel_restart_receive(inject_retained_failure: bool) {
             )
             .unwrap();
         let settings =
-            chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db);
+            chatter_core::testing::storage::repositories::settings_repo::SettingsRepository::new(db);
         settings.set(&sync_key, &0_u64).unwrap();
         // No stored cursor means subscribe starts at the current server tail.
         // Offline rows below must therefore arrive through GetMessages backfill,
@@ -12477,7 +12477,7 @@ async fn channel_restart_receive(inject_retained_failure: bool) {
             refresh.is_some(),
             "partial backfill stored rows but failed to notify the visible chat to reload"
         );
-        let settings = chatter_core::storage::repositories::settings_repo::SettingsRepository::new(
+        let settings = chatter_core::testing::storage::repositories::settings_repo::SettingsRepository::new(
             client_b2.messages().database(),
         );
         assert_eq!(
@@ -12759,7 +12759,7 @@ async fn v55_accepting_an_invite_is_enough_to_get_the_channel() {
 // ============================================================================
 #[tokio::test]
 async fn v56_linked_device_restricts_profile_visibility_with_pin() {
-    use chatter_core::services::profile_visibility::ProfileVisibility;
+    use chatter_core::testing::services::profile_visibility::ProfileVisibility;
     skip_if_no_server!();
     no_keyring_prompts();
 
@@ -12796,7 +12796,7 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
                 .get_passphrase()
                 .expect("linked DB passphrase unavailable"),
         );
-        let db = chatter_core::storage::Database::open(&path, &passphrase)
+        let db = chatter_core::testing::storage::Database::open(&path, &passphrase)
             .expect("open linked cache fixture");
         db.connection()
             .expect("linked cache connection")
@@ -12831,9 +12831,9 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
                 .get_passphrase()
                 .expect("linked DB passphrase unavailable"),
         );
-        let db = Arc::new(chatter_core::storage::Database::open(&path, &passphrase).unwrap());
-        chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db)
-            .get_bytes(chatter_core::storage::repositories::settings_repo::keys::PIN_FINGERPRINT)
+        let db = Arc::new(chatter_core::testing::storage::Database::open(&path, &passphrase).unwrap());
+        chatter_core::testing::storage::repositories::settings_repo::SettingsRepository::new(db)
+            .get_bytes(chatter_core::testing::storage::repositories::settings_repo::keys::PIN_FINGERPRINT)
             .unwrap()
             .is_some()
     };
@@ -12896,12 +12896,12 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
             .expect("linked DB passphrase unavailable"),
     );
     let db = Arc::new(
-        chatter_core::storage::Database::open(&db_path, &passphrase)
+        chatter_core::testing::storage::Database::open(&db_path, &passphrase)
             .expect("open linked profile-key store"),
     );
-    let settings = chatter_core::storage::SettingsRepository::new(db);
+    let settings = chatter_core::testing::storage::SettingsRepository::new(db);
     let key: [u8; 32] = settings
-        .get_bytes(chatter_core::storage::settings_keys::PROFILE_KEY)
+        .get_bytes(chatter_core::testing::storage::settings_keys::PROFILE_KEY)
         .expect("read linked profile key")
         .expect("linked profile key absent")
         .try_into()
@@ -13197,7 +13197,7 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
     // 1. libsignal ignores the ciphertext for a SenderKey DEM (protocol.rs
     // `for_original`: SenderKey => no ratchet key).
     let dem =
-        chatter_core::services::signal::SignalService::group_decryption_error(&[], m1_sent_at, 1)
+        chatter_core::testing::services::signal::SignalService::group_decryption_error(&[], m1_sent_at, 1)
             .expect("build the DecryptionErrorMessage");
 
     // NEGATIVES first, so by the time the positive control's resend has landed
@@ -13363,12 +13363,12 @@ async fn local_tracks(client: &Arc<ChatterClient>) -> usize {
 async fn accept_group_ring(
     client: &Arc<ChatterClient>,
     events: &mut tokio::sync::broadcast::Receiver<
-        chatter_core::services::call_worker::CallOrchestratorEvent,
+        chatter_core::testing::services::call_worker::CallOrchestratorEvent,
     >,
     call_id: &str,
     label: &str,
 ) {
-    use chatter_core::services::call_worker::CallOrchestratorEvent;
+    use chatter_core::testing::services::call_worker::CallOrchestratorEvent;
     let deadline = Instant::now() + EVENT_TIMEOUT;
     loop {
         match tokio::time::timeout_at(deadline.into(), events.recv()).await {
@@ -13800,8 +13800,8 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
 //     relays it to the live client. That is "the server relays a change".
 // ============================================================================
 
-use chatter_core::services::channel::membership_log::MembershipNotice;
-use chatter_core::services::channel::verified_state::{MemberStatus, VerifiedChannel};
+use chatter_core::testing::services::channel::membership_log::MembershipNotice;
+use chatter_core::domain::verified_state::{MemberStatus, VerifiedChannel};
 
 fn verified_of(client: &Arc<ChatterClient>, gid: &ChannelId) -> Option<VerifiedChannel> {
     client.channels().membership_log().load(gid).ok().flatten()
@@ -13876,7 +13876,7 @@ async fn try_group_decrypt(
     content: &[u8],
 ) -> Result<Vec<u8>, String> {
     use prost::Message as _;
-    let ge = chatter_core::proto::content_v1::GroupEncrypted::decode(content)
+    let ge = chatter_proto::content_v1::GroupEncrypted::decode(content)
         .map_err(|e| format!("not a GroupEncrypted: {e}"))?;
     client
         .signal()
@@ -14548,8 +14548,8 @@ async fn v61_invite_link_join_and_revocation() {
 async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     use base64::Engine as _;
     use chatter_core::domain::channel::ChannelType;
-    use chatter_core::proto::chat_v1::{self as pb, channel_action::Action};
-    use chatter_core::services::channel::verified_state::rules;
+    use chatter_proto::chat_v1::{self as pb, channel_action::Action};
+    use chatter_core::domain::verified_state::rules;
     use tokio_stream::StreamExt as _;
     skip_if_no_server!();
     no_keyring_prompts();
@@ -14564,7 +14564,7 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     let owner = common::setup_authenticated_test(&pool)
         .await
         .expect("raw owner");
-    let mut cc = chatter_core::network::grpc::ChannelClient::new(pool.channel(), pool.auth_clone());
+    let mut cc = chatter_core::testing::network::grpc::ChannelClient::new(pool.channel(), pool.auth_clone());
     let (_, genesis) = common::membership::genesis(&owner, false);
     let stream = cc
         .create_channel(

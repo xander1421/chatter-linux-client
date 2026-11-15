@@ -12,155 +12,39 @@ use chatter_core::domain::message::Message;
 
 /// Handle an incoming message (DM, channel, or anonymous).
 ///
-/// Resolves sender name + attachments, inserts into the Slint message model
-/// if the conversation is active, updates sidebar preview, and triggers
-/// attachment auto-download.
+/// Core builds the row and decides everything about it
+/// (`ChatterClient::incoming_message_row` / `incoming_message`); this decodes
+/// the row's images, starts the downloads core picked and applies the result
+/// to the Slint models.
 pub(super) async fn handle_message_received(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
-    let session = ui_ctx.session_guard();
+    let scope = ui_ctx.session_scope();
     let generation = crate::bin_ui::decode_cache::thumbnail_generation();
-    let is_call_end = matches!(
-        &message.content,
-        chatter_core::domain::message::MessageContent::Call(call)
-            if call.call_type == chatter_core::domain::message::CallMessageType::Ended
-    );
-    let message = if message.conversation_type
-        == chatter_core::domain::message::ConversationType::SavedMessages
-        || is_call_end
-    {
-        let Some(stored) = ui_ctx.get_message_local(&message.id).filter(|stored| {
-            stored.conversation_type == message.conversation_type
-                && stored.conversation_id == message.conversation_id
-                && stored.sender_id == message.sender_id
-                && stored.sent_at == message.sent_at
-                && !stored.is_deleted
-        }) else {
-            return;
-        };
-        stored
-    } else {
-        message
-    };
-    if chatter_core::services::disappearing::is_timer_notice(&message) {
+    let Some((message, row)) = ui_ctx.incoming_message_row(message) else {
         return;
-    }
-    if let Err(error) = ui_ctx.unarchive_on_incoming_message(&message) {
-        tracing::warn!(%error, "Failed to update archived chat after message");
-    }
-    let conversation_id = message.conversation_id;
-    let sender_id = message.sender_id;
-    let timestamp = message.sent_at;
-    let conv_type = message.conversation_type.clone();
-
-    // Call end events may be sent by someone other than the caller.
-    let display_sender = crate::bin_ui::converters::call_display_sender(&message);
-    // Sender name resolution (conversation-scoped) lives in core.
-    let sender_name = ui_ctx.message_sender_display_name(&display_sender);
-
-    // Sender avatar resolution (conversation-scoped) lives in core.
-    let sender_avatar = ui_ctx.message_sender_avatar(&display_sender);
-
-    // Resolve attachments from attachment service
-    let resolved_attachments: Vec<_> = message
-        .attachments
-        .iter()
-        .filter_map(|att_id| ui_ctx.get_attachment(att_id))
-        .collect();
-
-    // Build display data on this thread (before moving to UI thread)
-    // Uses unified converter that handles optional avatars
-    let mut display_data = crate::bin_ui::converters::message_to_display_data(
-        &message,
-        &sender_name,
-        &resolved_attachments,
-        sender_avatar.map(std::sync::Arc::<[u8]>::from),
-    );
-    display_data.mention_members =
-        ui_ctx.mention_members(&message.conversation_type, &message.conversation_id);
-    crate::bin_ui::converters::mark_disappearing(&ui_ctx, std::slice::from_mut(&mut display_data));
-
-    // Reply metadata — mirror the reload batch so a LIVE-received reply shows the
-    // quote thumbnail/player immediately instead of a text label until reload.
-    // Must run BEFORE decode so the local-thumbnail fallback gets decoded.
-    if display_data.is_reply {
-        display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(&message);
-        display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(&message);
-        crate::bin_ui::converters::apply_reply_parent_media(
-            &mut display_data,
-            ui_ctx.reply_parent_media(&message),
-        );
-    }
-    let mut prepared =
-        crate::bin_ui::converters::prepare_display_media_guarded(vec![display_data], true, generation).await;
-    if !session.is_current() {
+    };
+    let mut prepared = crate::bin_ui::converters::prepare_rows(vec![row], true, generation).await;
+    // Not only staleness of the result: `incoming_message` marks the
+    // conversation read and records the typing end, which must not happen
+    // in a session that has since ended.
+    if !scope.is_current() {
         return;
     }
     let Some(display_data) = prepared.pop() else {
         return;
     };
 
-    let current_user_id = ui_ctx
-        .auth_snapshot()
-        .current_user_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| {
-            ui_ctx
-                .session_current_user_id()
-                .map(|id| id.to_string())
-                .unwrap_or_default()
-        });
-
-    // Build sidebar preview + time via the shared core helpers, from the
-    // conversation's NEWEST message rather than this one: a late-delivered
-    // older message (a resend, an offline backlog) flipped the row's preview
-    // and time backwards until the next rebuild put them right again.
-    let latest = ui_ctx.latest_message(&conversation_id, &conv_type);
-    let (preview, timestamp_at) =
-        ui_ctx.sidebar_activity(Some(latest.as_ref().unwrap_or(&message)));
-    let timestamp_str = timestamp_at
-        .map(crate::bin_ui::converters::sidebar_time)
+    let update = ui_ctx.incoming_message(&message, scope);
+    let conversation_id = message.conversation_id;
+    let timestamp_str = update
+        .preview_at
+        .map(chatter_core::ui::format::sidebar_time)
         .unwrap_or_default();
 
-    // Core's one "is this message on screen" rule (mailbox DMs included).
-    let is_active = ui_ctx.is_showing(&message);
-    tracing::info!(
-        msg_conv = %conversation_id,
-        is_active,
-        ?conv_type,
-        "[UI_RECV] handle_message_received"
-    );
-
-    // If the user is looking at this conversation, flip the incoming message
-    // (and any previously-stored unreads) to read so the sidebar badge doesn't
-    // accumulate. Unread count is computed from messages.is_read.
-    if is_active {
-        if let Err(e) = ui_ctx.mark_conversation_read(&conversation_id, &conv_type) {
-            tracing::warn!(error = %e, "Failed to mark active conversation as read on incoming message");
-        }
-    }
-
-    // Classify into the typed ActiveConversation via the core helper.
-    let sidebar_conversation =
-        ui_ctx.classify_active_conversation(&conversation_id, &conv_type, sender_id);
-    // Absolute badge values, read here on the runtime (after the mark-read
-    // above), never counted up on the UI thread.
-    let badges = ui_ctx.unread_badges(&sidebar_conversation);
-    let mention_count = ui_ctx.sidebar_mention_count(&conversation_id, &conv_type);
-
-    // Fetch media thumbnail sidecars, then auto-download small images.
-    let downloadable: Vec<_> = resolved_attachments
-        .iter()
-        .filter(|a| a.needs_download())
-        .cloned()
-        .collect();
-
-    if !downloadable.is_empty() {
-        let own_sent = conv_type == chatter_core::domain::message::ConversationType::ServerDm
-            && sender_id.is_some()
-            && sender_id == ui_ctx.session_current_user_id();
+    if !update.downloads.is_empty() {
         let ui_ctx_dl = ui_ctx.clone();
         let weak_dl = window.clone();
         let conv_id = conversation_id.to_string();
@@ -169,6 +53,8 @@ pub(super) async fn handle_message_received(
             &ui_ctx_dl,
             ui_ctx_dl.active_conversation(),
         );
+        let downloadable = update.downloads.clone();
+        let own_sent = update.own_sent;
         tokio::spawn(async move {
             super::super::attachment_download::download_attachments(
                 &downloadable,
@@ -183,29 +69,22 @@ pub(super) async fn handle_message_received(
         });
     }
 
-    // The message ends its sender's typing: record it so a STARTED sent before
-    // it but delivered after it is dropped rather than shown.
-    if let Some(sid) = sender_id {
-        ui_ctx.update_typing_indicator(conversation_id, sid, timestamp, false);
-    }
-
-    let weak = window.clone();
     let ui_ctx_ui = ui_ctx.clone();
-
-    // A thread reply belongs to the thread panel, not the main message list.
-    // Route it there (and bump the root bubble's reply pill) instead of
-    // inserting it inline, which used to render every reply twice.
-    let thread_root = message.thread_id;
-    let panel_shows_this_thread = thread_root
-        .zip(ui_ctx.active_thread())
-        .map(|(root, panel)| panel.root_message_id == root)
-        .unwrap_or(false);
-
-    let _ = slint::invoke_from_event_loop(move || {
-        if !session.is_current() {
-            return;
-        }
-        let Some(w) = weak.upgrade() else { return };
+    crate::bin_ui::features::history_owner::apply_if_current(window, update, move |w, update| {
+        let is_active = update.is_active;
+        let current_user_id = update.current_user_id;
+        let sidebar_conversation = update.sidebar_conversation;
+        let badges = update.badges;
+        let mention_count = update.mention_count;
+        let preview = update.preview;
+        // A thread reply belongs to the thread panel, not the main message list.
+        // Route it there (and bump the root bubble's reply pill) instead of
+        // inserting it inline, which used to render every reply twice.
+        let thread_root = update.thread_root;
+        let panel_shows_this_thread = update.panel_shows_thread;
+        let replaces_existing = update.replaces_existing;
+        let marks_delivered = update.marks_delivered;
+        let groups_continuations = update.groups_continuations;
 
         // A message ends its sender's typing. Keyed by conversation, like the
         // typing state itself: the sender's id matched only for DMs, so in a
@@ -253,8 +132,7 @@ pub(super) async fn handle_message_received(
             // Build Slint message item
             let mut new_msg = display_data.to_slint_with_user(&current_user_id);
 
-            // Only non-anon messages get auto-delivered status (anon has its own delivery logic)
-            if !conv_type.is_anon() {
+            if marks_delivered {
                 new_msg.delivery_status = "delivered".into();
             }
 
@@ -305,9 +183,7 @@ pub(super) async fn handle_message_received(
                 chatter_core::domain::message::InsertPosition::Duplicate => {
                     // Saved snapshots and ended calls replace their existing row.
                     // Keep the model, viewport anchor and selection.
-                    if conv_type == chatter_core::domain::message::ConversationType::SavedMessages
-                        || is_call_end
-                    {
+                    if replaces_existing {
                         if let Some(row) = current_model.iter().position(|m| {
                             m.message_id == new_msg.message_id
                                 && m.sender_id == new_msg.sender_id
@@ -340,7 +216,7 @@ pub(super) async fn handle_message_received(
                             }
                         } else {
                         vec_model.insert(insert_pos, new_msg);
-                        if conv_type == chatter_core::domain::message::ConversationType::Channel {
+                        if groups_continuations {
                             // Continuation depends only on the previous row, so a
                             // single insert can change only the inserted row and the
                             // one after it — O(1) instead of re-scanning the whole
@@ -359,7 +235,7 @@ pub(super) async fn handle_message_received(
                         let mut messages: Vec<MessageItemData> = current_model.iter().collect();
                         messages.insert(insert_pos, new_msg);
                         let model = crate::bin_ui::message_model::MessageModel::from(messages);
-                        if conv_type == chatter_core::domain::message::ConversationType::Channel {
+                        if groups_continuations {
                             crate::bin_ui::features::chat::recompute_channel_continuations(&model);
                         }
                         w.global::<crate::ChatPane>()
@@ -402,7 +278,7 @@ pub(super) fn handle_message_sent(
     preview: String,
     at: chrono::DateTime<chrono::Utc>,
 ) {
-    let timestamp = crate::bin_ui::converters::sidebar_time(at);
+    let timestamp = chatter_core::ui::format::sidebar_time(at);
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -484,7 +360,7 @@ pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str
                     .parse::<u64>()
                     .is_ok_and(|ts| targets.contains(&ts))
             {
-                msg.delivery_status = chatter_core::services::message::advance_delivery_status(
+                msg.delivery_status = chatter_core::ui::advance_delivery_status(
                     msg.delivery_status.as_str(),
                     status,
                 )
@@ -528,7 +404,7 @@ pub(super) fn handle_delivery_status_update(
                     if msg.is_own && targets.contains(msg.timestamp_ns.as_str()) {
                         let mut updated = msg.clone();
                         updated.delivery_status =
-                            chatter_core::services::message::advance_delivery_status(
+                            chatter_core::ui::advance_delivery_status(
                                 msg.delivery_status.as_str(),
                                 new_status,
                             )
@@ -685,7 +561,7 @@ pub(super) fn handle_message_delete(
         // re-counted from storage instead.
         crate::bin_ui::features::thread::refresh_root_reply_counts(&w, &ui_ctx);
         if ui_ctx.prune_deleted_pins() {
-            crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+            crate::bin_ui::features::message_list::pinned_bar::refresh_pinned_ui(&w, &ui_ctx);
         }
     });
 }
@@ -794,13 +670,14 @@ pub(super) fn handle_persisted_delivery_status(
     let status = stored
         .as_ref()
         .map(|message| {
-            chatter_core::services::message::display_delivery_status(
+            chatter_core::ui::display_delivery_status(
                 &message.delivery_status,
                 message.failure_reason.as_deref(),
             )
             .to_owned()
         })
         .unwrap_or(status);
+    let can_retry = stored.as_ref().is_some_and(|message| message.can_retry_send());
     let failure_reason = stored
         .and_then(|message| message.failure_reason)
         .unwrap_or_default();
@@ -825,12 +702,13 @@ pub(super) fn handle_persisted_delivery_status(
                 };
                 if message.message_id.as_str() == message_id {
                     message.delivery_status =
-                        chatter_core::services::message::advance_delivery_status(
+                        chatter_core::ui::advance_delivery_status(
                             message.delivery_status.as_str(),
                             &status,
                         )
                         .into();
                     message.failure_reason = failure_reason.clone().into();
+                    message.can_retry = can_retry;
                     model.set_row_data(i, message);
                     // message_id is unique across both models; done.
                     return;

@@ -714,9 +714,25 @@ impl WinitWindowAdapter {
                     if let Some(this) = keyboard_curve_self.upgrade() {
                         use i_slint_core::api::{LogicalPosition, LogicalSize};
 
+                        // UIKit animates a hidden keyboard below the window;
+                        // its frame still has a nonzero height there. Report
+                        // only the visible intersection, otherwise the chat
+                        // keeps an empty keyboard-sized gap and emoji drawers
+                        // calculate zero available height after dismissal.
+                        let Some(native) = this.winit_window() else { return };
+                        // The notification uses full UIView coordinates.
+                        // winit::inner_size excludes iOS safe areas, so clipping
+                        // against it would hide part of the real keyboard.
+                        let bounds = crate::ios::content_view(&native).bounds();
+                        let right_edge = bounds.origin.x + bounds.size.width;
+                        let bottom_edge = bounds.origin.y + bounds.size.height;
+                        let left = rect.origin.x.clamp(bounds.origin.x, right_edge);
+                        let top = rect.origin.y.clamp(bounds.origin.y, bottom_edge);
+                        let right = (rect.origin.x + rect.size.width).clamp(left, right_edge);
+                        let bottom = (rect.origin.y + rect.size.height).clamp(top, bottom_edge);
                         this.window().set_virtual_keyboard(
-                            LogicalPosition::new(rect.origin.x as _, rect.origin.y as _),
-                            LogicalSize::new(rect.size.width as _, rect.size.height as _),
+                            LogicalPosition::new(left as _, top as _),
+                            LogicalSize::new((right - left) as _, (bottom - top) as _),
                             i_slint_core::InternalToken,
                         );
                     }

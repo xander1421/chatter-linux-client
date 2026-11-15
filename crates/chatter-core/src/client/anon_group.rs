@@ -367,8 +367,8 @@ impl ChatterClient {
     {
         let session = self.anon_group_invite_session()?;
         let send_session =
-            crate::services::gateway::submission::SendSession::capture(self.auth_state());
-        crate::services::gateway::submission::SEND_SESSION
+            crate::state::send_session::SendSession::capture(self.auth_state());
+        crate::state::send_session::SEND_SESSION
             .scope(send_session, async {
                 self.anon_groups()
                     .accept_invite_bound(
@@ -422,7 +422,7 @@ impl ChatterClient {
     {
         let session = self.anon_group_invite_session()?;
         let send_session =
-            crate::services::gateway::submission::SendSession::capture(self.auth_state());
+            crate::state::send_session::SendSession::capture(self.auth_state());
         let invite = {
             let _admission = session.admit().await?;
             self.anon_groups()
@@ -434,7 +434,7 @@ impl ChatterClient {
                     )
                 })?
         };
-        crate::services::gateway::submission::SEND_SESSION
+        crate::state::send_session::SEND_SESSION
             .scope(
                 send_session,
                 self.anon_groups()
@@ -449,8 +449,8 @@ impl ChatterClient {
     ) -> Result<(), crate::services::anon_group::AnonGroupError> {
         let session = self.anon_group_invite_session()?;
         let send_session =
-            crate::services::gateway::submission::SendSession::capture(self.auth_state());
-        crate::services::gateway::submission::SEND_SESSION
+            crate::state::send_session::SendSession::capture(self.auth_state());
+        crate::state::send_session::SEND_SESSION
             .scope(
                 send_session,
                 self.anon_groups()

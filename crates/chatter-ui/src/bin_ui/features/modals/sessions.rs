@@ -7,7 +7,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::session_service::Session;
+use chatter_core::client::Session;
 
 use crate::{MainWindow, SessionInfo};
 
@@ -21,8 +21,8 @@ pub(crate) fn session_to_slint(s: Session) -> SessionInfo {
         status_text: s.status_text.into(),
         // Day precision: the server records a device's activity per day
         // (Signal's lastSeen), so a time of day would be invented.
-        last_used: crate::bin_ui::converters::format_activity_day(s.last_used).into(),
-        created_at: crate::bin_ui::converters::format_timestamp(s.created_at).into(),
+        last_used: chatter_core::ui::format::format_activity_day(s.last_used).into(),
+        created_at: chatter_core::ui::format::format_timestamp(s.created_at).into(),
         is_current: s.is_current,
         is_mobile: s.is_mobile,
         can_revoke: s.can_revoke,
@@ -184,7 +184,7 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
                 w.global::<crate::SettingsPane>()
                     .set_settings_session_count(rows.len() as i32);
                 w.global::<crate::ModalHostState>().set_sessions_revocable_count(
-                    chatter_core::services::session_service::revocable_count(&rows) as i32,
+                    chatter_core::ui::revocable_count(&rows) as i32,
                 );
                 w.global::<crate::ModalHostState>()
                     .set_sessions(ModelRc::new(VecModel::from(

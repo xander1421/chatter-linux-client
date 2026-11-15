@@ -4,7 +4,7 @@ use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallResult};
 use crate::domain::ids::MessageId;
 use crate::events::DomainEvent;
-use crate::proto::content_v1::{self, Content};
+use chatter_proto::content_v1::{self, Content};
 use crate::services::call_history_recorder::{dm_call_bubble, file_dm_bubble};
 use crate::services::gateway::builders::build_stored_dm_delete_content;
 use crate::storage::repositories::CallHistoryRepository;
@@ -50,7 +50,6 @@ async fn normal_receive_from_mailbox(
     content: Content,
 ) {
     use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
-    use crate::services::inbox_processor::InboxEventProcessor;
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);
     let stats = Arc::new(parking_lot::RwLock::new(InboxStats::default()));
     let content = decoded(content);
@@ -98,7 +97,7 @@ async fn normal_receive_from_mailbox(
         );
     }
     if let Ok(event) = rx.try_recv() {
-        InboxEventProcessor::from_client(&f.client)
+        f.client.inbox_event_processor()
             .process(&event)
             .await;
     }

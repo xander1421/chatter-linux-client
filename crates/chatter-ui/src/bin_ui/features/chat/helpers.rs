@@ -55,7 +55,7 @@ pub fn build_own_message_item(
     reply_to_has_thumbnail: bool,
     reply_to_thumbnail_width: i32,
     reply_to_thumbnail_height: i32,
-    reply_media: &chatter_core::client::ReplyParentMedia,
+    reply_media: &chatter_core::ui::display::ReplyParentMedia,
     delivery_status: &str,
 ) -> crate::MessageItemData {
     use slint::{ModelRc, VecModel};
@@ -70,7 +70,7 @@ pub fn build_own_message_item(
         message_id: message_id.into(),
         sender_id: sender_id.into(),
         sender_name: sender_name.into(),
-        sender_initials: crate::bin_ui::converters::initials_from_name(sender_name).into(),
+        sender_initials: chatter_core::ui::message_row::initials_from_name(sender_name).into(),
         content,
         rich_content,
         timestamp: timestamp.into(),
@@ -99,7 +99,7 @@ pub fn build_own_message_item(
                 .waveform
                 .iter()
                 .copied()
-                .map(crate::bin_ui::converters::waveform_bar)
+                .map(chatter_core::ui::format::waveform_bar)
                 .collect::<Vec<_>>(),
         )),
         reply_to_has_thumbnail,
@@ -109,7 +109,7 @@ pub fn build_own_message_item(
         show_sender: true,
         delivery_status: delivery_status.into(),
         // Just sent, so today's chip.
-        date_separator_text: crate::bin_ui::converters::day_label(chrono::Utc::now()).into(),
+        date_separator_text: chatter_core::util::time::day_label(chrono::Utc::now()).into(),
         ..Default::default()
     }
 }
@@ -311,9 +311,8 @@ fn refresh_reaction_snapshot(
             return;
         }
     };
-    // The (author, timestamp_ns) pair is a unique message identity, so at most
-    // one row matches: stop at the hit and skip the thread pass if the main
-    // model already held it. Hoist the key strings out of the per-row loop.
+    // One row matches within each model. A pinned page can show the same
+    // message as the hidden main list, so both retained views need the update.
     let author_key = author.to_string();
     let sent_at_key = snapshot.sent_at.to_string();
     let apply = |model: &dyn Model<Data = crate::MessageItemData>| -> bool {
@@ -337,14 +336,10 @@ fn refresh_reaction_snapshot(
         }
         false
     };
-    let found;
     // Reactions never change grouping inputs. Update the same retained model
     // directly instead of performing any continuation work.
-    found = apply(&window.global::<crate::ChatPane>().get_messages());
-    // The open thread panel keeps its own model; its replies react too.
-    if !found {
-        apply(&window.global::<crate::ChatPane>().get_thread_replies());
-    }
+    apply(&window.global::<crate::ChatPane>().get_messages());
+    apply(&window.global::<crate::ChatPane>().get_thread_replies());
 }
 
 /// Remove a message from the UI model by sender_id + timestamp_ns.
@@ -451,7 +446,7 @@ mod own_echo_tests {
             false,
             0,
             0,
-            &chatter_core::client::ReplyParentMedia::default(),
+            &chatter_core::ui::display::ReplyParentMedia::default(),
             "sent",
         );
         assert_eq!(row.content, "bold italic strike and normal text");

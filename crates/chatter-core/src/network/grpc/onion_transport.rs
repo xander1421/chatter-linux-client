@@ -348,7 +348,8 @@ pub(crate) async fn shared_bootstrap(
                 // CryptoProvider. Without it, guard/HS-descriptor/rendezvous
                 // TLS silently fails ("no CryptoProvider is installed").
                 // Idempotent — Err means another init already installed one.
-                let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+                let _ =
+                    tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
                 let client = TorClient::builder()
                     .config(config)
                     .create_unbootstrapped_async()

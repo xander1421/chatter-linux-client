@@ -31,7 +31,7 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 use crate::error::CryptoError;
-use crate::proto::chat_v1::DeviceName;
+use chatter_proto::chat_v1::DeviceName;
 
 type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
 

@@ -10,7 +10,7 @@ use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 
-use crate::bin_ui::converters::initials_from_name;
+use chatter_core::ui::message_row::initials_from_name;
 use crate::bin_ui::converters::{FriendDataExt, FriendRequestExt, FriendRequestSendData};
 use crate::{FriendData, FriendRequestData, MainWindow};
 
@@ -147,7 +147,7 @@ fn publish_friends(
             } else {
                 f.user_id.parse::<chatter_core::domain::ids::UserId>().ok()
                     .and_then(|id| ui_ctx.peer_last_seen(&id))
-                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                    .map(|(presence, at)| chatter_core::ui::format::last_seen_label(presence, at))
                     .unwrap_or_default()
             };
             let mut row = f.to_slint();

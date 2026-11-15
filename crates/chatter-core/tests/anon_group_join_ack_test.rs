@@ -49,8 +49,8 @@
 //! by the group polling handler to emit `InboxEvent::AnonGroupJoinAck`,
 //! which calls `anon_group_service.handle_join_ack()`.
 
-use chatter_core::proto::content_v1::{self, AnonGroupJoinAck, Content};
-use chatter_core::services::gateway::SealedSenderResult;
+use chatter_proto::content_v1::{self, AnonGroupJoinAck, Content};
+use chatter_core::testing::services::gateway::SealedSenderResult;
 use prost::Message;
 
 /// Test that AnonGroupJoinAck content is correctly identified.
@@ -167,7 +167,7 @@ fn test_all_content_types_listed() {
 /// Test that InboxEvent has the AnonGroupJoinAck variant.
 #[test]
 fn test_inbox_event_has_join_ack_variant() {
-    use chatter_core::inbox::events::InboxEvent;
+    use chatter_core::testing::inbox::events::InboxEvent;
 
     let peer_id = chatter_core::domain::UserId::new();
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();

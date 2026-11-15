@@ -1,0 +1,7 @@
+// Native input behavior supplied by the platform at startup.
+export global InputPolicy {
+    in property <bool> dismiss-after-send: false;
+    // UIKit keyboard frames include the bottom home-indicator safe area.
+    in property <bool> keyboard-includes-safe-area: false;
+    callback dismiss-native-keyboard();
+}

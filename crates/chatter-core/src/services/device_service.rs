@@ -2,7 +2,6 @@
 //!
 //! List, rename, and revoke user devices (Signal-style multi-device support).
 
-use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 use libsignal_protocol::IdentityKeyPair;
@@ -43,26 +42,6 @@ pub(crate) fn readable_device_name(key_store: &Arc<KeyStore>, encrypted: &[u8]) 
             None
         }
     }
-}
-
-/// Device information.
-#[derive(Debug, Clone)]
-pub struct Device {
-    /// Signal device ID (1 for primary, 2-127 for linked devices).
-    pub device_id: u32,
-    /// Device name, decrypted with the account identity key. `None` when the
-    /// device was never named or its name does not decrypt.
-    pub name: Option<String>,
-    /// Device description (e.g., "Linux Desktop", "iPhone 15").
-    pub info: String,
-    /// When the device was first registered.
-    pub created_at: DateTime<Utc>,
-    /// When the device was last active.
-    pub last_active: DateTime<Utc>,
-    /// Whether this is the primary device (device_id = 1).
-    pub is_primary: bool,
-    /// Whether this is the current device making the request.
-    pub is_current: bool,
 }
 
 /// Device management errors.
@@ -146,41 +125,6 @@ impl DeviceService {
             .get(keys::CURRENT_DEVICE_ID)
             .ok()
             .flatten()
-    }
-
-    /// List all devices for the current user.
-    ///
-    /// Returns devices sorted by device_id (primary first).
-    pub async fn list_devices(
-        &self,
-        auth_client: &mut AuthClient,
-    ) -> Result<Vec<Device>, DeviceError> {
-        if !self.is_logged_in() {
-            return Err(DeviceError::NotLoggedIn);
-        }
-
-        let response = auth_client.list_devices().await?;
-
-        let mut devices: Vec<Device> = response
-            .devices
-            .into_iter()
-            .map(|d| Device {
-                device_id: d.device_id,
-                name: readable_device_name(&self.signal_service.key_store, &d.encrypted_name),
-                info: d.device_info,
-                created_at: DateTime::from_timestamp_millis(d.created_at as i64)
-                    .unwrap_or(DateTime::UNIX_EPOCH),
-                last_active: DateTime::from_timestamp_millis(d.last_active as i64)
-                    .unwrap_or(DateTime::UNIX_EPOCH),
-                is_primary: d.is_primary,
-                is_current: d.is_current,
-            })
-            .collect();
-
-        // Sort by device_id (primary device first)
-        devices.sort_by_key(|d| d.device_id);
-
-        Ok(devices)
     }
 
     /// Rename a device.

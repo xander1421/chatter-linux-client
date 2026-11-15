@@ -1,3 +1,4 @@
+import { InputPolicy } from "../theme/input_policy.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { VoiceRecording } from "voice_recording.slint";
@@ -6,7 +7,7 @@ import { ComposerReplyPreview } from "composer_reply_preview.slint";
 import { ComposerAttachmentStrip } from "composer_attachment_strip.slint";
 import { ComposerRecordingPanel } from "composer_recording_panel.slint";
 import { ComposerEditBar } from "composer_edit_bar.slint";
-import { ComposerEmojiButton, ComposerAttachButton } from "composer_action_buttons.slint";
+import { HeaderButton } from "../components/header_button.slint";
 // Message composer component
 //
 // Enhanced message input with attachment, emoji, GIF buttons, and @ mention detection.
@@ -41,8 +42,6 @@ export component MessageComposer inherits GlassSurface {
     material-level: 2;
     elevation: 3;
     border-radius: Spacing.radius-chrome;
-    border-width: 0px;
-    border-color: Materials.glass-edge;
 
     in property <bool> collapsed: false;
     // Collapsed but still holding its height, so the list above does not
@@ -287,7 +286,13 @@ export component MessageComposer inherits GlassSurface {
     // can send several messages in a row.
     function reset-after-send() {
         root.text = "";
-        root.reset-composition();
+        if InputPolicy.dismiss-after-send {
+            text-input.clear-focus();
+            root.input-dismissed();
+            InputPolicy.dismiss-native-keyboard();
+        } else {
+            root.reset-composition();
+        }
     }
 
     // Make the input method finish composing. Dropping focus is the only handle
@@ -550,23 +555,39 @@ export component MessageComposer inherits GlassSurface {
                 attachment-clicked => { root.attachment-clicked(); }
             }
 
-            ComposerEmojiButton {
+            // Emoji & GIF (unified — the pickers toggle via tabs inside). The
+            // shared plain HeaderButton at the 48px touch box on every
+            // platform; the glyph keeps the composer's 20px.
+            HeaderButton {
                 x: root.row-padding * (1 - root.lift-layout);
                 y: parent.action-y;
-                lift-layout: root.lift-layout;
-                picker-open: root.picker-open;
-                mobile: root.mobile;
-                disabled: root.disabled;
-                surface-material-level: root.material-level;
-                surface-backdrop-paused: root.backdrop-paused;
-                suspend-input => { root.suspend-input(); }
-                restore-input => { root.restore-input(); }
-                keyboard-requested => { root.keyboard-requested(); }
-                emoji-clicked => { root.emoji-clicked(); }
+                height: Spacing.touch-target-min;
+                touch: true;
+                plain: true;
+                glyph: 20px;
+                // Above the shell, an opaque neutral plate keeps media out of
+                // the glyph. Inline controls share the shell, so the plate
+                // fades with the travel: held opaque until the row landed, it
+                // showed as a grey disc inside the shell on the way down.
+                background: Colors.surface.with-alpha(root.lift-layout);
+                border-radius: self.height / 2;
+                enabled: !root.disabled;
+                // On a phone the open drawer stands where the keyboard was, so
+                // the button offers the keyboard back; a desktop window has no
+                // soft keyboard, so there the same click is "close".
+                active: root.picker-open && !root.mobile;
+                icon: root.picker-open && root.mobile ? Icons.keyboard : Icons.smile;
+                label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
+                clicked => {
+                    if !root.picker-open { root.suspend-input(); }
+                    if root.picker-open { root.keyboard-requested(); }
+                    root.emoji-clicked();
+                    if !root.picker-open { root.restore-input(); }
+                }
             }
 
             // One native input below the toolbar beside Send; compact inline when empty.
-            Rectangle {
+            input-field := Rectangle {
                 x: root.row-padding + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs);
                 y: root.row-padding + root.raised-toolbar-height;
                 width: parent.width - root.row-padding * 2
@@ -714,15 +735,24 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            if root.show-attachment-action: ComposerAttachButton {
+            // Attachment. Present in the mesh room and in a cell, absent in a
+            // mesh DM: a bitchat file packet is cleartext, every mesh DM is
+            // Noise-sealed, and core refuses a directed file for exactly that
+            // reason. Hidden while editing: an edit changes text only.
+            if root.show-attachment-action: HeaderButton {
                 x: parent.width - root.row-padding * (1 - root.lift-layout) - Spacing.touch-target-min
                     - (1 - root.lift-layout) * root.inline-terminal-width;
                 y: parent.action-y;
-                lift-layout: root.lift-layout;
-                disabled: root.disabled;
-                surface-material-level: root.material-level;
-                surface-backdrop-paused: root.backdrop-paused;
-                attachment-clicked => { root.attachment-clicked(); }
+                height: Spacing.touch-target-min;
+                touch: true;
+                plain: true;
+                glyph: 20px;
+                background: Colors.surface.with-alpha(root.lift-layout);
+                border-radius: self.height / 2;
+                enabled: !root.disabled;
+                icon: Icons.paperclip;
+                label: "Attach file";
+                clicked => { root.attachment-clicked(); }
             }
 
             // Tap starts recording. The recording bar owns Cancel and Send;

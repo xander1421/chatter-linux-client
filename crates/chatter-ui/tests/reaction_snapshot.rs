@@ -30,11 +30,11 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
     let author = UserId::new();
     let second_reactor = UserId::new();
     client.testing_set_logged_in(own, 1, "reaction fixture".into());
-    chatter_core::storage::repositories::settings_repo::SettingsRepository::new(
+    chatter_core::testing::storage::repositories::settings_repo::SettingsRepository::new(
         client.messages().database(),
     )
     .set_string(
-        chatter_core::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+        chatter_core::testing::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
         &own.to_string(),
     )
     .unwrap();
@@ -173,11 +173,8 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             .get_message_local(&target.id)
             .unwrap()
             .unwrap();
-        let initial = chatter_ui::bin_ui::converters::message_to_display_data(
-            &persisted,
-            "Author",
-            &[],
-            None,
+        let initial = chatter_ui::bin_ui::converters::MessageDisplayData::from(
+            chatter_core::ui::message_row::message_to_row(&persisted, "Author", &[], None),
         )
         .to_slint_with_user(&own.to_string());
         assert!(
@@ -259,11 +256,8 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             .get_message_local(&target.id)
             .unwrap()
             .unwrap();
-        let initial = chatter_ui::bin_ui::converters::message_to_display_data(
-            &persisted,
-            "Author",
-            &[],
-            None,
+        let initial = chatter_ui::bin_ui::converters::MessageDisplayData::from(
+            chatter_core::ui::message_row::message_to_row(&persisted, "Author", &[], None),
         )
         .to_slint_with_user(&own.to_string());
         assert!(
@@ -339,7 +333,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
     window
         .global::<chatter_ui::ChatPane>()
         .set_messages(ModelRc::new(VecModel::from(vec![row])));
-    let db = chatter_core::storage::Database::open(
+    let db = chatter_core::testing::storage::Database::open(
         &dir.path().join("data/chatter.db"),
         "reaction-fixture-passphrase",
     )

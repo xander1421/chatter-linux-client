@@ -35,6 +35,18 @@ impl MessageService {
         let mut last_error = None;
 
         for attempt in 0..2 {
+            // Send to peer's device inbox via anonymous client (no AuthInterceptor)
+            // to avoid dual-auth rejection — GRA-436. Resolved before any
+            // session is advanced or token spent: Shield with no Tor route is
+            // refused while the send is still provably local.
+            let mut message_client = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+            {
+                grpc_pool
+                    .secret_message_client()
+                    .map_err(MessageError::Network)?
+            } else {
+                grpc_pool.anonymous_message_client()
+            };
             let mut messages = Vec::with_capacity(devices.len());
             for &peer_device_id in &devices {
                 crate::services::gateway::submission::mark_submission_started()?;
@@ -78,16 +90,6 @@ impl MessageService {
                 }
             };
 
-            // Send to peer's device inbox via anonymous client (no AuthInterceptor)
-            // to avoid dual-auth rejection — GRA-436
-            let mut message_client = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
-            {
-                grpc_pool
-                    .secret_message_client()
-                    .map_err(MessageError::Network)?
-            } else {
-                grpc_pool.anonymous_message_client()
-            };
             match message_client
                 .send_with_anonymous_credential(
                     &uuid::Uuid::new_v4().to_string(),
@@ -236,9 +238,9 @@ impl MessageService {
 
 /// A bootstrap REQUEST: a KeyExchange with an empty ephemeral.
 pub(super) fn bootstrap_request(our_user_id: &UserId) -> Vec<u8> {
-    crate::proto::content_v1::Content {
-        content: Some(crate::proto::content_v1::content::Content::KeyExchange(
-            crate::proto::content_v1::KeyExchange {
+    chatter_proto::content_v1::Content {
+        content: Some(chatter_proto::content_v1::content::Content::KeyExchange(
+            chatter_proto::content_v1::KeyExchange {
                 ephemeral_pk: vec![], // 0 bytes = bootstrap REQUEST
                 conversation_id: our_user_id.to_string(),
                 timestamp: TimestampNanos::now().as_u64(),

@@ -11,10 +11,11 @@
 use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleRequest,
     GetPreKeyBundleResponse, GetProofRequest, GetProofResponse, SealedDelivery,
-    SealedDeviceMessage, SendSealedMessageRequest, SendSealedMessageResponse,
+    SealedDeviceMessage, SendGroupMessageRequest, SendGroupMessageResponse,
+    SendSealedMessageRequest, SendSealedMessageResponse,
     auth_service_client::AuthServiceClient,
     key_transparency_service_client::KeyTransparencyServiceClient,
     message_service_client::MessageServiceClient,
@@ -112,6 +113,29 @@ impl AnonymousMessageClient {
             .await
             .map_err(|s| NetworkError::from_status(&s))
             .and_then(|r| super::message_client::sealed_send_result(r.into_inner()))
+    }
+
+    /// One anonymous send to every member device of a private channel: an
+    /// SSv2 multi-recipient message authorized by a group send token, with NO
+    /// authorization header (the server refuses one). See
+    /// `SendGroupMessageRequest` in message.proto.
+    pub async fn send_group_message(
+        &mut self,
+        channel_id: &str,
+        group_send_token: Vec<u8>,
+        multi_recipient_message: Vec<u8>,
+        client_request_id: &str,
+    ) -> Result<SendGroupMessageResponse, NetworkError> {
+        self.inner
+            .send_group_message(SendGroupMessageRequest {
+                channel_id: channel_id.to_string(),
+                group_send_token,
+                multi_recipient_message,
+                client_request_id: client_request_id.to_string(),
+            })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
     }
 
     /// One sealed send under an anonymous credential (blind signature), with

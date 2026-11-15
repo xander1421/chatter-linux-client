@@ -14,18 +14,24 @@ import { DeleteConfirm } from "chat/delete_confirm.slint";
 import { LinkConfirm } from "chat/link_confirm.slint";
 import { CallConfirm } from "chat/call_confirm.slint";
 import { EmojiData } from "components/emoji_picker.slint";
-import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
+import { MentionAutocomplete } from "components/mention_autocomplete.slint";
 import { ImageViewer, EmojiData } from "components/mod.slint";
 import { CodePreviewOverlay, PdfPreviewOverlay } from "components/file_previews.slint";
 import { VideoPlayer } from "components/mod.slint";
-import { IncomingCallModal, DevicePicker, IncomingCallData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
+import { IncomingCallModal, DevicePicker } from "calls/mod.slint";
 import { SectionContextMenu, SectionHeaderContextMenu } from "sidebar/section_context_menu.slint";
 
 // Call, media and message-action surfaces above the modal stack.
 export component AppTopOverlays inherits Rectangle {
+    // A composer that is hidden or not laid out yet reports top 0 (its
+    // `changed` never fired); taking that as the limit gave the reaction
+    // picker zero height: an empty, see-through popup. An unknown top is the
+    // window's bottom instead.
+    property <length> main-composer-top: ChatPane.mention-composer-top > 0px ? ChatPane.mention-composer-top : root.height;
+    property <length> thread-composer-top: ChatPane.thread-composer-top > 0px ? ChatPane.thread-composer-top : root.height;
     property <length> popup-bottom-limit: (ChatPane.thread-panel-visible
-        ? min(ChatPane.thread-composer-top, ChatPane.mention-composer-top)
-        : ChatPane.mention-composer-top) - root.safe-area-top;
+        ? min(root.thread-composer-top, root.main-composer-top)
+        : root.main-composer-top) - root.safe-area-top;
     in property <string> active-modal;
     in property <length> context-menu-anchor-bottom;
     in property <length> context-menu-anchor-left;
@@ -276,7 +282,7 @@ export component AppTopOverlays inherits Rectangle {
         // The composer edge is measured in window coordinates; this overlay
         // starts below the status bar and shrinks with the keyboard.
         x: self.phone ? Spacing.sm : max(Spacing.sm, min(SidebarPane.sidebar-hidden ? 16px
-            : (SidebarPane.sidebar-collapsed ? 80px : 280px), root.width - self.width - Spacing.sm));
+            : root.sidebar-menu-width, root.width - self.width - Spacing.sm));
         y: max(Spacing.sm, ChatPane.mention-composer-top - root.safe-area-top - self.height - Spacing.sm);
 
         suggestion-selected(id, display) => {
@@ -328,7 +334,7 @@ export component AppTopOverlays inherits Rectangle {
         preview-audio-elapsed: ChatPane.audio-elapsed;
         retry-clicked(id) => { ChatPane.message-clicked(id); }
         info-clicked(id) => { MessageInfo.open(id); }
-        can-thread: ChatPane.conversation-kind == ConversationKind.channel && !root.context-menu-preview-from-thread;
+        can-thread: ChatPane.can-thread && !root.context-menu-preview-from-thread;
 
         close => {
             ChatPane.context-menu-visible = false;
@@ -460,7 +466,7 @@ export component AppTopOverlays inherits Rectangle {
         is-archived: SidebarPane.ctx-menu-is-archived;
         is-muted: SidebarPane.row-context-menu-muted;
         can-leave: SidebarPane.ctx-menu-can-leave;
-        can-delete-channel: SidebarPane.ctx-menu-can-delete-channel;
+        can-delete: SidebarPane.ctx-menu-can-delete;
         sections: SidebarPane.custom-sections;
 
         // An action that opens a dialog (new section, delete) keeps it focused.

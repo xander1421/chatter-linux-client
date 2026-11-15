@@ -22,11 +22,11 @@ impl ChatterClient {
         self: &Arc<Self>,
         conversation: ActiveConversation,
         ids: &[String],
-        scope: crate::services::conversation::SelectedDeleteScope,
+        scope: crate::client::conversation::SelectedDeleteScope,
         account: crate::domain::ids::UserId,
         session_revision: u64,
         completed: tokio::sync::mpsc::UnboundedSender<Vec<(crate::domain::ids::UserId, u64)>>,
-    ) -> crate::services::conversation::SelectedDeleteResult {
+    ) -> crate::client::conversation::SelectedDeleteResult {
         self.conversation(conversation)
             .delete_selected(ids, scope, account, session_revision, completed)
             .await

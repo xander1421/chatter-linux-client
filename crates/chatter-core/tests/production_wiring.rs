@@ -312,7 +312,7 @@ const TABLE: &[Entry] = &[
         symbol: "kick_member",
         defined_in: "chatter-core/src/services/anon_group/removal.rs",
         expect: Expect::Wired,
-        why: "Send-side, signed private-group kick (services/conversation.rs \
+        why: "Send-side, signed private-group kick (client/conversation \
               `remove_member`, from Settings › Members › Remove). Dead until \
               2026-10-04: the button sent the group id to the server's channel kick.",
     },
@@ -320,8 +320,36 @@ const TABLE: &[Entry] = &[
         symbol: "leave_group",
         defined_in: "chatter-core/src/services/anon_group/removal.rs",
         expect: Expect::Wired,
-        why: "Private-group leave (services/conversation.rs `leave`, from Settings and \
+        why: "Private-group leave (client/conversation `leave`, from Settings and \
               the sidebar row menu). Dead until 2026-10-04: a group could not be left.",
+    },    // ---- App lock + duress wipe ------------------------------------------
+    Entry {
+        symbol: "unlock_app",
+        defined_in: "chatter-core/src/client/app_lock.rs",
+        expect: Expect::Wired,
+        why: "The lock screen's only path to core (chatter-ui features/app_lock.rs), and the \
+              only caller of full_local_wipe. Lose it and the duress PIN wipes nothing.",
+    },
+    Entry {
+        symbol: "destroy_keys",
+        defined_in: "chatter-core/src/storage/local_wipe.rs",
+        expect: Expect::Wired,
+        why: "First step of the duress wipe (client/app_lock.rs full_local_wipe): the \
+              Keystore keys, keyring entry and key files. Lose it and the deleted files' \
+              bytes left on flash stay decryptable.",
+    },
+    Entry {
+        symbol: "wipe_rows_and_files",
+        defined_in: "chatter-core/src/storage/local_wipe.rs",
+        expect: Expect::Wired,
+        why: "Second step of the duress wipe: every row, then the data/cache/config dirs.",
+    },
+    Entry {
+        symbol: "set_app_lock",
+        defined_in: "chatter-core/src/services/notification_service/mod.rs",
+        expect: Expect::Wired,
+        why: "Hands the app lock to the notification service (app/core_services.rs). Lose \
+              it and notifications show sender and text while the app is locked.",
     },
 ];
 
@@ -681,13 +709,20 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
     /// Plaintext. A new entry here is a deliberate security review, not a typo
     /// fix.
     const EXPECTED_CONSUMERS: &[&str] = &[
-        "chatter-core/src/services/gateway/decryption.rs",
+        // Identified/group gateway: only the 0xC0 DecryptionErrorMessage
+        // ride-along is accepted as Plaintext; anything else is refused.
+        "chatter-core/src/services/gateway/decryption/mod.rs",
+        // Mailbox DM path: refuses every Plaintext before Content::decode.
+        "chatter-core/src/services/gateway/decryption/dm.rs",
         // Durable receive: `decrypt_durable_inner` returns None for Plaintext
         // before reading the bytes, surfaced as PlaintextRejected.
         "chatter-core/src/crypto/signal/receive_store.rs",
         // Plumbing: forwards the (result, type) tuple to the consumers above and
         // never interprets the bytes itself.
-        "chatter-core/src/services/signal/actor.rs",
+        "chatter-core/src/services/signal/actor/runtime.rs",
+        // The primitive's own unit tests (a `#[cfg(test)] mod tests;` file, which
+        // strip_cfg_test cannot see as test code from inside the file).
+        "chatter-core/src/crypto/signal/sealed_sender/tests.rs",
     ];
 
     let mut consumers: BTreeMap<String, bool> = BTreeMap::new();
@@ -799,7 +834,8 @@ fn fn_body(lines: &[String], name: &str) -> Option<String> {
 /// unanchored check. This test goes red naming the broken link.
 #[test]
 fn anon_kt_gate_is_anchored_to_the_device_pin() {
-    const SESSION: &str = "chatter-core/src/services/signal/session.rs";
+    // The session module is split across files (establish.rs, kt.rs, ...).
+    const SESSION: &str = "chatter-core/src/services/signal/session/";
     // (caller, callee): each caller's production body must call the callee.
     const CHAIN: &[(&str, &str)] = &[
         (
@@ -812,11 +848,15 @@ fn anon_kt_gate_is_anchored_to_the_device_pin() {
         ("check_tree_head_consistency", "hold_head_locked"),
     ];
 
-    let path = rust_sources()
+    let files: Vec<_> = rust_sources()
         .into_iter()
-        .find(|p| p.to_string_lossy().replace('\\', "/").ends_with(SESSION))
-        .expect("session.rs not found — update SESSION");
-    let lines = strip_cfg_test(&std::fs::read_to_string(&path).expect("read session.rs"));
+        .filter(|p| p.to_string_lossy().replace('\\', "/").contains(SESSION))
+        .collect();
+    assert!(!files.is_empty(), "no files under {SESSION} — update SESSION");
+    let lines: Vec<String> = files
+        .iter()
+        .flat_map(|p| strip_cfg_test(&std::fs::read_to_string(p).expect("read session module")))
+        .collect();
 
     let mut broken = Vec::new();
     for (caller, callee) in CHAIN {

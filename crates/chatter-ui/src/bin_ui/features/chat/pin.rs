@@ -14,7 +14,7 @@ use crate::{MainWindow, MessageItemData};
 fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> String {
     if let Some(text) = message.as_text() {
         if !text.is_empty() {
-            return crate::bin_ui::converters::pin_preview::text_preview(text);
+            return chatter_core::ui::pin_preview::text_preview(text);
         }
     }
     if !attachments.is_empty() {
@@ -253,7 +253,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .set_pinned_message_preview("".into());
                         }
                     }
-                    crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+                    crate::bin_ui::features::message_list::pinned_bar::refresh_pinned_ui(&w, &ui_ctx);
                 });
             });
         },

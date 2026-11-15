@@ -137,14 +137,42 @@ pub struct ChatRowSendData {
     pub member_count: u32,
     /// Channel rows: core's `can_leave_channel`.
     pub can_leave: bool,
-    /// Channel rows: core's `is_former_channel` — read-only, offer "Delete chat".
+    /// "Delete chat" in the row menu: DM rows by kind
+    /// (`ConversationType::can_delete_from_list`), channel rows when
+    /// `is_former_channel`, private-group rows once removed.
     pub can_delete: bool,
+    /// Row menu offers Mute (`ConversationType::can_mute`).
+    pub can_mute: bool,
+    /// Mute offers durations (`ConversationType::can_mute_timed`).
+    pub can_mute_timed: bool,
     /// When the conversation last saw activity: the order key. `None` (no
     /// messages yet) sinks below every dated row.
     pub last_activity: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ChatRowSendData {
+    /// The name the row shows: a secret-chat request carries its envelope
+    /// mark, an outgoing one also "(pending)". Initials still come from the
+    /// bare `display_name`.
+    #[must_use]
+    pub fn shown_name(&self) -> String {
+        match self.label {
+            ChatRowLabel::Plain => self.display_name.clone(),
+            ChatRowLabel::IncomingSecretRequest => format!("\u{1F4E9} {}", self.display_name),
+            ChatRowLabel::OutgoingSecretRequest => {
+                format!("\u{1F4EE} {} (pending)", self.display_name)
+            }
+        }
+    }
+
+    /// The activity time shown at the right of the row; empty without one.
+    #[must_use]
+    pub fn timestamp_text(&self) -> String {
+        self.timestamp_at
+            .map(crate::ui::format::sidebar_time)
+            .unwrap_or_default()
+    }
+
     /// A row of `kind` with everything else empty; builders fill what they know.
     #[must_use]
     pub fn new(
@@ -153,6 +181,8 @@ impl ChatRowSendData {
         display_name: impl Into<String>,
     ) -> Self {
         let display_name = display_name.into();
+        let (can_delete, can_mute, can_mute_timed) =
+            (kind.can_delete_from_list(), kind.can_mute(), kind.can_mute_timed());
         Self {
             kind,
             id: id.into(),
@@ -172,7 +202,9 @@ impl ChatRowSendData {
             private_channel: false,
             member_count: 0,
             can_leave: false,
-            can_delete: false,
+            can_delete,
+            can_mute,
+            can_mute_timed,
             last_activity: None,
         }
     }

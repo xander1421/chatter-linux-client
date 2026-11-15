@@ -11,7 +11,6 @@ use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continu
 
 use super::chat::recompute_channel_continuations;
 use super::history_owner::HistoryOwner;
-use crate::bin_ui::converters::messages_to_display_batch;
 use crate::{EmojiData, MainWindow, MentionSuggestion, MessageItemData};
 
 fn grouping_row(message: &MessageItemData) -> ChannelGroupingRow<'_> {
@@ -304,6 +303,60 @@ pub(crate) fn render_thread_attachments(w: &MainWindow, attachments: &[chatter_c
     w.global::<crate::ChatPane>().set_thread_pending_attachments(ModelRc::new(VecModel::from(rows)));
 }
 
+/// Show every pinned message of the open chat in the side panel, as the chat
+/// renders them (bubbles, date separators), oldest first. Returns false when
+/// the pins cannot be read as stored messages (private groups keep their own
+/// store), so the caller can fall back to the plain list.
+pub(crate) fn open_pinned_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) -> bool {
+    use chatter_core::state::ActiveConversation;
+    let conversation = ui_ctx.active_conversation();
+    if matches!(conversation, ActiveConversation::AnonGroup(_)) {
+        return false;
+    }
+    // A thread that was open gives the panel up first, as closing it would.
+    window.global::<crate::ChatPane>().invoke_close_thread_clicked();
+    let ids = ui_ctx.chat_snapshot().pinned.pinned_message_ids;
+    let mut messages: Vec<Message> = ids
+        .iter()
+        .filter_map(|id| ui_ctx.get_message_local(id))
+        .collect();
+    messages.sort_by_key(|message| message.sent_at);
+    let owner = HistoryOwner::capture(ui_ctx, conversation);
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+        let display =
+            crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(&messages), true, generation)
+                .await;
+        let current_user_id = ui_ctx
+            .session_current_user_id()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let _ = slint::invoke_from_event_loop(move || {
+            if !owner.is_current() {
+                return;
+            }
+            let Some(w) = weak.upgrade() else { return };
+            let rows: Vec<_> = display
+                .iter()
+                .map(|d| d.to_slint_with_user(&current_user_id))
+                .collect();
+            let model = VecModel::from(rows);
+            recompute_channel_continuations(&model);
+            let pane = w.global::<crate::ChatPane>();
+            pane.set_thread_root_message_id(SharedString::default());
+            pane.set_thread_reply_count(0);
+            pane.set_thread_loading(false);
+            pane.set_thread_replies(ModelRc::new(model));
+            pane.set_thread_pinned_mode(true);
+            pane.set_thread_panel_visible(true);
+            request_thread_tail(&w);
+        });
+    });
+    true
+}
+
 fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let client = ui_ctx.clone();
@@ -319,6 +372,7 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // The text stays with its thread; root first, so the text
                 // change's autosave has no thread to overwrite it under.
                 crate::bin_ui::features::composer::autosave_thread_draft(&w, &client);
+                w.global::<crate::ChatPane>().set_thread_pinned_mode(false);
                 w.global::<crate::ChatPane>()
                     .set_thread_root_message_id(SharedString::default());
                 w.global::<crate::ChatPane>()
@@ -334,6 +388,12 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 }
                 if let Some(w) = weak.upgrade() {
+                    // Opening the pinned page reuses this panel without an
+                    // active thread. Its rows may arrive before this queued
+                    // close runs; do not erase the newly opened page.
+                    if w.global::<crate::ChatPane>().get_thread_pinned_mode() {
+                        return;
+                    }
                     w.global::<crate::ChatPane>()
                         .set_thread_panel_visible(false);
                     w.global::<crate::ChatPane>()
@@ -574,16 +634,9 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                 if page.is_empty() {
                     return;
                 }
-                let display = messages_to_display_batch(
-                    &page,
-                    |ms| ui_ctx.message_sender_display_names(ms),
-                    |m| ui_ctx.message_sender_avatar(m),
-                    crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-                    |m| ui_ctx.reply_author_display_name(m),
-                    |m| ui_ctx.reply_parent_missing_for(m),
-                    |m| ui_ctx.reply_parent_media(m),
-                    |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-                ).await;
+                let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+                let display =
+                    crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(&page), true, generation).await;
                 let current_user_id = ui_ctx
                     .session_current_user_id()
                     .map(|id| id.to_string())
@@ -763,7 +816,7 @@ fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
         let mut updated = msg;
         updated.reply_count = (updated.reply_count + delta).max(0);
         updated.reply_count_text =
-            crate::bin_ui::converters::format_count(updated.reply_count, "reply", "replies").into();
+            chatter_core::ui::message_row::format_count(updated.reply_count, "reply", "replies").into();
         model.set_row_data(i, updated);
         return;
     }
@@ -788,7 +841,7 @@ pub(crate) fn refresh_root_reply_counts(w: &MainWindow, ui_ctx: &ChatterClient) 
         if count != row.reply_count {
             row.reply_count = count;
             row.reply_count_text =
-                crate::bin_ui::converters::format_count(count, "reply", "replies").into();
+                chatter_core::ui::message_row::format_count(count, "reply", "replies").into();
             model.set_row_data(i, row);
         }
     }
@@ -834,16 +887,9 @@ pub async fn thread_reply_display(
     ui_ctx: &Arc<ChatterClient>,
     message: &Message,
 ) -> Option<crate::bin_ui::converters::MessageDisplayData> {
-    let display = messages_to_display_batch(
-        std::slice::from_ref(message),
-        |ms| ui_ctx.message_sender_display_names(ms),
-        |m| ui_ctx.message_sender_avatar(m),
-        crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-        |m| ui_ctx.reply_author_display_name(m),
-        |m| ui_ctx.reply_parent_missing_for(m),
-        |m| ui_ctx.reply_parent_media(m),
-        |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-    ).await;
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let display =
+        crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(std::slice::from_ref(message)), true, generation).await;
     display.into_iter().next()
 }
 
@@ -880,23 +926,18 @@ pub fn load_thread_data(
             let content_preview = root_message
                 .as_text()
                 .map(|t| chatter_core::domain::message::truncate_preview_text(t, 100))
-                .unwrap_or_else(|| "[Attachment]".to_string());
+                // No text body: say what the root is (a call record, a
+                // notice, attachments) as the chat list does, not "[Attachment]".
+                .unwrap_or_else(|| root_message.sidebar_preview(None, None, None));
             let replies = ui_ctx
                 .list_thread_replies(&root_message_id, None, 50)
                 .unwrap_or_default();
             // The true total, not the page size: the panel offers "earlier
             // replies" while it shows fewer than this.
             let total_replies = ui_ctx.thread_reply_count(&root_message_id);
-            let display = messages_to_display_batch(
-                &replies,
-                |ms| ui_ctx.message_sender_display_names(ms),
-                |m| ui_ctx.message_sender_avatar(m),
-                crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-                |m| ui_ctx.reply_author_display_name(m),
-                |m| ui_ctx.reply_parent_missing_for(m),
-                |m| ui_ctx.reply_parent_media(m),
-                |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-            ).await;
+            let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+            let display =
+                crate::bin_ui::converters::prepare_rows(ui_ctx.message_rows(&replies), true, generation).await;
             let current_user_id = ui_ctx
                 .session_current_user_id()
                 .map(|id| id.to_string())
@@ -919,6 +960,7 @@ pub fn load_thread_data(
                         .as_str()
                         != root_id;
                     crate::bin_ui::features::composer::autosave_thread_draft(&w, &ctx);
+                    w.global::<crate::ChatPane>().set_thread_pinned_mode(false);
                     w.global::<crate::ChatPane>().set_thread_panel_visible(true);
                     w.global::<crate::ChatPane>()
                         .set_thread_root_message_id(root_id.into());
@@ -946,6 +988,21 @@ pub fn load_thread_data(
                         .set_thread_root_sender_name(sender_name.into());
                     w.global::<crate::ChatPane>()
                         .set_thread_root_content_preview(content_preview.into());
+                    // The root's picture, from its row in the open chat (already
+                    // decoded there); none when the root has no preview.
+                    {
+                        use slint::Model as _;
+                        let pane = w.global::<crate::ChatPane>();
+                        let root_id = root_message_id.to_string();
+                        let thumb = pane
+                            .get_messages()
+                            .iter()
+                            .find(|row| row.message_id.as_str() == root_id)
+                            .and_then(|row| row.attachments.iter().find(|a| a.has_thumbnail))
+                            .map(|a| a.thumbnail);
+                        pane.set_thread_root_has_thumbnail(thumb.is_some());
+                        pane.set_thread_root_thumbnail(thumb.unwrap_or_default());
+                    }
                     w.global::<crate::ChatPane>().set_thread_loading(false);
                     let slint_replies: Vec<_> = display
                         .iter()
@@ -995,7 +1052,7 @@ pub fn load_thread_data(
 }
 
 /// Scroll the thread panel to reply `index` and flash it, as a jump in the
-/// main list does (header.rs `jump_to_message`). UI thread.
+/// main list does (`message_list::jump::jump_to_message`). UI thread.
 fn show_thread_reply_at(w: &MainWindow, index: usize, message_id: SharedString) {
     let pane = w.global::<crate::ChatPane>();
     pane.set_thread_focus_index(index as i32);

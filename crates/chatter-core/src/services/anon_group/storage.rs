@@ -227,7 +227,7 @@ impl AnonGroupService {
     /// an error when any origin could not be persisted.
     pub fn create_attachments_from_pointers(
         &self,
-        pointers: &[crate::proto::content_v1::AttachmentPointer],
+        pointers: &[chatter_proto::content_v1::AttachmentPointer],
     ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         AttachmentService::new_local(self.attachment_repo.clone())
             .for_secret_chat()

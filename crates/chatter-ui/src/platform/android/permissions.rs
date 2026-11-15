@@ -21,7 +21,10 @@ use super::activity;
 /// The `ensure()` call waiting on the dialog, woken by the result callback.
 /// One at a time: a newer request drops the older sender, which wakes that
 /// waiter too, and it then reads the grant state like any other.
-static WAITER: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
+// The bool is whether the system dialog returned an answer: a request the
+// system cancelled (blocked from the background, then torn down when the
+// activity came to front) reports neither granted nor denied.
+static WAITER: Mutex<Option<tokio::sync::oneshot::Sender<bool>>> = Mutex::new(None);
 // ActivityResult has one launcher. Serialize awaitable requests so an Accept
 // tap during the early incoming-call prompt waits for that same result.
 static REQUEST_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -59,20 +62,28 @@ pub fn request(permissions: &[&str]) {
 /// Request any of `permissions` not yet granted and wait for the user's answer.
 /// True when all of them are granted afterwards.
 pub async fn ensure(permissions: &[&str]) -> bool {
+    ensure_answered(permissions).await.unwrap_or(false)
+}
+
+/// Like `ensure`, but `None` when the dialog never got an answer (the system
+/// cancelled it). A caller that would act on a refusal must not treat that
+/// as one: the user was never asked.
+pub async fn ensure_answered(permissions: &[&str]) -> Option<bool> {
     let _gate = REQUEST_GATE.lock().await;
     let pending: Vec<&str> = permissions.iter().copied().filter(|p| !has(p)).collect();
     if pending.is_empty() {
-        return true;
+        return Some(true);
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
     *WAITER.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
     if let Err(e) = launch_request(&pending) {
         WAITER.lock().unwrap_or_else(|e| e.into_inner()).take();
         tracing::error!("Android permissions: request failed: {e}");
-        return false;
+        return Some(false);
     }
-    let _ = rx.await;
-    pending.iter().all(|p| has(p))
+    let answered = rx.await.unwrap_or(true);
+    let granted = pending.iter().all(|p| has(p));
+    (answered || granted).then_some(granted)
 }
 
 /// Explain a denied call permission and offer the Android app-settings page.
@@ -163,7 +174,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnPermissionsR
                 tracing::warn!("Android permissions denied: {:?}", d);
             }
             if let Some(waiter) = WAITER.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                let _ = waiter.send(());
+                let _ = waiter.send(!g.is_empty() || !d.is_empty());
             }
         })())
     })

@@ -160,14 +160,23 @@ pub(super) fn settle_failure(
     let request_not_sent = matches!(
         &error,
         SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotSubmitted(_))
-            | SendError::Message(crate::services::message::MessageError::Network(
-                crate::error::NetworkError::RequestNotSent(_)
-            ))
+    ) || matches!(
+        &error,
+        SendError::Message(crate::services::message::MessageError::Network(e)) if e.is_provably_unsent()
     );
     if !started || request_not_sent {
         if let Some(id) = row.as_ref() {
+            let reason = match &error {
+                SendError::Message(
+                    e @ crate::services::message::MessageError::Network(
+                        crate::error::NetworkError::SecretChatNeedsTor(_),
+                    ),
+                ) => e.permanent_send_failure_reason(),
+                _ => None,
+            }
+            .unwrap_or("Message not submitted");
             let conn = db.connection().map_err(storage_error)?;
-            conn.execute("UPDATE messages SET delivery_status='failed',failure_reason='Message not submitted' WHERE id=?1 AND delivery_status NOT IN ('sent','delivered','read')", params![id])
+            conn.execute("UPDATE messages SET delivery_status='failed',failure_reason=?2 WHERE id=?1 AND delivery_status NOT IN ('sent','delivered','read')", params![id, reason])
                 .map_err(|e| storage_error(StorageError::Database(e)))?;
         }
         discard_preparation(db, key, &attempt.to_string())?;
@@ -436,7 +445,7 @@ impl ChatterClient {
                             .get("pointer")
                             .and_then(|p| serde_json::from_value::<Vec<u8>>(p.clone()).ok())
                             .and_then(|bytes| {
-                                crate::proto::content_v1::AttachmentPointer::decode(
+                                chatter_proto::content_v1::AttachmentPointer::decode(
                                     bytes.as_slice(),
                                 )
                                 .ok()

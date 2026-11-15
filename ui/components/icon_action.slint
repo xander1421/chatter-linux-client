@@ -10,7 +10,13 @@ export component IconAction inherits Rectangle {
     in property <bool> destructive: false;
     in property <bool> enabled: true;
     in property <length> size: Spacing.button-height;
+    // The drawn circle; defaults to the whole touch target.
+    in property <length> visual-size: self.width;
     callback clicked();
+    // `focus()` on the action reaches its key scope, and a container that
+    // tracks which control holds focus (a menu row) can read it here.
+    forward-focus: keys;
+    out property <bool> key-focused: keys.has-focus;
 
     width: max(Spacing.touch-target-min, root.size);
     height: self.width;
@@ -33,6 +39,8 @@ export component IconAction inherits Rectangle {
     }
 
     Rectangle {
+        width: root.visual-size;
+        height: self.width;
         transform-scale-x: touch.pressed && root.enabled ? 94% : 100%;
         transform-scale-y: touch.pressed && root.enabled ? 94% : 100%;
         animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }

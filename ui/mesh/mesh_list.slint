@@ -9,7 +9,6 @@ import { MeshListItem } from "mesh_list_item.slint";
 export component MeshList inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> touch: false;
-    callback setup-requested();
     property <string> device-count: MeshGlobal.peer-count == 1 ? "1 device nearby"
         : MeshGlobal.peer-count + " devices nearby";
     property <string> relay-count: MeshGlobal.relay-count == 1 ? "1 relay"

@@ -83,7 +83,7 @@ impl ChannelEventService {
     }
 
     fn classify_unsigned(&self, channel_id: &ChannelId, user_id: &UserId, added: bool) {
-        use crate::services::channel::verified_state::UnsignedEvent;
+        use crate::domain::verified_state::UnsignedEvent;
         let user_id = user_id.to_string();
         let event = if added {
             UnsignedEvent::Added { user_id }
@@ -104,11 +104,19 @@ impl ChannelEventService {
     /// sees it files it once.
     pub fn record_synced_departure(&self, membership: &Membership) {
         self.classify_unsigned(&membership.channel_id, &membership.user_id, false);
+        // The event time becomes the notice's `sent_at`. The join notice for
+        // this same membership already sits at `joined_at` from the same
+        // sender, so reusing it collides on idx_messages_sender_sent_at and
+        // the departure is silently dropped. One nanosecond later keeps it
+        // deterministic (a re-sync still files it once) and ordered after the
+        // join. 0 stays 0: it means "no identity, use a fresh id".
+        let joined = membership_ts(membership);
+        let event_ts = if joined == 0 { 0 } else { joined.saturating_add(1) };
         self.publish_member_removed(
             &membership.channel_id,
             &membership.user_id,
             MemberRemoval::Unexplained,
-            membership_ts(membership),
+            event_ts,
         );
     }
 
@@ -167,9 +175,9 @@ impl ChannelEventService {
     pub async fn record_departure(
         &self,
         own: &Membership,
-        departure: &crate::proto::chat_v1::Departure,
+        departure: &chatter_proto::chat_v1::Departure,
     ) -> Result<(), crate::services::channel::membership_log::LogError> {
-        use crate::proto::chat_v1::departure::Reason;
+        use chatter_proto::chat_v1::departure::Reason;
         match Reason::try_from(departure.reason) {
             // The listing moved under our paging; nothing was lost.
             Ok(Reason::Member) => {}
@@ -203,7 +211,7 @@ impl ChannelEventService {
         own: &Membership,
         removal: Option<crate::services::channel::membership_log::OwnRemoval>,
     ) {
-        use crate::proto::chat_v1::remove_member::Reason;
+        use chatter_proto::chat_v1::remove_member::Reason;
         let author = removal
             .as_ref()
             .and_then(|r| r.author.parse::<uuid::Uuid>().ok())
@@ -535,7 +543,7 @@ impl ChannelEventService {
     /// Whether our newest membership notice in `channel_id` is a join (or an
     /// "added you") filed in the last two minutes.
     fn recently_recorded_own_join(&self, channel_id: &ChannelId, me: &UserId) -> bool {
-        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+        let conv_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
             &self.channel_repo,
             channel_id,
         );
@@ -558,7 +566,7 @@ impl ChannelEventService {
     // time window, because the RPC and the broadcast carry no shared
     // id; a server-issued departure id on both would make this exact.
     fn recently_recorded_own_leave(&self, channel_id: &ChannelId, me: &UserId) -> bool {
-        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+        let conv_type = crate::storage::repositories::channel_repo::conversation_type_for_channel(
             &self.channel_repo,
             channel_id,
         );
@@ -636,7 +644,7 @@ impl ChannelEventService {
             conversation_id: *channel_id,
             // The channel's own bucket, as its messages are filed: anything
             // else is missing from its history and sidebar preview.
-            conversation_type: crate::services::message::conversion::conversation_type_for_channel(
+            conversation_type: crate::storage::repositories::channel_repo::conversation_type_for_channel(
                 &self.channel_repo,
                 channel_id,
             ),

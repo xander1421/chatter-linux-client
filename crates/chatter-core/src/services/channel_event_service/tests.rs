@@ -2,7 +2,7 @@ use super::membership::join_is_news;
 use super::stream::unannounced_invites;
 use super::*;
 use crate::domain::message::ConversationType;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     ChannelError as ProtoChannelError, ChannelModeration, OperationFailed,
 };
 use crate::storage::Database;
@@ -112,7 +112,7 @@ async fn a_heartbeat_changes_nothing() {
     let mut rx = bus.domain_sender().subscribe();
     service
         .handle_stream_event(
-            channel_event::Event::Heartbeat(crate::proto::chat_v1::StreamHeartbeat {}),
+            channel_event::Event::Heartbeat(chatter_proto::chat_v1::StreamHeartbeat {}),
             "",
         )
         .await;
@@ -139,7 +139,7 @@ async fn operation_failed_reaches_the_ui_layer() {
                 channel_id: channel_id.to_string(),
                 user_id: uuid::Uuid::new_v4().to_string(),
                 error: Some(ProtoChannelError {
-                    code: crate::proto::chat_v1::channel_error::Code::PermissionDenied as i32,
+                    code: chatter_proto::chat_v1::channel_error::Code::PermissionDenied as i32,
                     message: "not allowed".to_string(),
                     details: Default::default(),
                 }),
@@ -239,12 +239,12 @@ async fn channel_deleted_keeps_the_channel_read_only_with_one_notice() {
     assert_eq!(channel_repo.former_state(&unknown).unwrap(), None);
 }
 
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     self as pb, channel_action::Action, remove_member::Reason as RmReason,
 };
 use crate::services::channel::membership_log::AuthorBase;
 use crate::services::channel::membership_log::test_support::{FakeServer, Who, who};
-use crate::services::channel::verified_state::{ChannelRole, Policy};
+use crate::domain::verified_state::{ChannelRole, Policy};
 
 fn act(a: Action) -> pb::ChannelAction {
     pb::ChannelAction { action: Some(a) }
@@ -817,7 +817,7 @@ async fn an_unsigned_roster_add_is_ignored_for_keys_and_surfaced() {
     };
     w.service.record_synced_join(&row);
     let v = w.my_log.load(&w.ch).unwrap().unwrap();
-    use crate::services::channel::verified_state::VerifiedMembership;
+    use crate::domain::verified_state::VerifiedMembership;
     assert!(!v.contains(&ghost.to_string()));
     let mut surfaced = false;
     while let Ok(ev) = rx.try_recv() {
@@ -1039,7 +1039,7 @@ async fn synced_roster_changes_file_one_notice_each() {
 /// deletion reads as one; "still a member" changes nothing.
 #[tokio::test]
 async fn synced_own_departure_without_a_signed_change_states_no_reason() {
-    use crate::proto::chat_v1::{Departure, departure::Reason as Dep};
+    use chatter_proto::chat_v1::{Departure, departure::Reason as Dep};
     let (service, _bus, channel_repo) = setup();
     let me = as_me(&service);
     let own_in = |channel_id| {
@@ -1152,7 +1152,7 @@ async fn moderation_mute_is_mirrored_and_announced() {
                 channel_id: channel_id.to_string(),
                 user_id: me.to_string(),
                 moderator_id: uuid::Uuid::new_v4().to_string(),
-                action: crate::proto::chat_v1::channel_moderation::Action::Mute as i32,
+                action: chatter_proto::chat_v1::channel_moderation::Action::Mute as i32,
                 duration: Some(prost_types::Duration {
                     seconds: 600,
                     nanos: 0,

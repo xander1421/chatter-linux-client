@@ -46,6 +46,8 @@ pub use bus::EventBus;
 // Re-export DomainEvent from inbox::handlers (the authoritative definition)
 // Do NOT duplicate - use the canonical definition
 pub use crate::inbox::handlers::{AttachmentUploadState, DomainEvent};
+/// Payload of the friend-requests-updated client event.
+pub use crate::inbox::events::FriendRequestInfo;
 
 // Re-export EventHandlers
 pub use handlers::EventHandlers;

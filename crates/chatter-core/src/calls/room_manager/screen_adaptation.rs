@@ -42,7 +42,10 @@ impl RoomManager {
                 }
                 let is_metered = metered();
                 // Apply the initial metered target before waiting for the first stats.
+                #[cfg(not(target_os = "android"))]
                 let target = controller.target(is_metered);
+                #[cfg(target_os = "android")]
+                let target = controller.android_target(is_metered);
                 if applied != Some(target) {
                     match track.set_screen_share_encoding(target.bitrate, target.fps, target.scale)
                     {

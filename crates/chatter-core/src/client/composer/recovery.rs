@@ -179,6 +179,10 @@ impl ChatterClient {
             let size = staged_size
                 .or_else(|| client.staged_file_size(&path))
                 .unwrap_or(metadata.len());
+            // An empty file sends a placeholder nobody can open.
+            if size == 0 {
+                return Err(format!("{filename} is empty"));
+            }
             let attachment =
                 PendingAttachment::new(AttachmentId::new(), filename, path, size, mime);
             if client.add_pending_attachment_for(conversation, revision, attachment) {
@@ -206,6 +210,20 @@ impl ChatterClient {
     /// Read/decode a tray preview only on the bounded attachment worker. This
     /// skips the inline-thumbnail WebP encode/decode round trip and Lanczos pass.
     pub fn pending_image_pixels(&self, path: &std::path::Path) -> Option<image::RgbaImage> {
+        crate::media::ImageProcessor::tray_preview_from_memory(&self.pending_image_bytes(path)?)
+            .ok()
+    }
+
+    /// The in-flight bubble's pixels for a staged image, at the inline
+    /// preview bound every stored bubble uses (768 px), read from the staged
+    /// file so the bubble shows the image the moment it is sent rather than
+    /// when the upload's own thumbnail exists. Bounded attachment worker only.
+    pub fn pending_inline_pixels(&self, path: &std::path::Path) -> Option<image::RgbaImage> {
+        crate::media::ImageProcessor::inline_pixels_from_memory(&self.pending_image_bytes(path)?)
+            .ok()
+    }
+
+    fn pending_image_bytes(&self, path: &std::path::Path) -> Option<zeroize::Zeroizing<Vec<u8>>> {
         let bytes = if self.staging_crypto_key(path).is_some() {
             self.staged_image_plaintext(path)?
         } else {
@@ -224,7 +242,7 @@ impl ChatterClient {
             }
             bytes
         };
-        crate::media::ImageProcessor::tray_preview_from_memory(&bytes).ok()
+        Some(bytes)
     }
 
     /// Stage app-owned files without running encryption on the caller's executor.
@@ -282,7 +300,7 @@ impl ChatterClient {
         if size > crate::services::attachment::image_preview_ciphertext_limit() {
             return None;
         }
-        let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
+        let mut decryptor = chatter_attachment_crypto::StreamingDecryptor::new(
             std::io::BufReader::new(source),
             &key,
             &digest,
@@ -333,7 +351,7 @@ impl ChatterClient {
                 .metadata()
                 .map_err(|e| AttachmentError::FileError(e.to_string()))?
                 .len() as usize;
-            let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
+            let mut decryptor = chatter_attachment_crypto::StreamingDecryptor::new(
                 std::io::BufReader::new(source),
                 &key,
                 &digest,
@@ -432,7 +450,7 @@ impl ChatterClient {
             }
         };
         let encrypted =
-            match crate::crypto::attachment_crypto::AttachmentCrypto::encrypt_file_to_file(
+            match chatter_attachment_crypto::AttachmentCrypto::encrypt_file_to_file(
                 &path,
                 staging.path(),
             ) {

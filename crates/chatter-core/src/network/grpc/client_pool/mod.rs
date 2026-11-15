@@ -4,7 +4,9 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "onion")]
+use std::time::Instant;
 
 use parking_lot::RwLock;
 use tonic::transport::Endpoint;
@@ -156,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn in_flight_direct_probe_is_discarded_after_endpoint_generation_changes() {
-        let pool = std::sync::Arc::new(GrpcClientPool::new("http://127.0.0.1:1").unwrap());
+        let pool = std::sync::Arc::new(GrpcClientPool::new("https://127.0.0.1:1").unwrap());
         let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         pool.controlled_dial.lock().replace(Box::pin(async move {
@@ -172,7 +174,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        pool.set_url("http://127.0.0.1:1").unwrap();
+        pool.set_url("https://127.0.0.1:1").unwrap();
         release_tx.send(()).unwrap();
         let error = tokio::time::timeout(Duration::from_secs(1), probe)
             .await

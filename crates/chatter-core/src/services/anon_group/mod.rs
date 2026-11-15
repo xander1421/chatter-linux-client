@@ -24,6 +24,8 @@ mod membership;
 mod messaging;
 mod processing;
 mod removal;
+#[cfg(test)]
+mod timer_tests;
 pub(crate) mod send_ledger;
 mod storage;
 
@@ -131,10 +133,10 @@ impl AnonGroupService {
         }
         self.anon_group_repo.decline_exact_pending_invite(&invite)?;
         drop(admission);
-        let content = crate::proto::content_v1::Content {
+        let content = chatter_proto::content_v1::Content {
             content: Some(
-                crate::proto::content_v1::content::Content::AnonGroupDecline(
-                    crate::proto::content_v1::AnonGroupDecline {
+                chatter_proto::content_v1::content::Content::AnonGroupDecline(
+                    chatter_proto::content_v1::AnonGroupDecline {
                         group_id: group_id.to_vec(),
                         invite_epoch: invite.invite_epoch,
                     },

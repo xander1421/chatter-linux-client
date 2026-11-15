@@ -81,7 +81,7 @@ impl ChatterClient {
                 .ok()?;
             if let Some(message) = messages
                 .iter()
-                .find(|message| !crate::services::disappearing::is_timer_notice(message))
+                .find(|message| !crate::domain::disappearing::is_timer_notice(message))
             {
                 return Some(message.clone());
             }
@@ -185,7 +185,7 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> crate::domain::message::ConversationType {
-        crate::services::message::conversion::conversation_type_for_channel(
+        crate::storage::repositories::channel_repo::conversation_type_for_channel(
             &self.services.channel_repo,
             channel_id,
         )
@@ -296,7 +296,8 @@ impl ChatterClient {
                 CT::Channel => channel_id.is_some_and(|id| self.can_leave_channel(&id)),
                 _ => false,
             },
-            can_delete: (is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)))
+            can_delete: conv.conversation_type.can_delete_from_list()
+                || (is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)))
                 || (conv.conversation_type == CT::AnonGroup
                     && conv
                         .conversation_id

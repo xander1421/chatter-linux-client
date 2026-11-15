@@ -1,7 +1,7 @@
 use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, RequestState};
-use crate::proto::content_v1::Content;
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::content_v1::Content;
+use chatter_proto::mailbox_v1::EnvelopeType;
 use chrono::Utc;
 use prost::Message as ProstMessage;
 use uuid::Uuid;

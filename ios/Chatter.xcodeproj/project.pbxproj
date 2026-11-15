@@ -214,6 +214,7 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
+					"-ObjC",
 					"-lchatter_ios",
 					"-lc++",
 					"-framework",
@@ -228,6 +229,12 @@
 					CoreAudio,
 					"-framework",
 					CoreMedia,
+					"-framework",
+					VideoToolbox,
+					"-framework",
+					MetalKit,
+					"-framework",
+					Network,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.chatter.client;
 				SDKROOT = iphoneos;
@@ -413,6 +420,7 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
+					"-ObjC",
 					"-lchatter_ios",
 					"-lc++",
 					"-framework",
@@ -427,6 +435,12 @@
 					CoreAudio,
 					"-framework",
 					CoreMedia,
+					"-framework",
+					VideoToolbox,
+					"-framework",
+					MetalKit,
+					"-framework",
+					Network,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.chatter.client;
 				SDKROOT = iphoneos;

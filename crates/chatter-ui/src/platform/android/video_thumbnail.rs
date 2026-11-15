@@ -3,7 +3,7 @@ use super::activity;
 use crate::platform::video_source::{ThumbnailSource, VideoSource};
 use std::cell::RefCell;
 use chatter_core::media::VideoMetadata;
-use chatter_core::services::attachment::{CbcRangeDecryptor, ImageDecodeResult, ThumbnailOwner};
+use chatter_core::media::{CbcRangeDecryptor, ImageDecodeResult, ThumbnailOwner};
 use jni::{
     objects::{Global, JByteArray, JClass, JObject, JValue},
     sys::{jint, jlong},
@@ -53,7 +53,7 @@ fn video_helper(env: &mut jni::Env<'_>) -> jni::errors::Result<Arc<Global<JObjec
 }
 
 pub fn init() {
-    chatter_core::services::attachment::register_video_thumbnail_extractor(extract);
+    chatter_core::media::register_video_thumbnail_extractor(extract);
     chatter_core::media::register_video_metadata_extractor(extract_file);
 }
 

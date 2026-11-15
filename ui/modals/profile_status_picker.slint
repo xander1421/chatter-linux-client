@@ -1,59 +1,136 @@
 import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+
+struct StatusOption { mode: string, label: string, hint: string, dot: color }
+
+// One card, styled like the info card above it: the current status in one
+// row, tap to open the five choices, each saying what it does. It replaced
+// a row of five equal outline buttons whose labels were all that told them
+// apart.
 export component ProfileStatusPicker inherits VerticalLayout {
     in property <string> status-mode;
     callback change-status(string);
     padding-left: Spacing.md;
     padding-right: Spacing.md;
-    spacing: Spacing.sm;
 
-    Text {
-        text: "STATUS";
-        color: Colors.text-muted;
-        font-size: Typography.xs2;
-        font-weight: Typography.bold;
-        letter-spacing: 0.5px;
-    }
+    property <[StatusOption]> options: [
+        { mode: "auto", label: "Automatic", hint: "Online while active, away after 5 minutes idle", dot: Colors.online },
+        { mode: "online", label: "Online", hint: "Always shown as online", dot: Colors.online },
+        { mode: "away", label: "Away", hint: "Shown as away", dot: Colors.away },
+        { mode: "dnd", label: "Do not disturb", hint: "Mutes message notifications", dot: Colors.dnd },
+        { mode: "invisible", label: "Invisible", hint: "Appear offline to everyone", dot: Colors.text-muted },
+    ];
+    property <bool> expanded: false;
+    property <int> current: root.status-mode == "online" ? 1 : root.status-mode == "away" ? 2
+        : root.status-mode == "dnd" ? 3 : root.status-mode == "invisible" ? 4 : 0;
 
-    HorizontalLayout {
-        spacing: Spacing.xs;
-        for opt in [
-            { mode: "auto", label: "Auto", dot: Colors.online },
-            { mode: "online", label: "Online", dot: Colors.online },
-            { mode: "away", label: "Away", dot: Colors.away },
-            { mode: "dnd", label: "DND", dot: Colors.dnd },
-            { mode: "invisible", label: "Invisible", dot: Colors.text-muted },
-        ]: Rectangle {
-            height: Spacing.button-height;
-            horizontal-stretch: 1;
-            border-radius: 6px;
-            border-width: root.status-mode == opt.mode ? Spacing.stroke : 0px;
-            border-color: Colors.primary;
-            background: status-touch.has-hover ? Colors.surface-hover : transparent;
-            // A choice of one: a radio that says which status it sets.
-            accessible-role: radio-button;
-            accessible-label: opt.mode == "dnd" ? "Do not disturb" : opt.label;
-            accessible-checkable: true;
-            accessible-checked: root.status-mode == opt.mode;
-            accessible-action-default => { root.change-status(opt.mode); }
-            KeyFocus { border-radius: parent.border-radius; activate => { root.change-status(opt.mode); } }
-            status-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.change-status(opt.mode); }
-            }
-            HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.xs;
-                VerticalLayout { alignment: center;
-                    Rectangle { width: 8px; height: 8px; border-radius: 4px; background: opt.dot; }
+    Rectangle {
+        height: card.preferred-height;
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+        clip: true;
+
+        card := VerticalLayout {
+            // Summary row: what everyone sees now.
+            Rectangle {
+                height: max(Spacing.touch-target-min, summary.preferred-height);
+                background: summary-touch.pressed ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Status: " + root.options[root.current].label;
+                accessible-expandable: true;
+                accessible-expanded: root.expanded;
+                accessible-action-default => { root.expanded = !root.expanded; }
+                KeyFocus { border-radius: Spacing.radius-lg; activate => { root.expanded = !root.expanded; } }
+                summary-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.expanded = !root.expanded; }
                 }
-                Text {
-                    text: opt.label;
-                    vertical-alignment: center;
-                    color: root.status-mode == opt.mode ? Colors.text-primary : Colors.text-muted;
-                    font-size: Typography.xs;
+                summary := HorizontalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.md;
+                    VerticalLayout { alignment: center;
+                        Rectangle { width: 10px; height: 10px; border-radius: 5px; background: root.options[root.current].dot; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        spacing: Spacing.xxs;
+                        Text {
+                            text: root.options[root.current].label;
+                            color: Colors.text-primary;
+                            font-size: Typography.base;
+                        }
+                        Text {
+                            text: "Status";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                        }
+                    }
+                    VerticalLayout { alignment: center;
+                        Image {
+                            source: Icons.chevron-down;
+                            width: 18px;
+                            height: 18px;
+                            colorize: Colors.text-muted;
+                            rotation-angle: root.expanded ? 180deg : 0deg;
+                            animate rotation-angle { duration: 150ms; }
+                        }
+                    }
+                }
+            }
+
+            if root.expanded: VerticalLayout {
+                Rectangle { height: Spacing.stroke; background: Colors.divider; }
+                for opt[i] in root.options: Rectangle {
+                    height: max(Spacing.touch-target-min, row.preferred-height);
+                    background: row-touch.pressed ? Colors.surface-hover : transparent;
+                    // A choice of one: a radio that says which status it sets.
+                    accessible-role: radio-button;
+                    accessible-label: opt.label;
+                    accessible-description: opt.hint;
+                    accessible-checkable: true;
+                    accessible-checked: i == root.current;
+                    accessible-action-default => { root.change-status(opt.mode); root.expanded = false; }
+                    KeyFocus { activate => { root.change-status(opt.mode); root.expanded = false; } }
+                    row-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.change-status(opt.mode); root.expanded = false; }
+                    }
+                    row := HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        padding-top: Spacing.sm;
+                        padding-bottom: Spacing.sm;
+                        spacing: Spacing.md;
+                        VerticalLayout { alignment: center;
+                            Rectangle { width: 10px; height: 10px; border-radius: 5px; background: opt.dot; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            spacing: Spacing.xxs;
+                            Text { text: opt.label; color: Colors.text-primary; font-size: Typography.sm; }
+                            Text { text: opt.hint; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+                        }
+                        VerticalLayout { alignment: center;
+                            Image {
+                                source: Icons.check;
+                                width: 18px;
+                                height: 18px;
+                                colorize: Colors.primary;
+                                opacity: i == root.current ? 1 : 0;
+                            }
+                        }
+                    }
                 }
             }
         }

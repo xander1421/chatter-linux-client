@@ -2,7 +2,7 @@ use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::proto::content_v1::{self, AnonDmAccept, Content};
+use chatter_proto::content_v1::{self, AnonDmAccept, Content};
 use crate::util::time::TimestampNanos;
 use chrono::Utc;
 
@@ -325,9 +325,9 @@ impl AnonDmService {
         dm.peer_display_name = peer_display_name;
         dm.peer_avatar = peer_avatar;
         self.anon_dm_repo.insert_incoming_replacing_live(&dm)?;
-        crate::services::disappearing::initialize_anon_dm_timer(
+        crate::services::disappearing::initialize_secret_chat_timer(
             &self.settings_repo, &self.message_repo,
-            &conversation_id,
+            crate::services::disappearing::SecretChat::Dm(conversation_id),
             &sender_id,
             TimestampNanos::now().as_u64(),
         )?;
@@ -375,7 +375,7 @@ impl AnonDmService {
                 crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
                     self.settings_repo.database().clone(),
                 )
-                .insert_armed(&msg.id, crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS)?;
+                .insert_armed(&msg.id, crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS)?;
             }
         }
 
@@ -420,9 +420,9 @@ impl AnonDmService {
 
         // Store the conversation
         self.anon_dm_repo.insert_incoming_replacing_live(dm)?;
-        crate::services::disappearing::initialize_anon_dm_timer(
+        crate::services::disappearing::initialize_secret_chat_timer(
             &self.settings_repo, &self.message_repo,
-            &dm.id,
+            crate::services::disappearing::SecretChat::Dm(dm.id),
             &dm.peer_id,
             TimestampNanos::now().as_u64(),
         )?;

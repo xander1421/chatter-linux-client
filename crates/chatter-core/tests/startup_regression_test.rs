@@ -184,7 +184,7 @@ fn test_05_keyring_with_env_bypass() {
 
 #[test]
 fn test_06_database_open() {
-    use chatter_core::storage::Database;
+    use chatter_core::testing::storage::Database;
 
     println!("\n=== Testing database open ===");
 
@@ -224,7 +224,7 @@ fn test_06_database_open() {
 
 #[test]
 fn test_07_grpc_pool_creation() {
-    use chatter_core::network::grpc::GrpcClientPool;
+    use chatter_core::testing::network::grpc::GrpcClientPool;
 
     println!("\n=== Testing gRPC pool creation ===");
 
@@ -257,7 +257,7 @@ fn test_08_infrastructure_container() {
         set_env("XDG_DATA_HOME", "/tmp/chatter-startup-test-infra");
     }
 
-    use chatter_core::app::InfrastructureContainer;
+    use chatter_core::app::infrastructure::InfrastructureContainer;
 
     let (result, duration) = with_timeout("InfrastructureContainer::new", || {
         InfrastructureContainer::new(None, "https://localhost:50051")
@@ -295,7 +295,7 @@ fn test_09_app_context() {
         set_env("XDG_DATA_HOME", "/tmp/chatter-startup-test-ctx");
     }
 
-    use chatter_core::app::AppContext;
+    use chatter_core::app::context::AppContext;
 
     let (result, duration) = with_timeout("AppContext::new", || AppContext::new(None))
         .expect("AppContext::new should not hang");
@@ -494,7 +494,7 @@ fn test_13_infrastructure_real_path() {
     let (tx, rx) = mpsc::channel();
 
     let handle = thread::spawn(move || {
-        use chatter_core::app::InfrastructureContainer;
+        use chatter_core::app::infrastructure::InfrastructureContainer;
 
         println!("  [thread] Creating InfrastructureContainer...");
         let start = std::time::Instant::now();

@@ -1,13 +1,11 @@
 //! Sidebar callbacks.
 //!
-//! Handles channel/DM selection, settings, and profile.
+//! Handles the conversation list, sections, archive, settings, and profile.
+//! Opening a conversation lives in `features::chat::open`.
 
 use slint::ComponentHandle;
 mod anon_mode;
-pub mod channel;
-pub mod dm;
 pub(crate) mod navigation;
-pub mod private_group;
 pub mod sections;
 
 use std::sync::Arc;
@@ -16,7 +14,6 @@ use std::time::Duration;
 
 use chatter_core::client::ChatterClient;
 
-use crate::bin_ui::audio_state;
 use crate::{MainWindow, run_ui};
 
 static NEXT_ARRIVAL_SERIAL: AtomicI32 = AtomicI32::new(1);
@@ -275,7 +272,6 @@ fn settle_arrivals(
 }
 
 // Re-export public functions
-pub use channel::load_channel_into_ui;
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -307,18 +303,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             pane.get_archive_open()) {
             pane.set_active_tab("chats".into());
             pane.set_mobile_show_chat(true);
-            select_conversation(&window, target);
+            super::chat::open::select_conversation(&window, target);
         }
     });
     wire_context_menu_mute(window, ui_ctx);
     wire_context_menu_mark_read(window, ui_ctx);
     wire_context_menu_mark_unread(window, ui_ctx);
     wire_context_menu_mute_for(window, ui_ctx);
-    channel::wire_channel_selected(window, ui_ctx);
-    dm::wire_dm_selected(window, ui_ctx);
-    dm::wire_delete_conversation(window, ui_ctx);
-    dm::wire_secret_request_answer(window, ui_ctx);
-    dm::wire_start_secret_chat(window, ui_ctx);
 
     // On a phone, leaving the chat pane left its conversation "active": the
     // next message there was marked read (and receipted) unseen, and its row
@@ -331,8 +322,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             refresh_selection(&w, &ctx);
         }
     });
-    private_group::wire_private_group_selected(window, ui_ctx);
-    navigation::wire_saved_messages(window, ui_ctx);
     navigation::wire_settings_clicked(window, ui_ctx);
     navigation::wire_profile_clicked(window, ui_ctx);
     navigation::wire_toggle_sidebar(window, ui_ctx);
@@ -455,60 +444,6 @@ pub(crate) fn refresh_mute_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move { history_changed(&weak, &ui_ctx) });
-}
-
-/// Tell the message list where to open.
-///
-/// The anchor comes from `ConversationHandle::mark_as_read`, which captured it
-/// on its way past — by the time the page below is loaded, every row is read
-/// and the boundary no longer exists in the data. Core decides *which* row
-/// (`UnreadAnchor::divider_index`); this only hands the number to the list.
-///
-/// `is_at_bottom` is reset here on purpose: it is sticky across conversations,
-/// so without this an open lands wherever the previous conversation's scroll
-/// left it.
-pub(crate) fn apply_unread_anchor(
-    window: &MainWindow,
-    anchor: chatter_core::domain::message::UnreadAnchor,
-    page: &[chatter_core::domain::message::Message],
-) {
-    let index = anchor.divider_index(page);
-    window
-        .global::<crate::ChatPane>()
-        .set_unread_index(index.map_or(-1, |i| i as i32));
-    window
-        .global::<crate::ChatPane>()
-        .set_unread_count(anchor.unread_count as i32);
-    window
-        .global::<crate::ChatPane>()
-        .set_is_at_bottom(index.is_none());
-}
-
-/// Fire the sidebar-open callback for `conv` — the same entry point a row tap
-/// uses, so the message list is (re)loaded from storage. False for the
-/// variant no open callback exists for (`None`).
-pub(crate) fn select_conversation(
-    window: &MainWindow,
-    conv: chatter_core::state::ActiveConversation,
-) -> bool {
-    use chatter_core::state::ActiveConversation;
-    super::header::cancel_pending_jump_for(conv);
-    match conv {
-        ActiveConversation::Channel(id) => window
-            .global::<crate::SidebarPane>()
-            .invoke_channel_selected(id.to_string().into()),
-        ActiveConversation::ServerDm { peer_id } => window
-            .global::<crate::SidebarPane>()
-            .invoke_dm_selected(peer_id.to_string().into()),
-        ActiveConversation::AnonDm(id) => window
-            .global::<crate::SidebarPane>()
-            .invoke_dm_selected(id.to_string().into()),
-        ActiveConversation::AnonGroup(id) => window
-            .global::<crate::SidebarPane>()
-            .invoke_private_group_selected(id.to_string().into()),
-        ActiveConversation::None => return false,
-    }
-    true
 }
 
 /// Recompute `is_selected` on every sidebar model item from the typed
@@ -669,39 +604,6 @@ pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterCl
         return;
     }
     sections::queue_refresh(window, ui_ctx);
-}
-
-/// Apply pinned message state to the UI.
-///
-/// Shared helper used by channel, DM, and private group sidebar handlers
-/// to update the pinned message bar after loading pinned messages.
-/// Pins belong to the same history request as the model/header they accompany.
-pub(crate) fn apply_pinned_ui_owned(
-    weak: &slint::Weak<MainWindow>,
-    client: &Arc<ChatterClient>,
-    ids: Vec<chatter_core::domain::ids::MessageId>,
-    preview: String,
-    owner: &crate::bin_ui::features::history_owner::HistoryOwner,
-) {
-    let client = client.clone();
-    crate::run_history_ui!(weak, owner, |w| {
-        if ids.is_empty() {
-            client.clear_pinned();
-            w.global::<crate::ChatPane>().set_has_pinned_messages(false);
-            w.global::<crate::ChatPane>()
-                .set_pinned_message_preview("".into());
-            w.global::<crate::ChatPane>().set_pinned_total_count(0);
-        } else {
-            let count = ids.len() as i32;
-            client.set_pinned_messages(ids);
-            w.global::<crate::ChatPane>()
-                .set_has_pinned_messages(client.pinned_should_show());
-            w.global::<crate::ChatPane>()
-                .set_pinned_message_preview(preview.into());
-            w.global::<crate::ChatPane>().set_pinned_current_index(1);
-            w.global::<crate::ChatPane>().set_pinned_total_count(count);
-        }
-    });
 }
 
 /// Update a sidebar item's preview text and timestamp, moving it to the top
@@ -1102,50 +1004,11 @@ pub(crate) fn conversation_removed(
         if ui_ctx_ui.composer_session_is_current(session_revision)
             && ui_ctx_ui.active_conversation() == conv
         {
-            close_open_conversation(&w, &ui_ctx_ui);
+            super::chat::open::close_open_conversation(&w, &ui_ctx_ui);
         }
     });
     sections::refresh_sections_ui(weak, ui_ctx);
     rebuild_chat_list(weak, ui_ctx);
-}
-
-/// Close whatever conversation is open: the pane shows "Select a
-/// conversation" on desktop, and a phone returns to the list. UI thread.
-/// Pushed screens are left alone: their owners close them separately.
-pub(crate) fn close_open_conversation(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // The thread panel hangs off the conversation; it stayed open beside the
-    // empty pane. Keep its draft, as its own close button does.
-    if w.global::<crate::ChatPane>().get_thread_panel_visible() {
-        crate::bin_ui::features::composer::autosave_thread_draft(w, ui_ctx);
-        w.global::<crate::ChatPane>()
-            .set_thread_root_message_id("".into());
-        w.global::<crate::ChatPane>()
-            .set_thread_composer_text("".into());
-        w.global::<crate::ChatPane>().set_thread_panel_visible(false);
-        w.global::<crate::ChatPane>()
-            .set_thread_replies(slint::ModelRc::new(slint::VecModel::default()));
-    }
-    ui_ctx.select_conversation(chatter_core::state::ActiveConversation::None);
-    w.invoke_refresh_screen_protection();
-    w.global::<crate::ChatPane>()
-        .set_messages(slint::ModelRc::new(
-            crate::bin_ui::message_model::MessageModel::default(),
-        ));
-    // No name = nothing open: the pane shows "Select a conversation".
-    w.global::<crate::ChatPane>().set_channel_name("".into());
-    w.global::<crate::ChatPane>().set_header_can_call(false);
-    w.global::<crate::ChatPane>().set_header_can_invite(false);
-    w.global::<crate::ChatPane>()
-        .set_header_can_open_settings(false);
-    w.global::<crate::ChatPane>()
-        .set_header_can_open_pinned_list(false);
-    // The empty detail pane is useful on desktop; on a phone the closed
-    // conversation must reveal the list without another Back.
-    if w.get_is_mobile_platform() {
-        w.global::<crate::SidebarPane>().set_mobile_show_chat(false);
-        w.global::<crate::SidebarPane>()
-            .set_active_tab("chats".into());
-    }
 }
 
 /// [`rebuild_chat_list`] from the UI thread. Rows are rebuilt from local
@@ -1162,61 +1025,4 @@ pub fn refresh_chat_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let _ = ui_ctx.list_friends_with_profiles().await;
         rebuild_chat_list(&weak, &ui_ctx);
     });
-}
-
-/// Opening a conversation shows it. On a phone the chat pane is a separate
-/// screen, and only the sidebar's own row taps used to raise it: every other
-/// opener (Friends and Profile "Message", search, call history, sections)
-/// selected the conversation behind the list and looked like it did nothing.
-/// Runs on the UI thread, from the selection callbacks.
-pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
-    if let Some(w) = weak.upgrade() {
-        // A conversation lives on the Chats tab: opened from Contacts, Calls
-        // or a pushed profile, it must not stay hidden behind them.
-        crate::bin_ui::features::back::reset_to_chats(&w);
-        // Picker visibility belongs to the composer being left. Reset at the
-        // synchronous entry point as well as on phone Back: a two-pane switch
-        // does not change mobile-show-chat, and the chat child is recreated.
-        w.global::<crate::ChatPane>()
-            .set_composer_emoji_picker_visible(false);
-        w.global::<crate::ChatPane>()
-            .set_composer_gif_picker_visible(false);
-        // Clear the old header synchronously, before revealing the pane or
-        // waiting for the next conversation's asynchronous load.
-        w.global::<crate::ChatPane>().set_loading_messages(true);
-        w.global::<crate::ChatPane>().set_channel_id("".into());
-        w.global::<crate::ChatPane>().set_header_last_seen("".into());
-        w.global::<crate::ChatPane>().set_channel_name("".into());
-        w.global::<crate::ChatPane>().set_header_can_call(false);
-        w.global::<crate::ChatPane>().set_header_can_invite(false);
-        w.global::<crate::ChatPane>()
-            .set_header_can_open_settings(false);
-        w.global::<crate::ChatPane>()
-            .set_header_can_open_pinned_list(false);
-        w.global::<crate::ChatPane>().set_topic("".into());
-        w.global::<crate::ChatPane>().set_member_count(0);
-        w.global::<crate::ChatPane>()
-            .set_header_presence_status("offline".into());
-        w.global::<crate::ChatPane>()
-            .set_channel_avatar_source(slint::Image::default());
-        w.global::<crate::ChatPane>().set_channel_has_avatar(false);
-        // The header's typing line belongs to the conversation being left.
-        w.global::<crate::ChatPane>()
-            .set_typing_indicator("".into());
-        if w.get_is_mobile_platform() {
-            w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
-        }
-    }
-}
-
-/// Stop any currently playing audio and clear state.
-pub(crate) fn stop_audio_playback() {
-    // Stop the audio player
-    if let Ok(mut guard) = audio_state::get_audio_player().lock() {
-        if let Some(ref mut player) = *guard {
-            player.stop();
-        }
-    }
-    // Clear the audio state
-    audio_state::clear_state();
 }

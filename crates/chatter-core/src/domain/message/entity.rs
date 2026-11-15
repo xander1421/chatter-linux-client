@@ -214,8 +214,15 @@ impl Message {
     /// transport limit permanently.
     #[must_use]
     pub fn can_retry_send(&self) -> bool {
+        let reason = self.failure_reason.as_deref();
+        // A channel refusal is final: the send journal goes `terminal` and
+        // `durable_channel_retry` refuses a fresh post, so Retry would only
+        // ever fail.
+        let channel_refused = self.conversation_type == ConversationType::Channel
+            && matches!(reason, Some("Message rejected" | "Not allowed" | "You are muted"));
         self.delivery_status == "failed" && !self.is_deleted
-            && self.failure_reason.as_deref() != Some("Message too long")
+            && reason != Some("Message too long")
+            && !channel_refused
     }
 
     /// Menu actions for this message. `is_own` is the caller's authorship check
@@ -234,6 +241,23 @@ impl Message {
             self.conversation_type.is_one_to_one_dm(),
         );
         actions.resend &= self.can_retry_send();
+        // A call record is an information point, not a message (owner,
+        // 2026-11-14): no reply, thread, reaction, pin, forward, edit or
+        // info. In a channel it exists only on each client, so the server
+        // refused a reply to it ("reply parent must exist in this channel")
+        // and it cannot be deleted for everyone either; a 1:1 record has an
+        // id both peers share and keeps delete-for-everyone.
+        if matches!(self.content, MessageContent::Call(_)) {
+            actions.reply = false;
+            actions.react = false;
+            actions.edit = false;
+            actions.pin = false;
+            actions.forward = false;
+            actions.info = false;
+            if self.conversation_type == ConversationType::Channel {
+                actions.delete_for_everyone = false;
+            }
+        }
         actions
     }
 
@@ -335,12 +359,23 @@ impl Message {
 
         match &self.content {
             // A call or a notice has no body; say what it was.
+            // A channel call's row is one row updated in place from STARTED
+            // to ENDED (`file_channel_call_event`), so it says which, as its
+            // bubble does; "Incoming call" outlived the call it named.
             MessageContent::Call(call) => {
+                let noun = if call.is_video { "video call" } else { "call" };
+                let channel = matches!(self.conversation_type, ConversationType::Channel);
                 let what = match call.call_type {
-                    CallMessageType::Missed => "Missed call",
-                    CallMessageType::Declined => "Declined call",
-                    _ if current_user_id == Some(&call.initiator_id) => "Outgoing call",
-                    _ => "Incoming call",
+                    CallMessageType::Missed => format!("Missed {noun}"),
+                    CallMessageType::Declined => format!("Declined {noun}"),
+                    CallMessageType::Started if channel => {
+                        if call.is_video { "Video call started" } else { "Call started" }.to_string()
+                    }
+                    CallMessageType::Ended if channel => {
+                        if call.is_video { "Video call ended" } else { "Call ended" }.to_string()
+                    }
+                    _ if current_user_id == Some(&call.initiator_id) => format!("Outgoing {noun}"),
+                    _ => format!("Incoming {noun}"),
                 };
                 return format!("{}\u{1F4DE} {}", pin, what);
             }

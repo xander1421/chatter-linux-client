@@ -39,12 +39,18 @@ mod mentions;
 mod messaging;
 mod search_visible;
 mod send_attempt;
+mod shield_recovery;
 pub use search_visible::{SearchPage, VisibleSearchHit};
 pub use send_attempt::await_send_with_notice;
 mod receipts;
+mod delivery_receipt_batch;
 pub use crate::network::connection::ConnectionState;
+/// `tracing` target of the onion connector, for the Tor stage trace.
+pub use crate::network::grpc::ONION_TRANSPORT_LOG_TARGET;
 pub use anon_group::{AnonGroupInviteCandidate, PrivateGroupRoster};
-pub use messaging::{ChannelInviteRow, ForwardDestination, InviteCandidate, ReplyParentMedia};
+pub use messaging::{
+    ChannelInviteRow, ConversationPage, ForwardDestination, IncomingUpdate, InviteCandidate, PageAnchor,
+};
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
 pub use secret_chat::{SecretChatError, SecretChatGate};
 
@@ -135,7 +141,7 @@ impl From<crate::storage::mesh_binding_store::PeerBinding> for MeshBindingStatus
 }
 
 mod activity;
-mod notification;
+pub(crate) mod notification;
 pub use activity::ActivityStatus;
 mod picker_history;
 mod pin;
@@ -165,7 +171,7 @@ use crate::error::NetworkError;
 use crate::events::{DomainEvent, EventBus};
 use crate::inbox::DeviceInboxProvider;
 use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::AttachmentPointer;
+use chatter_proto::content_v1::AttachmentPointer;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
@@ -175,7 +181,7 @@ use crate::services::auth_service::AuthService;
 #[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
-use crate::services::conversation::ConversationHandle;
+use conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::gateway::outgoing::{
     OutgoingIntent, OwnedOutgoingServices, QuoteIntent, SendError, SendResult, route_outgoing_owned,
@@ -192,8 +198,10 @@ use crate::services::user::UserService;
 use crate::state::JarvisState;
 use crate::state::chat_state::PendingAttachment;
 use crate::state::{
-    ActiveConversation, AuthState, ChatState, MessageState, OfflineState, UserState,
+    ActiveConversation, AuthState, ChatState, OfflineState,
 };
+#[cfg(test)]
+use crate::state::MessageState;
 use crate::storage::settings_keys;
 use crate::system::Directories;
 
@@ -261,6 +269,7 @@ impl ClientBuilder {
             tasks: Mutex::new(Vec::new()),
             pending_receipts: Mutex::new(Vec::new()),
             sent_receipts: Mutex::new(Vec::new()),
+            dm_delivery_receipts: Default::default(),
             upload_cancels: Mutex::new(std::collections::HashMap::new()),
             started: AtomicBool::new(false),
             channel_delivery_shutdown: AtomicBool::new(false),
@@ -270,7 +279,7 @@ impl ClientBuilder {
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
             message_backup_service: std::sync::OnceLock::new(),
-            outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
+            outgoing_typing: outgoing_typing::OutgoingTypingManager::new(),
             link_device_service: std::sync::OnceLock::new(),
             anon_mode,
             pending_update: Mutex::new(None),
@@ -534,8 +543,11 @@ pub struct ChatterClient {
     activity_listener_started: AtomicBool,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     /// Failed ephemeral receipts for this process and auth session only.
-    pub(crate) pending_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
-    pub(crate) sent_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
+    pub(crate) pending_receipts: Mutex<Vec<conversation::PendingReceipt>>,
+    pub(crate) sent_receipts: Mutex<Vec<conversation::PendingReceipt>>,
+    /// Friend-DM delivery receipts waiting out their random delay.
+    pub(crate) dm_delivery_receipts:
+        delivery_receipt_batch::ReceiptBatch<delivery_receipt_batch::DmReceiptKey>,
     /// Cancellation tokens for in-flight outgoing attachment uploads, keyed by
     /// the tray (pending) attachment id. The composer's per-file cancel X
     /// aborts just that file via [`Self::cancel_attachment_upload`]; the upload
@@ -558,7 +570,7 @@ pub struct ChatterClient {
     /// Cached call signaling service (persistent for pending state).
     call_signaling: std::sync::OnceLock<crate::services::call_signaling::CallSignalingService>,
     /// Outgoing typing-indicator state machine (Signal refresh/pause timers).
-    outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager,
+    outgoing_typing: outgoing_typing::OutgoingTypingManager,
     /// Cached SVR backup service.
     svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
     /// Cached message-history backup service (L7 message-backup).
@@ -643,7 +655,39 @@ pub struct ChatterClient {
 
 pub use crate::services::user::ReceivedFriendRequestProfile;
 
+// Service types that are part of this façade's signatures: the error a
+// façade method returns, the value it hands back, or the setting it takes.
+// Each is named here because a caller of that method has to name it too.
+pub use crate::services::UserError;
+pub use crate::services::account_service::AccountError;
+pub use crate::services::anon_dm::AnonDmError;
+pub use crate::services::appearance::{MessageDensity, TextSize, ThemeMode};
+pub use crate::services::channel::ChannelError;
+#[cfg(feature = "jarvis")]
+pub use crate::services::jarvis::JarvisCommand;
+pub use crate::services::key_recovery::KeyRecoveryNeed;
+pub use crate::services::link_device_service::{LinkProgress, PinVerification};
+pub use crate::services::media_gallery::{GalleryAttachment, GalleryMessage};
+#[cfg(feature = "mesh")]
+pub use crate::services::mesh::{
+    MeshConversation, MeshDelivery, MeshError, MeshEvent, MeshMessage, MeshSidebarRow, MeshStatus,
+    RadioDown,
+};
+pub use crate::services::notification_service::NotificationDetailLevel;
+pub use crate::services::profile_visibility::ProfileVisibility;
+pub use crate::services::quick_switcher::QuickSwitcherEntry;
+pub use crate::services::search::{SearchQuery, SearchShortcut};
+pub use crate::services::section_service::SectionError;
+pub use crate::services::server_records::RecordPage;
+pub use crate::services::session_service::Session;
+pub use crate::services::voice_recording::{
+    NO_MICROPHONE, RecordedVoiceNote, RecordingEvent, RecordingSession,
+};
+
 mod account_settings;
+mod app_lock;
+pub use app_lock::AppUnlock;
+pub use crate::services::app_lock::{AppLockError, AppLockSettings, LockTimeout};
 mod ai_settings;
 mod auth_state;
 mod backup;
@@ -653,7 +697,9 @@ mod event_streams;
 mod mesh;
 mod sidebar;
 mod trust;
-pub use auth_state::{ConversationGuard, SessionGuard};
+pub use auth_state::{ResultScope, SessionGuard};
+pub mod conversation;
+mod outgoing_typing;
 mod conversation_listing;
 mod infrastructure;
 mod outgoing;

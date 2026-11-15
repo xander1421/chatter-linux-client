@@ -167,7 +167,7 @@ impl<S: Subscriber> Layer<S> for TorStageTrace {
             "circmgr"
         } else if target.starts_with("tor_dirmgr") {
             "dirmgr"
-        } else if target == "chatter_core::network::grpc::onion_transport" {
+        } else if target == chatter_core::client::ONION_TRANSPORT_LOG_TARGET {
             "connector"
         } else {
             return;

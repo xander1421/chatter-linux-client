@@ -1,3 +1,4 @@
+import { IconAction } from "../components/icon_action.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
@@ -43,7 +44,6 @@ export global MessageMenuActions {
 // pointer path alone left every quick reaction invisible to TalkBack.
 component QuickReaction inherits Rectangle {
     in property <string> emoji;
-    in property <string> short-name;
     in property <bool> shown: false;
     in property <int> stagger-index: 0;
     // The emoji's spoken name; the glyph alone is not a name.
@@ -108,80 +108,11 @@ component QuickReaction inherits Rectangle {
         // bundled UI font has no emoji coverage, which is what turns bare
         // dingbats into tofu boxes elsewhere in this tree.
         font-family: Typography.font-family-emoji;
-        // The emoji face draws past its line box; keep it clear of the label.
-        font-size: 20px;
+        font-size: 24px;
         horizontal-alignment: center;
         vertical-alignment: center;
-        y: 2px;
         width: 100%;
-        height: 28px;
-    }
-
-    // Color emoji is unavailable to some software renderers. Keep the action
-    // identifiable there, while the full emoji remains visible on device.
-    Text {
-        text: root.short-name;
-        color: Colors.text-secondary;
-        font-size: 10px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        y: 32px;
-        width: 100%;
-        height: 14px;
-    }
-
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-}
-
-// Trailing button on the quick-reaction row: opens the full emoji + sticker
-// picker. Lives in the row, so it navigates like a QuickReaction (Left back to
-// the emojis, Down into the actions) rather than like a vertical MenuItem.
-component ReactionPickerButton inherits Rectangle {
-    in property <int> nav-index: 0;
-    in property <int> focused-index: 0;
-    in property <bool> keyboard-active: false;
-    callback clicked();
-    callback navigate(int, int);
-    callback focused(int, length, length);
-
-    width: Spacing.touch-target-min;
-    height: Spacing.touch-target-min;
-    border-radius: Spacing.touch-target-min / 2;
-    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : Colors.inset;
-    border-width: keys.has-focus ? Spacing.stroke : 0px;
-    border-color: Colors.primary;
-    accessible-role: button;
-    accessible-label: "More reactions and stickers";
-    accessible-action-default => { root.clicked(); }
-
-    changed focused-index => {
-        if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
-    }
-
-    keys := FocusScope {
-        width: 0px;
-        height: 0px;
-        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
-        key-pressed(event) => {
-            if event.text == Key.LeftArrow { root.navigate(root.nav-index, -1); return accept; }
-            if event.text == Key.RightArrow { return accept; }
-            if event.text == Key.DownArrow { root.navigate(root.nav-index, 3); return accept; }
-            if event.text == Key.UpArrow { return accept; }
-            if event.text == Key.Space || event.text == Key.Return { root.clicked(); return accept; }
-            return reject;
-        }
-    }
-
-    Image {
-        source: Icons.smile;
-        colorize: Colors.text-secondary;
-        width: 22px;
-        height: 22px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        height: 100%;
     }
 
     touch := TouchArea {
@@ -435,6 +366,7 @@ export component MessageContextMenu inherits Rectangle {
             is-call: root.preview-message.is-call;
             call-type: root.preview-message.call-type;
             call-duration: root.preview-message.call-duration;
+            call-is-video: root.preview-message.call-is-video;
             has-attachments: root.preview-message.has-attachments;
             attachment-count: root.preview-message.attachment-count;
             attachments: root.preview-message.attachments;
@@ -467,6 +399,7 @@ export component MessageContextMenu inherits Rectangle {
             show-sender: root.preview-message.show-sender;
             delivery-status: root.preview-message.delivery-status;
             failure-reason: root.preview-message.failure-reason;
+            can-retry: root.preview-message.can-retry;
             mobile: root.preview-mobile;
             menu-open: true;
         }
@@ -546,7 +479,10 @@ export component MessageContextMenu inherits Rectangle {
                         : (self.has-bubble-anchor ? root.anchor-bottom : root.position-y) + Spacing.sm,
                         self.bottom-limit - self.height))) + self.entrance-offset,
                 self.bottom-limit - self.height));
-        width: min(304px, parent.width - 2 * Spacing.md);
+        // Wide enough for all six quick reactions plus the picker button
+        // (6 x 48 + gaps + 48 + padding = 376) on a standard phone; narrower
+        // windows still scroll the emoji row.
+        width: min(380px, parent.width - 2 * Spacing.md);
         height: !root.preview-mobile ? self.desktop-height
             : max(0px, min(self.menu-h, self.cramped-bubble
                 ? self.bottom-limit - self.top-limit - Spacing.touch-target-min
@@ -602,7 +538,6 @@ export component MessageContextMenu inherits Rectangle {
                                 focused(item-index, top, item-height) => { root.focus-index = item-index; }
                                 navigate(from, direction) => { root.move-focus(from, direction); }
                                 emoji: emoji;
-                                short-name: ["Like", "Love", "Haha", "Wow", "Sad", "Thanks"][index];
                                 shown: root.show;
                                 stagger-index: index;
                                 name: QuickReactions.names[index];
@@ -615,15 +550,40 @@ export component MessageContextMenu inherits Rectangle {
                     }
 
                     // Pinned at the end: opens the full emoji + sticker picker.
-                    ReactionPickerButton {
-                        nav-index: root.picker-index;
-                        focused-index: root.focus-index;
-                        keyboard-active: root.show && !root.preview-mobile;
-                        focused(item-index, top, item-height) => { root.focus-index = item-index; }
-                        navigate(from, direction) => { root.move-focus(from, direction); }
-                        clicked => {
-                            root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
-                            root.close();
+                    // Lives in the row, so it navigates like a QuickReaction
+                    // (Left back to the emojis, Down into the actions) rather
+                    // than like a vertical MenuItem: the shared IconAction's
+                    // key scope rejects arrows, and they bubble up to here.
+                    FocusScope {
+                        width: picker-action.width;
+                        height: picker-action.height;
+                        focus-on-click: false;
+                        focus-on-tab-navigation: false;
+                        property <bool> keyboard-active: root.show && !root.preview-mobile;
+                        property <int> focused-index: root.focus-index;
+                        changed focused-index => {
+                            if self.keyboard-active && self.focused-index == root.picker-index { picker-action.focus(); }
+                        }
+                        property <bool> action-focused: picker-action.key-focused;
+                        changed action-focused => {
+                            if self.action-focused { root.focus-index = root.picker-index; }
+                        }
+                        key-pressed(event) => {
+                            if event.text == Key.LeftArrow { root.move-focus(root.picker-index, -1); return accept; }
+                            if event.text == Key.RightArrow { return accept; }
+                            if event.text == Key.DownArrow { root.move-focus(root.picker-index, 3); return accept; }
+                            if event.text == Key.UpArrow { return accept; }
+                            return reject;
+                        }
+                        picker-action := IconAction {
+                            icon: Icons.smile;
+                            label: "More reactions and stickers";
+                            // Emoji-sized chip; the 48px touch target stays.
+                            visual-size: 32px;
+                            clicked => {
+                                root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
+                                root.close();
+                            }
                         }
                     }
                 }

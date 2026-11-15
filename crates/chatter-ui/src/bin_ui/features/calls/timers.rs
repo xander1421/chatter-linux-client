@@ -65,7 +65,7 @@ where
                 .map(|call| chatter_core::client::calls::CallRoomSnapshot {
                     call,
                     remotes: None,
-                    verification: chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
+                    verification: chatter_core::client::calls::CallEncryptionVerification::ExistingHandshake,
                 })
         }
     });
@@ -123,7 +123,7 @@ where
                 if let Some(remotes) = snapshot.remotes {
                     super::room_events::reconcile_roster(&mut data, remotes);
                 }
-                use chatter_core::services::call_worker::CallEncryptionVerification;
+                use chatter_core::client::calls::CallEncryptionVerification;
                 match snapshot.verification {
                     CallEncryptionVerification::ExistingHandshake => {
                         // DM SAS belongs to the existing handshake.
@@ -540,7 +540,7 @@ pub(super) mod tests {
         let source = Arc::new(Mutex::new(Some(CallRoomSnapshot {
             call: call.clone(),
             verification:
-                chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
+                chatter_core::client::calls::CallEncryptionVerification::ExistingHandshake,
             remotes: Some(roster(&["b", "a"])),
         })));
         let read = source.clone();
@@ -611,7 +611,7 @@ pub(super) mod tests {
         *source.lock().unwrap() = Some(CallRoomSnapshot {
             call: other,
             verification:
-                chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
+                chatter_core::client::calls::CallEncryptionVerification::ExistingHandshake,
             remotes: Some(roster(&["wrong-room"])),
         });
         pump(&window, 1100);
@@ -630,7 +630,7 @@ pub(super) mod tests {
 
     fn verification_tracks_snapshot_with_identity_fences() {
         use chatter_core::client::calls::CallRoomSnapshot;
-        use chatter_core::services::call_worker::CallEncryptionVerification as Verification;
+        use chatter_core::client::calls::CallEncryptionVerification as Verification;
         let window = MainWindow::new().unwrap();
         let call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
         let mut data = window.global::<crate::CallView>().get_active_call_data();

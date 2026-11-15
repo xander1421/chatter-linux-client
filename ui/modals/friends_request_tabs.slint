@@ -14,23 +14,47 @@ export component RequestTabs inherits Flickable {
     in property <int> channel-invites-count;
     z: 1;
     height: max(Spacing.touch-target-min, 36px * Appearance.text-grow);
-    viewport-width: request-tabs.preferred-width;
+    // Tab widths and starts, shared by the tabs and the scroll snap below.
+    property <length> recv-w: 104px * Appearance.text-grow;
+    property <length> sent-w: 88px * Appearance.text-grow;
+    property <length> priv-w: 96px * Appearance.text-grow;
+    property <length> grp-w: 96px * Appearance.text-grow;
+    property <length> chan-w: 112px * Appearance.text-grow;
+    property <length> sent-x: root.recv-w + Spacing.xs;
+    property <length> priv-x: root.sent-x + root.sent-w + Spacing.xs;
+    property <length> grp-x: root.priv-x + root.priv-w + Spacing.xs;
+    property <length> chan-x: root.grp-x + root.grp-w + Spacing.xs;
+    // Room to scroll the last tab's snap position to the left edge.
+    viewport-width: max(request-tabs.preferred-width, root.snap(root.chan-x + root.chan-w) + root.width);
     viewport-height: self.height;
     // A partial trailing tab hints that this row scrolls horizontally.
 
+    // Least scroll that shows a tab ending at `end` whole while the row
+    // starts on a tab boundary: a scroll between two starts cut the first
+    // visible label ("ent (0)").
+    pure function snap(end: length) -> length {
+        let need = end - root.width;
+        return need <= 0px ? 0px
+            : need <= root.sent-x ? root.sent-x
+            : need <= root.priv-x ? root.priv-x
+            : need <= root.grp-x ? root.grp-x : root.chan-x;
+    }
+
     // Keep the selected tab on screen: on a phone "Channels" sits past the
     // right edge, so opening an invite left the visible tabs all unselected.
+    // Re-run on a width change: at init the row may not be laid out yet.
     function reveal-active() {
-        let tab-x = root.requests-sub-tab == "sent" ? sent-tab.x
-            : root.requests-sub-tab == "private" ? priv-tab.x
-            : root.requests-sub-tab == "groups" ? grp-tab.x
-            : root.requests-sub-tab == "channels" ? chan-tab.x : recv-tab.x;
-        self.viewport-x = -max(0px, min(tab-x - (self.width - 104px * Appearance.text-grow) / 2, self.viewport-width - self.width));
+        self.viewport-x = -(root.requests-sub-tab == "sent" ? root.snap(root.sent-x + root.sent-w)
+            : root.requests-sub-tab == "private" ? root.snap(root.priv-x + root.priv-w)
+            : root.requests-sub-tab == "groups" ? root.snap(root.grp-x + root.grp-w)
+            : root.requests-sub-tab == "channels" ? root.snap(root.chan-x + root.chan-w) : 0px);
     }
     init => { self.reveal-active(); }
     changed requests-sub-tab => { self.reveal-active(); }
+    changed width => { self.reveal-active(); }
 
     request-tabs := HorizontalLayout {
+        alignment: start;
         spacing: Spacing.xs;
 
         recv-tab := Rectangle {
@@ -43,7 +67,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-action-default => { root.requests-sub-tab = "received"; }
             KeyFocus { activate => { root.requests-sub-tab = "received"; } }
-            width: 104px * Appearance.text-grow;
+            width: root.recv-w;
             background: recv-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -85,7 +109,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-action-default => { root.requests-sub-tab = "sent"; }
             KeyFocus { activate => { root.requests-sub-tab = "sent"; } }
-            width: 88px * Appearance.text-grow;
+            width: root.sent-w;
             background: sent-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -127,7 +151,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-action-default => { root.requests-sub-tab = "private"; }
             KeyFocus { activate => { root.requests-sub-tab = "private"; } }
-            width: 96px * Appearance.text-grow;
+            width: root.priv-w;
             background: priv-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -169,7 +193,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-action-default => { root.requests-sub-tab = "groups"; }
             KeyFocus { activate => { root.requests-sub-tab = "groups"; } }
-            width: 96px * Appearance.text-grow;
+            width: root.grp-w;
             background: groups-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -211,7 +235,7 @@ export component RequestTabs inherits Flickable {
 
             accessible-action-default => { root.requests-sub-tab = "channels"; }
             KeyFocus { activate => { root.requests-sub-tab = "channels"; } }
-            width: 112px * Appearance.text-grow;
+            width: root.chan-w;
             background: channels-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {

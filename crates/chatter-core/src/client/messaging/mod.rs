@@ -155,39 +155,15 @@ pub struct SelectionSnapshot {
 }
 
 mod channels;
-mod display;
 mod friends;
 mod history;
+mod open;
+pub use open::{ConversationPage, PageAnchor};
+mod receive;
+pub use receive::IncomingUpdate;
 mod search;
 mod sidebar;
 mod threads;
-
-/// Media descriptor of a reply's quoted parent, shaped by
-/// [`ChatterClient::reply_parent_media`]. Lets the quote bubble render the
-/// parent's media richly (an inline audio player for audio parents, a thumbnail
-/// for visual parents) instead of plain text. All fields are empty/`None` when
-/// the message is not a reply, the parent or its first attachment can't be
-/// resolved locally, or the parent carries no renderable media.
-#[derive(Debug, Clone, Default)]
-pub struct ReplyParentMedia {
-    /// `"audio"`/`"image"`/`"gif"`/`"video"` — `"gif"` splits out of image so
-    /// the quote can badge it as animated. Empty when no renderable media.
-    pub category: String,
-    /// Parent attachment id (for play/seek callbacks).
-    pub attachment_id: String,
-    /// Formatted `"m:ss"` for audio, else empty.
-    pub duration: String,
-    /// Parent attachment's locally-stored thumbnail bytes for visual categories
-    /// — a fallback the converter uses when the wire quote thumbnail (capped at
-    /// ~12KB and often dropped) is absent, so image/gif/video quotes still show
-    /// a preview instead of degrading to text.
-    pub thumbnail: Option<Vec<u8>>,
-    /// Parent attachment filename, shown in the inline audio quote player.
-    pub filename: String,
-    /// Audio waveform (32 values, 0-100) for the inline quote player; empty when
-    /// the parent carries none.
-    pub waveform: Vec<i32>,
-}
 
 /// One destination row in the forward picker, shaped by
 /// [`ChatterClient::forward_destinations`].
@@ -200,6 +176,9 @@ pub struct ForwardDestination {
     pub id: String,
     pub name: String,
     pub kind: ConversationType,
+    /// An invite-only channel: the picker draws its lock, as the chat list
+    /// does, where a public channel gets '#'. False for every non-channel.
+    pub private_channel: bool,
 }
 
 /// A person the user can invite to a channel, shaped by
@@ -266,7 +245,7 @@ pub struct SendMessageUiResult {
     /// Quoted parent's media descriptor (category/attachment/duration/filename/
     /// waveform) so the sender's own bubble renders the audio player / media
     /// preview immediately, without waiting for a reload.
-    pub reply_parent_media: crate::client::ReplyParentMedia,
+    pub reply_parent_media: crate::ui::display::ReplyParentMedia,
     /// Why the message was not delivered, for the user, when
     /// `delivery_status` is `"failed"`.
     pub failure_notice: Option<String>,

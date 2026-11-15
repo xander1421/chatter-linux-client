@@ -80,7 +80,7 @@ pub struct ImageDecodeResult {
 /// Include Signal bucket padding as well as IV/MAC overhead in the work cap.
 /// A fixed overhead above plaintext size rejects valid near-limit originals.
 pub(crate) fn image_preview_ciphertext_limit() -> u64 {
-    crate::crypto::attachment_crypto::AttachmentCrypto::padded_size(
+    chatter_attachment_crypto::AttachmentCrypto::padded_size(
         crate::domain::attachment::Attachment::AUTO_DOWNLOAD_IMAGE_LIMIT as usize,
     ) as u64
         + 16
@@ -296,9 +296,10 @@ impl AttachmentService {
                 AttachmentError::InvalidAttachment("image preview encoding failed".into())
             })?;
         drop(encode);
+        let sidecar_dims = (thumbnail.width(), thumbnail.height());
         let pixels = {
             let _resize = trace::section(c"chatter.media.image.model_resize");
-            thumbnail.thumbnail(320, 320).into_rgba8()
+            ImageProcessor::inline_pixels(thumbnail)
         };
         if !owner() {
             return Err(stale());
@@ -310,7 +311,7 @@ impl AttachmentService {
                 &attachment,
                 encoded.get_ref(),
                 (width, height),
-                (thumbnail.width(), thumbnail.height()),
+                sidecar_dims,
             )
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
         {
@@ -327,23 +328,6 @@ impl AttachmentService {
             width,
             height,
         })
-    }
-
-    /// Decrypt a video attachment and extract a thumbnail frame.
-    ///
-    /// Server-managed DMs strip the inline thumbnail before sealing (sealed
-    /// envelope is padded to ≤4096-byte buckets for metadata privacy), so the
-    /// receiver derives one from the downloaded video. Returns the encoded
-    /// thumbnail bytes + dims, reusing [`ImageDecodeResult`] (`image_bytes` =
-    /// the thumbnail).
-    ///
-    /// Blocking platform decode — call from a background thread. Android uses
-    /// an authenticated, bounded range source; desktop keeps GStreamer.
-    pub fn decrypt_and_extract_video_thumbnail(
-        &self,
-        attachment_id: &AttachmentId,
-    ) -> Result<ImageDecodeResult, AttachmentError> {
-        self.decrypt_and_extract_video_thumbnail_guarded(attachment_id, Arc::new(|| true))
     }
 
     /// Revoke decoder reads immediately when the requesting account owner changes.
@@ -564,7 +548,7 @@ mod video_thumbnail_tests {
     }
     #[test]
     fn video_thumbnail_authenticates_owned_ciphertext_before_decoder() {
-        use crate::crypto::attachment_crypto::AttachmentCrypto;
+        use chatter_attachment_crypto::AttachmentCrypto;
         use crate::domain::attachment::{
             Attachment, AttachmentStatus, ContentLocation, FileMetadata,
         };
@@ -679,7 +663,7 @@ mod video_thumbnail_tests {
 #[cfg(test)]
 mod image_preview_tests {
     use super::*;
-    use crate::crypto::attachment_crypto::AttachmentCrypto;
+    use chatter_attachment_crypto::AttachmentCrypto;
     use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
     use crate::storage::repositories::AttachmentRepository;
 
@@ -799,14 +783,14 @@ mod image_preview_tests {
     }
 
     #[test]
-    fn missing_or_failed_sidecar_retains_only_small_pixels_and_reuses_durable_preview() {
+    fn missing_or_failed_sidecar_retains_inline_bounded_pixels_and_reuses_durable_preview() {
         let f = fixture();
         let result = f
             .service
             .prepare_image_preview_guarded(&f.source.id, Arc::new(|| true))
             .unwrap();
         assert_eq!((result.width, result.height), (2048, 1024));
-        assert_eq!(result.pixels.dimensions(), (320, 160));
+        assert_eq!(result.pixels.dimensions(), (768, 384));
         assert_eq!(
             std::fs::read(&f.path).unwrap(),
             f.ciphertext,
@@ -831,7 +815,7 @@ mod image_preview_tests {
                 panic!("cached sidecar must skip original decode")
             })
             .unwrap();
-        assert_eq!(reused.pixels.dimensions(), (320, 160));
+        assert_eq!(reused.pixels.dimensions(), (768, 384));
         assert_eq!((reused.width, reused.height), (2048, 1024));
         // A broken fetched sidecar must fall back to the authenticated original.
         let mut broken = f.repo.get(&f.source.id).unwrap().unwrap();

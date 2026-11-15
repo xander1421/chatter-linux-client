@@ -30,6 +30,7 @@ export component CreateSectionModal inherits Rectangle {
     // true = rename mode, false = create mode
     in property <bool> rename-mode: false;
     in property <bool> show-modal: false;
+    in property <bool> touch: false;
     in property <bool> loading: false;
 
     in-out property <string> section-name: "";
@@ -122,7 +123,7 @@ export component CreateSectionModal inherits Rectangle {
                     text <=> root.section-name;
                     // Created on open: the name is the only thing to type. A
                     // rename starts selected, so typing replaces the old name.
-                    init => { self.focus(); self.select-all(); }
+                    init => { if !root.touch { self.focus(); self.select-all(); } }
                     accepted => { root.submit(self.composed-text); }
                 }
             }

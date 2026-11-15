@@ -8,8 +8,8 @@ use crate::{common, skip_if_no_server};
 use tokio_stream::StreamExt;
 
 use chatter_core::error::NetworkError;
-use chatter_core::network::grpc::AuthClient;
-use chatter_core::proto::chat_v1::auth_event;
+use chatter_core::testing::network::grpc::AuthClient;
+use chatter_proto::chat_v1::auth_event;
 
 use common::*;
 
@@ -17,7 +17,7 @@ fn signed_kyber_prekey(
     identity: &libsignal_protocol::IdentityKeyPair,
     id: u32,
     timestamp: u64,
-) -> chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+) -> chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
     use libsignal_protocol::{GenericSignedPreKey, KyberPreKeyId, KyberPreKeyRecord, kem};
     let key = KyberPreKeyRecord::generate(
         kem::KeyType::Kyber1024,
@@ -25,7 +25,7 @@ fn signed_kyber_prekey(
         identity.private_key(),
     )
     .expect("Kyber prekey generation should succeed");
-    chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+    chatter_proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
         id,
         public_key: key
             .public_key()
@@ -58,8 +58,8 @@ async fn test_register_user_stream() {
     let uak = chatter_core::crypto::derive_uak(&profile_key);
 
     // Generate real Signal Protocol keys
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -214,8 +214,8 @@ async fn test_register_duplicate_username() {
     let user = assert_ok(register_test_user(&pool).await);
 
     // Generate real Signal Protocol keys for the duplicate attempt
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -447,7 +447,7 @@ async fn test_login_nonexistent_user_is_indistinguishable() {
 #[tokio::test]
 async fn test_login_priced_by_proof_of_work_not_locked() {
     use chatter_core::crypto::opaque;
-    use chatter_core::services::auth_service::login_start_paying_pow;
+    use chatter_core::testing::services::auth_service::login_start_paying_pow;
     use std::sync::atomic::{AtomicU32, Ordering};
     skip_if_no_server!();
 
@@ -568,7 +568,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
 #[tokio::test]
 async fn test_login_guess_ceiling_and_its_bypasses() {
     use chatter_core::crypto::opaque;
-    use chatter_core::services::auth_service::{AuthError, login_start_paying_pow};
+    use chatter_core::testing::services::auth_service::{AuthError, login_start_paying_pow};
     skip_if_no_server!();
 
     // A signed-in device with fresh recovery codes.
@@ -583,7 +583,7 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
             let done = opaque::login_finish_async(start, &pw, opened.ke2)
                 .await
                 .unwrap();
-            Ok::<_, NetworkError>(chatter_core::proto::chat_v1::PasswordProof {
+            Ok::<_, NetworkError>(chatter_proto::chat_v1::PasswordProof {
                 proof_id: opened.proof_id,
                 ke3: done.ke3,
             })
@@ -705,7 +705,7 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
 #[tokio::test]
 async fn test_trusted_device_token_outlasts_burnt_ceiling() {
     use chatter_core::crypto::opaque;
-    use chatter_core::services::auth_service::{AuthError, login_start_paying_pow};
+    use chatter_core::testing::services::auth_service::{AuthError, login_start_paying_pow};
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
@@ -1054,8 +1054,8 @@ async fn test_upload_and_get_prekey_bundle() {
     let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a prekey bundle with real Signal keys
-    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
-    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_proto::chat_v1::SignalPreKeyBundle;
+    use chatter_proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     // Reuse the identity key pair from registration. The server enforces

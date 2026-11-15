@@ -199,6 +199,7 @@ export component MessageList inherits Rectangle {
             // The initial bottom seek can transiently look close to row zero.
             // Paging starts only after a real scroll in this conversation.
             root.load-more-armed = false;
+            root.load-more-asked = false;
             root.load-failed = false;
             root.seen-rows = 0;
             root.first-visible-row = 0;
@@ -316,7 +317,12 @@ export component MessageList inherits Rectangle {
     }
     // Older history is requested once per approach to the top.
     private property <bool> load-more-armed: true;
-    // The last older page did not load (a storage read failed, header.rs
+    // A request went out and nothing has answered it yet: no page landed (the
+    // row count is unchanged) and the reader has not left the top. A scroll
+    // must not re-arm then, or every wheel step near the top while the page
+    // is in flight asks again.
+    private property <bool> load-more-asked: false;
+    // The last older page did not load (a storage read failed, message_list/history.rs
     // `load_history`). The rows and the scroll anchor are untouched; the banner
     // below says so and offers Retry, because the top is already reached and
     // asks for nothing more until the user scrolls away and back. Written by
@@ -468,6 +474,7 @@ export component MessageList inherits Rectangle {
             root.seen-top = max(0, root.seen-top - shift);
             root.seen-rows = root.messages.length;
             root.seen-first = root.messages.length > 0 ? root.messages[0].message-id : "";
+            root.load-more-asked = false;
             if root.jump-row >= 0 { root.stop-row-seek(); }
         }
     }
@@ -608,6 +615,12 @@ export component MessageList inherits Rectangle {
                 if (self.unread-tail-in-view) {
                     root.seen-opening-tail = true;
                     root.unread-count = 0;
+                    // The same conclusion `newest-visible` draws (a08304d2).
+                    // Zeroing the count stops the tail Timer that calls it, so
+                    // when this fires first the open stayed "away from the
+                    // bottom": the next incoming message was not followed and
+                    // put "1 new message" back over a fully visible chat.
+                    root.is-at-bottom = true;
                 }
             }
 
@@ -676,7 +689,7 @@ export component MessageList inherits Rectangle {
                 root.seen-opening-tail = false;
                 root.following-tail = false;
                 root.scrolling = true;
-                root.load-more-armed = true;
+                root.load-more-armed = !root.load-more-asked;
                 root.end-pending = false;
                 root.stop-row-seek();
                 self.read-position();
@@ -847,10 +860,12 @@ export component MessageList inherits Rectangle {
                         // in before row 0 is on screen: rows inserted above
                         // the live ones move nothing.
                         root.load-more-armed = false;
+                        root.load-more-asked = true;
                         root.load-more();
                     } else if (self.viewport-y < -self.height * 3) {
                         // Left the top; the next approach asks again.
                         root.load-more-armed = true;
+                        root.load-more-asked = false;
                     }
                 }
                 // Row 0 is read only when the row count moved (`prepended`
@@ -859,6 +874,8 @@ export component MessageList inherits Rectangle {
                 // change which row is first — a prepend changes the count.
                 if (root.messages.length != root.seen-rows) {
                     root.seen-first = root.messages[0].message-id;
+                    // A page (or any row) landed: the request was answered.
+                    root.load-more-asked = false;
                 }
                 root.seen-rows = root.messages.length;
                 root.seen-height = self.viewport-height;
@@ -1016,6 +1033,7 @@ export component MessageList inherits Rectangle {
                     is-call: item.is-call;
                     call-type: item.call-type;
                     call-duration: item.call-duration;
+                    call-is-video: item.call-is-video;
                     has-attachments: item.has-attachments;
                     attachment-count: item.attachment-count;
                     attachments: item.attachments;
@@ -1048,6 +1066,7 @@ export component MessageList inherits Rectangle {
                     show-sender: item.show-sender;
                     delivery-status: item.delivery-status;
                     failure-reason: item.failure-reason;
+                    can-retry: item.can-retry;
                     is-continuation: item.is-continuation;
                     selected: item.selected;
                     selection-mode: root.selection-mode;

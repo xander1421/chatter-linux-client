@@ -108,6 +108,7 @@ impl CallSignalingService {
                 &call_id,
                 ChannelCallPhase::Ended,
                 duration,
+                is_video,
                 now,
             ) {
                 tracing::warn!(error = %e, "Failed to file group call row");

@@ -21,6 +21,7 @@ impl MeshService {
             .map_err(|_| MeshError::WorkerGone)
     }
 
+    #[cfg(test)]
     /// Announce our identity now, outside the normal cadence.
     pub fn announce_now(&self) -> Result<(), MeshError> {
         if !self.has_radio {

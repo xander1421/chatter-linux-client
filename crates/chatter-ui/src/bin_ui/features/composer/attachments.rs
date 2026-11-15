@@ -38,9 +38,24 @@ pub(crate) async fn process_and_add_file(
     revision: u64,
     weak: &Weak<MainWindow>,
 ) -> Result<(), String> {
-    chat_state
+    if let Err(e) = chat_state
         .prepare_pending_file(file_path, staged_size, conversation, revision)
-        .await?;
+        .await
+    {
+        // Every picker/drop/paste path only logs the error; say it here once.
+        if e.ends_with(" is empty") {
+            let weak = weak.clone();
+            let message = format!("Can't attach {e}");
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_toast_message(message.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
+            });
+        }
+        return Err(e);
+    }
 
     // The caller renders once it has staged its whole batch: rendering here,
     // per file, rebuilt the tray model N times for N dropped/picked files
@@ -136,7 +151,7 @@ pub(crate) fn render_attachments(
                 let worker_session = session.clone();
                 let worker_path = path.clone();
                 let worker_client = client.clone();
-                let pixels = chatter_core::services::attachment::run_attachment_work(move || {
+                let pixels = chatter_core::media::run_attachment_work(move || {
                     if !worker_session.is_current()
                         || !worker_client
                             .pending_attachments()
@@ -674,7 +689,7 @@ mod tests {
         let completed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let results = completed.clone();
         slint::spawn_local(async move {
-            let first = chatter_core::services::attachment::run_attachment_work(move || {
+            let first = chatter_core::media::run_attachment_work(move || {
                 assert_ne!(std::thread::current().id(), ui_thread);
                 entered_tx.send(()).unwrap();
                 // ONLY the event loop can release this worker. Inline work
@@ -690,7 +705,7 @@ mod tests {
             results.borrow_mut().push(first);
             for index in 1..8 {
                 results.borrow_mut().push(
-                    chatter_core::services::attachment::run_attachment_work(move || index)
+                    chatter_core::media::run_attachment_work(move || index)
                         .await
                         .unwrap(),
                 );

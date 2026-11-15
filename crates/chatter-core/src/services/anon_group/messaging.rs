@@ -2,7 +2,7 @@
 
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
 use crate::domain::ids::ChannelId;
-use crate::proto::content_v1::{self, Content};
+use chatter_proto::content_v1::{self, Content};
 use crate::services::gateway::builders::{
     build_data_message_content, build_data_message_content_with_quote, build_text_content,
 };
@@ -12,6 +12,34 @@ use crate::util::time::TimestampNanos;
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    /// Stamp a post with the group's disappearing timer (every member adopts
+    /// it from there, so a lost timer update heals on the next post) and arm
+    /// its stored row when the timer is on.
+    pub(super) fn apply_group_timer(
+        &self,
+        group_id: &AnonGroupId,
+        inner: &mut Content,
+        row: &AnonGroupMessageId,
+        sent_at: u64,
+    ) -> Result<(), AnonGroupError> {
+        use crate::services::disappearing::{SecretChat, secret_chat_state, stamp_timer};
+        let timer = secret_chat_state(&self.settings_repo, SecretChat::Group(*group_id));
+        if let Some(content_v1::content::Content::DataMessage(data)) = inner.content.as_mut() {
+            stamp_timer(data, timer);
+        }
+        if timer.effective_seconds(sent_at) > 0 {
+            let id = row
+                .as_str()
+                .parse()
+                .map_err(|_| AnonGroupError::InvalidData("Invalid group message ID".into()))?;
+            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                self.settings_repo.database().clone(),
+            )
+            .insert_armed(&id, timer.seconds)?;
+        }
+        Ok(())
+    }
+
     fn retain_group_row(
         &self,
         group_id: &AnonGroupId,
@@ -82,10 +110,11 @@ impl AnonGroupService {
         let sent_at = TimestampNanos::now().as_u64();
 
         // Create DataMessage content
-        let inner_content = build_text_content(text, sent_at);
+        let mut inner_content = build_text_content(text, sent_at);
 
         // Store message locally first with the same timestamp we'll send
         let message_id = self.store_text_message(group_id, &current_user, text, sent_at)?;
+        self.apply_group_timer(group_id, &mut inner_content, &message_id, sent_at)?;
 
         self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // Send to all members
@@ -119,7 +148,7 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
     ) -> Result<(AnonGroupMessageId, u64), AnonGroupError> {
         let current_user = self.current_user_id()?;
 
@@ -130,7 +159,7 @@ impl AnonGroupService {
         let sent_at = TimestampNanos::now().as_u64();
 
         // Create DataMessage content with attachments
-        let inner_content = build_data_message_content(text, attachments, sent_at);
+        let mut inner_content = build_data_message_content(text, attachments, sent_at);
 
         // Store message locally first with the same timestamp we'll send
         let message_id = self.store_message_with_attachments(
@@ -142,6 +171,7 @@ impl AnonGroupService {
             None,
         )?;
 
+        self.apply_group_timer(group_id, &mut inner_content, &message_id, sent_at)?;
         self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
         // so the server can't correlate the authenticated upload with this write.
@@ -181,7 +211,7 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
         text: &str,
-        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachments: Vec<chatter_proto::content_v1::AttachmentPointer>,
         reply_to_sender: &crate::domain::UserId,
         reply_to_timestamp: u64,
     ) -> Result<(AnonGroupMessageId, u64), AnonGroupError> {
@@ -231,7 +261,7 @@ impl AnonGroupService {
 
         let sent_at = TimestampNanos::now().as_u64();
 
-        let inner_content =
+        let mut inner_content =
             build_data_message_content_with_quote(text, attachments, Some(quote), sent_at);
 
         // Resolve author display name for storage
@@ -271,6 +301,7 @@ impl AnonGroupService {
             quote_ctx,
         )?;
 
+        self.apply_group_timer(group_id, &mut inner_content, &message_id, sent_at)?;
         self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
         if !attachment_ids.is_empty() {
@@ -322,7 +353,7 @@ impl AnonGroupService {
         inner_content: Content,
         releasing_held: bool,
     ) -> Result<(), AnonGroupError> {
-        use crate::proto::content_v1::AnonGroupMessage;
+        use chatter_proto::content_v1::AnonGroupMessage;
         use prost::Message as ProstMessage;
 
         let current_user = self.current_user_id()?;
@@ -673,7 +704,11 @@ impl AnonGroupService {
                     self.anon_group_repo.delete_pending_message(row_id)?;
                     tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
                         outcome = "failed", reason = %e, "Pending anon group delivery resolved");
-                    if let Some(undelivered) = undelivered_post(&content) {
+                    // A timer update is no post the user wrote: the next post
+                    // states the timer again, so nothing is reported.
+                    if let Some(undelivered) =
+                        undelivered_post(&content).filter(|_| !is_queued_timer_update(&content))
+                    {
                         self.store_system_message(
                             group_id,
                             Some(*recipient_user_id),
@@ -902,7 +937,7 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
         inner_content: Content,
     ) -> Result<(), AnonGroupError> {
-        use crate::proto::content_v1::AnonGroupMessage;
+        use chatter_proto::content_v1::AnonGroupMessage;
 
         let current_user = self.current_user_id()?;
 
@@ -967,6 +1002,17 @@ impl AnonGroupService {
 const MAX_PARKED_ATTEMPTS: u32 = 5;
 
 /// The `Undelivered` notice for a parked `Content`, if it was a user's post.
+fn is_queued_timer_update(content: &Content) -> bool {
+    let Some(content_v1::content::Content::AnonGroupMessage(m)) = &content.content else {
+        return false;
+    };
+    matches!(
+        m.inner_content.as_deref().and_then(|c| c.content.as_ref()),
+        Some(content_v1::content::Content::DataMessage(dm))
+            if crate::services::disappearing::is_timer_update(dm)
+    )
+}
+
 fn undelivered_post(content: &Content) -> Option<crate::domain::message::SystemMessage> {
     let Some(content_v1::content::Content::AnonGroupMessage(m)) = &content.content else {
         return None;
@@ -991,7 +1037,7 @@ fn undelivered_post(content: &Content) -> Option<crate::domain::message::SystemM
 mod tests {
     use super::*;
     use crate::domain::message::SystemMessage;
-    use crate::proto::content_v1::AnonGroupMessage;
+    use chatter_proto::content_v1::AnonGroupMessage;
 
     fn wrap(inner: Content) -> Content {
         Content {
@@ -1089,7 +1135,7 @@ mod reaction_outcome_tests {
     use super::*;
     use crate::domain::UserId;
     use crate::domain::message::ConversationType;
-    use crate::services::conversation::ConversationError;
+    use crate::client::conversation::ConversationError;
     use prost::Message as _;
     use reaction_test_fixture::{Fixture, assert_encoded_action};
     use std::cell::RefCell;

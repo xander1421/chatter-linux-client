@@ -52,7 +52,7 @@ impl SavedSyncRepository {
         owner: &UserId,
         id: &MessageId,
     ) -> Result<(), StorageError> {
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         let current: Option<String> = conn
             .query_row(
                 "SELECT value FROM settings WHERE key = 'auth.current_user_id'",
@@ -226,7 +226,7 @@ impl SavedSyncRepository {
         sent_at: u64,
         acknowledged: bool,
     ) -> Result<bool, StorageError> {
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
         let current: Option<String> = tx
@@ -270,7 +270,7 @@ impl SavedSyncRepository {
                 ],
             )?;
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         tx.commit()?;
         Ok(acknowledged)
     }
@@ -280,7 +280,7 @@ impl SavedSyncRepository {
         owner: &UserId,
         reconnect: bool,
     ) -> Result<Vec<MessageId>, StorageError> {
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
         let current: Option<String> = tx
@@ -333,11 +333,12 @@ impl SavedSyncRepository {
                 }
             }
         }
-        crate::services::gateway::submission::check_send_session()?;
+        crate::state::send_session::check_send_session()?;
         tx.commit()?;
         Ok(due)
     }
 
+    #[cfg(test)]
     /// Clock of the last pin change applied to this record; 0 when none.
     pub fn pin_watermark(&self, id: &MessageId) -> Result<u64, StorageError> {
         let conn = self.db.read_connection()?;

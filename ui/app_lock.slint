@@ -1,0 +1,295 @@
+// App lock: the lock screen and its Settings › Privacy section.
+//
+// Presentation only. `chatter-core` (`services::app_lock`, via
+// `ChatterClient::unlock_app` and friends) decides whether the app is locked,
+// checks PINs, runs the backoff and, for the duress PIN, the full local wipe.
+// Rust glue: `crates/chatter-ui/src/bin_ui/features/app_lock.rs`.
+
+import { Colors } from "theme/colors.slint";
+import { Elevation } from "theme/elevation.slint";
+import { Spacing } from "theme/spacing.slint";
+import { Typography } from "theme/typography.slint";
+import { Button } from "components/button.slint";
+import { Input } from "components/input.slint";
+
+export global AppLockPane {
+    // Lock screen
+    in property <bool> locked: false;
+    in-out property <string> pin: "";
+    in property <bool> verifying: false;
+    in property <string> error: "";
+
+    // Settings
+    in property <bool> enabled: false;
+    // "immediate" | "one_minute" | "five_minutes" | "thirty_minutes" (core LockTimeout)
+    in property <string> timeout: "one_minute";
+    in property <bool> duress-enabled: false;
+    in property <bool> busy: false;
+    in property <string> settings-error: "";
+    in property <string> settings-message: "";
+    in-out property <string> new-pin: "";
+    in-out property <string> confirm-pin: "";
+    in-out property <string> current-pin: "";
+    in-out property <string> duress-pin: "";
+    in-out property <string> duress-confirm: "";
+
+    callback unlock(string);
+    callback enable(string, string);             // pin, confirm
+    callback disable(string);                    // current
+    callback timeout-selected(string);
+    callback set-duress(string, string, string); // current, duress, confirm
+    callback clear-duress(string);               // current
+}
+
+export component LockScreen inherits Rectangle {
+    in property <length> safe-area-top: 0px;
+    background: Colors.background;
+
+    // Nothing behind the lock screen receives pointer input.
+    TouchArea { }
+
+    VerticalLayout {
+        alignment: center;
+        padding: Spacing.lg;
+        padding-top: root.safe-area-top + Spacing.lg;
+        spacing: Spacing.md;
+
+        Text {
+            horizontal-alignment: center;
+            text: "Chatter is locked";
+            color: Colors.text-primary;
+            font-size: Typography.xl;
+            font-weight: Typography.semibold;
+        }
+
+        // The error takes the subtitle's place: below the button it sat
+        // under the on-screen keyboard and the wrong PIN showed no text.
+        Text {
+            horizontal-alignment: center;
+            text: AppLockPane.error != "" ? AppLockPane.error : "Enter your app lock PIN";
+            color: AppLockPane.error != "" ? Colors.error : Colors.text-muted;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            VerticalLayout {
+                width: min(360px, root.width - Spacing.lg * 2);
+                spacing: Spacing.md;
+
+                pin-field := Input {
+                    placeholder: "PIN";
+                    password: true;
+                    text <=> AppLockPane.pin;
+                    disabled: AppLockPane.verifying;
+                    error: AppLockPane.error != "";
+                    init => { self.focus(); }
+                    accepted(value) => {
+                        if (value != "" && !AppLockPane.verifying) {
+                            AppLockPane.unlock(value);
+                        }
+                    }
+                }
+
+                Button {
+                    text: AppLockPane.verifying ? "" : "Unlock";
+                    variant: "primary";
+                    loading: AppLockPane.verifying;
+                    disabled: AppLockPane.verifying || AppLockPane.pin == "";
+                    clicked => { AppLockPane.unlock(AppLockPane.pin); }
+                }
+
+            }
+        }
+    }
+}
+
+component Card inherits Rectangle {
+    background: Colors.surface-section;
+    border-radius: Spacing.radius-lg;
+    drop-shadow-blur: Elevation.card-blur;
+    drop-shadow-offset-y: Elevation.card-offset;
+    drop-shadow-color: Elevation.card-shadow;
+    border-width: Elevation.rim-width;
+    border-color: Elevation.card-rim;
+}
+
+component Caption inherits Text {
+    color: Colors.text-muted;
+    font-size: Typography.xs;
+    wrap: word-wrap;
+}
+
+export component AppLockSettings inherits Card {
+    VerticalLayout {
+        padding: Spacing.md;
+        spacing: Spacing.sm;
+
+        Text {
+            text: "App lock";
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            font-weight: Typography.medium;
+        }
+
+        Caption {
+            text: AppLockPane.enabled
+                ? "On. Chatter asks for your PIN when it opens and after it has been in the background. Notifications show no sender or text while locked."
+                : "Ask for a PIN whenever Chatter opens. This PIN stays on this device and is separate from your account PIN.";
+        }
+
+        if !AppLockPane.enabled: VerticalLayout {
+            spacing: Spacing.sm;
+            Input {
+                placeholder: "New PIN (6 or more characters)";
+                password: true;
+                text <=> AppLockPane.new-pin;
+                disabled: AppLockPane.busy;
+            }
+            Input {
+                placeholder: "Confirm PIN";
+                password: true;
+                text <=> AppLockPane.confirm-pin;
+                disabled: AppLockPane.busy;
+            }
+            Button {
+                text: AppLockPane.busy ? "" : "Turn on app lock";
+                variant: "primary";
+                loading: AppLockPane.busy;
+                disabled: AppLockPane.busy || AppLockPane.new-pin == "";
+                clicked => { AppLockPane.enable(AppLockPane.new-pin, AppLockPane.confirm-pin); }
+            }
+        }
+
+        if AppLockPane.enabled: VerticalLayout {
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Lock after leaving Chatter";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+            }
+
+            for opt in [
+                { key: "immediate", label: "Immediately" },
+                { key: "one_minute", label: "After 1 minute" },
+                { key: "five_minutes", label: "After 5 minutes" },
+                { key: "thirty_minutes", label: "After 30 minutes" },
+            ]: Rectangle {
+                property <bool> selected: AppLockPane.timeout == opt.key;
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: timeout-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
+                accessible-action-default => { AppLockPane.timeout-selected(opt.key); }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+                    Text {
+                        text: opt.label;
+                        vertical-alignment: center;
+                        color: selected ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+                }
+
+                timeout-touch := TouchArea {
+                    enabled: !AppLockPane.busy;
+                    mouse-cursor: pointer;
+                    clicked => { AppLockPane.timeout-selected(opt.key); }
+                }
+            }
+
+            Text {
+                text: "Duress PIN";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            Caption {
+                text: AppLockPane.duress-enabled
+                    ? "Set. Entering it on the lock screen permanently erases everything Chatter keeps on this device — keys, messages, attachments, mesh data — and Chatter starts as if newly installed. Your account stays on the server."
+                    : "Optional. A second PIN that, entered on the lock screen, permanently erases everything Chatter keeps on this device and starts it as if newly installed. Your account stays on the server. It must differ from your lock PIN and your account PIN.";
+            }
+
+            if !AppLockPane.duress-enabled: Input {
+                placeholder: "Duress PIN";
+                password: true;
+                text <=> AppLockPane.duress-pin;
+                disabled: AppLockPane.busy;
+            }
+            if !AppLockPane.duress-enabled: Input {
+                placeholder: "Confirm duress PIN";
+                password: true;
+                text <=> AppLockPane.duress-confirm;
+                disabled: AppLockPane.busy;
+            }
+
+            Input {
+                placeholder: "Current app lock PIN";
+                password: true;
+                text <=> AppLockPane.current-pin;
+                disabled: AppLockPane.busy;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                if !AppLockPane.duress-enabled: Button {
+                    text: "Set duress PIN";
+                    variant: "secondary";
+                    loading: AppLockPane.busy;
+                    disabled: AppLockPane.busy || AppLockPane.current-pin == "" || AppLockPane.duress-pin == "";
+                    clicked => {
+                        AppLockPane.set-duress(AppLockPane.current-pin, AppLockPane.duress-pin, AppLockPane.duress-confirm);
+                    }
+                }
+                if AppLockPane.duress-enabled: Button {
+                    text: "Remove duress PIN";
+                    variant: "secondary";
+                    loading: AppLockPane.busy;
+                    disabled: AppLockPane.busy || AppLockPane.current-pin == "";
+                    clicked => { AppLockPane.clear-duress(AppLockPane.current-pin); }
+                }
+                Button {
+                    text: "Turn off app lock";
+                    variant: "danger";
+                    disabled: AppLockPane.busy || AppLockPane.current-pin == "";
+                    clicked => { AppLockPane.disable(AppLockPane.current-pin); }
+                }
+            }
+        }
+
+        if AppLockPane.settings-error != "": Text {
+            text: AppLockPane.settings-error;
+            color: Colors.error;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+        }
+        if AppLockPane.settings-message != "": Caption {
+            text: AppLockPane.settings-message;
+        }
+    }
+}

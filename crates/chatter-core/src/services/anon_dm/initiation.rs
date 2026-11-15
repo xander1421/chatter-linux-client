@@ -1,8 +1,8 @@
 use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus, RequestState};
 use crate::domain::private_friend_code::PrivateFriendCode;
-use crate::proto::chat_v1::SealedSenderMessage;
-use crate::proto::content_v1::{self, AnonDmRequest, Content};
+use chatter_proto::chat_v1::SealedSenderMessage;
+use chatter_proto::content_v1::{self, AnonDmRequest, Content};
 use crate::util::time::TimestampNanos;
 
 use super::{AnonDmError, AnonDmService};
@@ -157,9 +157,9 @@ impl AnonDmService {
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
-        crate::services::disappearing::initialize_anon_dm_timer(
+        crate::services::disappearing::initialize_secret_chat_timer(
             &self.settings_repo, &self.message_repo,
-            &dm.id,
+            crate::services::disappearing::SecretChat::Dm(dm.id),
             &current_user,
             TimestampNanos::now().as_u64(),
         )?;
@@ -324,9 +324,9 @@ impl AnonDmService {
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
-        crate::services::disappearing::initialize_anon_dm_timer(
+        crate::services::disappearing::initialize_secret_chat_timer(
             &self.settings_repo, &self.message_repo,
-            &dm.id,
+            crate::services::disappearing::SecretChat::Dm(dm.id),
             &current_user,
             TimestampNanos::now().as_u64(),
         )?;
@@ -467,13 +467,13 @@ impl AnonDmService {
             .send_with_anonymous_credential(
                 &super::infrastructure::request_id(conversation_id),
                 &friend_code.user_id.to_string(),
-                vec![crate::proto::chat_v1::SealedDeviceMessage {
+                vec![chatter_proto::chat_v1::SealedDeviceMessage {
                     device_id: friend_code.device_id,
                     // Not compared for named devices: there is no session.
                     registration_id: 0,
                     sealed_message: Some(sealed_message),
                 }],
-                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                chatter_proto::chat_v1::SealedDelivery::NamedDevices,
                 ENVELOPE_TYPE_ECIES_INIT,
                 &token.public_key,
                 &token.signature,
@@ -522,7 +522,7 @@ impl AnonDmService {
             timestamp: TimestampNanos::now().as_u64(),
             encrypted_display_name,
             avatar,
-            disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
+            disappearing_seconds: crate::domain::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
         };
 
         let content = Content {
@@ -863,7 +863,7 @@ mod tests {
         svc.handle_acceptance(dm.id, peer, 2, [7; 32], None, Some("Peer".into()), None)
             .unwrap();
 
-        let pointer = crate::proto::content_v1::AttachmentPointer {
+        let pointer = chatter_proto::content_v1::AttachmentPointer {
             cdn_key: "k".into(),
             plaintext_size: 3,
             plaintext_hash: "00".into(),

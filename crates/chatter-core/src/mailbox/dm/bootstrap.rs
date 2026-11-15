@@ -23,7 +23,7 @@ use crate::error::MailboxError;
 use crate::mailbox::dm::{ConversationKey, DmConversationManager, DmMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
 use crate::network::grpc::AnonymousMailboxClient;
-use crate::proto::content_v1::{Content, KeyExchange, content};
+use chatter_proto::content_v1::{Content, KeyExchange, content};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
 
@@ -383,7 +383,7 @@ impl DmBootstrap {
     fn build_mailbox_from_token(
         &self,
         token: &MailboxToken,
-        response: &crate::proto::mailbox_v1::CreateEphemeralMailboxResponse,
+        response: &chatter_proto::mailbox_v1::CreateEphemeralMailboxResponse,
     ) -> Result<DmMailbox, MailboxError> {
         let mut public_key = [0u8; 32];
         let mut private_key = [0u8; 64];

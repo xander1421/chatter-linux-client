@@ -11,7 +11,7 @@
 //! 4. Client unblinds the signature
 //! 5. Result: signature on original key that server cannot link to blinding request
 
-use crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
+use chatter_proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use blind_rsa_signatures::{
     BlindSignature, BlindingResult, DefaultRng, PublicKeySha384PSSZeroDeterministic as PublicKey,
     Secret,
@@ -23,7 +23,7 @@ use rsa::traits::PublicKeyParts;
 use std::future::Future;
 
 use crate::error::{MailboxError, NetworkError};
-use crate::proto::chat_v1::GetConsistencyProofResponse;
+use chatter_proto::chat_v1::GetConsistencyProofResponse;
 use crate::services::signal::kt_anchor;
 use crate::storage::repositories::SettingsRepository;
 
@@ -426,7 +426,7 @@ pub(crate) mod tests {
 
     #[test]
     fn signed_manifest_authenticates_keys_and_rotation_windows() {
-        use crate::proto::mailbox_v1::BlindSignatureNextKey;
+        use chatter_proto::mailbox_v1::BlindSignatureNextKey;
         use ed25519_dalek::Signer;
         let signer = ed25519_dalek::SigningKey::from_bytes(&[42; 32]);
         let pin = signer.verifying_key().to_bytes();
@@ -650,7 +650,7 @@ pub(crate) mod tests {
 
     #[test]
     fn manifest_canonical_vector_matches_go() {
-        use crate::proto::mailbox_v1::BlindSignatureNextKey;
+        use chatter_proto::mailbox_v1::BlindSignatureNextKey;
         let m = GetBlindSignaturePublicKeyResponse {
             public_key: vec![1, 2],
             key_id: "a".into(),

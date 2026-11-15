@@ -23,6 +23,7 @@ pub(crate) use dm::null_message_content;
 mod dm_bootstrap;
 mod dm_resend;
 mod group;
+mod group_send;
 pub use group::ChannelStateSync;
 pub(crate) use group::GroupStateGate;
 mod call_event;
@@ -37,10 +38,19 @@ mod saved;
 pub use saved::SavedSyncOutcome;
 pub(crate) use saved::persist_saved_device_snapshot;
 pub(crate) use saved::spawn_saved_sync_recovery;
+
+/// The façade handles the saved, channel and DM recovery workers read on each
+/// tick. Implemented by `ChatterClient`. Each worker holds only a `Weak<C>` and
+/// upgrades it per tick, so it never keeps the client alive.
+pub(crate) trait SendRecoveryClient: Send + Sync + 'static {
+    fn auth_state(&self) -> &crate::state::AuthState;
+    fn offline_state(&self) -> &crate::state::OfflineState;
+    fn event_bus(&self) -> &crate::events::EventBus;
+    fn messages(&self) -> &std::sync::Arc<MessageService>;
+}
 mod server_dm;
-mod shield_retry;
+pub(crate) mod shield_retry;
 pub use call_event::ChannelCallPhase;
-pub(crate) use shield_retry::spawn_shield_send_recovery;
 mod receipts;
 pub use receipts::{advance_delivery_status, display_delivery_status};
 
@@ -158,6 +168,11 @@ pub enum MessageError {
     #[error("invalid message: {0}")]
     InvalidMessage(String),
 
+    /// This account is muted in the channel's signed membership state; every
+    /// member would drop the message (`GroupStateGate::admits_content`).
+    #[error("you are muted in this channel")]
+    Muted,
+
     /// Group mailbox operation failed.
     #[error("mailbox error: {0}")]
     MailboxError(String),
@@ -172,12 +187,12 @@ pub enum MessageError {
     /// group-encrypted until it clears. Retrying cannot help.
     #[error("channel membership could not be verified ({})", match status {
         None => "no verified state",
-        Some(crate::services::channel::verified_state::VerificationStatus::Fork) => "fork detected",
+        Some(crate::domain::verified_state::VerificationStatus::Fork) => "fork detected",
         Some(_) => "verification failed",
     })]
     MembershipNotVerified {
         channel_id: ChannelId,
-        status: Option<crate::services::channel::verified_state::VerificationStatus>,
+        status: Option<crate::domain::verified_state::VerificationStatus>,
     },
 }
 
@@ -229,7 +244,7 @@ pub struct SendDmContentParams<'a> {
     /// The peer's user ID.
     pub peer_id: &'a UserId,
     /// The Content proto to send.
-    pub content: crate::proto::content_v1::Content,
+    pub content: chatter_proto::content_v1::Content,
     /// For sending to the peer's mailbox.
     pub mailbox_manager: &'a MailboxManager,
     /// Optional gRPC pool for bootstrap (needed for first DM).
@@ -306,14 +321,6 @@ impl PendingFlush {
     }
 }
 
-/// The bubble a queued `Content` belongs to: its `DataMessage.timestamp`.
-pub(crate) fn queued_bubble_timestamp(content: &crate::proto::content_v1::Content) -> Option<u64> {
-    match &content.content {
-        Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => Some(dm.timestamp),
-        _ => None,
-    }
-}
-
 /// Message service for all message operations.
 ///
 /// Orchestrates message sending, editing, and deletion by coordinating
@@ -364,7 +371,7 @@ pub struct MessageService {
                     crate::domain::ids::UserId,
                     u32,
                 ),
-                Vec<(std::time::Instant, crate::proto::chat_v1::Message)>,
+                Vec<(std::time::Instant, chatter_proto::chat_v1::Message)>,
             >,
         >,
     >,
@@ -408,6 +415,9 @@ pub struct MessageService {
     /// [`group::ChannelStateSync`].
     pub(crate) channel_state_sync:
         Arc<parking_lot::RwLock<Option<Arc<dyn group::ChannelStateSync>>>>,
+    /// Group send tokens per private channel, for the verified state they
+    /// were made for (group_send.rs).
+    pub(crate) group_send_tokens: Arc<group_send::TokenCache>,
 }
 
 /// `(channel, sender, server sent_at in epoch millis)` of every group message
@@ -496,9 +506,6 @@ impl SolicitedResends {
 
 
 // Re-export helper functions used by other parts of the codebase
-pub use self::core::{
-    proto_content_to_domain, proto_to_domain_message, proto_to_domain_message_with_sender,
-};
 
 #[cfg(test)]
 mod solicited_resends_tests {

@@ -84,6 +84,8 @@ pub struct CoreServices {
     #[cfg(feature = "jarvis")]
     pub jarvis_engine: SharedJarvisEngine,
     pub notification_service: Arc<NotificationService>,
+    /// App lock + duress PIN; also gates notification content.
+    pub app_lock: Arc<crate::services::app_lock::AppLock>,
     pub section_service: Arc<SectionService>,
     pub conversation_pins: Arc<ConversationPins>,
     pub device_service: Arc<DeviceService>,
@@ -160,6 +162,9 @@ impl CoreServices {
             }
         });
         let auth_state = AuthState::new();
+        let app_lock = Arc::new(crate::services::app_lock::AppLock::new(
+            infra.settings_repo.clone(),
+        ));
         let _ = services
             .message_service
             .receive_auth
@@ -240,8 +245,10 @@ impl CoreServices {
                         .flatten()
                         .unwrap_or(true),
                 );
+                svc.set_app_lock(app_lock.clone());
                 Arc::new(svc)
             },
+            app_lock,
             section_service: services.section_service.clone(),
             conversation_pins: services.conversation_pins.clone(),
             device_service: services.device_service.clone(),
@@ -308,7 +315,7 @@ impl CoreServices {
     pub async fn trending_gifs(
         &self,
         limit: u32,
-    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, crate::error::NetworkError> {
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
         match self.gif_client() {
             Some(mut client) => client.trending(limit as i32).await,
             None => Err(crate::error::NetworkError::Unavailable),
@@ -320,7 +327,7 @@ impl CoreServices {
         &self,
         query: &str,
         limit: u32,
-    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, crate::error::NetworkError> {
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
         match self.gif_client() {
             Some(mut client) => client.search(query, limit as i32).await,
             None => Err(crate::error::NetworkError::Unavailable),
@@ -582,7 +589,7 @@ impl CoreServices {
         use crate::mailbox::key_rolling::{
             DEFAULT_CHECK_INTERVAL_SECS, KeyRollingService, RotationTarget,
         };
-        use crate::proto::content_v1;
+        use chatter_proto::content_v1;
         use crate::services::message::SendDmContentParams;
         use crate::util::time::TimestampNanos;
         use std::time::Duration;
@@ -770,8 +777,8 @@ async fn announce_rotated_group_mailbox(
     grpc_pool: &crate::network::grpc::client_pool::GrpcClientPool,
 ) {
     use crate::mailbox::key_rolling::group_mailbox_rotation_plaintext;
-    use crate::proto::chat_v1::SealedSenderMessage;
-    use crate::proto::mailbox_v1::EnvelopeType;
+    use chatter_proto::chat_v1::SealedSenderMessage;
+    use chatter_proto::mailbox_v1::EnvelopeType;
     use crate::util::time::TimestampNanos;
 
     let me = match message_service.settings_repo.current_user_id() {
@@ -894,12 +901,12 @@ async fn announce_rotated_group_mailbox(
             match anon_messages
                 .send_sealed_messages_with_uak(
                     &recipient.user_id.to_string(),
-                    vec![crate::proto::chat_v1::SealedDeviceMessage {
+                    vec![chatter_proto::chat_v1::SealedDeviceMessage {
                         device_id: recipient.device_id,
                         registration_id: 0,
                         sealed_message: Some(sealed),
                     }],
-                    crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                    chatter_proto::chat_v1::SealedDelivery::NamedDevices,
                     &uuid::Uuid::new_v4().to_string(),
                     &uak,
                 )

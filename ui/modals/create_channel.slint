@@ -256,6 +256,7 @@ export component CreateChannelModal inherits Rectangle {
             spacing: Spacing.lg;
 
             identity := ChannelIdentityFields {
+                focus-on-show: !root.touch;
                 channel-name <=> root.channel-name;
                 channel-description <=> root.channel-description;
                 error-message: root.error-message;
@@ -575,7 +576,11 @@ export component CreateChannelModal inherits Rectangle {
                                     width: 100%;
                                     height: 100%;
                                     placeholder: "24";
-                                    text: root.ttl-hours;
+                                    // Keep the text being edited separate from its numeric
+                                    // value; parsing must not rewrite a partial entry.
+                                    property <string> draft;
+                                    text <=> self.draft;
+                                    init => { self.draft = root.ttl-hours; }
                                     edited(t) => {
                                         root.ttl-hours = t.to-float();
                                     }

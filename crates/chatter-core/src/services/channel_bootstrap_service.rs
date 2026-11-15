@@ -14,7 +14,7 @@ use crate::inbox::DomainEvent;
 use crate::mailbox::group::{GroupFanout, GroupMailboxManager};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::mailbox_v1::EnvelopeType;
+use chatter_proto::mailbox_v1::EnvelopeType;
 use crate::services::signal::SignalService;
 
 /// Channel bootstrap service for handling pending message flush.

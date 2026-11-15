@@ -1,12 +1,6 @@
 import { Colors } from "theme/colors.slint";
-import { AvatarOption } from "components/avatar_picker.slint";
-import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
-import { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
-import { EmojiData } from "components/emoji_picker.slint";
-import { GifData } from "components/gif_picker.slint";
-import { MentionSuggestion } from "components/mention_autocomplete.slint";
-import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
+import { AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
 import { SharedContentItem, SharedTab } from "modals/mod.slint";
 import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, UserSearchData } from "modals/friends.slint";
 import { ForwardTarget } from "modals/forward_message.slint";
@@ -14,10 +8,6 @@ import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
 import { ChannelMemberData, BannedMemberData, ChannelRosterRowData } from "modals/channel_member_types.slint";
 import { InviteUser } from "modals/invite_member.slint";
-import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
-import { PinnedItem } from "modals/pinned_messages.slint";
-import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
-import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 export global ModalHostState {
     // ========== Channel settings callbacks ==========
@@ -156,7 +146,8 @@ export global ModalHostState {
     in property <bool> edit-profile-loading: false;
     in property <string> edit-profile-error: "";
     // Friends modal properties
-    in-out property <string> friends-modal-tab: "find";  // "find", "friends", "requests", "blocked"
+    // "friends", "requests", "blocked"; "find" opens the Add sheet (see FriendsModal init).
+    in-out property <string> friends-modal-tab: "friends";
     in property <[FriendData]> friends-list: [];
     in-out property <string> new-chat-query: "";
     in property <[FriendData]> new-chat-friends: [];

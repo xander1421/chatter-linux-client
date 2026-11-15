@@ -12,8 +12,8 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::services::SignalService;
-use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
+use chatter_core::testing::services::SignalService;
+use chatter_core::testing::storage::{Database, KeyStore, SettingsRepository, settings_keys};
 
 struct Party {
     svc: SignalService,
@@ -44,7 +44,7 @@ fn party() -> Party {
 /// The sender-key plaintext: a valid encoded `Content`, as every channel send
 /// carries (the Signal actor refuses anything else).
 fn plaintext(body: &str) -> Vec<u8> {
-    use chatter_core::proto::content_v1::{Content, DataMessage, content};
+    use chatter_proto::content_v1::{Content, DataMessage, content};
     use prost::Message as _;
     Content {
         content: Some(content::Content::DataMessage(DataMessage {
@@ -62,7 +62,7 @@ async fn send(
     from: &Party,
     channel: &ChannelId,
     body: &str,
-) -> chatter_core::proto::content_v1::GroupEncrypted {
+) -> chatter_proto::content_v1::GroupEncrypted {
     from.svc
         .encrypt_for_group(channel, &plaintext(body))
         .await

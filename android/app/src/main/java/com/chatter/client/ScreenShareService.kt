@@ -100,8 +100,10 @@ class ScreenShareService : Service() {
             val metrics = DisplayMetrics()
             getSystemService(WindowManager::class.java).defaultDisplay.getRealMetrics(metrics)
             val scale = minOf(1.0, 1920.0 / maxOf(metrics.widthPixels, metrics.heightPixels))
-            val width = ((metrics.widthPixels * scale).toInt() and -2).coerceAtLeast(2)
-            val height = ((metrics.heightPixels * scale).toInt() and -2).coerceAtLeast(2)
+            // Android's H.264 encoder requires even dimensions. Keep capture
+            // divisible by eight so the 1x/2x/4x adaptation ladder stays even.
+            val width = ((metrics.widthPixels * scale).toInt() and -8).coerceAtLeast(8)
+            val height = ((metrics.heightPixels * scale).toInt() and -8).coerceAtLeast(8)
             val worker = HandlerThread("ChatterScreenCapture").also { it.start() }
             thread = worker
             val handler = Handler(worker.looper)

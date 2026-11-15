@@ -146,7 +146,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
         .global::<crate::AuthFlow>()
         .on_register_username_validation(|username| {
-            chatter_core::services::validation::validate_registration_username(username.as_str())
+            chatter_core::ui::validate_registration_username(username.as_str())
                 .err()
                 .unwrap_or_default()
                 .into()
@@ -270,7 +270,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 tracing::info!("Register: connected! Calling register()...");
                 // Register
-                match ui_ctx.register(&username, &password, &display_name, &chatter_core::services::link_device_service::LinkDeviceService::current_device_name(), Some(&avatar_bytes), Some(&pin)).await {
+                match ui_ctx.register(&username, &password, &display_name, &chatter_core::client::ChatterClient::current_device_name(), Some(&avatar_bytes), Some(&pin)).await {
                     Ok(result) => {
                         tracing::info!("Registration successful!");
                         if let Ok(mut g) = selected_avatar().lock() { *g = None; }

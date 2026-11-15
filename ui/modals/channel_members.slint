@@ -502,7 +502,7 @@ export component ChannelMembersSection inherits Rectangle {
                 mouse-drag-pan-enabled: true;
                 menu-content := VerticalLayout {
                     width: parent.width;
-                    spacing: 0px;
+                    spacing: Spacing.none;
                     HorizontalLayout { padding-left: Spacing.md; padding-right: Spacing.md; Text {
                         text: root.menu-member.display-name;
                         color: Colors.text-secondary;

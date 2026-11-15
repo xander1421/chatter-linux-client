@@ -8,41 +8,10 @@ use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{
     ConversationType, Message, MessageContent, MixedContent, ReactionCount,
 };
-use crate::proto::chat_v1;
-use crate::storage::repositories::channel_repo::ChannelRepository;
+use chatter_proto::chat_v1;
 use crate::util::time::TimestampNanos;
 
 use super::MessageError;
-
-/// Derive the `ConversationType` for a given channel ID via
-/// `ChannelType::conversation_type()`. Defaults to `Channel` when the row
-/// isn't available yet (channel sync race). Use at RPC boundaries that
-/// hand proto Messages to `proto_to_domain_message_with_sender` —
-/// prevents every caller from repeating the same lookup boilerplate and
-/// keeps the mapping logic in one place.
-pub fn conversation_type_for_channel(
-    repo: &ChannelRepository,
-    channel_id: &ChannelId,
-) -> ConversationType {
-    match repo.get_channel_type(channel_id) {
-        Ok(Some(kind)) => kind.conversation_type(),
-        Ok(None) => {
-            tracing::debug!(
-                channel_id = %channel_id,
-                "conversation_type_for_channel: channel row missing, defaulting to Channel"
-            );
-            ConversationType::Channel
-        }
-        Err(e) => {
-            tracing::warn!(
-                channel_id = %channel_id,
-                error = %e,
-                "conversation_type_for_channel: repo error, defaulting to Channel"
-            );
-            ConversationType::Channel
-        }
-    }
-}
 
 /// Convert a proto Message to a domain Message.
 ///
@@ -182,33 +151,6 @@ pub fn proto_to_domain_message_with_sender(
     })
 }
 
-/// Extracted quote context (author display name, preview text) from a
-/// stored `content_json` blob on anonymous DM/group messages.
-///
-/// Lives in core because the JSON schema is part of the anonymous-message
-/// storage contract — not presentation.
-pub fn extract_quote_from_content_json(content_json: &str) -> Option<(String, String)> {
-    let v: serde_json::Value = serde_json::from_str(content_json).ok()?;
-    let quote = v.get("quote")?;
-    // Prefer stored display name, fall back to UUID.
-    let author_name = quote
-        .get("author_name")
-        .and_then(|n| n.as_str())
-        .filter(|n| !n.is_empty())
-        .or_else(|| quote.get("author_id").and_then(|n| n.as_str()))
-        .unwrap_or_default()
-        .to_string();
-    let preview = quote
-        .get("preview")?
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    if author_name.is_empty() && preview.is_empty() {
-        return None;
-    }
-    Some((author_name, preview))
-}
-
 /// Extract attachment IDs from proto message content.
 fn extract_attachment_ids_from_content(
     proto_content: Option<&chat_v1::message::Content>,
@@ -304,6 +246,7 @@ pub fn proto_content_to_domain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::repositories::channel_repo::{ChannelRepository, conversation_type_for_channel};
     use crate::domain::ids::ChannelId;
 
     /// F13: a server channel with `require_encryption` (the default) is still a

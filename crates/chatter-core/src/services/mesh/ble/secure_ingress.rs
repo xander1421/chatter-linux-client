@@ -176,7 +176,7 @@ impl BleRuntime {
         if let Some(hello) = ChatterHello::decode(&plaintext) {
             let signal_capable = hello.capabilities & super::super::chatter_hello::SIGNAL_MESH != 0
                 && hello.compatible()
-                && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32;
+                && hello.max_carrier_bytes >= frames::MAX_CARRIER as u32;
             match self
                 .binding_store
                 .note_hello(claimed, &hello.nonce, now_secs())
@@ -389,7 +389,7 @@ impl BleRuntime {
         claimed: &PeerId,
     ) -> bool {
         if packet.recipient_id.is_none()
-            || signal_mesh::CarrierFrame::decode(&packet.payload, now_secs()).is_none()
+            || frames::CarrierFrame::decode(&packet.payload, now_secs()).is_none()
         {
             return false;
         }
@@ -438,7 +438,7 @@ impl BleRuntime {
             return false;
         }
         entry.1 += 1;
-        let Some(frame) = signal_mesh::CarrierFrame::decode(bytes, now_secs()) else {
+        let Some(frame) = frames::CarrierFrame::decode(bytes, now_secs()) else {
             return false;
         };
         if self.events.peer_blocked(claimed) {
@@ -515,7 +515,7 @@ impl BleRuntime {
                     &receipt,
                     *receipt_id.as_bytes(),
                 ))
-                .and_then(|frame| frame.encode())
+                .and_then(|frame| frame.encode().map_err(crate::services::mesh::MeshError::Binding))
                 .ok();
                 drop(store);
                 drop(_guard);
@@ -638,7 +638,7 @@ impl BleRuntime {
                     &receipt,
                     *receipt_id.as_bytes(),
                 ))
-                .and_then(|frame| frame.encode())
+                .and_then(|frame| frame.encode().map_err(crate::services::mesh::MeshError::Binding))
                 .ok()
             }
             signal_mesh::PlainKind::Delivered => {

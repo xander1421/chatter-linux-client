@@ -62,6 +62,7 @@ use crate::MainWindow;
 /// Wire the Back key and the Slint-side stack operations. No core access:
 /// this is pure UI-shell navigation state.
 pub fn wire(window: &MainWindow) {
+    mouse_history::wire(window);
     let weak = window.as_weak();
     window.on_back_pressed(move || {
         if let Some(w) = weak.upgrade() {
@@ -186,6 +187,13 @@ pub fn reset_to_chats(w: &MainWindow) {
 ///
 /// Split out from the callback so tests can drive it directly.
 pub fn handle_back(window: &MainWindow) -> bool {
+    // Locked (core's decision, mirrored in AppLockPane): the lock screen covers
+    // everything, so Back must not pop the hidden layers behind it. It leaves
+    // the app, as Signal's lock screen does.
+    if window.global::<crate::AppLockPane>().get_locked() {
+        background_app();
+        return false;
+    }
     if window.global::<crate::ChatPane>().get_link_confirm_url() != "" {
         window.global::<crate::ChatPane>().set_link_confirm_url("".into());
         return true;
@@ -518,3 +526,5 @@ fn background_app() {
 /// does; never quit the window out from under the user.
 #[cfg(not(target_os = "android"))]
 fn background_app() {}
+
+mod mouse_history;

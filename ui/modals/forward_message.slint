@@ -19,6 +19,8 @@ export struct ForwardTarget {
     avatar-source: image,
     is-anonymous: bool,
     target-type: string,  // "channel", "group", "dm", or "anon-dm"
+    // Invite-only channel: drawn with the chat list's lock, not '#'.
+    private-channel: bool,
 }
 
 export component ForwardMessageModal inherits Rectangle {
@@ -170,7 +172,22 @@ export component ForwardMessageModal inherits Rectangle {
                                         colorize: Colors.primary;
                                     }
                                 }
-                                if target.target-type != "saved_messages": Avatar {
+                                // An iconless channel wears the chat list's type
+                                // glyph (lock = private, '#' = public), not a
+                                // letter avatar.
+                                if target.target-type == "channel" && target.avatar-source.width == 0: Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    border-radius: 16px;
+                                    background: Colors.surface-control;
+                                    Image {
+                                        source: target.private-channel ? Icons.lock : Icons.hash;
+                                        width: 16px;
+                                        height: 16px;
+                                        colorize: Colors.text-secondary;
+                                    }
+                                }
+                                if target.target-type != "saved_messages" && !(target.target-type == "channel" && target.avatar-source.width == 0): Avatar {
                                     size: 32px;
                                     name: target.name;
                                     source: target.avatar-source;

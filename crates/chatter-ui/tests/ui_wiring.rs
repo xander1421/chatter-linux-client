@@ -66,6 +66,17 @@ fn harness_never_reaches_the_os_keyring() {
 /// Install the headless backend for the current test thread. Safe to call once
 /// per thread; a second call on the same thread would panic (platform already
 /// initialized), which cargo's thread-per-test model avoids.
+/// Let a `current-view` change finish its handoff, as the real loop does
+/// within a few frames. Since 4877b9e6 the outgoing page holds a window-sized
+/// stray-tap blocker (app.slint, `exiting-view`) until AppViewTransition's
+/// leave timer fires; a harness that never advances time clicks into it and
+/// nothing underneath sees the press.
+fn settle_view_handoff() {
+    slint::platform::update_timers_and_animations();
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    slint::platform::update_timers_and_animations();
+}
+
 fn boot() -> MainWindow {
     testing::init_no_event_loop();
     MainWindow::new().expect("MainWindow::new under testing backend")
@@ -145,6 +156,19 @@ fn test_rt() -> &'static tokio::runtime::Runtime {
     &RT
 }
 
+/// Enter the test runtime for the REST of this test thread, as production
+/// enters its runtime on the UI thread for the life of the event loop
+/// (src/lib.rs desktop `app_main`, Android `android_main`). Handlers the test
+/// invokes after setup (`refresh_draft_rows`, the settings AI handlers) call
+/// `tokio::spawn`, which needs that ambient context. The guard is leaked on
+/// purpose: each libtest test owns its thread, and tokio only requires guards
+/// to unwind in LIFO order, which a never-dropped outermost guard satisfies.
+fn enter_test_rt() -> &'static tokio::runtime::Runtime {
+    let rt = test_rt();
+    std::mem::forget(rt.enter());
+    rt
+}
+
 fn wired_offline() -> (
     &'static tokio::runtime::Runtime,
     tempfile::TempDir,
@@ -152,8 +176,7 @@ fn wired_offline() -> (
     MainWindow,
 ) {
     no_keyring();
-    let rt = test_rt();
-    let _guard = rt.enter();
+    let rt = enter_test_rt();
     let tmp = tempfile::tempdir().unwrap();
     testing::init_no_event_loop();
     let client = chatter_core::client::ChatterClient::builder()
@@ -174,7 +197,7 @@ fn wired_offline() -> (
 /// construction). Default is the private "none".
 #[test]
 fn settings_notification_detail_level_persists_across_restart() {
-    use chatter_core::services::notification_service::NotificationDetailLevel;
+    use chatter_core::client::NotificationDetailLevel;
     let (rt, tmp, client, w) = wired_offline();
     assert_eq!(
         client.notification_detail_level(),
@@ -214,7 +237,7 @@ fn settings_notification_detail_level_persists_across_restart() {
 /// a restart.
 #[test]
 fn settings_theme_pick_persists_and_flips_palette() {
-    use chatter_core::services::appearance::ThemeMode;
+    use chatter_core::client::ThemeMode;
     use slint::ComponentHandle;
     let (rt, tmp, client, w) = wired_offline();
     let appearance = w.global::<chatter_ui::Appearance>();
@@ -615,8 +638,8 @@ fn edit_profile_avatar_change_persists_picked_bytes_on_save() {
     );
     assert!(profile.contains("avatar_edit::wire(window, ui_ctx)"));
     let src = include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs");
-    let pick = src.find("window.on_edit_profile_change_avatar").unwrap();
-    let save = src.find("window.on_edit_profile_save").unwrap();
+    let pick = src.find(".on_edit_profile_change_avatar(").unwrap();
+    let save = src.find(".on_edit_profile_save(").unwrap();
     let pick_body = &src[pick..save];
     assert!(pick_body.contains("finish_picker"));
     assert!(
@@ -708,12 +731,13 @@ fn channel_settings_save_reaches_core_and_drafts_are_wired() {
         slint_src.contains("root.save-settings(root.channel-name-draft"),
         "the Save button must invoke save-settings with the name/description drafts"
     );
+    // Two-way bound since 3cf2b504 (text-edit fixes): every edit writes the draft.
     assert!(
-        slint_src.contains("root.channel-name-draft = value"),
+        slint_src.contains("text <=> root.channel-name-draft;"),
         "the name Input must write its draft on edit (was an empty stub)"
     );
     assert!(
-        slint_src.contains("root.channel-description-draft = value"),
+        slint_src.contains("text <=> root.channel-description-draft;"),
         "the description Input must write its draft on edit (was an empty stub)"
     );
 }
@@ -878,7 +902,7 @@ fn message_reply_in_thread_button_is_wired() {
     assert!(
         slint_src.contains("thread-btn := IconAction {")
             && slint_src.contains(r#"label: "Reply in thread""#)
-            && item_src.contains("if root.is-hovered: MessageActions {")
+            && item_src.contains("if root.is-hovered && !root.selection-mode: MessageActions {")
             && item_src.contains("thread-clicked(a0) => { root.thread-clicked(a0); }"),
         "the message hover actions must include a Reply-in-thread button so a \
          message with zero replies can still START a thread"
@@ -991,6 +1015,22 @@ fn message_react_edit_pin_actions_are_wired() {
 // The full linking round-trip against the live stack is proven server-side by
 // validated.rs V8/V9/V11 and tests/integration_provisioning.rs.
 // ============================================================================
+
+#[test]
+fn link_device_copy_preserves_verification_code() {
+    let (rt, _tmp, client, w) = wired_offline();
+    chatter_ui::init_rt_handle(rt.handle().clone());
+    chatter_ui::bin_ui::features::auth::link_device::wire_link_device(&w, &client);
+    w.set_current_view("link-device".into());
+    let status = "Verification code: 123456\nCheck your other device shows the same code, then approve there.";
+    let url = "chatter://link?uuid=offline-test";
+    w.global::<chatter_ui::AuthFlow>().set_link_device_status(status.into());
+    w.global::<chatter_ui::AuthFlow>().set_link_device_url(url.into());
+    w.global::<chatter_ui::AuthFlow>().invoke_link_device_copy();
+    assert_eq!(w.global::<chatter_ui::AuthFlow>().get_link_device_status().as_str(), status);
+    assert_eq!(chatter_ui::platform::clipboard::test_clipboard_text().as_deref(), Some(url));
+    assert_eq!(w.get_toast_message().as_str(), "Link copied to clipboard.");
+}
 
 #[test]
 fn link_device_page_start_and_cancel_are_wired() {
@@ -1124,7 +1164,7 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
     );
 
     // L2 static (Rust): channel selection branches to the Jarvis history loader.
-    let sel_src = include_str!("../src/bin_ui/features/sidebar/channel.rs");
+    let sel_src = include_str!("../src/bin_ui/features/chat/open/channel.rs");
     let sidx = sel_src
         .find("is_jarvis_channel_str")
         .expect("selection must branch on the AI channel");
@@ -1412,9 +1452,11 @@ fn cloud_preference_does_not_override_the_dm_policy() {
     client.set_ai_enabled_for("dm-1", true).expect("enable");
     client.set_ai_enabled_for("chan-1", true).expect("enable");
 
+    // The policy clamps a DM to the local silo; with the local runtime
+    // removed (badf7e8a) that resolves Off — never to the cloud.
     assert_eq!(
         client.resolve_ai_for("dm-1", &ConversationType::ServerDm, false),
-        Resolved::Use(Silo::Local),
+        Resolved::Off,
         "a DM resolved to the cloud silo despite the policy clamp"
     );
     assert_eq!(
@@ -1432,10 +1474,11 @@ fn cloud_preference_does_not_override_the_dm_policy() {
 /// The per-conversation AI switch must actually gate a Jarvis turn, not just
 /// sit in settings. Before this, `conv.ai.enabled.<id>` was written by the UI
 /// and never read at ask time — a channel with AI off would still answer.
+#[cfg(feature = "jarvis")]
 #[test]
 fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
     use chatter_core::domain::jarvis::JarvisContext;
-    use chatter_core::services::jarvis::JarvisError;
+    use chatter_core::testing::services::jarvis::JarvisError;
 
     require_element_queries();
     let (rt, _tmp, client, _w) = wired_offline();
@@ -1464,11 +1507,12 @@ fn jarvis_ask_is_gated_by_the_per_conversation_switch() {
 
 /// The dedicated AI channel is exempt — requiring it to be switched on would
 /// be circular, since it exists only to talk to the model.
+#[cfg(feature = "jarvis")]
 #[test]
 fn the_dedicated_ai_channel_needs_no_opt_in() {
     use chatter_core::client::jarvis_channel_id;
     use chatter_core::domain::jarvis::JarvisContext;
-    use chatter_core::services::jarvis::JarvisError;
+    use chatter_core::testing::services::jarvis::JarvisError;
 
     require_element_queries();
     let (rt, _tmp, client, _w) = wired_offline();
@@ -1642,6 +1686,20 @@ fn profile_share_username_link_is_wired() {
             .is_empty(),
         "copy-share-link did NOT run the real handler (status not set)"
     );
+    // The copy reached the clipboard writer — the in-memory one of this
+    // ui-test-debug build, never the desktop's wl-copy (it daemonizes holding
+    // the test's pipe and hung the gate).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while chatter_ui::platform::clipboard::test_clipboard_text().as_deref()
+        != Some("chatter://u/test-id#AAAA")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "copy-share-link never wrote the link to the clipboard (got {:?})",
+            chatter_ui::platform::clipboard::test_clipboard_text()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 
     // ---- L2: static — handlers reach core; Slint fires the callbacks --------
     let profile_src = concat!(
@@ -1766,7 +1824,8 @@ fn profile_shared_content_drawer_is_wired() {
     }
     let modal_src = include_str!("../../../ui/modals/user_profile.slint");
     assert!(
-        modal_src.contains("root.shared-tab-selected(tab.id)")
+        // Categories are profile pages since 6a4b8da7: a category row opens one.
+        modal_src.contains("root.shared-page-open = true; root.shared-tab-selected(category.id);")
             && modal_src.contains("root.shared-load-more()")
             && modal_src.contains("root.open-shared-item(")
             && modal_src.contains("root.start-call("),
@@ -1954,8 +2013,11 @@ fn friends_modal_tab_switch_is_wired() {
     // The historical bug: FriendsModal set its local active-tab but never fired
     // switch-tab, so no Rust hook could ever run. Prove the .slint now fires it.
     let slint_src = include_str!("../../../ui/modals/friends.slint");
+    // Click, keyboard and screen-reader activation share `open-tab`.
+    let open_tab = &slint_src[slint_src.find("function open-tab(id: string) {").expect("open-tab")..];
     assert!(
-        slint_src.contains("root.switch-tab(tab.id)"),
+        slint_src.contains("clicked => { root.open-tab(tab.id); }")
+            && open_tab[..open_tab.find("\n    }\n").unwrap()].contains("root.switch-tab(id);"),
         "FriendsModal tab click no longer fires switch-tab — Rust refresh hook is unreachable"
     );
 
@@ -1983,6 +2045,14 @@ fn presence_status_picker_reaches_core() {
     let (rt, _tmp, client, w) = wired_offline();
     chatter_ui::init_rt_handle(rt.handle().clone());
     chatter_ui::bin_ui::features::status::wire(&w, &client);
+    // Presence writes are admitted only for the current signed-in session
+    // (presence_facade.rs with_presence_publication); the picker exists only
+    // then. In-memory fixture identity, no login or connection.
+    client.testing_set_logged_in(
+        chatter_core::domain::ids::UserId::new(),
+        1,
+        "Presence fixture".into(),
+    );
 
     // Negative control: nothing persisted before the callback fires.
     assert_eq!(
@@ -2024,9 +2094,13 @@ fn presence_status_picker_reaches_core() {
     }
 
     // Static half: the picker row actually invokes the callback chain.
+    // The pills are their own component (ProfileStatusPicker) since the
+    // profile split; the modal forwards its callback.
     let modal = include_str!("../../../ui/modals/user_profile.slint");
+    let picker = include_str!("../../../ui/modals/profile_status_picker.slint");
     assert!(
-        modal.contains("root.change-status(opt.mode)"),
+        picker.contains("clicked => { root.change-status(opt.mode); }")
+            && modal.contains("change-status(mode) => { root.change-status(mode); }"),
         "STATUS pills must fire change-status"
     );
     let app = include_str!("../../../ui/app_modal_host.slint");
@@ -2068,6 +2142,7 @@ fn forward_message_confirm_is_wired_to_core() {
         id: peer.into(),
         name: "Test Peer".into(),
         target_type: "dm".into(),
+        private_channel: false,
     }];
     w.global::<chatter_ui::ModalHostState>()
         .set_forward_targets(ModelRc::new(VecModel::from(targets)));
@@ -2094,7 +2169,7 @@ fn session_revoke_routes_through_sender_key_rotation() {
     // The UI's revoke buttons call client.revoke_session / revoke_all_other_sessions.
     // Historical bug: those routed to a server-only revoke that skipped sender-key
     // rotation, while the rotating path (revoke_and_rotate) was unreachable.
-    let core_src = include_str!("../../chatter-core/src/client/mod.rs");
+    let core_src = include_str!("../../chatter-core/src/client/account_settings.rs");
     let revoke_fn = core_src
         .split("pub async fn revoke_session")
         .nth(1)
@@ -2117,10 +2192,11 @@ fn session_revoke_routes_through_sender_key_rotation() {
 // ============================================================================
 #[test]
 fn connection_banner_is_dismissible_without_hiding_the_outage() {
-    let app = include_str!("../../../ui/app.slint");
     let notices = include_str!("../../../ui/main_status_notices.slint");
     let banner = include_str!("../../../ui/components/connection_banner.slint");
-    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+    // The status dot lives in the footer since 8271cc25: on the bell in the
+    // expanded footer, on the gear in the collapsed rail.
+    let sidebar = include_str!("../../../ui/sidebar/sidebar_footer.slint");
 
     // The banner offers a way out...
     assert!(
@@ -2128,31 +2204,34 @@ fn connection_banner_is_dismissible_without_hiding_the_outage() {
         "connection banner has no dismissed callback — nothing to close it with"
     );
     assert!(
-        notices.contains("dismissed => { root.connection-banner-dismissed = true; }"),
+        notices.contains("dismissed => { root.connection-dismissed = true; }"),
         "app does not handle the banner's dismissed callback (dead close button)"
     );
     assert!(
-        notices.contains("suppressed: root.connection-banner-dismissed;"),
+        notices.contains("suppressed: root.connection-dismissed;"),
         "the banner is not gated on the dismissal flag, so closing it does nothing"
     );
 
     // ...that resets, so a later outage is not swallowed by an old dismissal.
+    let reset = notices
+        .find("changed connection-status => {")
+        .expect("dismissal must be cleared on a status change");
     assert!(
-        app.contains("root.connection-banner-dismissed = false;"),
+        notices[reset..].contains("root.connection-dismissed = false;"),
         "dismissal is never cleared — one dismissal would silence every future outage"
     );
 
     // ...and the fact survives the dismissal.
     assert!(
-        sidebar.contains("if root.server-unreachable: Rectangle"),
+        sidebar.contains("if root.server-unreachable: Rectangle")
+            && sidebar.contains("if root.server-unreachable || ActivityGlobal.unread-count > 0: Rectangle"),
         "sidebar has no server-unreachable indicator, so a dismissed banner hides the outage"
     );
     assert_eq!(
-        sidebar
-            .matches("accessible-label: \"Server unreachable\"")
-            .count(),
+        sidebar.matches("\"Server unreachable\"").count(),
         2,
-        "both the expanded and collapsed sidebar footers must carry the dot"
+        "both the expanded and collapsed sidebar footers must carry the dot, \
+         and say so to a screen reader"
     );
 }
 
@@ -2443,6 +2522,11 @@ fn opening_a_composer_picker_on_a_phone_keeps_back_alive() {
     w.window().request_redraw();
     resize(801.0);
     slint::platform::update_timers_and_animations();
+    // On a phone the palette is one of the menus that drop text focus to
+    // back-scope (`other-menu-open`, 2817c408); its field takes focus back
+    // from its own 50ms timer (unified_search.slint), so let that fire.
+    testing::mock_elapsed_time(std::time::Duration::from_millis(100));
+    slint::platform::update_timers_and_animations();
     w.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
     assert_eq!(
@@ -2506,9 +2590,19 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
                 .to_logical(scale),
         });
     chatter_ui::bin_ui::features::back::push(&w, "create-channel");
+    // The modal mounts from `changed active-modal` (app.slint →
+    // AppModalTransitions.present-active-modal), which runs on the next tick.
+    slint::platform::update_timers_and_animations();
     w.window().request_redraw();
     // Let the card's entrance animation settle so clicks land on the fields.
     testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    // Since 3cf2b504 a phone sheet mounts offscreen and starts its slide from
+    // a one-frame timer; fire it, then let the slide finish.
+    for _ in 0..2 {
+        slint::platform::update_timers_and_animations();
+        testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    }
+    slint::platform::update_timers_and_animations();
 
     let key = |t: slint::SharedString| {
         w.window()
@@ -2558,6 +2652,15 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
         "Done on Description did not drop focus — the keyboard stays up"
     );
 
+    // The first lookup found the placeholder Text, which typing removed: look
+    // the field itself up. And a second tap on the same spot right after the
+    // first is a double tap (word select, so "b" would replace "a"); a user's
+    // second tap comes seconds later.
+    let name = testing::ElementHandle::find_by_accessible_label(&w, "Channel name")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::TextInput))
+        .expect("the New Channel name field is not on screen");
+    testing::mock_elapsed_time(std::time::Duration::from_millis(2000));
+    slint::platform::update_timers_and_animations();
     name.mock_single_click(slint::platform::PointerEventButton::Left);
     key("b".into());
     assert_eq!(
@@ -2656,6 +2759,92 @@ fn back_key_event_reaches_the_handler() {
     );
 }
 
+/// App lock (78fd3d41): the lock screen's PIN field takes focus, so a real
+/// Back key is delivered to that field and must bubble to back-pressed. While
+/// locked, Back leaves the app (Signal's lock screen does the same) and pops
+/// NOTHING: the layers hidden behind the lock screen stay as they were. After
+/// unlocking, Back works on the app again.
+#[test]
+fn back_on_the_lock_screen_leaves_the_app_and_pops_nothing() {
+    use slint::ComponentHandle;
+    use std::{cell::Cell, rc::Rc};
+    require_element_queries();
+    let w = boot();
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
+    let scale = w.window().scale_factor();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
+    let presses = Rc::new(Cell::new(0u32));
+    let consumed = Rc::new(Cell::new(None));
+    {
+        let (weak, presses, consumed) = (w.as_weak(), presses.clone(), consumed.clone());
+        w.on_back_pressed(move || {
+            presses.set(presses.get() + 1);
+            consumed.set(Some(chatter_ui::bin_ui::features::back::handle_back(
+                &weak.upgrade().unwrap(),
+            )));
+        });
+    }
+
+    w.global::<chatter_ui::AppLockPane>().set_locked(true);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        testing::ElementHandle::find_by_accessible_label(&w, "PIN")
+            .filter(|e| e.accessible_role() == Some(testing::AccessibleRole::TextInput))
+            .count(),
+        1,
+        "the lock screen's PIN field was not instantiated"
+    );
+    // The PIN field holds focus: typed text lands in it.
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "7".into() });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "7".into() });
+    assert_eq!(
+        w.global::<chatter_ui::AppLockPane>().get_pin().as_str(),
+        "7",
+        "the PIN field does not hold focus on the lock screen"
+    );
+
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    assert_eq!(
+        presses.get(),
+        1,
+        "Back from the focused PIN field never reached back-pressed"
+    );
+    assert_eq!(
+        consumed.get(),
+        Some(false),
+        "Back on the lock screen must fall through to leaving the app"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "sessions",
+        "Back on the lock screen popped a layer hidden behind it"
+    );
+
+    w.global::<chatter_ui::AppLockPane>().set_locked(false);
+    slint::platform::update_timers_and_animations();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    assert_eq!(
+        presses.get(),
+        2,
+        "after unlocking, Back no longer reaches back-pressed (focus was lost with the PIN field)"
+    );
+    assert_eq!(consumed.get(), Some(true));
+    assert_eq!(w.get_active_modal().as_str(), "none");
+}
+
 /// The Back scope must not become a focus thief. It is an ancestor of the whole
 /// app including the message composer, so if it grabbed focus on click or on Tab
 /// the composer would lose the caret mid-typing. Both are switched off, and Back
@@ -2675,16 +2864,27 @@ fn back_scope_does_not_steal_focus_from_text_input() {
     // beside it at the window's top level, or Back is lost while that thing's
     // TextInput holds focus.
     let after = &app[at..];
+    // The one allowed sibling is the Shield wash: a bare gradient Rectangle
+    // (ui/anon_mode/shield_wash.slint) that can neither hold focus nor take a
+    // pointer, layered over everything by z.
     assert!(
         after
             .lines()
             .skip(1)
             .filter(|l| l.starts_with("    ") && !l.starts_with("     "))
-            .all(|l| l == "    }"),
+            .all(|l| l == "    }" || l == "    ShieldWash {"),
         "an element was added beside back-scope instead of inside it"
     );
+    let wash = include_str!("../../../ui/anon_mode/shield_wash.slint");
+    for focusable in ["TextInput", "FocusScope", "TouchArea", "Input {", "Flickable"] {
+        assert!(
+            !wash.contains(focusable),
+            "ShieldWash sits beside back-scope, so it must stay non-interactive ({focusable})"
+        );
+    }
+    // Shortcuts live in AppShortcuts (ui/app_shortcuts.slint) since the app split.
     let main = &after[..after
-        .find("Global keyboard shortcuts")
+        .find("shortcuts := AppShortcuts {")
         .expect("shortcut scope moved")];
     assert!(
         main.contains("focus-on-click: false;"),
@@ -2698,7 +2898,7 @@ fn back_scope_does_not_steal_focus_from_text_input() {
     assert!(
         main.contains("if (event.text == Key.Back || (event.text == Key.Escape")
             && main
-                .contains("root.composer-emoji-picker-visible || root.composer-gif-picker-visible")
+                .contains("ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible")
             && main.contains("return reject;"),
         "back-scope must reject ordinary keys and limit Escape to the drawer, or it \
          would eat text input"
@@ -2896,23 +3096,24 @@ fn tab_bar_and_call_bar_sit_under_pushed_modals() {
     let tabs = include_str!("../../../ui/app_tab_screens.slint");
     let settings = include_str!("../../../ui/app_settings_host.slint");
     let chrome = include_str!("../../../ui/app_bottom_chrome.slint");
-    for host in ["AppTabScreens {", "AppSettingsHost {", "AppBottomChrome {"] {
+    // The element's own property list: from its header to its first nested
+    // block or its end, so a `z` of some child can never satisfy it.
+    let props = |host: &str| {
         let at = app
             .find(host)
-            .unwrap_or_else(|| panic!("app.slint lost `{host}`"));
+            .unwrap_or_else(|| panic!("app.slint lost `{host}`"))
+            + host.len();
+        let end = app[at..].find(['{', '}']).map_or(app.len(), |e| at + e);
+        &app[at..end]
+    };
+    for host in ["AppTabScreens {", "AppSettingsHost {", "AppBottomChrome {"] {
         assert!(
-            app[at..at + 50].contains("z: -1;"),
+            props(host).contains("z: -1;"),
             "`{host}` must sit below modals"
         );
     }
     for host in ["AppModalHost {", "AppSecondaryModals {"] {
-        let at = app
-            .find(host)
-            .unwrap_or_else(|| panic!("app.slint lost `{host}`"));
-        assert!(
-            app[at..at + 50].contains("z: 0;"),
-            "`{host}` must cover tabs"
-        );
+        assert!(props(host).contains("z: 0;"), "`{host}` must cover tabs");
     }
     assert!(chrome.contains("if root.bottom-nav-visible: AppBottomNavigation {"));
     assert!(chrome.contains("selected-tab <=> SidebarPane.active-tab;"));
@@ -2927,8 +3128,21 @@ fn tab_bar_and_call_bar_sit_under_pushed_modals() {
     ] {
         let at = tabs
             .find(screen)
-            .unwrap_or_else(|| panic!("tab screen lost `{screen}`"));
-        assert!(tabs[at..at + 60].contains("z: -1;"));
+            .unwrap_or_else(|| panic!("tab screen lost `{screen}`"))
+            + screen.len();
+        // Only the element's own properties (depth 1), wherever they sit
+        // among its handlers: a child's `z` must not satisfy it.
+        let (mut depth, mut own) = (1usize, String::new());
+        for c in tabs[at..].chars() {
+            match c {
+                '{' => depth += 1,
+                '}' if depth == 1 => break,
+                '}' => depth -= 1,
+                _ if depth == 1 => own.push(c),
+                _ => {}
+            }
+        }
+        assert!(own.contains("z: -1;"), "`{screen}` must sit below modals");
     }
     assert!(settings.contains("if ModalHostState.settings-open: SettingsScreen {"));
 }
@@ -3056,7 +3270,7 @@ fn the_message_hover_action_bar_never_appears_on_touch() {
         "the message action bar's hover gate must exclude touch platforms"
     );
     assert!(
-        item_src.contains("if root.is-hovered: MessageActions {"),
+        item_src.contains("if root.is-hovered && !root.selection-mode: MessageActions {"),
         "the action bar is what that gate is for — if it stops reading \
          is-hovered, the gate is guarding nothing"
     );
@@ -3083,7 +3297,7 @@ fn the_message_hover_action_bar_never_appears_on_touch() {
 // ============================================================================
 
 /// A pinned conversation had no route from the UI to core: `pin_conversation`
-/// (services/conversation.rs) existed with no Slint callback and no handler.
+/// (client/conversation) existed with no Slint callback and no handler.
 ///
 ///  L1 (DYNAMIC): the callback exists on MainWindow and the real handler runs.
 ///  L2 (STATIC, Rust): the handler reaches `set_conversation_pinned` on core.
@@ -3129,15 +3343,19 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
         "the entry must name the action it will actually perform"
     );
 
-    // Every chat-list row hands itself to the menu, pin state included.
-    let list = include_str!("../../../ui/sidebar/chat_list.slint");
-    assert!(
-        list.contains("root.row-context-menu-requested(row, x, y)"),
+    // Every chat-list row — loose and foldered, both slots of the flat list
+    // (038d14a9) — hands itself to the menu, pin state included.
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+    assert_eq!(
+        sidebar.matches("SidebarPane.ctx-menu-row = entry.chat;").count(),
+        2,
         "the chat-list row must carry itself into the menu"
     );
-    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
-    assert!(
-        sidebar.contains("root.ctx-menu-is-pinned = row.is-pinned;"),
+    assert_eq!(
+        sidebar
+            .matches("SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;")
+            .count(),
+        2,
         "the menu must read the row's pin state"
     );
 }
@@ -3300,7 +3518,7 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
 /// this — had zero callers.
 #[test]
 fn foldered_conversations_are_excluded_from_the_loose_lists() {
-    let core = include_str!("../../chatter-core/src/client/mod.rs");
+    let core = include_str!("../../chatter-core/src/client/sidebar.rs");
     let idx = core
         .find("pub fn sidebar_channels")
         .expect("sidebar_channels present");
@@ -3336,17 +3554,24 @@ fn foldered_conversations_are_excluded_from_the_loose_lists() {
 /// on a hot path — that is now a single unified-conversation query.
 #[test]
 fn folder_badges_refresh_on_message_arrival_and_on_read() {
+    // Since 04ab835e a foldered row is refreshed incrementally: the preview
+    // update finds the key in the folder index and re-reads that one member.
     let sidebar = include_str!("../src/bin_ui/features/sidebar/mod.rs");
     let idx = sidebar
         .find("pub(crate) fn update_sidebar_preview")
         .expect("update_sidebar_preview present");
     assert!(
-        sidebar[idx..].contains("refresh_section_badges(window, ui_ctx)"),
+        sidebar[idx..].contains("update_sidebar_row(window, ui_ctx, conversation"),
+        "update_sidebar_preview must route through update_sidebar_row"
+    );
+    let row = &sidebar[sidebar.find("fn update_sidebar_row").expect("update_sidebar_row")..];
+    assert!(
+        row[..row.find("\n}\n").unwrap()].contains("sections::refresh_member(window, ui_ctx, &key)"),
         "every sent and received message funnels through update_sidebar_preview; \
          the folder badges must be rebuilt there or they stay frozen from launch"
     );
 
-    let channel = include_str!("../src/bin_ui/features/sidebar/channel.rs");
+    let channel = include_str!("../src/bin_ui/features/chat/open/channel.rs");
     let read_idx = channel
         .find("mark_read_local()")
         .expect("mark_read_local present");
@@ -3359,7 +3584,7 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     // `messages.is_read`, so opening a DM cleared the Slint model and nothing
     // else — the count came straight back on the next refresh and after every
     // restart.
-    let dm = include_str!("../src/bin_ui/features/sidebar/dm.rs");
+    let dm = include_str!("../src/bin_ui/features/chat/open/dm.rs");
     let dm_read_idx = dm
         .find("mark_read_local()")
         .expect("selecting a DM must mark it read in core, not just zero the sidebar model");
@@ -3374,8 +3599,10 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
         .find("pub fn list_sections_with_conversations")
         .expect("list_sections_with_conversations present");
     let body = &core[list_idx..list_idx + 2500];
+    // Two batched reads (names, then unread/activity stats), never one per membership.
     assert!(
-        body.contains("list_all()"),
+        body.contains("self.conversation_repo.conversation_names()?")
+            && body.contains("self.conversation_repo.conversation_stats()?"),
         "folder metadata must come from ONE unified-conversation query, not a \
          get_conversation per membership"
     );
@@ -3391,25 +3618,36 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
 /// section's model holds only its own.
 #[test]
 fn folder_rows_are_pre_grouped_per_section() {
+    // Since 038d14a9 the sidebar is one virtualized flat list. Each section
+    // still owns its rows; core turns the per-section shape into slots, so no
+    // Slint filter runs over a flat list of every foldered row.
     let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
     assert!(
         list.contains("conversations: [ChatRowData]"),
         "each section must own its rows"
     );
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
     assert!(
-        list.contains("for conv in section.conversations:"),
-        "a section must loop only its own rows"
+        sidebar.contains("for entry[idx] in root.flat-rows:")
+            && sidebar.contains("if entry.kind == \"section-chat\":"),
+        "folder rows must render from the flat slot list"
     );
     assert!(
-        !list.contains("conv.section-id == section.section-id"),
+        !sidebar.contains("section-id == entry") && !list.contains("conv.section-id == section.section-id"),
         "the visible/height:0 filter over the whole flat list must be gone"
     );
 
-    // Rust must be the thing that groups them.
+    // Rust must be the thing that groups them, and core orders the slots.
     let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
     assert!(
         src.contains("conversations: ModelRc::new(VecModel::from(rows))"),
         "the per-section model must be built in Rust"
+    );
+    let flat = include_str!("../src/bin_ui/features/sidebar/mod.rs");
+    assert!(
+        flat.contains("sidebar_slots(chats.row_count(), &shape)")
+            && flat.contains("sections[index].conversations.row_data(row)"),
+        "each section-chat slot must read its own section's row"
     );
 }
 
@@ -3418,35 +3656,39 @@ fn folder_rows_are_pre_grouped_per_section() {
 /// on a surface that has no hover.
 #[test]
 fn folder_ui_sizes_up_for_touch() {
+    // Folder headers and rows render from the flat list since 038d14a9.
     let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
-    let idx = sidebar
-        .find("CustomSectionList {")
-        .expect("CustomSectionList instantiated");
+    let header = &sidebar[sidebar
+        .find("if entry.kind == \"section-header\": CustomSectionHeader {")
+        .expect("CustomSectionList instantiated")..];
     assert!(
         // `touch`, not `mobile-mode`: a two-pane tablet is not in mobile
         // layout but is still driven by a finger (595b5031).
-        sidebar[idx..idx + 600].contains("mobile-mode: root.touch"),
+        header[..600].contains("mobile-mode: root.touch"),
         "the folder list must be told whether it is being touched"
     );
 
-    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
     // Folder rows are the chat list's own rows, sized by the same flag.
-    let rows = &list[list
-        .find("for conv in section.conversations: ChatRow {")
+    let rows = &sidebar[sidebar
+        .find("if entry.kind == \"section-chat\": Rectangle {")
         .expect("folder rows are ChatRows")..];
     assert!(
-        rows[..200].contains("mobile-mode: root.mobile-mode;"),
+        rows[..400].contains("root.touch ? Spacing.row-height-touch")
+            && rows[..400].contains("section-chat-row := ChatRow {")
+            && rows[..600].contains("mobile-mode: root.touch;"),
         "folder conversation rows must meet the touch minimum"
     );
+    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
     assert!(
         list.contains(
             "height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height"
         ),
         "folder headers must meet the touch minimum"
     );
+    // Desktop shows them always (keyboard reach); touch never does.
     assert!(
-        list.contains("if !root.mobile-mode && header-hover.has-hover:"),
-        "the hover-reveal rename/delete buttons are desktop-only — hold opens \
+        list.contains("if !root.mobile-mode: HorizontalLayout {"),
+        "the rename/delete buttons are desktop-only — hold opens \
          a menu carrying both, and a 24px button is unhittable by a finger"
     );
 
@@ -3537,7 +3779,7 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
     }
 
     // L2 static: the handler asks core instead of the model it just emptied.
-    let src = include_str!("../src/bin_ui/features/sidebar/dm.rs");
+    let src = include_str!("../src/bin_ui/features/chat/open/dm.rs");
     assert!(
         src.contains("resolve_dm_conversation"),
         "DM selection must resolve the conversation through core"
@@ -3616,11 +3858,17 @@ fn foldered_private_groups_leave_the_loose_list() {
     );
 
     let rows = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
+    // sidebar_rows filters archived rows out of sidebar_rows_unfiltered,
+    // which builds the rows.
+    assert!(
+        rows.contains("self.sidebar_rows_unfiltered().into_iter()"),
+        "sidebar_rows must build from sidebar_rows_unfiltered"
+    );
     let idx = rows
-        .find("pub fn sidebar_rows")
+        .find("fn sidebar_rows_unfiltered")
         .expect("sidebar_rows present");
     assert!(
-        rows[idx..idx + 1500].contains("sidebar_private_groups()"),
+        rows[idx..idx + 300].contains("let groups = self.sidebar_private_groups();"),
         "the chat list's group rows must come from the folder-aware core list"
     );
 
@@ -3734,7 +3982,8 @@ fn channel_and_group_rows_show_their_latest_activity() {
     let core = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
     let idx = core.find("fn channel_row(").expect("channel_row present");
     assert!(
-        core[idx..idx + 900].contains("&channel.conversation_type()"),
+        // Read from the batched sidebar projection, keyed by the channel's bucket.
+        core[idx..idx + 900].contains("projection.latest.get(&(id.clone(), channel.conversation_type()))"),
         "a channel row's preview must come from the channel's own bucket"
     );
     let idx = core
@@ -3817,10 +4066,10 @@ fn park_identity_change(data_dir: &std::path::Path, peer: &str, source: &str) ->
         .expect("Directories::with_base_dir")
         .database_path();
     let db = std::sync::Arc::new(
-        chatter_core::storage::Database::open(&db_path, "ui-wiring-harness-passphrase")
+        chatter_core::testing::storage::Database::open(&db_path, "ui-wiring-harness-passphrase")
             .expect("open the client's database a second time"),
     );
-    let key_store = chatter_core::storage::KeyStore::new(db);
+    let key_store = chatter_core::testing::storage::KeyStore::new(db);
 
     let mut new_identity_key = vec![0x05u8];
     new_identity_key.extend_from_slice(&[0x42u8; 32]);
@@ -3841,8 +4090,7 @@ fn wired_dm_open(
     MainWindow,
 ) {
     no_keyring();
-    let rt = test_rt();
-    let _guard = rt.enter();
+    let rt = enter_test_rt();
     let tmp = tempfile::tempdir().unwrap();
     testing::init_no_event_loop();
     let client = chatter_core::client::ChatterClient::builder()
@@ -4048,12 +4296,12 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
 /// parked, so "Encryption failed — try again" is advice to loop forever.
 #[test]
 fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
-    use chatter_core::services::message::MessageError;
+    use chatter_core::testing::services::message::MessageError;
 
     let peer = chatter_core::domain::ids::UserId::new();
     let (_tmp, client, _w) = wired_dm_open(peer);
 
-    let err = chatter_core::services::gateway::SendError::Message(
+    let err = chatter_core::testing::services::gateway::SendError::Message(
         MessageError::RecipientIdentityChanged {
             peer_id: peer.to_string(),
         },
@@ -4082,25 +4330,27 @@ fn conversation_open_anchors_on_the_unread_boundary() {
     for (name, src) in [
         (
             "channel",
-            include_str!("../src/bin_ui/features/sidebar/channel.rs"),
+            include_str!("../src/bin_ui/features/chat/open/channel.rs"),
         ),
-        ("dm", include_str!("../src/bin_ui/features/sidebar/dm.rs")),
+        ("dm", include_str!("../src/bin_ui/features/chat/open/dm.rs")),
         (
             "private_group",
-            include_str!("../src/bin_ui/features/sidebar/private_group.rs"),
+            include_str!("../src/bin_ui/features/chat/open/private_group.rs"),
         ),
     ] {
         // `mark_as_read`, or its local half `mark_read_local` when the open
-        // receipts the page it loads itself (`send_read_receipts_for_page`).
+        // receipts the page it loads: core's `open_conversation` sends
+        // `send_read_receipts_for_page` for an `Opening` page (asserted below).
         let read_idx = src
             .find("mark_read_local()")
             .or_else(|| src.find("mark_as_read()"))
             .unwrap_or_else(|| panic!("{name} open path must mark the conversation read"));
         if src[read_idx..].starts_with("mark_read_local()") {
             assert!(
-                src.contains("send_read_receipts_for_page("),
-                "{name}: mark_read_local sends no receipts; the open must send \
-                 them for the page it loads"
+                src.contains("PageAnchor::Opening(anchor)"),
+                "{name}: mark_read_local sends no receipts; the open must load \
+                 its page through open_conversation(PageAnchor::Opening) so core \
+                 sends them"
             );
         }
         // The anchor is bound from the mark_as_read expression itself, not
@@ -4120,15 +4370,29 @@ fn conversation_open_anchors_on_the_unread_boundary() {
         );
     }
 
-    // Core owns which row the boundary is; the UI only forwards the number.
-    let sidebar = include_str!("../src/bin_ui/features/sidebar/mod.rs");
+    // ...and core does send them, for the page an open shows only.
+    let core_open = include_str!("../../chatter-core/src/client/messaging/open.rs");
+    let receipts = core_open
+        .find(".send_read_receipts_for_page(&messages)")
+        .expect("open_conversation must receipt the page it loads");
+    let gate = core_open[..receipts]
+        .rfind("if opening")
+        .expect("receipts must be gated on an Opening anchor");
     assert!(
-        sidebar.contains("anchor.divider_index(page)"),
-        "the index must come from chatter-core's UnreadAnchor, not be recomputed \
-         in the presentation layer"
+        receipts - gate < 400,
+        "the receipt send must sit inside the `if opening` gate, or history \
+         paging would receipt pages the user never opened"
+    );
+
+    // Core owns which row the boundary is; the UI only forwards the number.
+    let open = include_str!("../src/bin_ui/features/chat/open/mod.rs");
+    assert!(
+        open.contains("page.unread_index") && !open.contains("divider_index"),
+        "the index must come from chatter-core's ConversationPage, not be \
+         recomputed in the presentation layer"
     );
     assert!(
-        sidebar.contains("set_is_at_bottom(index.is_none())"),
+        open.contains("set_is_at_bottom(page.unread_index.is_none())"),
         "is_at_bottom is sticky across conversations; the open has to reset it or \
          a chat left scrolled up decides where the next one opens"
     );
@@ -4139,12 +4403,17 @@ fn conversation_open_anchors_on_the_unread_boundary() {
         list.contains("in-out property <int> unread-index"),
         "MessageList must expose the open position"
     );
+    // The divider and pill are their own components since d97fe91d.
     assert!(
-        list.contains("Unread messages"),
+        list.contains("if idx == root.unread-index: UnreadDivider {")
+            && include_str!("../../../ui/chat/message_row_separators.slint")
+                .contains("Unread messages"),
         "MessageList must draw the unread divider at the boundary"
     );
     assert!(
-        list.contains("new messages"),
+        list.contains("MessageScrollPill {")
+            && include_str!("../../../ui/chat/message_list_overlays.slint")
+                .contains("new messages"),
         "MessageList must offer the jump-to-newest pill with its count"
     );
     // Rows are created on demand by Slint's ListView runtime, which the
@@ -4250,8 +4519,28 @@ fn no_screen_defines_its_own_dismissal_glyph() {
         "close-settings",
     ];
 
+    // Sections split out of a Modal screen (0466f692): their Cancel forwards
+    // to the host's close, so the host's Modal is their dismissal.
+    const MODAL_SECTIONS: [(&str, &str, &str); 1] = [(
+        "ui/modals/join_channel_tab.slint",
+        "JoinChannelTab {",
+        "ui/modals/create_channel.slint",
+    )];
+    let screens = dismissable_screens();
+    for (section, element, host) in MODAL_SECTIONS {
+        let host_src = &screens.iter().find(|(n, _)| n == host).expect("modal host").1;
+        let at = host_src.find(element).expect("host instantiates the section");
+        assert!(
+            host_src.contains("Modal {") && block_around(host_src, at + element.len(), 1).contains("close => { root.close(); }"),
+            "{section} must close through {host}'s Modal"
+        );
+    }
+
     let mut findings = Vec::new();
-    for (name, src) in dismissable_screens() {
+    for (name, src) in screens {
+        if MODAL_SECTIONS.iter().any(|(section, _, _)| *section == name) {
+            continue;
+        }
         for needle in OWN_GLYPH {
             if src.contains(needle) {
                 findings.push(format!(
@@ -4423,18 +4712,24 @@ fn headers_use_the_shared_header_button() {
         "\\u{2715}",
         "\\u{22EE}",
     ];
-    const NOT_A_HEADER: [(&str, &str); 11] = [
+    const NOT_A_HEADER: [(&str, &str); 15] = [
+        ("chat/composer_reply_preview.slint", "Icons.x"), // cancel the reply strip
         ("chat/chat_layout.slint", "Icons.x"), // clear the picker drawer's search field
-        ("chat/message_composer.slint", "Icons.x"), // cancel reply / edit strip
-        ("chat/message_composer.slint", "\\u{00D7}"), // remove a pending attachment
+        ("chat/composer_edit_bar.slint", "Icons.x"), // cancel the edit strip
+        ("chat/composer_attachment_strip.slint", "Icons.x"), // remove a pending attachment
         ("chat/pinned_bar.slint", "Icons.x"),  // dismiss the pinned banner
         ("components/connection_banner.slint", "Icons.x"), // dismiss the banner
         ("components/toast.slint", "Icons.x"), // dismiss a toast
         ("components/emoji_picker.slint", "Icons.x"), // clear the search field
         ("components/gif_picker.slint", "Icons.x"), // clear the search field
-        ("modals/channel_settings.slint", "Icons.more-vertical"), // a member row's menu
-        ("modals/friends.slint", "Icons.more-vertical"), // a friend row's menu
-        ("sidebar/sidebar.slint", "Icons.chevron-left"), // the rail's collapse control
+        // The rows below moved files in the 2026-10-18 splits (853d5fde,
+        // 85f04336, 852e5c15); the controls are the same.
+        ("modals/channel_members.slint", "Icons.more-vertical"), // a member row's menu
+        ("modals/friends_friends_tab.slint", "Icons.more-vertical"), // a friend row's menu
+        ("sidebar/sidebar_footer.slint", "Icons.chevron-left"), // the rail's collapse control
+        ("sidebar/sidebar.slint", "Icons.chevron-left"), // the archive list's back row
+        ("chat/message_attachments.slint", "Icons.x"), // cancel an upload on its bubble
+        ("pages/register.slint", "Icons.chevron-left"), // the avatar carousel's previous
     ];
     for (name, src) in &sources {
         if name.ends_with("header_button.slint") || name.ends_with("dismiss_button.slint") {
@@ -4475,7 +4770,8 @@ fn headers_use_the_shared_header_button() {
         "chat/chat_header.slint",
         "chat/selection_bar.slint",
         "chat/thread_panel.slint",
-        "sidebar/sidebar.slint",
+        // The sidebar's title row moved to sidebar_header.slint (852e5c15).
+        "sidebar/sidebar_header.slint",
         "calls/device_picker.slint",
         "calls/active_call_view.slint",
         "modals/user_profile.slint",
@@ -4486,7 +4782,8 @@ fn headers_use_the_shared_header_button() {
         "components/image_viewer.slint",
         "components/video_player.slint",
         "pages/register.slint",
-        "app.slint",
+        // app.slint's one titled overlay became keyboard_shortcuts.slint (7ab433cf).
+        "modals/keyboard_shortcuts.slint",
     ] {
         let src = &sources
             .iter()
@@ -4513,7 +4810,14 @@ fn headers_use_the_shared_header_button() {
             findings.push(format!("HeaderButton lost `{token}`"));
         }
     }
-    if button.contains("border-width") {
+    // The only stroke allowed is the keyboard focus ring (9c4e86e9): every
+    // border is conditioned on key focus and drawn in Colors.focus-ring.
+    if button
+        .lines()
+        .filter(|l| l.contains("border-width:"))
+        .any(|l| !l.contains("keys.has-focus ?"))
+        || button.matches("border-color:").count() != button.matches("border-color: Colors.focus-ring;").count()
+    {
         findings
             .push("HeaderButton draws its own stroke instead of using the shared material".into());
     }
@@ -4556,31 +4860,28 @@ fn headers_use_the_shared_header_button() {
 /// `clicked`, and none of the three `show-*-confirm` properties existed.
 #[test]
 fn destructive_actions_need_a_second_click() {
-    // (screen, source, confirm flag, the callback it gates)
-    let screens: [(&str, &str, &str, &str); 3] = [
-        (
-            "channel_settings/delete",
-            include_str!("../../../ui/modals/channel_settings.slint"),
-            "show-delete-confirm",
-            "root.delete-channel();",
-        ),
-        (
-            "channel_settings/leave",
-            include_str!("../../../ui/modals/channel_settings.slint"),
-            "show-leave-confirm",
-            "root.leave-channel();",
-        ),
-        (
-            "call_history/clear",
-            include_str!("../../../ui/calls/call_history_screen.slint"),
-            "show-clear-confirm",
-            "root.clear-history();",
-        ),
+    // (screen, where the flag is declared, where the buttons live, confirm
+    // flag, the callback it gates). Channel settings' danger zone is its own
+    // component, ChannelDangerSection, bound two-way to the modal's flags.
+    let settings = include_str!("../../../ui/modals/channel_settings.slint");
+    let danger = include_str!("../../../ui/modals/channel_danger.slint");
+    let history = include_str!("../../../ui/calls/call_history_screen.slint");
+    let screens: [(&str, &str, &str, &str, &str); 3] = [
+        ("channel_settings/delete", settings, danger, "show-delete-confirm", "root.delete-channel();"),
+        ("channel_settings/leave", settings, danger, "show-leave-confirm", "root.leave-channel();"),
+        ("call_history/clear", history, history, "show-clear-confirm", "root.clear-history();"),
     ];
-
-    for (name, src, flag, callback) in screens {
+    for flag in ["show-delete-confirm", "show-leave-confirm"] {
         assert!(
-            src.contains(&format!("property <bool> {flag}: false;")),
+            settings.contains(&format!("{flag} <=> root.{flag};"))
+                && danger.contains(&format!("in-out property <bool> {flag};")),
+            "the danger section must share the modal's {flag}"
+        );
+    }
+
+    for (name, decl, src, flag, callback) in screens {
+        assert!(
+            decl.contains(&format!("property <bool> {flag}: false;")),
             "{name}: must gate the destructive action behind an explicit confirm reveal"
         );
         // The FIRST button may only reveal the confirm — never fire. Where the
@@ -4609,11 +4910,11 @@ fn destructive_actions_need_a_second_click() {
         // Reopening must not land on the confirm step (possibly for a
         // different channel), so the reveal resets whenever the screen is
         // shown or hidden.
-        let reset = src
+        let reset = decl
             .find("changed show-modal =>")
             .unwrap_or_else(|| panic!("{name}: no reset-on-open handler"));
         assert!(
-            src[reset..reset + 200].contains(&format!("self.{flag} = false;")),
+            decl[reset..reset + 200].contains(&format!("self.{flag} = false;")),
             "{name}: {flag} must reset on open, or a screen closed mid-confirm \
              reopens already asking to do the irreversible thing"
         );
@@ -4658,21 +4959,26 @@ fn gated_on(cond: &str, flag: &str) -> bool {
 /// chip you actually tap was 34px. The shell is now sized FROM the chip.
 #[test]
 fn shared_content_pill_tabs_clear_the_touch_floor() {
+    // Since 6a4b8da7 the pill strip is a card of category rows, each opening
+    // its own profile page. Each row is a full list row: the touch floor holds
+    // because the row height is the list-row token, never a literal.
     let src = include_str!("../../../ui/modals/user_profile.slint");
     let strip = src
-        .find("Shared-content tab strip")
+        .find("for category in root.shared-tabs: Rectangle {")
         .expect("profile must have a shared-content tab strip");
-    // Up to the next section, so the assertion cannot pass on some other
-    // element's geometry further down the page.
-    let end = src[strip..]
-        .find("Media / GIF grid")
-        .expect("the grid follows the tab strip");
-    let block = &src[strip..strip + end];
     assert!(
-        block.contains("height: Spacing.touch-target-min;")
-            && block.contains("padding: Spacing.xxs;"),
-        "the pill shell must be Spacing.touch-target-min with a 2px inset, so each \
-         chip lands on the 44px touch floor — a literal here is how 34px happened"
+        src[strip..strip + 200].contains("height: root.row-height;"),
+        "each shared-content category row must be a full list row"
+    );
+    assert!(
+        src.contains("property <length> row-height: root.mobile-mode ? Spacing.list-row-height-touch"),
+        "on touch the rows must use the touch list-row height"
+    );
+    let spacing = include_str!("../../../ui/theme/spacing.slint");
+    assert!(
+        spacing.contains("out property <length> touch-target-min: 48px;")
+            && spacing.contains("out property <length> list-row-height-touch: 56px * Appearance.text-grow;"),
+        "the touch list row must clear the 48px touch floor"
     );
 }
 
@@ -4695,34 +5001,24 @@ fn shared_content_pill_tabs_clear_the_touch_floor() {
 /// root callback -> app.slint, which opens the join tab of CreateChannelModal.
 #[test]
 fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
-    let list_src = include_str!("../../../ui/sidebar/chat_list.slint");
     let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
     let app_src = include_str!("../../../ui/app_sidebar_host.slint");
 
-    // The emitter exists and the empty state's "Browse channels" fires it.
-    assert!(
-        list_src.contains("callback join-channel-clicked();"),
-        "ChatList must declare join-channel-clicked"
-    );
-    let cta = list_src
+    // Since 038d14a9 the empty state is the flat list's "empty" slot inside
+    // Sidebar itself (no ChatList instantiation in between). Its "Browse
+    // channels" fires the Sidebar's own callback, by pointer and by a11y.
+    let empty = sidebar_src
+        .find("if entry.kind == \"empty\"")
+        .expect("the sidebar must render an empty state");
+    let cta = sidebar_src[empty..]
         .find("text: \"Browse channels\";")
-        .expect("the empty state must still offer Browse channels");
+        .expect("the empty state must still offer Browse channels")
+        + empty;
+    let tail = &sidebar_src[cta..cta + 700];
     assert!(
-        list_src[cta..cta + 400].contains("root.join-channel-clicked()"),
+        tail.contains("accessible-action-default => { root.join-channel-clicked(); }")
+            && tail.contains("clicked => { root.join-channel-clicked(); }"),
         "the empty state's Browse channels must emit join-channel-clicked"
-    );
-
-    // The instantiation binds it. This is the assertion that was missing.
-    let inst = sidebar_src
-        .find("ChatList {")
-        .expect("sidebar must instantiate ChatList");
-    let block = &sidebar_src[inst..];
-    let block_end = block.find("\n                }\n").unwrap_or(block.len());
-    assert!(
-        block[..block_end].contains("join-channel-clicked() => { root.join-channel-clicked(); }"),
-        "the ChatList instantiation in sidebar.slint must bind \
-         join-channel-clicked — without it the empty-state CTA a brand-new \
-         account sees first is dead (FEAT-8)"
     );
 
     // The sidebar re-emits it, and AppSidebarHost opens the join modal.
@@ -4753,7 +5049,12 @@ fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
 /// nothing else told the user.
 #[test]
 fn tor_status_dot_does_not_report_off_as_connecting() {
-    let src = include_str!("../../../ui/sidebar/sidebar.slint");
+    // The two shield entry points live in the sidebar's header (expanded) and
+    // footer rail (collapsed) components since 852e5c15.
+    let src = concat!(
+        include_str!("../../../ui/sidebar/sidebar_header.slint"),
+        include_str!("../../../ui/sidebar/sidebar_footer.slint"),
+    );
 
     // Both shield entry points (expanded footer + collapsed rail) carry a dot.
     let dots: Vec<_> = src
@@ -4800,7 +5101,11 @@ fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
         "AnonMode must carry the mirrored `onion` Cargo feature flag"
     );
 
-    let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
+    let sidebar_src = concat!(
+        include_str!("../../../ui/sidebar/sidebar.slint"),
+        include_str!("../../../ui/sidebar/sidebar_header.slint"),
+        include_str!("../../../ui/sidebar/sidebar_footer.slint"),
+    );
     let settings_src = include_str!("../../../ui/settings/settings_screen.slint");
     assert!(
         !sidebar_src.contains("if AnonMode.onion-built:")
@@ -4808,8 +5113,16 @@ fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
         "a Shield entry point is gated on the `onion` feature again — the \
          Android build has no onion, so it would have no Shield toggle"
     );
-    let shields = sidebar_src.matches("root.anon-mode-clicked()").count();
-    let dots = sidebar_src
+    // One pointer handler per shield; key and a11y activations ride on it.
+    let entries = concat!(
+        include_str!("../../../ui/sidebar/sidebar_header.slint"),
+        include_str!("../../../ui/sidebar/sidebar_footer.slint"),
+    );
+    let shields = entries
+        .matches(" clicked => { root.anon-mode-clicked(); }")
+        .count();
+    assert_eq!(shields, 2, "expanded header shield and collapsed rail shield");
+    let dots = entries
         .matches("visible: AnonMode.enabled && AnonMode.onion-built;")
         .count();
     assert_eq!(
@@ -4926,7 +5239,18 @@ fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
 fn tablet_sidebar_opens_the_calls_screen() {
     use slint::ComponentHandle;
     require_element_queries();
+    no_keyring();
+    enter_test_rt();
+    let tmp = tempfile::tempdir().unwrap();
+    headless_dir(tmp.path());
     let w = boot();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    // The sidebar's quick links are rows of the flat list Rust builds at
+    // startup (038d14a9), so the production wiring has to run.
+    chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
 
@@ -5051,6 +5375,7 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     require_element_queries();
     let w = boot();
     w.set_current_view("main".into());
+    settle_view_handoff();
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
 
     // ---- Channel Settings > Notifications: Mute + AI ------------------------
@@ -5064,6 +5389,9 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
         .on_channel_settings_toggle_ai(move |v| a.borrow_mut().push(v));
 
     chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
+    slint::platform::update_timers_and_animations();
+    // Let the sheet's entrance animation settle so taps land on its rows.
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
     slint::platform::update_timers_and_animations();
     tap_text(&w, "Notifications");
 
@@ -5113,8 +5441,20 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
 
     // ---- App settings > Privacy: a ToggleRow outside the modal --------------
     chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
+    // The App lock card (78fd3d41) sits above Read receipts in Privacy and
+    // pushed the row below an 800px window, where it is not instantiated
+    // until scrolled to. A taller window keeps the row on screen.
+    w.window().set_size(slint::LogicalSize::new(1000.0, 1600.0));
     chatter_ui::bin_ui::features::back::push(&w, "settings");
-    tap_text(&w, "Privacy");
+    slint::platform::update_timers_and_animations();
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    slint::platform::update_timers_and_animations();
+    // Settings' section list rows are accessible tabs since 77816701 (their
+    // label Text is no longer a separate node): tap the row itself.
+    testing::ElementHandle::find_by_accessible_label(&w, "Privacy")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Tab))
+        .expect("no Privacy section tab on screen")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
     let before = w
         .global::<chatter_ui::SettingsPane>()
         .get_settings_read_receipts();
@@ -5173,13 +5513,27 @@ fn disappearing_picker_offers_presets_to_friends_only() {
         "a non-friend has no DM to carry a timer"
     );
 
-    chatter_ui::bin_ui::features::chat::disappearing::show_for_profile(&w, &client, &peer, true);
+    // Since 1fd9f6ab the friend's state is read off the UI thread and lands
+    // through `upgrade_in_event_loop`, which this no-event-loop harness never
+    // runs. So pin the gate's two halves instead: the UI asks core only for a
+    // friend, and core lets either side of a friend DM set the timer.
+    let ui = include_str!("../src/bin_ui/features/chat/disappearing.rs");
     assert!(
-        g.get_dm_can_set(),
+        ui.contains("let can_set = is_friend && ctx.can_set_disappearing_timer(dm.clone());")
+            && ui.contains("g.set_dm_can_set(can_set);"),
         "a friend's DM settings offer the picker"
     );
-    assert_eq!(g.get_dm_seconds(), 0);
-    assert_eq!(g.get_dm_label().as_str(), "Off");
+    let dm = chatter_core::state::ActiveConversation::ServerDm { peer_id: peer };
+    assert!(
+        client.can_set_disappearing_timer(dm),
+        "a friend's DM settings offer the picker"
+    );
+    assert!(
+        !client.can_set_disappearing_timer(chatter_core::state::ActiveConversation::Channel(
+            chatter_core::domain::ids::ChannelId::new()
+        )),
+        "a channel's timer is fixed at creation"
+    );
 }
 
 // ============================================================================
@@ -5226,13 +5580,19 @@ fn channel_settings_moderation_reaches_core() {
         ".unban_user(",
         ".mute_user(",
         ".unmute_user(",
-        ".list_banned_members(",
+        // The ban list is read through core's roster since 306bd1d8.
+        ".channel_member_lists(",
     ] {
         assert!(
             src.contains(call),
             "channel settings must call ChatterClient{call}"
         );
     }
+    assert!(
+        include_str!("../../chatter-core/src/client/channels.rs")
+            .contains("self.list_banned_members(channel_id)"),
+        "core's channel_member_lists must load the ban list"
+    );
     let conv = include_str!("../src/bin_ui/converters/channel.rs");
     assert!(
         conv.contains("can_ban: m.moderation.can_ban")
@@ -5241,11 +5601,14 @@ fn channel_settings_moderation_reaches_core() {
     );
     let slint = include_str!("../../../ui/modals/channel_members.slint");
     let settings = include_str!("../../../ui/modals/channel_settings.slint");
+    // Per-member actions live in one member menu since 88756309; it still
+    // gates on core's per-member flags.
     assert!(
-        slint.contains("if member.can-ban: Button")
-            && slint.contains("if member.can-mute && member.muted: Button")
+        slint.contains("if root.menu-member.can-ban: MemberMenuItem {")
+            && slint.contains("if root.menu-member.can-mute && root.menu-member.muted: MemberMenuItem {")
+            && slint.contains("if root.menu-member.can-mute && !root.menu-member.muted: VerticalLayout {")
     );
-    assert!(slint.contains("root.unban-member(banned.user-id)"));
+    assert!(slint.contains("root.unban-member(row.banned.user-id)"));
     assert!(settings.contains("unban-member(arg0) => { root.unban-member(arg0); }"));
 }
 
@@ -5261,6 +5624,7 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     let w = boot();
     back::wire(&w);
     w.set_current_view("main".into());
+    settle_view_handoff();
 
     // The bar is Chats, Calls, Contacts, Profile; nothing routes to a
     // Settings tab any more.
@@ -5288,8 +5652,10 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
     w.global::<chatter_ui::SidebarPane>()
         .set_active_tab("profile".into());
-    let settings_row = testing::ElementHandle::find_by_accessible_label(&w, "Settings")
-        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+    // The account menu's row, not the sidebar footer's gear, which is also a
+    // "Settings" button since 494ae5b2 made the footer keyboard accessible.
+    let settings_row = testing::ElementHandle::find_by_element_type_name(&w, "MenuRow")
+        .find(|e| e.accessible_label().as_deref() == Some("Settings"))
         .expect("the account menu has no Settings row");
     settings_row.mock_single_click(slint::platform::PointerEventButton::Left);
     assert_eq!(
@@ -5374,6 +5740,9 @@ fn phone_call_end_without_chat_returns_to_list() {
         // `changed` handlers run on the next tick, not inside the setter.
         w.global::<chatter_ui::CallView>()
             .set_active_call_visible(true);
+        // As calls/incoming.rs open_call_screen: Accept saves the route the
+        // call covers, and the call's end restores it (faecc37f).
+        w.global::<chatter_ui::CallView>().invoke_save_call_route();
         if !w.global::<chatter_ui::SidebarPane>().get_mobile_show_chat() {
             w.global::<chatter_ui::CallView>()
                 .set_call_raised_pane(true);
@@ -5504,39 +5873,65 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
             < chat.find("top-chrome := VerticalLayout").unwrap()
     );
     assert!(
+        // With the keyboard up the composer ends the viewport, so the inset
+        // drops to 0 (4336bff2).
         chat.contains("top-inset: top-chrome.height;")
-            && chat.contains("bottom-inset: bottom-chrome.height + composer.list-clearance-extra")
+            && chat.contains("bottom-inset: root.keyboard-open ? 0px\n            : bottom-chrome.height + composer.list-clearance-extra")
     );
     assert!(chat.contains("y: root.height - self.height - root.drawer-occupied-height;"));
     assert!(list.contains("padding-top: idx == 0 ? root.top-inset + Spacing.md : Spacing.none;"));
-    assert!(list.contains("? root.bottom-inset + Spacing.md + Spacing.touch-target-min"));
+    // The FAB clearance under the last row is the layout's tail-clearance (50ff37cf).
+    assert!(list.contains("? root.bottom-inset + root.tail-clearance"));
+    assert!(chat.contains("tail-clearance: root.keyboard-open ? Spacing.sm : Spacing.md + Spacing.touch-target-min;"));
     assert!(list.contains("(self.viewport-height - root.bottom-inset) + self.viewport-y"));
     assert!(
         list.contains("changed bottom-inset =>")
             && list.contains("root.is-at-bottom && !root.scrolling && root.jump-row < 0")
     );
     assert!(list.contains("y: root.height - root.bottom-inset - 60px;"));
+    // The glass header (SidebarHeader inherits GlassSurface) floats over the list.
     assert!(
-        sidebar.find("Flickable {").unwrap()
-            < sidebar.find("if !root.collapsed: GlassSurface {").unwrap()
+        sidebar.find("central-scroll := ListView {").unwrap()
+            < sidebar
+                .find("if !root.collapsed && root.active-tab != \"mesh\": SidebarHeader {")
+                .unwrap()
     );
+    assert!(include_str!("../../../ui/sidebar/sidebar_header.slint")
+        .contains("export component SidebarHeader inherits GlassSurface {"));
     assert!(sidebar.contains("root.bottom-inset + Spacing.fab-size"));
     assert!(!app.contains("// Space held for the bottom tab bar."));
-    for src in [
-        include_str!("../../../ui/modals/friends.slint"),
-        include_str!("../../../ui/calls/call_history_screen.slint"),
+    // The contacts screen's lists are its tab components since 85f04336;
+    // each pads past the floating tab bar.
+    let friends = include_str!("../../../ui/modals/friends.slint");
+    for (screen, lists) in [
+        (
+            friends,
+            concat!(
+                include_str!("../../../ui/modals/friends_friends_tab.slint"),
+                include_str!("../../../ui/modals/friends_requests_tab.slint"),
+                include_str!("../../../ui/modals/friends_blocked_tab.slint"),
+            ),
+        ),
+        (
+            include_str!("../../../ui/calls/call_history_screen.slint"),
+            include_str!("../../../ui/calls/call_history_screen.slint"),
+        ),
     ] {
-        assert!(src.contains("floating-content: root.mobile-mode;"));
-        assert!(src.contains(
+        assert!(screen.contains("floating-content: root.mobile-mode;"));
+        assert!(lists.contains(
             "padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"
         ));
     }
+    assert_eq!(friends.matches("bottom-inset: root.bottom-inset;").count(), 4);
     // Calls reserves space for its confirmation footer. Its actual floating
     // viewport and footer hit isolation are checked by ui_calls_menu; an
     // unconditional full-height source rule would require the native overlap.
+    // The list viewports live in the tab components since 85f04336.
     assert!(
-        include_str!("../../../ui/modals/friends.slint")
+        include_str!("../../../ui/modals/friends_friends_tab.slint")
             .contains("height: root.mobile-mode ? root.height : parent.height;")
+            && include_str!("../../../ui/modals/friends_requests_tab.slint")
+                .contains("height: root.mobile-mode ? root.height : parent.height;")
     );
     assert!(material.contains("Appearance.glass-effects"));
     assert!(material.contains("blur-regular:") && material.contains("blur-thick:"));
@@ -5587,8 +5982,12 @@ fn inline_gifs_animate_only_visible_rows() {
     let app = include_str!("../../../ui/chat/app_conversation_layout.slint");
     assert!(app.contains("message-last-visible-row <=> root.message-last-visible-row;"));
     let gifs = include_str!("../src/bin_ui/gif_state/inline.rs");
+    // Since cd18c496 the tick walks the visible rows plus a small admission
+    // margin (`rows_to_admit`) and animates only the visible ones.
     assert!(
-        gifs.contains("for msg_idx in rows {"),
+        gifs.contains("for index in rows {")
+            && gifs.contains("fn rows_to_admit(")
+            && gifs.contains("animate.as_ref().is_some_and(|rows| rows.contains(&index))"),
         "the tick must walk only the visible rows"
     );
     assert!(
@@ -5607,22 +6006,24 @@ fn inline_gifs_animate_only_visible_rows() {
 /// while the list scrolls, and keeps its at-rest material unchanged.
 #[test]
 fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
+    // Since f997bbaa the material no longer fades while paused: it stays
+    // visually constant so a settling list cannot expose readable text behind
+    // the chrome (glass_surface.slint, `backdrop-paused` doc). The scrolling
+    // signal is still wired to every surface below.
     let glass = squash(include_str!("../../../ui/components/glass_surface.slint"));
-    // Neutral values at 0 (no backdrop layer), the designed values at 1.
-    assert!(glass.contains("property <float> sampling: root.backdrop-paused ? 0 : 1;"));
-    assert!(glass.contains(": Materials.blur-regular) : 0px) * root.sampling;"));
-    assert!(glass.contains("saturation: 1.0 + ((Appearance.glass-effects ? Materials.saturation : 1.0) - 1.0) * root.sampling;"));
-    assert!(glass.contains(
-        "refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;"
-    ));
-    // Stops at once, fades back in at rest (no pop), honours reduce-motion.
+    assert!(glass.contains("in property <bool> backdrop-paused: false;"));
+    let backdrop = &glass[glass.find("if root.material-enabled: Backdrop {").expect("backdrop layer")..];
+    let backdrop = &backdrop[..backdrop.find("Rectangle {").unwrap()];
     assert!(
-        glass.contains("duration: root.backdrop-paused || Appearance.reduce-motion ? 0ms : 160ms;")
+        !backdrop.contains("backdrop-paused"),
+        "blur/saturation/refraction must not change while the list scrolls"
     );
     let list = include_str!("../../../ui/chat/message_list.slint");
     assert!(list.contains("out property <bool> scrolling: false;"));
     assert!(
-        list.contains("backdrop-paused: root.scrolling;"),
+        list.contains("scrolling: root.scrolling;")
+            && include_str!("../../../ui/chat/message_list_overlays.slint")
+                .contains("backdrop-paused: root.scrolling;"),
         "jump pill"
     );
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
@@ -5661,16 +6062,26 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
             .count(),
         "every selection-bar button pauses with the bar"
     );
-    let composer = include_str!("../../../ui/chat/message_composer.slint");
     // Raised composer surfaces also sample the backdrop. Verify each element
     // directly so adding a surface cannot mask a missing recording-button binding.
-    for marker in ["HeaderButton {", "GlassSurface {"] {
-        let elements: Vec<_> = composer.match_indices(marker).collect();
+    // The recording panel is its own component and takes the composer's flag
+    // as `surface-backdrop-paused`.
+    let composer = include_str!("../../../ui/chat/message_composer.slint");
+    let recording = include_str!("../../../ui/chat/composer_recording_panel.slint");
+    for (src, marker, binding) in [
+        (composer, "GlassSurface {", "backdrop-paused: root.backdrop-paused;"),
+        (composer, "ComposerReplyPreview {", "backdrop-paused: root.backdrop-paused;"),
+        (composer, "ComposerAttachmentStrip {", "backdrop-paused: root.backdrop-paused;"),
+        (composer, "ComposerRecordingPanel {", "surface-backdrop-paused: root.backdrop-paused;"),
+        (recording, "GlassSurface {", "backdrop-paused: root.surface-backdrop-paused;"),
+        (recording, "HeaderButton {", "backdrop-paused: root.surface-backdrop-paused;"),
+    ] {
+        let elements: Vec<_> = src.match_indices(marker).collect();
         assert!(!elements.is_empty(), "composer must exercise {marker}");
         for (pos, _) in elements {
-            let element = block_around(composer, pos + marker.len(), 1);
+            let element = block_around(src, pos + marker.len(), 1);
             assert!(
-                element.contains("backdrop-paused: root.backdrop-paused;"),
+                element.contains(binding),
                 "composer {marker} at {pos} must pause with the composer"
             );
         }
@@ -5764,12 +6175,19 @@ fn secondary_chrome_exposes_its_shared_material() {
         reaction.contains("material-enabled: false;"),
         "embedded emoji picker must not stack glass"
     );
-    let list = include_str!("../../../ui/chat/message_list.slint");
+    // The list's overlays and row chips are their own files since d97fe91d.
+    let list = concat!(
+        include_str!("../../../ui/chat/message_list.slint"),
+        include_str!("../../../ui/chat/message_list_overlays.slint"),
+        include_str!("../../../ui/chat/message_row_separators.slint"),
+        include_str!("../../../ui/chat/message_list_states.slint"),
+    );
     assert_eq!(
         list.matches("GlassSurface {").count(),
         1,
         "only the jump capsule floats over the list"
     );
+    assert!(list.contains("export component MessageScrollPill inherits GlassSurface {"));
     // The date and unread chips, and the history-retry notice that reuses
     // the unread chip (41464d63), are a plain tinted fill, never a backdrop
     // sample per row (glass_surface.slint:1).
@@ -5923,18 +6341,19 @@ fn polish_shared_controls_and_rc28_regressions() {
     assert!(button.contains("overflow: elide;") && button.contains("accessible-action-default"));
     let toggle = source("components/toggle.slint");
     assert!(
-        toggle.contains("height: Spacing.button-height;")
+        // Full touch-height hit target around the track since 67e4ab53.
+        toggle.contains("height: Spacing.touch-target-min;")
             && toggle.contains("background: Colors.on-action;")
     );
     let icons = source("components/icon_action.slint");
     assert!(
-        icons.contains("max(Spacing.button-height, root.size)")
+        icons.contains("max(Spacing.touch-target-min, root.size)")
             && icons.contains("enabled: root.enabled;")
     );
     let checkbox = source("components/checkbox.slint");
     assert!(
-        checkbox.contains("width: Spacing.button-height;")
-            && checkbox.contains("height: Spacing.button-height;")
+        checkbox.contains("width: Spacing.touch-target-min;")
+            && checkbox.contains("height: Spacing.touch-target-min;")
     );
     assert!(
         source("components/emoji_picker.slint")
@@ -5956,7 +6375,7 @@ fn polish_shared_controls_and_rc28_regressions() {
     // D6: the narrow DM column must retain the word that conveys the status.
     assert!(
         source("chat/chat_header.slint")
-            .contains("root.mobile && root.is-dm ? \"Typing…\" : root.typing-indicator")
+            .contains("root.mobile && root.is-dm ? \"Typing\" : root.typing-indicator")
     );
     // D7: both cut edges are faded, and tabs share the ordinary Button family.
     let settings = source("settings/settings_screen.slint");
@@ -6104,8 +6523,21 @@ fn video_call_lives_in_the_header_more_menu() {
         "the header still emits video-call-clicked"
     );
 
+    // Core: calls only in channels and friend DMs; settings everywhere but
+    // an anonymous DM.
+    let core = include_str!("../../chatter-core/src/client/auth_state.rs");
+    assert!(
+        core.contains("let can_call = matches!(kind, Kind::Channel | Kind::ServerDm)")
+            && core.contains("can_open_settings: matches!(kind, Kind::Channel | Kind::ServerDm | Kind::AnonGroup),"),
+        "core's header capabilities changed; update the table below"
+    );
+
     let w = boot();
     back::wire(&w);
+    // Channels and friend DMs are an account's. Signed out, the mesh-only
+    // strip (ui/components/mesh_only_bar.slint) floats over the header and
+    // takes the tap meant for ⋯.
+    w.global::<chatter_ui::AuthFlow>().set_is_signed_in(true);
     let started = std::rc::Rc::new(std::cell::Cell::new(0));
     let s = started.clone();
     w.global::<chatter_ui::ChatPane>()
@@ -6115,6 +6547,7 @@ fn video_call_lives_in_the_header_more_menu() {
     w.global::<chatter_ui::ChatPane>()
         .on_chat_settings_clicked(move || o.set(o.get() + 1));
     w.set_current_view("main".into());
+    settle_view_handoff();
 
     let button = |w: &MainWindow, label: &str| {
         testing::ElementHandle::find_by_accessible_label(w, label)
@@ -6143,11 +6576,25 @@ fn video_call_lives_in_the_header_more_menu() {
         });
         w.global::<chatter_ui::ChatPane>()
             .set_conversation_kind(kind);
+        // The header renders what core's conversation_actions decides
+        // (eeef4563; rule pinned below), which needs stored conversations
+        // this fixture does not have — so hand the header those two answers.
+        w.global::<chatter_ui::ChatPane>()
+            .set_header_can_call(calls);
+        w.global::<chatter_ui::ChatPane>()
+            .set_header_can_open_settings(settings_row);
         w.global::<chatter_ui::ChatPane>()
             .set_channel_name(name.into());
         w.global::<chatter_ui::SidebarPane>()
             .set_mobile_show_chat(true);
         slint::platform::update_timers_and_animations();
+        // A phone pushes the chat from a one-frame timer (3cf2b504), then
+        // animates it in; let both run as the frames after the tap would: the
+        // timer fires on the first tick and the slide only moves on the next.
+        for _ in 0..2 {
+            testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+            slint::platform::update_timers_and_animations();
+        }
 
         assert_eq!(
             button(&w, "Voice call").is_some(),
@@ -6172,6 +6619,19 @@ fn video_call_lives_in_the_header_more_menu() {
         if calls {
             let before = started.get();
             click(&w, "Video call");
+            // A channel video call rings every member, so it asks first
+            // (76941dc4); a DM starts at once.
+            if kind == ConversationKind::Channel {
+                let pane = w.global::<chatter_ui::ChatPane>();
+                assert!(
+                    pane.get_call_confirm_open() && pane.get_call_confirm_video(),
+                    "{kind:?}: the menu's Video call did not ask before ringing everyone"
+                );
+                assert_eq!(started.get(), before, "{kind:?}: rang before confirming");
+                slint::platform::update_timers_and_animations();
+                click(&w, "Start call");
+                assert!(!pane.get_call_confirm_open(), "{kind:?}: confirm stayed open");
+            }
             assert_eq!(
                 started.get(),
                 before + 1,
@@ -6230,6 +6690,16 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
     w.global::<chatter_ui::CallView>()
         .set_active_call_visible(true);
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    // The return-to-call bar's clock is a plain Text (label = its text); the
+    // call view's is labelled "Call duration" with the text as its value
+    // (59ab7eac).
+    let shows = |w: &MainWindow, text: &str| {
+        testing::ElementHandle::find_by_accessible_label(w, text)
+            .next()
+            .is_some()
+            || testing::ElementHandle::find_by_accessible_label(w, "Call duration")
+                .any(|e| e.accessible_value().as_deref() == Some(text))
+    };
     let mut data = w.global::<chatter_ui::CallView>().get_active_call_data();
     data.call_id = "test-call".into();
     data.title = "Call test".into();
@@ -6244,9 +6714,7 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
             .set_active_call_fullscreen(fullscreen);
         slint::platform::update_timers_and_animations();
         assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
-                .next()
-                .is_some(),
+            shows(&w, "Calling…"),
             "ringing roster must not imply an answered call (fullscreen={fullscreen})"
         );
     }
@@ -6261,15 +6729,9 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
         w.global::<chatter_ui::CallView>()
             .set_active_call_fullscreen(fullscreen);
         slint::platform::update_timers_and_animations();
+        assert!(!shows(&w, "Calling…"));
         assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
-                .next()
-                .is_none()
-        );
-        assert!(
-            testing::ElementHandle::find_by_accessible_label(&w, "0:00")
-                .next()
-                .is_some(),
+            shows(&w, "0:00"),
             "connected zero-second call must show its clock (fullscreen={fullscreen})"
         );
     }
@@ -6305,7 +6767,7 @@ fn composer_with_caret(
 ) {
     use slint::ComponentHandle;
     no_keyring();
-    let _guard = test_rt().enter();
+    enter_test_rt();
     let tmp = tempfile::tempdir().unwrap();
     headless_dir(tmp.path());
     let w = boot();
@@ -6318,6 +6780,7 @@ fn composer_with_caret(
     w.global::<chatter_ui::ChatPane>()
         .set_channel_name("A".into());
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    settle_view_handoff();
     let input = testing::ElementHandle::find_by_accessible_label(&w, "Message input")
         .next()
         .expect("the composer's text input is not in the tree");
@@ -6505,8 +6968,8 @@ struct GifHarness {
 
 impl GifHarness {
     fn new() -> Self {
-        no_keyring();
-        let _guard = test_rt().enter();
+            no_keyring();
+        enter_test_rt();
         let tmp = tempfile::tempdir().unwrap();
         headless_dir(tmp.path());
         let w = boot();
@@ -6946,6 +7409,8 @@ fn a_composition_lost_with_the_pane_goes_to_its_own_chat_not_the_next() {
             .as_str(),
         "ab"
     );
+    // Reopening A restores its draft with the caret at the end (dcfe24b6),
+    // so the word composes after "ab", not where the caret was before B.
     ime(&w, "X", false);
     w.global::<chatter_ui::CallView>()
         .set_active_call_fullscreen(true);
@@ -6980,7 +7445,7 @@ fn a_composition_lost_with_the_pane_goes_to_its_own_chat_not_the_next() {
         w.global::<chatter_ui::ChatPane>()
             .get_composer_text()
             .as_str(),
-        "aXb"
+        "abX"
     );
 }
 
@@ -7338,9 +7803,9 @@ fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
 
 #[test]
 fn a_gif_finishing_after_an_account_change_is_discarded() {
+    // GifHarness is signed in as account A. Signing in again here would be
+    // a second session, which strands the harness's composer before A sends.
     let h = GifHarness::new();
-    h.client
-        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.global::<chatter_ui::ChatPane>()
         .set_composer_text("A's caption".into());
     let (tx, task) = h.pick();
@@ -7368,9 +7833,9 @@ fn a_gif_finishing_after_an_account_change_is_discarded() {
 
 #[test]
 fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
+    // GifHarness is signed in as account A. Signing in again here would be
+    // a second session, which strands the harness's composer before A sends.
     let h = GifHarness::new();
-    h.client
-        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.global::<chatter_ui::ChatPane>()
         .set_composer_text("A's caption".into());
     let old = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
@@ -7414,9 +7879,9 @@ fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
 
 #[test]
 fn a_gif_upload_error_after_account_change_cannot_restore_or_show_a_toast() {
+    // GifHarness is signed in as account A. Signing in again here would be
+    // a second session, which strands the harness's composer before A sends.
     let h = GifHarness::new();
-    h.client
-        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.global::<chatter_ui::ChatPane>()
         .set_composer_text("A's caption".into());
     let (tx, task) = h.pick();
@@ -7560,7 +8025,7 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
         ids::ChannelId,
         message::{ConversationType, Message},
     };
-    use chatter_core::inbox::{events::InboxEvent, polling::device::dispatch_control_content};
+    use chatter_core::testing::inbox::{events::InboxEvent, polling::device::dispatch_control_content};
     use std::sync::{Arc, Mutex};
     testing::init_no_event_loop();
     let window = MainWindow::new().unwrap();
@@ -7576,7 +8041,9 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
         clock,
     );
     let row =
-        chatter_ui::bin_ui::converters::message_to_display_data(&message, "synthetic", &[], None)
+        chatter_ui::bin_ui::converters::MessageDisplayData::from(
+            chatter_core::ui::message_row::message_to_row(&message, "synthetic", &[], None),
+        )
             .to_slint_with_user(&actor.to_string());
     let captured = Arc::new(Mutex::new(None));
     let capture = captured.clone();
@@ -7586,7 +8053,7 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
             let parsed_author: UserId = sender.as_str().parse().unwrap();
             let parsed_clock: u64 = timestamp.as_str().parse().unwrap();
             *capture.lock().unwrap() = Some(
-                chatter_core::services::build_reaction_content_with_channel(
+                chatter_core::testing::services::gateway::builders::build_reaction_content_with_channel(
                     emoji.as_str(),
                     false,
                     &parsed_author.to_string(),

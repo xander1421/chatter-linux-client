@@ -31,7 +31,6 @@
 //! - **Decisions live here.** The UI crate renders [`MeshEvent`]s and calls the
 //!   methods below; it filters nothing and derives nothing.
 
-pub mod account_binding;
 pub mod ble;
 pub mod chatter_hello;
 pub mod config;
@@ -65,6 +64,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chatter_mesh::ids::PeerId;
+#[cfg(test)]
 use chatter_mesh::packet::NoisePayloadType;
 use chatter_mesh::tlv::file::BitchatFilePacket;
 use chatter_mesh::tlv::file_stream::{MAX_SINGLE_PACKET_FILE_BYTES, MAX_STREAMED_FILE_BYTES};
@@ -88,7 +88,7 @@ use crate::storage::KeyStore;
 use crate::storage::mesh_binding_store::{BindingMethod, MeshBindingStore, PeerBinding};
 use crate::storage::mesh_identity_store::MeshIdentityStore;
 use crate::storage::repositories::MessageRepository;
-use account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
+use crate::domain::mesh::account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
 use private_channel::{Member, PendingLeave, PrivateChannel, PrivateChannelStore};
 
 /// A mesh conversation with its sidebar state resolved by the mesh service.

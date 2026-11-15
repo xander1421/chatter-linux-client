@@ -12,6 +12,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod rekor;
+
 const DOMAIN: &[u8] = b"chatter-release-update-v1\0";
 pub const MAX_MANIFEST_BYTES: usize = 16 * 1024;
 pub const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
@@ -57,7 +59,7 @@ pub fn platform() -> &'static str {
     }
     #[cfg(not(target_os = "android"))]
     {
-        "linux"
+        std::env::consts::OS
     }
 }
 
@@ -81,6 +83,9 @@ pub struct UpdateManifest {
 pub struct SignedManifest {
     pub manifest: UpdateManifest,
     pub signature: String,
+    /// Rekor entry for the artifact. Self-authenticating (log-signed), so it
+    /// sits outside the Ed25519-signed bytes.
+    pub rekor: rekor::RekorBundle,
 }
 
 pub fn signed_bytes(manifest: &UpdateManifest) -> Result<Vec<u8>, String> {
@@ -99,7 +104,7 @@ pub fn verify_manifest(
     expected_platform: &str,
     expected_channel: &str,
     installed_code: u64,
-) -> Result<UpdateManifest, String> {
+) -> Result<(UpdateManifest, rekor::RekorBundle), String> {
     verify_manifest_inner(
         bytes,
         public_key,
@@ -117,7 +122,7 @@ fn verify_manifest_inner(
     expected_channel: &str,
     installed_code: u64,
     require_newer: bool,
-) -> Result<UpdateManifest, String> {
+) -> Result<(UpdateManifest, rekor::RekorBundle), String> {
     if bytes.len() > MAX_MANIFEST_BYTES {
         return Err("update manifest is too large".into());
     }
@@ -132,7 +137,9 @@ fn verify_manifest_inner(
         .map_err(|_| "update signing key is invalid".to_string())?;
     key.verify(&signed_bytes(&signed.manifest)?, &signature)
         .map_err(|_| "update signature is invalid".to_string())?;
-    let manifest = signed.manifest;
+    let SignedManifest {
+        manifest, rekor, ..
+    } = signed;
     if manifest.platform != expected_platform || manifest.channel != expected_channel {
         return Err("update targets another platform or channel".into());
     }
@@ -157,7 +164,7 @@ fn verify_manifest_inner(
     if digest.len() != 32 || manifest.sha256 != manifest.sha256.to_ascii_lowercase() {
         return Err("update artifact digest is malformed".into());
     }
-    Ok(manifest)
+    Ok((manifest, rekor))
 }
 
 /// Hash the staged file with a bounded reader. A size mismatch is fatal even
@@ -249,17 +256,107 @@ fn validate_artifact_url(origin: &str, manifest: &UpdateManifest) -> Result<(), 
     Ok(())
 }
 
+/// GET a bounded body over the live transport: pinned-CA direct, or Tor+TLS
+/// in onion mode. 404 is `None`.
+async fn fetch_optional(
+    pool: &GrpcClientPool,
+    mode: TransportMode,
+    url: &str,
+    limit: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    if mode == TransportMode::Onion {
+        #[cfg(feature = "onion")]
+        {
+            return crate::network::anon_http::get_optional(&pool.onion_tor(), url, limit).await;
+        }
+        #[cfg(not(feature = "onion"))]
+        {
+            let _ = pool;
+            return Err("Tor support is missing".into());
+        }
+    }
+    let mut response = crate::network::storage_http::storage_client()?
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| "update check failed")?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!("update check returned {}", response.status()));
+    }
+    if response.content_length().is_some_and(|n| n > limit as u64) {
+        return Err("update response is too large".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) =
+        tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
+            .await
+            .map_err(|_| "update check stalled")?
+            .map_err(|_| "update response read failed")?
+    {
+        if body
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|n| n > limit)
+        {
+            return Err("update response is too large".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Some(body))
+}
+
+fn checkpoint_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("updates").join("rekor-checkpoint.json")
+}
+
+/// The newest Rekor checkpoint this device accepted. Unreadable counts as
+/// none: a local attacker who can corrupt it can delete it just as well.
+async fn load_checkpoint(data_dir: &Path) -> Option<rekor::Checkpoint> {
+    let bytes = tokio::fs::read(checkpoint_path(data_dir)).await.ok()?;
+    serde_json::from_slice(&bytes)
+        .inspect_err(|_| tracing::warn!("stored Rekor checkpoint is unreadable; re-pinning"))
+        .ok()
+}
+
+async fn store_checkpoint(data_dir: &Path, checkpoint: &rekor::Checkpoint) -> Result<(), String> {
+    let path = checkpoint_path(data_dir);
+    let staging = path.with_extension("json.staging");
+    tokio::fs::create_dir_all(path.parent().expect("updates dir"))
+        .await
+        .map_err(|_| "cannot create update directory")?;
+    let bytes = serde_json::to_vec(checkpoint).map_err(|_| "cannot encode Rekor checkpoint")?;
+    tokio::fs::write(&staging, bytes)
+        .await
+        .map_err(|_| "cannot store Rekor checkpoint")?;
+    tokio::fs::rename(&staging, &path)
+        .await
+        .map_err(|_| "cannot store Rekor checkpoint".to_string())
+}
+
 /// Check via the same pinned CA as storage, or the existing Tor+TLS path while
 /// Shield is active. The caller passes the live transport state, not a cached
 /// preference, so a failed Shield switch never silently falls back to direct.
+///
+/// A newer release is returned only when it is signed by the release-update
+/// key AND logged in Rekor by the release-transparency key, in a tree that
+/// extends the newest checkpoint this device accepted before.
 pub async fn check_latest(
     pool: &GrpcClientPool,
     shield_requested: bool,
     platform: &str,
     channel: &str,
     installed_code: u64,
+    data_dir: &Path,
 ) -> Result<Option<UpdateManifest>, String> {
     tracing::info!(platform, channel, installed_code, "update check started");
+    // Native installers and signed release channels currently exist only for
+    // Android and Linux. Never query another OS's executable update channel.
+    if !matches!(platform, "android" | "linux") {
+        return Err(format!("In-app updates are not available for {platform} yet"));
+    }
     if shield_requested && pool.transport_mode() != TransportMode::Onion {
         return Err("Shield requires Tor for update checks".into());
     }
@@ -269,51 +366,7 @@ pub async fn check_latest(
         &origin,
         &format!("/updates/v1/{platform}/{channel}/latest.json"),
     )?;
-    let bytes = if mode == TransportMode::Onion {
-        #[cfg(feature = "onion")]
-        {
-            crate::network::anon_http::get_optional(&pool.onion_tor(), &url).await?
-        }
-        #[cfg(not(feature = "onion"))]
-        {
-            return Err("Tor support is missing".into());
-        }
-    } else {
-        let mut response = crate::network::storage_http::storage_client()?
-            .get(&url)
-            .send()
-            .await
-            .map_err(|_| "update check failed")?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !response.status().is_success() {
-            return Err(format!("update check returned {}", response.status()));
-        }
-        if response
-            .content_length()
-            .is_some_and(|n| n > MAX_MANIFEST_BYTES as u64)
-        {
-            return Err("update manifest is too large".into());
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) =
-            tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
-                .await
-                .map_err(|_| "update check stalled")?
-                .map_err(|_| "update manifest read failed")?
-        {
-            if body
-                .len()
-                .checked_add(chunk.len())
-                .is_none_or(|n| n > MAX_MANIFEST_BYTES)
-            {
-                return Err("update manifest is too large".into());
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Some(body)
-    };
+    let bytes = fetch_optional(pool, mode, &url, MAX_MANIFEST_BYTES).await?;
     if pool.transport_mode() != mode {
         return Err("network mode changed during update check".into());
     }
@@ -321,7 +374,7 @@ pub async fn check_latest(
         tracing::info!("update check found no release");
         return Ok(None);
     };
-    let manifest = verify_manifest_inner(
+    let (manifest, bundle) = verify_manifest_inner(
         &bytes,
         &crate::config::RELEASE_UPDATE_PUBLIC_KEY_BYTES,
         platform,
@@ -334,7 +387,34 @@ pub async fn check_latest(
         return Ok(None);
     }
     validate_artifact_url(&origin, &manifest)?;
-    tracing::info!(version = %manifest.version_name, size = manifest.size, "update available");
+    let checkpoint = rekor::verify_release_entry(
+        &bundle,
+        &crate::config::REKOR_LOG_PUBLIC_KEY,
+        &crate::config::RELEASE_TRANSPARENCY_PUBLIC_KEY,
+        &manifest.sha256,
+    )?;
+    let stored = load_checkpoint(data_dir).await;
+    let proofs = if rekor::needs_consistency_proof(stored.as_ref(), &checkpoint) {
+        let url = update_url(
+            &origin,
+            &format!("/updates/v1/{platform}/{channel}/consistency.json"),
+        )?;
+        let body = fetch_optional(pool, mode, &url, rekor::MAX_CONSISTENCY_BYTES)
+            .await?
+            .ok_or("Rekor consistency proof is missing")?;
+        if pool.transport_mode() != mode {
+            return Err("network mode changed during update check".into());
+        }
+        Some(
+            serde_json::from_slice::<rekor::ConsistencyFile>(&body)
+                .map_err(|_| "Rekor consistency proofs are malformed")?,
+        )
+    } else {
+        None
+    };
+    rekor::check_consistency(stored.as_ref(), &checkpoint, proofs.as_ref())?;
+    store_checkpoint(data_dir, &checkpoint).await?;
+    tracing::info!(version = %manifest.version_name, size = manifest.size, rekor_uuid = %bundle.uuid, "update available (Rekor-logged)");
     Ok(Some(manifest))
 }
 
@@ -802,9 +882,12 @@ mod tests {
     }
     fn encode(manifest: UpdateManifest, key: &SigningKey) -> Vec<u8> {
         let signature = key.sign(&signed_bytes(&manifest).unwrap());
+        let rekor = serde_json::from_str(include_str!("../tests/fixtures/rekor/bundle-shape.json"))
+            .unwrap();
         serde_json::to_vec(&SignedManifest {
             manifest,
             signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+            rekor,
         })
         .unwrap()
     }
@@ -814,7 +897,9 @@ mod tests {
         let bytes = encode(manifest.clone(), &key);
         let public = key.verifying_key().to_bytes();
         assert_eq!(
-            verify_manifest(&bytes, &public, "android", "sideload", 121).unwrap(),
+            verify_manifest(&bytes, &public, "android", "sideload", 121)
+                .unwrap()
+                .0,
             manifest
         );
         assert!(verify_manifest(&bytes, &[1; 32], "android", "sideload", 121).is_err());
@@ -848,61 +933,100 @@ mod tests {
     #[test]
     fn publishing_tool_round_trip_verifies_in_client() {
         let temp = tempfile::tempdir().unwrap();
-        // The publisher inspects the artifact before signing: a Linux archive
-        // must carry a BUILD.txt that matches the requested version.
-        let artifact = temp.path().join("fixture.tar.gz");
-        {
+        let publish = |code: u64| {
+            // The publisher inspects the artifact before signing: a Linux
+            // archive must carry a BUILD.txt that matches the requested version.
+            let artifact = temp.path().join(format!("fixture-{code}.tar.gz"));
             let encoder = flate2::write::GzEncoder::new(
                 std::fs::File::create(&artifact).unwrap(),
                 flate2::Compression::fast(),
             );
             let mut tar = tar::Builder::new(encoder);
-            let build = b"version=0.1.0-rc122\nversion_code=122\ntarget=x86_64-unknown-linux-gnu\n";
+            let build = format!(
+                "version=0.1.0-rc{code}\nversion_code={code}\ntarget=x86_64-unknown-linux-gnu\n"
+            );
             let mut header = tar::Header::new_gnu();
             header.set_size(build.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            tar.append_data(&mut header, "chatter-122/BUILD.txt", &build[..]).unwrap();
-            tar.into_inner().unwrap().finish().unwrap();
-        }
-        let script =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/publish-update.py");
-        let output = std::process::Command::new("python3")
-            .arg(script)
-            .args([
-                "--test-dev-seed",
-                "--platform",
-                "linux",
-                "--channel",
-                "stable",
-                "--version-code",
-                "122",
-                "--version-name",
-                "0.1.0-rc122",
-                "--release-notes",
-                "Test",
-                "--origin",
-                "https://updates.example",
-                "--artifact",
-            ])
-            .arg(&artifact)
-            .arg("--publish-dir")
-            .arg(temp.path())
-            .output()
+            tar.append_data(
+                &mut header,
+                format!("chatter-{code}/BUILD.txt"),
+                build.as_bytes(),
+            )
             .unwrap();
-        assert!(
-            output.status.success(),
-            "publisher failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let signed = std::fs::read(temp.path().join("linux/stable/latest.json")).unwrap();
-        let manifest =
-            verify_manifest(&signed, &dev_release_key(), "linux", "stable", 121).unwrap();
-        verify_artifact(
-            std::fs::File::open(temp.path().join("linux/stable/122.tar.gz")).unwrap(),
-            &manifest,
-        )
-        .unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+            let script =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/publish-update.py");
+            let output = std::process::Command::new("python3")
+                .arg(script)
+                .args([
+                    "--test-dev-seed",
+                    "--platform",
+                    "linux",
+                    "--channel",
+                    "stable",
+                ])
+                .args(["--version-code", &code.to_string()])
+                .args(["--version-name", &format!("0.1.0-rc{code}")])
+                .args([
+                    "--release-notes",
+                    "Test",
+                    "--origin",
+                    "https://updates.example",
+                ])
+                .arg("--artifact")
+                .arg(&artifact)
+                .arg("--publish-dir")
+                .arg(temp.path().join("pub"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "publisher failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let dir = temp.path().join("pub/linux/stable");
+            let signed = std::fs::read(dir.join("latest.json")).unwrap();
+            let (manifest, bundle) =
+                verify_manifest(&signed, &dev_release_key(), "linux", "stable", code - 1).unwrap();
+            verify_artifact(
+                std::fs::File::open(dir.join(format!("{code}.tar.gz"))).unwrap(),
+                &manifest,
+            )
+            .unwrap();
+            // The production log pin refuses the publisher's dev mock log.
+            assert!(
+                rekor::verify_release_entry(
+                    &bundle,
+                    &crate::config::PUBLIC_GOOD_REKOR_LOG_PUBLIC_KEY,
+                    &crate::config::RELEASE_TRANSPARENCY_PUBLIC_KEY,
+                    &manifest.sha256,
+                )
+                .is_err()
+            );
+            // The dev pins accept it: the mock log logs exactly this artifact
+            // under the key derived from the dev release seed.
+            let checkpoint = rekor::verify_release_entry(
+                &bundle,
+                &crate::config::DEV_REKOR_LOG_PUBLIC_KEY,
+                &crate::config::RELEASE_TRANSPARENCY_PUBLIC_KEY,
+                &manifest.sha256,
+            )
+            .unwrap();
+            let proofs: rekor::ConsistencyFile =
+                serde_json::from_slice(&std::fs::read(dir.join("consistency.json")).unwrap())
+                    .unwrap();
+            (checkpoint, proofs)
+        };
+        let (first, _) = publish(122);
+        let (second, proofs) = publish(123);
+        assert!(rekor::needs_consistency_proof(Some(&first), &second));
+        rekor::check_consistency(Some(&first), &second, Some(&proofs)).unwrap();
+        // A client that pinned some other history at that size refuses.
+        let mut forked = first.clone();
+        forked.root[0] ^= 1;
+        assert!(rekor::check_consistency(Some(&forked), &second, Some(&proofs)).is_err());
     }
 
     #[cfg(target_os = "linux")]

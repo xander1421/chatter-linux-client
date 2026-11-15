@@ -29,8 +29,8 @@ use crate::domain::{
     message::ConversationType,
 };
 use crate::error::{NetworkError, StorageError};
-use crate::proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SendSealedMessageRequest};
-use crate::proto::content_v1::Content;
+use chatter_proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SendSealedMessageRequest};
+use chatter_proto::content_v1::Content;
 use crate::storage::database::Database;
 use prost::Message as _;
 use rusqlite::{OptionalExtension, params};
@@ -191,6 +191,10 @@ impl MessageService {
         let devices = devices
             .map(|d| serde_json::to_string(d).map_err(|_| invalid("Cannot retain retry devices")))
             .transpose()?;
+        // Stored padded, so the first attempt and every retry seal the
+        // same bucket-sized plaintext.
+        let mut content = content.clone();
+        Self::pad_content_to_bucket(&mut content);
         let conn = self.database.connection()?;
         let inserted = conn.execute(
             "INSERT INTO dm_outbox(owner_id,message_id,peer_id,device_id,request_id,content,devices,generation,next_attempt_at,created_at)
@@ -461,7 +465,7 @@ impl MessageService {
         generation: &str,
     ) -> Result<FirstAttempt, MessageError> {
         let result = self.deliver_sealed_dm(id, generation).await;
-        if crate::services::gateway::submission::check_send_session().is_err() {
+        if crate::state::send_session::check_send_session().is_err() {
             // Another account or session: the entry keeps its owner and lease.
             return Ok(FirstAttempt::Queued);
         }
@@ -595,8 +599,8 @@ fn claim_due(
 /// Replays queued sealed DMs on start and whenever the connection is up:
 /// one session-scoped worker per client, a few entries per tick, each under
 /// its own lease, oldest first.
-pub(crate) fn spawn_dm_send_recovery(
-    client: &Arc<crate::client::ChatterClient>,
+pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
+    client: &Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
     tokio::spawn(async move {
@@ -636,7 +640,7 @@ pub(crate) fn spawn_dm_send_recovery(
                 }
             };
             let session =
-                crate::services::gateway::submission::SendSession::capture(client.auth_state());
+                crate::state::send_session::SendSession::capture(client.auth_state());
             let fail = |id: &MessageId,
                         generation: &str,
                         conversation: ChannelId,
@@ -678,7 +682,7 @@ pub(crate) fn spawn_dm_send_recovery(
                 {
                     break;
                 }
-                let result = crate::services::gateway::submission::SEND_SESSION
+                let result = crate::state::send_session::SEND_SESSION
                     .scope(
                         session.clone(),
                         tokio::time::timeout(

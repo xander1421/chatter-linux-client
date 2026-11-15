@@ -10,10 +10,10 @@ impl MessageService {
     /// `Message.timestamp` is the server's receive time and is not a name
     /// for the message. `None` when the envelope does not carry one.
     pub(super) fn group_envelope_timestamp_ns(
-        proto_msg: &crate::proto::chat_v1::Message,
+        proto_msg: &chatter_proto::chat_v1::Message,
     ) -> Option<u64> {
-        use crate::proto::chat_v1::message::content::Type;
-        use crate::proto::content_v1::GroupEncrypted;
+        use chatter_proto::chat_v1::message::content::Type;
+        use chatter_proto::content_v1::GroupEncrypted;
         use prost::Message as _;
 
         let Some(Type::Encrypted(enc)) = proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
@@ -39,7 +39,7 @@ impl MessageService {
         channel_id: ChannelId,
         sender_id: UserId,
         device_id: u32,
-        proto_msg: &crate::proto::chat_v1::Message,
+        proto_msg: &chatter_proto::chat_v1::Message,
         ciphertext: &[u8],
     ) {
 
@@ -382,7 +382,7 @@ impl MessageService {
         verified: &VerifiedChannel,
     ) -> Option<Vec<u8>> {
         use crate::domain::message::MessageContent;
-        use crate::proto::content_v1::{Content, DataMessage, content};
+        use chatter_proto::content_v1::{Content, DataMessage, content};
         use prost::Message as _;
 
         let body = match &message.content {
@@ -461,10 +461,10 @@ impl MessageService {
         device_id: u32,
         sealed_body: Vec<u8>,
     ) -> Result<(), MessageError> {
-        let message = crate::proto::chat_v1::SealedDeviceMessage {
+        let message = chatter_proto::chat_v1::SealedDeviceMessage {
             device_id,
             registration_id: 0,
-            sealed_message: Some(crate::proto::chat_v1::SealedSenderMessage {
+            sealed_message: Some(chatter_proto::chat_v1::SealedSenderMessage {
                 sealed_body,
                 server_key_id: self.signal_service.get_server_key_id(),
                 timestamp: TimestampNanos::now_anonymized().as_u64(),
@@ -485,7 +485,7 @@ impl MessageService {
                 &mut self.message_client(),
                 &peer,
                 vec![message],
-                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                chatter_proto::chat_v1::SealedDelivery::NamedDevices,
                 uak.as_ref(),
                 &uuid::Uuid::new_v4().to_string(),
             )
@@ -496,40 +496,82 @@ impl MessageService {
         Ok(())
     }
 
-    /// Pad a Content proto to the nearest standard bucket size for traffic analysis protection.
-    ///
-    /// The server validates that sealed sender ciphertexts match one of these plaintext bucket
-    /// sizes: 256, 512, 1024, 4096 bytes. Without padding, message sizes leak event type info.
-    pub(crate) fn pad_content_to_bucket(content: &mut crate::proto::content_v1::Content) {
+    /// Pad a Content proto to the smallest bucket (256, 512, 1024, 4096 bytes
+    /// encoded) it fits, through `Content.padding`. Content past the largest
+    /// bucket is sent unpadded, as is the rare content no padding length lands
+    /// on 4096 from (encoded 3965 and 4093..=4095 bytes). The server does not
+    /// check this: it only hides size from the server and the network.
+    pub(crate) fn pad_content_to_bucket(content: &mut chatter_proto::content_v1::Content) {
         use prost::Message;
+        use prost::encoding::{encoded_len_varint, key_len};
         const BUCKETS: [usize; 4] = [256, 512, 1024, 4096];
+        const PADDING_TAG: u32 = 200; // Content.padding
 
-        // Get current size without padding
         content.padding = vec![];
-        let base_size = content.encoded_len();
-
-        // Find smallest bucket that fits
-        let target = BUCKETS
-            .iter()
-            .copied()
-            .find(|&b| b >= base_size)
-            .unwrap_or(4096);
-
-        if base_size >= target {
-            return;
+        let base = content.encoded_len();
+        for target in BUCKETS.into_iter().filter(|&b| b >= base) {
+            if target == base {
+                return;
+            }
+            // The field costs tag + varint(n) + n bytes; a bucket that no n
+            // lands on exactly (a varint boundary) falls through to the next.
+            let room = target - base;
+            let fit = (1..=3).find_map(|vlen| {
+                let n = room.checked_sub(key_len(PADDING_TAG) + vlen)?;
+                (n > 0 && encoded_len_varint(n as u64) == vlen).then_some(n)
+            });
+            if let Some(n) = fit {
+                content.padding = vec![0u8; n];
+                debug_assert_eq!(content.encoded_len(), target);
+                return;
+            }
         }
+    }
+}
 
-        // Start with an overestimate, then trim to exact target.
-        // Protobuf overhead for the padding field: 1 (tag) + varint(len) + len.
-        let estimate = target.saturating_sub(base_size);
-        content.padding = vec![0u8; estimate];
+#[cfg(test)]
+mod padding_tests {
+    use crate::services::message::MessageService;
+    use chatter_proto::content_v1::{Content, DataMessage, content};
+    use prost::Message as _;
 
-        while content.encoded_len() > target && !content.padding.is_empty() {
-            content.padding.pop();
-        }
-        // If we undershot by 1 due to varint boundary, add back
-        while content.encoded_len() < target {
-            content.padding.push(0);
+    /// Every Content that fits the largest bucket encodes to exactly a bucket,
+    /// the body survives decode, and re-padding is idempotent; larger content
+    /// is left as is.
+    #[test]
+    fn content_pads_to_a_bucket_and_round_trips() {
+        for len in 0..4200 {
+            let body = "x".repeat(len);
+            let mut c = Content {
+                timestamp: 1,
+                content: Some(content::Content::DataMessage(DataMessage {
+                    body: body.clone(),
+                    timestamp: 1,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            let base = c.encoded_len();
+            MessageService::pad_content_to_bucket(&mut c);
+            let padded = c.encoded_len();
+            // No padding length lands exactly on 4096 from these (tag +
+            // varint + bytes cannot add up to 1..=3 or 131 bytes).
+            if base <= 4096 && ![3965, 4093, 4094, 4095].contains(&base) {
+                assert!([256, 512, 1024, 4096].contains(&padded), "len {len}: {padded}");
+            } else {
+                assert_eq!(padded, base, "len {len}: oversized content unchanged");
+            }
+            MessageService::pad_content_to_bucket(&mut c);
+            assert_eq!(c.encoded_len(), padded, "re-padding is idempotent");
+            let decoded = chatter_proto::protovalidate::decode_inbound_content(
+                c.encode_to_vec().as_slice(),
+                "padding_test",
+            )
+            .expect("padded content passes inbound validation");
+            let Some(content::Content::DataMessage(dm)) = decoded.content else {
+                panic!("data message lost");
+            };
+            assert_eq!(dm.body, body);
         }
     }
 }

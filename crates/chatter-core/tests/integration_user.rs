@@ -4,8 +4,8 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::network::grpc::UserClient;
-use chatter_core::proto::chat_v1::{UserPresence, friend_requests_filter};
+use chatter_core::testing::network::grpc::UserClient;
+use chatter_proto::chat_v1::{UserPresence, friend_requests_filter};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -173,7 +173,7 @@ async fn test_send_friend_request() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::user_event::Event;
+            use chatter_proto::chat_v1::user_event::Event;
             if let Event::FriendStatusChanged(_) = payload {
                 status_changed = true;
             }

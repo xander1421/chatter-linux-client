@@ -10,6 +10,9 @@ import { ReactionEntry } from "types.slint";
 export component MessageFooter inherits HorizontalLayout {
     in property <string> delivery-status;
     in property <string> failure-reason;
+    // Core's `Message::can_retry_send`: false for a body over the transport
+    // limit and for a channel post the server refused.
+    in property <bool> can-retry;
     in property <bool> has-reactions;
     in property <bool> is-edited;
     in property <bool> disappearing;
@@ -218,17 +221,16 @@ export component MessageFooter inherits HorizontalLayout {
                 }
             }
 
-            // "not sent" retries except when the body exceeded the transport
-            // limit; resending that unchanged body would fail again.
-            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason == "Message too long": Text {
-                text: "not sent \u{b7} Message too long";
+            // "not sent" offers Retry only when core says a retry can land.
+            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && !root.can-retry: Text {
+                text: root.failure-reason == "" ? "not sent" : "not sent \u{b7} " + root.failure-reason;
                 color: root.overlay-media ? #ffffff : Colors.error;
                 font-size: Typography.xs;
                 font-italic: true;
                 accessible-role: text;
-                accessible-label: "Not sent, message too long";
+                accessible-label: "Not sent, " + root.failure-reason;
             }
-            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason != "Message too long": Text {
+            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.can-retry: Text {
                 text: root.failure-reason == "" ? "not sent \u{b7} Retry" : "not sent \u{b7} " + root.failure-reason + " \u{b7} Retry";
                 color: root.overlay-media ? #ffffff : Colors.error;
                 font-size: Typography.xs;

@@ -22,7 +22,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::conversation::{SelectedDeleteFailureReason, SelectedDeleteScope};
+use chatter_core::client::conversation::{SelectedDeleteFailureReason, SelectedDeleteScope};
 
 use crate::MainWindow;
 
@@ -232,7 +232,7 @@ fn delete_selection(
                 .next()
                 .map(|failure| failure.reason),
             Err(error) => Some(SelectedDeleteFailureReason::Operation(
-                chatter_core::services::conversation::ConversationError::Other(error.to_string()),
+                chatter_core::client::conversation::ConversationError::Other(error.to_string()),
             )),
         };
         if let Some(failure) = failure {

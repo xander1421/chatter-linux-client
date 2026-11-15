@@ -48,7 +48,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use crate::error::NetworkError;
-use crate::proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
+use chatter_proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
 use crate::storage::repositories::SettingsRepository;
 
 /// Settings key holding [`PinnedTreeHead`].
@@ -221,6 +221,7 @@ where
         .unwrap_or_else(|_| Err(NetworkError::Timeout.into()))
 }
 
+#[cfg(test)]
 /// [`classify_head`] then, for a newer head, [`accept_advance`] with the proof
 /// `fetch` returns for the pinned->offered range (callers pass the anonymous
 /// KT client). Any failure, fetch included, rejects: an error must not be a

@@ -20,11 +20,12 @@ use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::Message;
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
-use crate::proto::chat_v1;
-use crate::proto::content_v1::{self, GroupEncrypted};
+use chatter_proto::chat_v1;
+use chatter_proto::content_v1::{self, GroupEncrypted};
 use crate::services::attachment::AttachmentService;
 
-use super::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
+use super::conversion::proto_to_domain_message_with_sender;
+use crate::storage::repositories::channel_repo::conversation_type_for_channel;
 use super::{MessageError, MessageService};
 
 mod edit;
@@ -114,6 +115,7 @@ impl ChannelInbound {
         &self.messages.event_bus
     }
 
+    #[cfg(test)]
     /// Decrypt, persist and announce one channel message.
     ///
     /// `live` skips this device's optimistic sends. Every newly inserted row
@@ -140,6 +142,7 @@ impl ChannelInbound {
 
     pub(crate) fn database(&self) -> &Arc<crate::storage::Database> { &self.messages.database }
 
+    #[cfg(test)]
     pub(crate) async fn ingest_with_hint(
         &self,
         proto_msg: &chat_v1::Message,

@@ -16,10 +16,19 @@ impl MessageService {
     pub async fn send_friend_dm_content(
         &self,
         peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
+        content: chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             self.send_dm(peer_id, content, &self.mailbox_manager).await
+        } else if is_delivery_receipt(&content)
+            && self.sealed_access_key(&peer_id.to_string(), false).is_none()
+        {
+            // Without their UAK the deposit degrades to identified delivery,
+            // which names us as the receipt's sender — exactly the link a
+            // sealed receipt exists to hide. An automatic receipt is not worth
+            // that (Signal-Desktop only receipts sealed incoming DMs).
+            tracing::info!(%peer_id, "No delivery receipt: no sealed access to the peer");
+            Ok(())
         } else {
             self.send_sealed_dm_content(peer_id, content).await
         }
@@ -66,7 +75,7 @@ impl MessageService {
     async fn send_sealed_dm_content(
         &self,
         peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
+        mut content: chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         // Backstop for `send_friend_dm_content`: this transport names the
         // recipient to the server, which Shield mode must never do.
@@ -76,6 +85,7 @@ impl MessageService {
             ));
         }
         validate_sealed_plaintext_size(content.encoded_len())?;
+        Self::pad_content_to_bucket(&mut content);
         let plaintext = content.encode_to_vec();
 
         let mut auth_client = self.auth_client();
@@ -135,4 +145,9 @@ impl MessageService {
 
         Ok(())
     }
+}
+
+fn is_delivery_receipt(content: &chatter_proto::content_v1::Content) -> bool {
+    use chatter_proto::content_v1::{content::Content as Body, receipt_message::Type};
+    matches!(&content.content, Some(Body::Receipt(r)) if r.r#type == Type::Delivery as i32)
 }

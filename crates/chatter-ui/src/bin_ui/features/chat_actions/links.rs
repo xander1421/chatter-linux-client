@@ -1,6 +1,6 @@
 //! Explicit user-tap web destinations; never launch message text automatically.
 use crate::MainWindow;
-use crate::bin_ui::converters::markdown::safe_web_url;
+use chatter_core::ui::markdown::safe_web_url;
 use chatter_core::domain::link::link_needs_confirmation;
 use slint::ComponentHandle;
 use std::sync::Arc;

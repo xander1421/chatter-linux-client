@@ -10,22 +10,21 @@
 //! `fullSizeContentView` style mask bit.
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSView, NSWindowStyleMask, NSWindowTitleVisibility};
+use objc2_app_kit::{NSView, NSWindow, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility};
 use raw_window_handle::HasWindowHandle;
 
 /// Height of the transparent titlebar overlay, in logical points — the
-/// standard macOS unified-toolbar row. Fixed by AppKit: it doesn't change
-/// with window size or Retina scaling.
+/// clearance for the inset native controls. Logical points stay constant
+/// across window sizes and Retina scaling.
 ///
-/// App content is drawn *under* this band, not below it; the value exists so
-/// the panel that happens to be at the top-left can keep its own content out
-/// of the traffic lights' way when it is too narrow to do that horizontally.
-pub const TITLEBAR_HEIGHT: f32 = 28.0;
+/// The root layout reserves this band plus a small gap for all routes, so
+/// native window controls never overlap app controls or page headings.
+pub const TITLEBAR_HEIGHT: f32 = 34.0;
 
-/// Leading width the three traffic lights occupy, in logical points: a 20pt
-/// left margin, three 12pt buttons, 8pt apart, plus trailing air. Content
-/// starting after this clears them at any window size.
-pub const TRAFFIC_LIGHTS_WIDTH: f32 = 78.0;
+/// Leading clearance for the inset traffic lights, including trailing air.
+pub const TRAFFIC_LIGHTS_WIDTH: f32 = 80.0;
+/// Collapsed sidebar width, matching DesktopChrome.rail-width.
+const RAIL_WIDTH: f32 = 68.0;
 
 /// Apply the unified-toolbar titlebar style to the window backing `window`.
 ///
@@ -67,7 +66,63 @@ pub fn apply_unified_titlebar(window: &slint::Window) -> bool {
     ns_window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     let mask = ns_window.styleMask() | NSWindowStyleMask::FullSizeContentView;
     ns_window.setStyleMask(mask);
+    inset_buttons(&ns_window);
     true
+}
+
+/// AppKit may lay the buttons out again after resizing or leaving full screen.
+/// Reapply absolute insets so repeated calls never accumulate an offset.
+pub fn refresh_window_button_insets(window: &slint::Window) {
+    let slint_handle = window.window_handle();
+    let Ok(handle) = slint_handle.window_handle() else {
+        return;
+    };
+    let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    let Some(view) = (unsafe { Retained::retain(appkit.ns_view.as_ptr().cast::<NSView>()) }) else {
+        return;
+    };
+    if let Some(window) = view.window() {
+        inset_buttons(&window);
+    }
+}
+
+fn inset_buttons(window: &NSWindow) {
+    let Some(close) = window.standardWindowButton(NSWindowButton::CloseButton) else {
+        return;
+    };
+    let Some(zoom) = window.standardWindowButton(NSWindowButton::ZoomButton) else {
+        return;
+    };
+    // Center the actual native group over the 68pt rail inside its 8pt
+    // window gutter. Keep AppKit's button sizes and spacing intact.
+    let group_left = close.frame().origin.x;
+    let group_right = zoom.frame().origin.x + zoom.frame().size.width;
+    let rail_center = 8.0 + f64::from(RAIL_WIDTH) / 2.0;
+    let horizontal_offset = rail_center - (group_left + group_right) / 2.0;
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        let Some(button) = window.standardWindowButton(kind) else {
+            continue;
+        };
+        // SAFETY: this is AppKit's live standard button, accessed only from
+        // the main-thread window callback; its retained parent stays alive.
+        let Some(container) = (unsafe { button.superview() }) else {
+            continue;
+        };
+        let mut origin = button.frame().origin;
+        origin.x += horizontal_offset;
+        origin.y = if container.isFlipped() {
+            14.0
+        } else {
+            container.bounds().size.height - button.frame().size.height - 14.0
+        };
+        button.setFrameOrigin(origin);
+    }
 }
 
 /// Point GStreamer at the plugins `macos/bundle.sh` staged in the .app.
@@ -96,9 +151,14 @@ pub fn prepare_bundled_gstreamer() {
         Err(_) => plugins,
     };
     tracing::info!(path = %path.display(), "using bundled GStreamer plugins");
+    let scanner = macos_dir.join("../Helpers/gst-plugin-scanner");
     // Safe: runs once at process startup, before any thread that might read the
     // environment is spawned. set_var is unsafe as of the 2024 edition.
     unsafe {
         std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &path);
+        if std::env::var_os("GST_PLUGIN_SCANNER").is_none() && scanner.is_file() {
+            std::env::set_var("GST_PLUGIN_SCANNER", &scanner);
+            tracing::info!(path = %scanner.display(), "using bundled GStreamer plugin scanner");
+        }
     }
 }

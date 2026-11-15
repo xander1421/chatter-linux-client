@@ -25,8 +25,14 @@ pub use incoming::AcceptedIncomingCall;
 #[cfg(feature = "media")]
 pub use media::{CallRoomSnapshot, room_roster_keeps_screen};
 #[cfg(feature = "media")]
-pub use outgoing::CallStartAttempt;
+pub use crate::services::call_signaling::CallStartAttempt;
+// Call-worker values the call façade hands out (orchestrator events, end
+// reasons, the incoming-call presentation snapshot) and the timeouts the
+// platform ring/notification code must agree with.
+pub use crate::services::gateway::CallHangupReason;
 #[cfg(feature = "media")]
-pub(crate) use outgoing::START_ATTEMPT;
-pub(crate) use outgoing::start_cancelled;
+pub use crate::services::call_worker::{
+    CONNECTION_LOST, CallEncryptionVerification, CallEndReason, CallOrchestratorEvent,
+    IncomingCallPresentationState, OrchestratedCallKind, RING_TIMEOUT,
+};
 pub use outgoing::{OutgoingCallStart, RingingPeer};

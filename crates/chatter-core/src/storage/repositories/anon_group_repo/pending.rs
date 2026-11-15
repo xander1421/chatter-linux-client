@@ -106,7 +106,7 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
         use prost::Message as _;
-        let content = crate::proto::content_v1::Content::decode(content_blob)
+        let content = chatter_proto::content_v1::Content::decode(content_blob)
             .map_err(|_| StorageError::InvalidData("Invalid pending anonymous content".into()))?;
         let timestamp = membership_timestamp(content.timestamp)?;
         let inserted = conn.execute(
@@ -143,10 +143,10 @@ impl AnonGroupRepository {
         content_blob: &[u8],
     ) -> Result<(), StorageError> {
         use prost::Message as _;
-        let content = crate::proto::content_v1::Content::decode(content_blob)
+        let content = chatter_proto::content_v1::Content::decode(content_blob)
             .map_err(|_| StorageError::InvalidData("Invalid roster content".into()))?;
         let roster_at = match content.content {
-            Some(crate::proto::content_v1::content::Content::AnonGroupMemberList(roster)) => {
+            Some(chatter_proto::content_v1::content::Content::AnonGroupMemberList(roster)) => {
                 roster.timestamp
             }
             _ => {
@@ -168,9 +168,9 @@ impl AnonGroupRepository {
                 )?;
                 for row in rows {
                     let (id, blob) = row?;
-                    if let Some(crate::proto::content_v1::content::Content::AnonGroupMemberList(
+                    if let Some(chatter_proto::content_v1::content::Content::AnonGroupMemberList(
                         roster,
-                    )) = crate::proto::content_v1::Content::decode(blob.as_slice())
+                    )) = chatter_proto::content_v1::Content::decode(blob.as_slice())
                         .ok()
                         .and_then(|old| old.content)
                     {

@@ -1,17 +1,18 @@
+import { DesktopChrome } from "theme/desktop_chrome.slint";
+import { InputPolicy } from "theme/input_policy.slint";
 import { AppViewTransition } from "app_view_transition.slint";
 import { AppCallLifecycle } from "app_call_lifecycle.slint";
 import { AppModalTransitions } from "app_modal_transitions.slint";
-import { JarvisPane } from "app_jarvis_pane.slint";
 import { CallView } from "app_call_view.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { ChatPane } from "app_chat_pane.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { SearchPane } from "app_search_pane.slint";
 import { SettingsPane } from "app_settings_pane.slint";
-import { AuthFlow } from "app_auth_flow.slint";
 import { AppBottomChrome } from "app_bottom_chrome.slint";
 import { AppShortcuts } from "app_shortcuts.slint";
 import { AppTopOverlays } from "app_top_overlays.slint";
+import { AppLockPane, LockScreen } from "app_lock.slint";
 import { AppSettingsHost } from "app_settings_host.slint";
 import { AppSecondaryModals } from "app_secondary_modals.slint";
 import { AppTabScreens } from "app_tab_screens.slint";
@@ -33,13 +34,11 @@ import { VirtualKeyboard } from "components/modal_container.slint";
 // Import auth screens
 import { AuthPages } from "auth_pages.slint";
 import { MainChatShell } from "main_chat_shell.slint";
-import { AvatarOption } from "components/avatar_picker.slint";
 
 // Import main layout components
 import { Sidebar, ChatRowData, CustomSectionData, SidebarRowData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
-import { SelectionBar } from "chat/selection_bar.slint";
 import { EmojiData } from "components/emoji_picker.slint";
 import { GifData } from "components/gif_picker.slint";
 import { MentionSuggestion } from "components/mention_autocomplete.slint";
@@ -53,7 +52,7 @@ import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
 import { ChannelMemberData, BannedMemberData } from "modals/channel_member_types.slint";
 import { InviteUser } from "modals/invite_member.slint";
-import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
+import { QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
 
 // Import settings
 import { PinnedItem } from "modals/pinned_messages.slint";
@@ -65,7 +64,7 @@ import { EmojiData } from "components/mod.slint";
 import { ToastOverlay } from "components/toast_overlay.slint";
 
 // Import call UI
-import { ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 // Import anon mode global + PIN modal
 import { ShieldWash } from "anon_mode/shield_wash.slint";
@@ -98,8 +97,15 @@ export component MainWindow inherits Window {
     // `WindowInsets.Type.ime()` respectively, so they must both be subtracted
     // from the content area to lift the composer above the keyboard.
     property <length> safe-area-top: root.safe-area-insets.top;
-    property <length> safe-area-bottom: root.safe-area-insets.bottom
-        + max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve);
+    property <length> safe-area-bottom: InputPolicy.keyboard-includes-safe-area
+        ? max(root.safe-area-insets.bottom,
+            max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve))
+        : root.safe-area-insets.bottom
+            + max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve);
+    // These children live inside the already-inset content rectangle. UIKit
+    // home-indicator clearance belongs to that rectangle, not each child.
+    property <length> content-bottom-inset: InputPolicy.keyboard-includes-safe-area
+        ? 0px : root.safe-area-bottom;
     private property <length> composer-keyboard-reserve: 0px;
     in-out property <float> remembered-keyboard-height-px: 0;
     in-out property <float> remembered-keyboard-width-px: 0;
@@ -180,19 +186,18 @@ export component MainWindow inherits Window {
     // transparent/unified (platform::macos::apply_unified_titlebar). 0 on
     // every other platform, which is what makes the bindings below no-ops
     // there.
-    // The app does NOT reserve a row for the titlebar: the whole point of the
-    // unified look is that the traffic lights sit *inside* the app's own top
-    // row, level with the sidebar's first row and the conversation header —
-    // one row, the way every native macOS chat app does it. So content runs
-    // to y=0 and the only thing that moves is whatever would otherwise be
-    // drawn beneath the lights themselves.
+    // Keep every page and overlay below the native traffic lights. A shared
+    // inset also covers Settings, auth, search and narrow/collapsed sidebars;
+    // per-header leading offsets missed those routes and squeezed Search.
     in property <length> macos-titlebar-height: 0px;
     in property <length> macos-traffic-lights-width: 0px;
-    // Leading clearance the conversation header has to add for itself: the
-    // sidebar absorbs the traffic lights when it is wide enough, and the rail
-    // (60px) is not. Zero whenever the panel already covers them.
-    property <length> chat-traffic-lights-lead: max(0px, root.macos-traffic-lights-width
-        - (root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width));
+    // The chat header shares the native title row. Full-width routes still
+    // reserve clearance because they have no sidebar around the traffic lights.
+    property <bool> native-chat-row: root.current-view == "main"
+        && SidebarPane.active-tab == "chats" && !CallView.active-call-fullscreen;
+    property <length> desktop-top-inset: root.macos-titlebar-height > 0px
+        && !root.native-chat-row ? root.macos-titlebar-height : 0px;
+    property <length> chat-traffic-lights-lead: 0px;
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
     // Whether the mobile tab bar is on screen. The full-screen pages that leave
@@ -214,7 +219,9 @@ export component MainWindow inherits Window {
     property <bool> fab-visible: root.bottom-nav-visible
         && (SidebarPane.active-tab == "chats" || SidebarPane.active-tab == "contacts")
         && root.active-modal == "none" && !SearchPane.unified-search-open && !ChatPane.selection-mode
-        && !ModalHostState.friends-show-add;
+        // The add-friend screen lives on Contacts; its flag outlives a tab
+        // switch, so it must not hide the Chats button.
+        && !(SidebarPane.active-tab == "contacts" && ModalHostState.friends-show-add);
     // Its top edge: above the dock and, during a call, the return-to-call
     // bar stacked on it — the same strip the main column reserves for them.
     // In the main content layer's coordinates (it and the dock both live
@@ -222,8 +229,8 @@ export component MainWindow inherits Window {
     // root.height put it a status bar's height low, over the dock.
     property <length> return-to-call-height: 116px;
     property <length> fab-y: root.height - root.safe-area-top - root.safe-area-bottom
-        - Spacing.fab-size - Spacing.xl
-        - (Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom)
+        - 2 * DesktopChrome.frame-inset - Spacing.fab-size - Spacing.xl
+        - (Spacing.bottom-nav-height + Spacing.sm + root.content-bottom-inset)
         - (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
 
     // ========== View routing ==========
@@ -267,6 +274,13 @@ export component MainWindow inherits Window {
     // there. The sidebar, the chat's x and the menus all read this one value.
     property <bool> sidebar-is-rail: SidebarPane.sidebar-collapsed
         || (root.is-small-screen && !SidebarPane.small-screen-expanded);
+    property <length> sidebar-expanded-width: root.is-mobile-platform ? Spacing.sidebar-width
+        : clamp(SidebarPane.sidebar-preferred-width > 0px ? SidebarPane.sidebar-preferred-width
+            : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width,
+            220px, max(220px, min(480px, root.width - 2 * DesktopChrome.frame-inset - 320px)));
+    out property <length> sidebar-panel-width: root.sidebar-is-rail
+        ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? DesktopChrome.rail-width : Spacing.sidebar-width-collapsed)
+        : root.sidebar-expanded-width;
     // Both phone panes stay mounted until the push settles. The message list
     // therefore keeps its scroll position while the header and composer travel
     // with the conversation, and Back reverses the same movement.
@@ -278,6 +292,15 @@ export component MainWindow inherits Window {
     animate chat-push-progress {
         duration: SidebarPane.chat-edge-swiping ? 0ms : Materials.motion-standard;
         easing: Materials.glide;
+    }
+
+    // Let a newly mounted conversation lay out offscreen before its push.
+    chat-enter-frame := Timer {
+        interval: 16ms;
+        triggered => {
+            self.stop();
+            if SidebarPane.mobile-show-chat { root.chat-push-progress = 1; }
+        }
     }
 
     private property <int> reply-focus-serial: 0;
@@ -324,7 +347,13 @@ export component MainWindow inherits Window {
     private property <bool> observed-mobile-show-chat: SidebarPane.mobile-show-chat;
     changed observed-mobile-show-chat => {
         root.refresh-screen-protection();
-        root.chat-push-progress = SidebarPane.mobile-show-chat ? 1 : 0;
+        chat-enter-frame.stop();
+        if SidebarPane.mobile-show-chat && root.compact-layout
+            && !Appearance.reduce-motion && root.chat-push-progress == 0 {
+            chat-enter-frame.start();
+        } else {
+            root.chat-push-progress = SidebarPane.mobile-show-chat ? 1 : 0;
+        }
         if !SidebarPane.mobile-show-chat && root.chat-return-tab != "chats" {
             if root.compact-layout && SidebarPane.active-tab == "chats" {
                 SidebarPane.active-tab = root.chat-return-tab;
@@ -347,7 +376,7 @@ export component MainWindow inherits Window {
             // app, and only a force-stop recovers it (§112y). Re-take focus whenever
             // the conversation pane or a modal closes, which is when the focused text
             // field goes away.
-            back-scope.focus();
+            root.release-text-focus();
             // The pickers belong to the conversation's composer; they are
             // app-level overlays, so leaving the chat has to close them or
             // they float over whatever screen comes next.
@@ -408,6 +437,12 @@ export component MainWindow inherits Window {
     // when Slint has no focused item. The scope below also routes desktop
     // Back/Escape here. Navigation decisions live in features/back.rs.
     callback back-pressed();
+    callback mouse-navigation(bool); // true = Forward
+    callback navigation-changed();
+    private property <string> navigation-route: root.current-view + ":" + (AppLockPane.locked ? "locked" : "unlocked")
+        + ":" + SidebarPane.active-tab + ":" + root.active-modal
+        + ":" + (ModalHostState.settings-open ? SettingsPane.navigation-section : "");
+    changed navigation-route => { root.navigation-changed(); }
     // Android asks core to recompute capture protection at navigation boundaries.
     callback refresh-screen-protection();
     // The phone's chat pane closed (Back, header back, a bottom tab): nothing
@@ -419,6 +454,10 @@ export component MainWindow inherits Window {
     // routed directly from MainActivity when no Slint item has focus.
     forward-focus: back-scope;
 
+    // The lock screen's PIN field held focus; once it is gone, give focus
+    // back to back-scope so Back/Escape keep arriving.
+    private property <bool> observed-locked: AppLockPane.locked;
+    changed observed-locked => { if !AppLockPane.locked { back-scope.focus(); } }
     private property <string> observed-channel-id: ChatPane.channel-id;
     changed observed-channel-id => {
         CallView.calls-more-menu-visible = false;
@@ -475,6 +514,7 @@ export component MainWindow inherits Window {
     public function release-text-focus() {
         root.cancel-composer-keyboard-handover();
         back-scope.focus();
+        InputPolicy.dismiss-native-keyboard();
     }
 
     // The composer's in-flight IME composition, mirrored from the live
@@ -619,6 +659,9 @@ export component MainWindow inherits Window {
         focus-on-tab-navigation: false;
 
         capture-key-pressed(event) => {
+            // Locked: no shortcut may act on the hidden app behind the lock
+            // screen. The PIN field gets the keys; Back reaches key-pressed.
+            if (AppLockPane.locked) { return reject; }
             if (event.text == Key.Tab || event.text == Key.Backtab || event.text == Key.UpArrow || event.text == Key.DownArrow
                 || event.text == Key.LeftArrow || event.text == Key.RightArrow) {
                 Appearance.keyboard-focus-visible = true;
@@ -634,6 +677,11 @@ export component MainWindow inherits Window {
         }
 
         key-pressed(event) => {
+            if (AppLockPane.locked) {
+                // Back leaves the app (features/back.rs); nothing else acts.
+                if (event.text == Key.Back) { root.back-pressed(); return accept; }
+                return reject;
+            }
             if (shortcuts.handle-command(event)) { return accept; }
             if (event.text == Key.Back || (event.text == Key.Escape && ChatPane.link-confirm-url != "") || (event.text == Key.Escape
                 && root.active-modal == "none"
@@ -708,9 +756,11 @@ export component MainWindow inherits Window {
             }
 
         Rectangle {
-            width: root.width;
-            height: root.height - root.safe-area-top - root.safe-area-bottom;
-            y: root.safe-area-top;
+            x: DesktopChrome.frame-inset;
+            width: max(0px, root.width - 2 * DesktopChrome.frame-inset);
+            height: max(0px, root.height - root.safe-area-top - root.safe-area-bottom
+                - root.desktop-top-inset - 2 * DesktopChrome.frame-inset);
+            y: root.safe-area-top + root.desktop-top-inset + DesktopChrome.frame-inset;
 
             AuthPages {
                 width: parent.width;
@@ -766,13 +816,14 @@ export component MainWindow inherits Window {
                 is-mobile-platform : root.is-mobile-platform;
                 is-small-screen : root.is-small-screen;
                 keyboard-open : root.keyboard-open;
-                macos-titlebar-height : root.macos-titlebar-height;
-                macos-traffic-lights-width : root.macos-traffic-lights-width;
+                macos-titlebar-height : root.native-chat-row ? root.macos-titlebar-height : 0px;
+                macos-traffic-lights-width : root.native-chat-row ? root.macos-traffic-lights-width : 0px;
                 reply-focus-serial <=> root.reply-focus-serial;
                 return-to-call-height : root.return-to-call-height;
-                safe-area-bottom : root.safe-area-bottom;
+                safe-area-bottom : root.content-bottom-inset;
                 server-unreachable : root.server-unreachable;
                 sidebar-is-rail : root.sidebar-is-rail;
+                sidebar-panel-width: root.sidebar-panel-width;
                 sidebar-user-collapsed <=> root.sidebar-user-collapsed;
                 viewer-origin-height <=> root.viewer-origin-height;
                 viewer-origin-width <=> root.viewer-origin-width;
@@ -811,7 +862,7 @@ export component MainWindow inherits Window {
             compact-layout : root.compact-layout;
             is-mobile-platform : root.is-mobile-platform;
             return-to-call-height : root.return-to-call-height;
-            safe-area-bottom : root.safe-area-bottom;
+            safe-area-bottom : root.content-bottom-inset;
         }
 
         AppSecondaryModals {
@@ -826,21 +877,23 @@ export component MainWindow inherits Window {
             exiting-modal : modal-transitions.exiting-modal;
             fab-y : root.fab-y;
             is-mobile-platform : root.is-mobile-platform;
-            macos-titlebar-height : root.macos-titlebar-height;
+            macos-titlebar-height : root.native-chat-row ? root.macos-titlebar-height : 0px;
             presented-modal : modal-transitions.presented-modal;
-            safe-area-top : root.safe-area-top;
+            safe-area-top : root.safe-area-top + root.desktop-top-inset;
             sidebar-is-rail : root.sidebar-is-rail;
+            sidebar-panel-width: root.sidebar-panel-width;
             window-height: root.height;
             submit-anon-mode-pin(arg0) => { root.submit-anon-mode-pin(arg0); }
         }
 
         AppSettingsHost {
             z: -1;
+            y: root.native-chat-row ? root.macos-titlebar-height : 0px;
             width: parent.width;
-            height: parent.height;
+            height: max(0px, parent.height - self.y);
             compact-layout : root.compact-layout;
             is-mobile-platform : root.is-mobile-platform;
-            safe-area-bottom : root.safe-area-bottom;
+            safe-area-bottom : root.content-bottom-inset;
             toggle-anon-mode() => { root.toggle-anon-mode(); }
         }
 
@@ -865,13 +918,12 @@ export component MainWindow inherits Window {
             is-mobile-platform: root.is-mobile-platform;
             presented-modal: modal-transitions.presented-modal;
             reply-focus-serial <=> root.reply-focus-serial;
-            safe-area-top: root.safe-area-top;
+            safe-area-top: root.safe-area-top + root.desktop-top-inset;
             sidebar-menu-collapsed: !root.compact-layout && root.sidebar-is-rail;
             sidebar-menu-width: root.compact-layout ? root.width
-                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
-                : Spacing.sidebar-width;
+                : root.sidebar-panel-width;
             sidebar-menu-bottom-inset: root.bottom-nav-visible
-                ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+                ? Spacing.bottom-nav-height + Spacing.sm + root.content-bottom-inset
                     + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px)
                 : 0px;
             viewer-origin-height: root.viewer-origin-height;
@@ -892,7 +944,7 @@ export component MainWindow inherits Window {
             fab-y: root.fab-y;
             fab-visible: root.fab-visible;
             return-to-call-height: root.return-to-call-height;
-            safe-area-bottom: root.safe-area-bottom;
+            safe-area-bottom: root.content-bottom-inset;
             sidebar-user-collapsed <=> root.sidebar-user-collapsed;
             create-clicked => {
                 if (SidebarPane.active-tab == "contacts") {
@@ -915,6 +967,17 @@ export component MainWindow inherits Window {
 
         }
         }
+
+        // Above everything, including modals, calls and toasts (core decides
+        // `locked`). Inside back-scope so that Back from the focused PIN field
+        // bubbles here; the key handlers above route it to back-pressed and
+        // ignore every other shortcut while locked.
+        if AppLockPane.locked: LockScreen {
+            z: 20;
+            width: root.width;
+            height: root.height;
+            safe-area-top: root.safe-area-top + root.desktop-top-inset;
+        }
     }
 
     ShieldWash {
@@ -922,4 +985,17 @@ export component MainWindow inherits Window {
         width: root.width;
         height: root.height;
     }
+    // A quiet window silhouette, including the native titlebar band.
+    if DesktopChrome.frame-inset > 0px: Rectangle {
+        z: 30;
+        x: 0.5px;
+        y: 0.5px;
+        width: parent.width - 1px;
+        height: parent.height - 1px;
+        border-radius: DesktopChrome.window-radius;
+        border-width: 1px;
+        border-color: Colors.text-primary.with-alpha(0.14);
+        background: transparent;
+    }
+
 }

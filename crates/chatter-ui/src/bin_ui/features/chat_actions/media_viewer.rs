@@ -11,7 +11,8 @@ static POSITION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{AttachmentId, MessageId};
-use chatter_core::services::media_gallery::{GalleryAttachment, GalleryMessage, ordered_media};
+use chatter_core::client::{GalleryAttachment, GalleryMessage};
+use chatter_core::ui::ordered_media;
 use chatter_core::state::ActiveConversation;
 use slint::{ComponentHandle, Model};
 
@@ -159,7 +160,7 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                     w.global::<crate::ChatPane>().set_image_viewer_sender(sender.into());
                     w.global::<crate::ChatPane>().set_image_viewer_datetime(datetime.into());
                     w.global::<crate::ChatPane>().set_image_viewer_caption(
-                        crate::bin_ui::converters::markdown::strip_markdown(&caption).into(),
+                        chatter_core::ui::markdown::strip_markdown(&caption).into(),
                     );
                 }
             });
@@ -181,10 +182,7 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
         let selected = id.to_string();
         std::thread::spawn(move || {
             let all = if needs_refresh {
-                let Ok(all) = chatter_core::services::media_gallery::conversation_media(
-                    &client,
-                    &conversation,
-                ) else {
+                let Ok(all) = client.conversation_media(&conversation) else {
                     return;
                 };
                 all
@@ -389,7 +387,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
 static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
 
 fn stream_export(
-    reader: &chatter_core::services::attachment::CbcRangeDecryptor,
+    reader: &chatter_core::media::CbcRangeDecryptor,
     output: &mut std::fs::File,
     check: impl Fn() -> Result<(), String>,
 ) -> Result<(), String> {

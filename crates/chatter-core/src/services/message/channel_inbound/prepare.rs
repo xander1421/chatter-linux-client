@@ -142,6 +142,14 @@ impl ChannelInbound {
                     return Err(Ingested::Dropped);
                 }
             };
+            // `decrypt_from_group` binds the ciphertext's distribution id to
+            // `group_encrypted.channel_id`; that must be the channel the
+            // membership gate below checks.
+            if group_encrypted.channel_id.parse::<ChannelId>().ok() != Some(channel_id) {
+                tracing::warn!(%channel_id, message_id = %proto_msg.id,
+                    "GroupEncrypted names another channel; dropped");
+                return Err(Ingested::Dropped);
+            }
             // Sender-keys are per (uuid, device); the proto must carry the
             // sender's source device.
             let device_id = proto_msg.author_device_id;
@@ -190,12 +198,12 @@ impl ChannelInbound {
             let admitted = self
                 .messages
                 .database
-                .run_blocking(move || Ok(messages.group_gate().admits(&channel_id, &sid)))
+                .run_blocking(move || Ok(messages.group_gate().admits_content(&channel_id, &sid)))
                 .await
                 .map_err(|_| Ingested::RetryableFailure)?;
             if !admitted {
                 tracing::warn!(%channel_id, %sid, message_id = %proto_msg.id,
-                    "Group message from a sender outside the verified membership; dropped");
+                    "Group message from a sender outside the verified membership or muted; dropped");
                 return Err(Ingested::Dropped);
             }
 
@@ -234,7 +242,7 @@ impl ChannelInbound {
             {
                 Ok(plaintext) => {
                     let dm =
-                        match crate::network::validation::protovalidate::decode_inbound_content(
+                        match chatter_proto::protovalidate::decode_inbound_content(
                             plaintext.as_slice(),
                             "channel",
                         )

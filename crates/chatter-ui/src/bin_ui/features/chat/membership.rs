@@ -122,7 +122,7 @@ fn run_action<F>(
     action: F,
 ) where
     F: std::future::Future<
-            Output = Result<Option<String>, chatter_core::services::channel::ChannelError>,
+            Output = Result<Option<String>, chatter_core::client::ChannelError>,
         > + Send
         + 'static,
 {

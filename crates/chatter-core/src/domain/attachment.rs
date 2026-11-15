@@ -332,14 +332,14 @@ impl Attachment {
     /// CDN key or the per-blob AES key — without both, receivers cannot
     /// download and decrypt the blob.
     #[must_use]
-    pub fn to_pointer(&self) -> Option<crate::proto::content_v1::AttachmentPointer> {
+    pub fn to_pointer(&self) -> Option<chatter_proto::content_v1::AttachmentPointer> {
         let cdn_key = self.remote_url.clone()?;
         let encryption_key = self.encryption_key.clone()?;
         // Digest (SHA-256 over ciphertext) is REQUIRED for integrity verification
         // on the receiver side — defaulting to empty bytes would produce a
         // pointer that fails digest check on download. Bail out if absent.
         let digest = self.encryption_iv.clone()?;
-        Some(crate::proto::content_v1::AttachmentPointer {
+        Some(chatter_proto::content_v1::AttachmentPointer {
             cdn_key,
             encryption_key,
             digest,

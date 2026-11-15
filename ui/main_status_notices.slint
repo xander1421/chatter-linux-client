@@ -7,6 +7,7 @@ import { Materials } from "theme/materials.slint";
 // this overlay's stack, never the list or chat pane.
 export component MainStatusNotices inherits Rectangle {
     in property <bool> is-signed-in;
+    in property <bool> chat-covers-screen;
     in property <string> connection-status;
     in property <bool> server-unreachable;
     in property <int> reconnect-attempt;
@@ -48,6 +49,7 @@ export component MainStatusNotices inherits Rectangle {
             : Spacing.sm;
         width: min(parent.width - Spacing.sm * 2, 620px);
         signed-in: root.is-signed-in;
+        suppressed: root.chat-covers-screen;
         sign-in => { root.go-to-login(); }
         animate y { duration: Materials.motion-standard; easing: Materials.spring; }
     }

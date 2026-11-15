@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 type PendingAnnouncement = (
     UserId,
     ChannelId,
-    crate::proto::content_v1::GroupMailboxAddress,
+    chatter_proto::content_v1::GroupMailboxAddress,
 );
 
 // Sealed sender decryption can advance the ratchet before the mailbox save.
@@ -23,6 +23,7 @@ pub(super) async fn process_sealed_sender_message(
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
     anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
+    ephemeral_repo: &Arc<EphemeralRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     retry_budget: &crate::inbox::ack_policy::RetryBudget,
@@ -46,6 +47,33 @@ pub(super) async fn process_sealed_sender_message(
     };
 
     match result {
+        // An anonymous private-channel message: the certificate named the
+        // sender, so from here it is the same sender-key message the
+        // identified path handles.
+        Ok(SealedSenderResult::SealedGroupMessage {
+            sender_id,
+            sender_device_id,
+            encrypted,
+        }) => {
+            let mut identified = msg.clone();
+            identified.source_user_id = sender_id.to_string();
+            identified.source_device_id = sender_device_id;
+            return Box::pin(super::sender_key::process_sender_key_message(
+                &identified,
+                &encrypted,
+                &sender_id,
+                event_tx,
+                stats,
+                message_gateway,
+                message_repo,
+                channel_repo,
+                ephemeral_repo,
+                group_coordinator,
+                domain_tx,
+                retry_budget,
+            ))
+            .await;
+        }
         // Blocked. This is the arm that matters most: on the sealed path the
         // sender certificate is the ONLY thing that ever names the sender —
         // `DeviceMessage.SourceUserID` is empty here — so the server could not
@@ -468,7 +496,7 @@ pub(super) async fn process_sealed_sender_message(
             let envelope_type = EnvelopeType::SealedSender;
 
             // Create a Message for pipeline processing
-            let proto_msg = crate::proto::chat_v1::Message {
+            let proto_msg = chatter_proto::chat_v1::Message {
                 id: msg.message_guid.clone(),
                 channel_id: "pending".to_string(),
                 author_id: msg.source_user_id.clone(),

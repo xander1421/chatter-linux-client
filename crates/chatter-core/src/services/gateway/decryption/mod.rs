@@ -10,7 +10,7 @@ use zeroize::Zeroize;
 use crate::crypto::dm_crypto::decrypt_dm_bytes;
 use crate::domain::ids::UserId;
 use crate::error::{CryptoError, ServiceError};
-use crate::proto::content_v1::{Content, GroupEncrypted, content};
+use chatter_proto::content_v1::{Content, GroupEncrypted, content};
 
 /// First byte of a serialized `PlaintextContent` (libsignal's
 /// `PLAINTEXT_CONTEXT_IDENTIFIER_BYTE`). A decrypted sealed-sender "message"
@@ -57,7 +57,7 @@ impl MessageGateway {
     /// - KeyExchange: returns for bootstrap handling
     pub async fn process_incoming_message(
         &self,
-        envelope: crate::proto::chat_v1::SealedSenderMessage,
+        envelope: chatter_proto::chat_v1::SealedSenderMessage,
     ) -> Result<SealedSenderResult, ServiceError> {
         // Decrypt the sealed sender envelope. An INNER (ratchet) failure with
         // an authenticated sender is the desynced-1:1-session wedge: turn it
@@ -102,8 +102,36 @@ impl MessageGateway {
                 );
                 return Ok(SealedSenderResult::MessageStored);
             }
+            // Our own private-channel send, echoed to this device.
+            Err(ServiceError::Crypto(CryptoError::SealedSenderSelfSend)) => {
+                return Ok(SealedSenderResult::MessageStored);
+            }
             Err(e) => return Err(e),
         };
+
+        // An anonymous private-channel message: the sender-key ciphertext,
+        // for the group path to decrypt as the certificate's sender.
+        if msg_type == CiphertextMessageType::SenderKey {
+            let sender_id: UserId = sender_address
+                .name()
+                .parse()
+                .map_err(|_| ServiceError::Validation("sender is not a user id".into()))?;
+            // The server no longer filters channel messages from blocked
+            // users (it does not know who sent them): drop them here.
+            if sender_is_blocked(&self.user_repo, &self.settings_repo, &sender_id)? {
+                plaintext.zeroize();
+                return Ok(SealedSenderResult::DroppedBlockedSender { sender_id });
+            }
+            return Ok(SealedSenderResult::SealedGroupMessage {
+                sender_id,
+                sender_device_id: sender_address.device_id().into(),
+                encrypted: chatter_proto::chat_v1::EncryptedData {
+                    version: chatter_proto::chat_v1::CryptoVersion::SignalProtocol as i32,
+                    ciphertext: std::mem::take(&mut plaintext),
+                    associated_data: b"sender_key".to_vec(),
+                },
+            });
+        }
 
         // A `Plaintext` USMC skipped the ratchet: no is_trusted_identity, no
         // replay protection, no forward secrecy. The ONLY thing we accept in
@@ -138,7 +166,7 @@ impl MessageGateway {
     /// Anonymous mailbox receive: journal validated plaintext before routing.
     pub(crate) async fn process_incoming_reaction_durable(
         &self,
-        envelope: crate::proto::chat_v1::SealedSenderMessage,
+        envelope: chatter_proto::chat_v1::SealedSenderMessage,
         key: &crate::storage::receive_artifact::ReceiveKey,
     ) -> Result<
         (
@@ -238,7 +266,7 @@ impl MessageGateway {
         );
 
         // First try to parse as Content proto (preferred, contains KeyExchange)
-        if let Ok(content_proto) = crate::network::validation::protovalidate::decode_inbound_content(
+        if let Ok(content_proto) = chatter_proto::protovalidate::decode_inbound_content(
             plaintext,
             "sealed_sender",
         ) {

@@ -1,49 +1,8 @@
 use super::*;
-
-/// The owner drains dispatched setup and rolls it back before releasing its gate.
 #[cfg(feature = "media")]
-#[derive(Clone, Default)]
-pub struct CallStartAttempt {
-    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    notify: std::sync::Arc<tokio::sync::Notify>,
-}
+use crate::services::call_signaling::start_cancelled;
 #[cfg(feature = "media")]
-impl CallStartAttempt {
-    pub fn cancel(&self) {
-        self.cancelled
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.notify.notify_one();
-    }
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
-    }
-    pub(crate) fn same_owner(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.cancelled, &other.cancelled)
-    }
-    pub async fn cancelled(&self) {
-        loop {
-            let notified = self.notify.notified();
-            if self.is_cancelled() {
-                return;
-            }
-            notified.await;
-        }
-    }
-}
-#[cfg(feature = "media")]
-tokio::task_local! { pub(crate) static START_ATTEMPT: CallStartAttempt; }
-pub(crate) fn start_cancelled() -> bool {
-    #[cfg(feature = "media")]
-    {
-        START_ATTEMPT
-            .try_with(CallStartAttempt::is_cancelled)
-            .unwrap_or(false)
-    }
-    #[cfg(not(feature = "media"))]
-    {
-        false
-    }
-}
+use crate::services::call_signaling::START_ATTEMPT;
 
 /// Shared production ownership boundary, also exercised with delayed resources
 /// in tests. Cancellation never drops `setup`; it drains and rolls back it.
@@ -157,7 +116,7 @@ impl ChatterClient {
             },
             |start| async move {
                 if let Some(worker) = self.call_service().get() {
-                    self.call_signaling().rollback_start(&start, worker).await;
+                    self.call_signaling().rollback_start(&start.call_id, start.is_video, worker).await;
                 }
             },
         )
@@ -190,7 +149,7 @@ impl ChatterClient {
     pub async fn rollback_call_start(&self, start: &OutgoingCallStart) {
         let _ownership = self.call_signaling().start_gate.lock().await;
         if let Some(worker) = self.call_service().get() {
-            self.call_signaling().rollback_start(start, worker).await;
+            self.call_signaling().rollback_start(&start.call_id, start.is_video, worker).await;
         }
     }
 

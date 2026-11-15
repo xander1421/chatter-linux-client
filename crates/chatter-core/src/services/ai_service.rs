@@ -11,7 +11,7 @@ use tokio_stream::StreamExt;
 use crate::error::NetworkError;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::integration_client::IntegrationClient;
-use crate::proto::chat_v1::{
+use chatter_proto::chat_v1::{
     AvailableModel, Integration, IntegrationConfig, IntegrationEvent, IntegrationType, ModelLimits,
 };
 use crate::services::current_user::CurrentUserError;
@@ -181,32 +181,6 @@ impl AIService {
         let mut client = self.client();
         client
             .add_integration_to_channel(integration_id, channel_id)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Remove an integration from a channel.
-    ///
-    /// Disassociates an integration from a channel, disabling its
-    /// functionality within that channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `integration_id` - Integration to remove
-    /// * `channel_id` - Target channel
-    pub async fn detach_from_channel(
-        &self,
-        integration_id: &str,
-        channel_id: &str,
-    ) -> Result<(), AIError> {
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Call server
-        let mut client = self.client();
-        client
-            .remove_integration_from_channel(integration_id, channel_id)
             .await?;
 
         Ok(())
@@ -435,9 +409,9 @@ impl AIService {
 /// One integration stream item: an event, nothing for the server's keepalive
 /// (it is also the first item, once subscribed), or an error.
 fn integration_event_of(
-    result: Result<crate::proto::chat_v1::StreamIntegrationEventsResponse, NetworkError>,
+    result: Result<chatter_proto::chat_v1::StreamIntegrationEventsResponse, NetworkError>,
 ) -> Option<Result<IntegrationEvent, AIError>> {
-    use crate::proto::chat_v1::stream_integration_events_response::Item;
+    use chatter_proto::chat_v1::stream_integration_events_response::Item;
     match result {
         Err(e) => Some(Err(AIError::Network(e))),
         Ok(response) => match response.item {
@@ -454,7 +428,7 @@ mod tests {
 
     #[test]
     fn a_heartbeat_is_not_an_integration_event() {
-        use crate::proto::chat_v1::{
+        use chatter_proto::chat_v1::{
             StreamHeartbeat, StreamIntegrationEventsResponse,
             stream_integration_events_response::Item,
         };
