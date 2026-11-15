@@ -88,7 +88,7 @@ impl SystemTray {
 
         // Create menu
         let menu = Menu::new();
-        let open_label = chatter_i18n::trf("Open {}", &[APP_DISPLAY_NAME]);
+        let open_label = chatter_i18n::trf("Open {}", &[&APP_DISPLAY_NAME]);
         let quit_label = chatter_i18n::tr("Quit");
         let open_item = MenuItem::new(&open_label, true, None);
         let quit_item = MenuItem::new(&quit_label, true, None);
