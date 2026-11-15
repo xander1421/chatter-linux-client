@@ -88,9 +88,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     let picked = {
                         let config = FilePickerConfig {
-                            title: Some("Select avatar".to_string()),
+                            title: Some(chatter_i18n::tr("Select avatar")),
                             filters: vec![FileFilter {
-                                name: "Images".to_string(),
+                                name: chatter_i18n::tr("Images"),
                                 extensions: vec!["jpg".to_string(), "jpeg".to_string(), "png".to_string(), "webp".to_string()],
                             }],
                             ..Default::default()
@@ -207,7 +207,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.global::<crate::AuthFlow>().set_register_error("".into());
                 if shield {
                     w.global::<crate::AnonMode>()
-                        .set_onboarding_progress(super::shield::CONNECTING_OVER_TOR.into());
+                        .set_onboarding_progress(super::shield::connecting_over_tor().into());
                 }
             }
 
@@ -216,7 +216,13 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Err(e) = ui_ctx.set_server_url(&server_url) {
                     if let Some(w) = weak.upgrade() {
                         w.global::<crate::AuthFlow>().set_register_loading(false);
-                        w.global::<crate::AuthFlow>().set_register_error(format!("Invalid Server URL: {}", registration_error_message(&e.to_string())).into());
+                        w.global::<crate::AuthFlow>().set_register_error(
+                            chatter_i18n::trf(
+                                "Invalid Server URL: {}",
+                                &[&registration_error_message(&e.to_string())],
+                            )
+                            .into(),
+                        );
                         w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                     }
                     return;
@@ -262,7 +268,11 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress(
-                                "Connected over Tor. Creating your account (includes a short anti-spam puzzle)…".into(),
+                                chatter_i18n::tr(
+                                    "Connected over Tor. Creating your account \
+                                     (includes a short anti-spam puzzle)…",
+                                )
+                                .into(),
                             );
                         }
                     });

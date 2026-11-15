@@ -69,10 +69,10 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<crate::SettingsPane>()
         .on_settings_cloud_ai_model_changed(move |model: SharedString| {
             let status = match ui_ctx_model.set_cloud_ai_model(model.as_str()) {
-                Ok(()) => "Model saved.".to_string(),
+                Ok(()) => chatter_i18n::tr("Model saved."),
                 Err(e) => {
                     tracing::error!("Failed to save cloud AI model: {}", e);
-                    format!("Could not save model: {e}")
+                    chatter_i18n::trf("Could not save model: {}", &[&e])
                 }
             };
             if let Some(w) = weak_model.upgrade() {
@@ -97,9 +97,9 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         w.global::<crate::SettingsPane>()
                             .set_settings_cloud_ai_status(
                                 if settings.is_available() {
-                                    "API key saved."
+                                    chatter_i18n::tr("API key saved.")
                                 } else {
-                                    "API key cleared."
+                                    chatter_i18n::tr("API key cleared.")
                                 }
                                 .into(),
                             );
@@ -111,7 +111,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Some(w) = weak_key.upgrade() {
                         w.global::<crate::SettingsPane>()
                             .set_settings_cloud_ai_status(
-                                format!("Could not save key: {msg}").into(),
+                                chatter_i18n::trf("Could not save key: {}", &[&msg]).into(),
                             );
                     }
                 }
@@ -133,7 +133,11 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::SettingsPane>()
                                     .set_settings_cloud_ai_balance(
-                                        format!("{balance} tokens remaining · {spent} used").into(),
+                                        chatter_i18n::trf(
+                                            "{} tokens remaining · {} used",
+                                            &[&balance, &spent],
+                                        )
+                                        .into(),
                                     );
                                 w.global::<crate::SettingsPane>()
                                     .set_settings_cloud_ai_status("".into());
@@ -149,7 +153,8 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     .set_settings_cloud_ai_balance("".into());
                                 w.global::<crate::SettingsPane>()
                                     .set_settings_cloud_ai_status(
-                                        format!("Could not fetch balance: {msg}").into(),
+                                        chatter_i18n::trf("Could not fetch balance: {}", &[&msg])
+                                            .into(),
                                     );
                             }
                         });

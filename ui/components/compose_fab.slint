@@ -35,7 +35,7 @@ export component ComposeFab inherits GlassSurface {
                 : fab-touch.has-hover ? Colors.action-hover : transparent);
     }
     accessible-role: button;
-    accessible-label: "Create";
+    accessible-label: @tr("Create");
     accessible-action-default => { root.create-clicked(); }
     keys := FocusScope {
         width: 0px;

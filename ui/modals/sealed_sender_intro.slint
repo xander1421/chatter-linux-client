@@ -77,7 +77,7 @@ export component SealedSenderIntroModal inherits Rectangle {
 
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "Sealed sender: private by default";
+                    text: @tr("Sealed sender: private by default");
                     color: Colors.text-primary;
                     font-size: Typography.xl;
                     font-weight: Typography.semibold;
@@ -87,7 +87,7 @@ export component SealedSenderIntroModal inherits Rectangle {
 
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "Chatter delivers your messages without the server learning who you are talking to. Your messages are always sent this way — nothing to turn on.";
+                    text: @tr("Chatter delivers your messages without the server learning who you are talking to. Your messages are always sent this way — nothing to turn on.");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -96,7 +96,7 @@ export component SealedSenderIntroModal inherits Rectangle {
 
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "This is privacy from the server. It is not anonymity from the person you message — they still see who you are.";
+                    text: @tr("This is privacy from the server. It is not anonymity from the person you message — they still see who you are.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -107,7 +107,7 @@ export component SealedSenderIntroModal inherits Rectangle {
 
                 // The one choice: who may reach you sealed.
                 Text {
-                    text: "Who can message you this way?";
+                    text: @tr("Who can message you this way?");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
@@ -129,11 +129,11 @@ export component SealedSenderIntroModal inherits Rectangle {
                             Checkbox {
                                 enabled: root.show-modal;
                                 checked <=> root.allow-from-anyone;
-                                label: "Allow sealed messages from anyone";
+                                label: @tr("Allow sealed messages from anyone");
                             }
                         }
                         Text {
-                            text: "Allow sealed messages from anyone";
+                            text: @tr("Allow sealed messages from anyone");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             vertical-alignment: center;
@@ -146,7 +146,7 @@ export component SealedSenderIntroModal inherits Rectangle {
 
                 Text {
                     width: max(0px, parent.width - parent.padding * 2);
-                    text: "Off (recommended): only your contacts can reach you this way. On: anyone can. You can change this later in Settings.";
+                    text: @tr("Off (recommended): only your contacts can reach you this way. On: anyone can. You can change this later in Settings.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -156,7 +156,7 @@ export component SealedSenderIntroModal inherits Rectangle {
                 Rectangle { height: Spacing.sm; }
 
                 Button {
-                    text: "Got it";
+                    text: @tr("Got it");
                     variant: "primary";
                     disabled: !root.show-modal;
                     clicked => { root.confirmed(); }

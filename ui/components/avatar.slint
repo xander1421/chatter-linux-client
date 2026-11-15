@@ -29,9 +29,9 @@ export component Avatar inherits Rectangle {
     in property <color> fallback-fg: Colors.text-primary;
 
     accessible-role: image;
-    accessible-label: root.name != "" ? "Avatar for " + root.name
-        : root.alt-name != "" ? "Avatar for " + root.alt-name
-        : root.fallback-text != "" && root.fallback-text != "?" ? "Avatar for " + root.fallback-text : "Avatar";
+    accessible-label: root.name != "" ? @tr("Avatar for {}", root.name)
+        : root.alt-name != "" ? @tr("Avatar for {}", root.alt-name)
+        : root.fallback-text != "" && root.fallback-text != "?" ? @tr("Avatar for {}", root.fallback-text) : @tr("Avatar");
 
     width: size;
     height: size;

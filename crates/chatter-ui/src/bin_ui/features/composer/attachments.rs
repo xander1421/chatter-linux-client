@@ -45,7 +45,7 @@ pub(crate) async fn process_and_add_file(
         // Every picker/drop/paste path only logs the error; say it here once.
         if e.ends_with(" is empty") {
             let weak = weak.clone();
-            let message = format!("Can't attach {e}");
+            let message = chatter_i18n::trf("Can't attach {}", &[&e]);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     w.set_toast_message(message.into());
@@ -209,11 +209,14 @@ pub(crate) fn render_attachments(
     // Update placeholder text
     let pending_count = attachments.len();
     let placeholder = if pending_count == 0 {
-        "Type a message...".to_string()
-    } else if pending_count == 1 {
-        "1 file attached - type a message...".to_string()
+        chatter_i18n::tr("Type a message...")
     } else {
-        format!("{} files attached - type a message...", pending_count)
+        chatter_i18n::trn(
+            "{n} file attached - type a message...",
+            "{n} files attached - type a message...",
+            pending_count as u64,
+            &[],
+        )
     };
     w.global::<crate::ChatPane>()
         .set_composer_placeholder(placeholder.into());
@@ -284,7 +287,7 @@ pub(crate) fn wire_attachment_clicked(
                     };
 
                     let config = FilePickerConfig::new()
-                        .with_title("Select attachment")
+                        .with_title(chatter_i18n::tr("Select attachment"))
                         .with_filter(FileFilter::all()) // Default to all files
                         .with_filter(FileFilter::images())
                         .with_filter(FileFilter::videos())

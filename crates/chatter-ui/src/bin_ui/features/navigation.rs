@@ -127,14 +127,19 @@ fn wire_go_to_link_device(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             .set_link_device_has_local_identity(false);
                         tracing::warn!("Could not check local identity before linking: {error}");
                         w.global::<crate::AuthFlow>().set_link_device_error(
-                            "Could not check this device's saved identity. Try again.".into(),
+                            chatter_i18n::tr(
+                                "Could not check this device's saved identity. Try again.",
+                            )
+                            .into(),
                         );
                     }
                 }
                 w.global::<crate::AuthFlow>().set_link_device_url("".into());
                 w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
                 w.global::<crate::AuthFlow>()
-                    .set_link_device_status("Tap \"Generate QR\" to start.".into());
+                    .set_link_device_status(
+                        chatter_i18n::tr("Tap \"Generate QR\" to start.").into(),
+                    );
                 w.global::<crate::AuthFlow>().set_link_device_active(false);
             }
         });

@@ -11,7 +11,7 @@ use super::ChatterClient;
 
 /// Device facts for the Activity Center. Never exposes an endpoint path or push topic.
 pub struct ActivityStatus {
-    pub push: &'static str,
+    pub push: String,
     pub last_connected: Option<chrono::DateTime<chrono::Utc>>,
     pub server_host: String,
     pub tor_bootstrap_percent: Option<u8>,
@@ -20,18 +20,19 @@ pub struct ActivityStatus {
 impl ChatterClient {
     pub fn activity_status(&self) -> ActivityStatus {
         let push = if self.push_url.lock().is_none() {
-            "Off"
+            chatter_i18n::tr("Off")
         } else if self.anon_mode_enabled() {
-            "Paused in Shield"
+            chatter_i18n::tr("Paused in Shield")
         } else if self.push_shutdown.lock().is_some() {
-            "Registered"
+            // Compared with `ActivityGlobal.push-status == "Registered"`.
+            "Registered".to_string()
         } else {
-            "Configured, not registered"
+            chatter_i18n::tr("Configured, not registered")
         };
         let server_host = url::Url::parse(&self.endpoint())
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_else(|| "Unknown".into());
+            .unwrap_or_else(|| chatter_i18n::tr("Unknown"));
         ActivityStatus {
             push,
             last_connected: self.offline_snapshot().last_connected,

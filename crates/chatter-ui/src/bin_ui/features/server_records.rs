@@ -47,7 +47,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 let id = id.to_string();
                 let ctx = ctx.clone();
                 let weak = w.as_weak();
-                g.set_detail_title("Loading details…".into());
+                g.set_detail_title(chatter_i18n::tr("Loading details…").into());
                 g.set_detail_body("".into());
                 tokio::spawn(async move {
                     let result = ctx.server_record_detail(&kind, &id).await;
@@ -77,8 +77,10 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                             }
                             Err(error) => {
                                 tracing::warn!(%error, "server record details failed");
-                                g.set_detail_title("Details unavailable".into());
-                                g.set_detail_body("Check your connection and try again.".into());
+                                g.set_detail_title(chatter_i18n::tr("Details unavailable").into());
+                                g.set_detail_body(
+                                    chatter_i18n::tr("Check your connection and try again.").into(),
+                                );
                             }
                         }
                     });
@@ -214,9 +216,13 @@ fn request(
                 Err(error) => {
                     tracing::warn!(%error, kind, "server records request failed");
                     g.set_error(if was_action {
-                        "Couldn't make that change. Check your connection and try again."
+                        chatter_i18n::tr(
+                            "Couldn't make that change. Check your connection and try again.",
+                        )
                     } else {
-                        "Couldn't load records. Check your connection and try again."
+                        chatter_i18n::tr(
+                            "Couldn't load records. Check your connection and try again.",
+                        )
                     }.into());
                 }
             }

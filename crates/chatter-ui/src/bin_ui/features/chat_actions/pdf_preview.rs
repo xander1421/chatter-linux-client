@@ -41,13 +41,19 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
                     let result = result.and_then(|session| session.finish());
                     if let Err(error) = result {
                         tracing::warn!(%error, "PDF external open failed");
-                        w.global::<crate::ChatPane>().set_pdf_preview_error("Unable to open PDF. Install a PDF viewer and try Open externally again.".into());
+                        w.global::<crate::ChatPane>().set_pdf_preview_error(
+                            chatter_i18n::tr(
+                                "Unable to open PDF. Install a PDF viewer and try Open externally again.",
+                            )
+                            .into(),
+                        );
                     }
                 });
             });
         } else if let Some(w) = weak.upgrade() {
             w.global::<crate::ChatPane>().set_pdf_preview_error(
-                "PDF content is no longer available. Reopen the attachment.".into(),
+                chatter_i18n::tr("PDF content is no longer available. Reopen the attachment.")
+                    .into(),
             );
         }
         #[cfg(not(target_os = "android"))]
@@ -59,7 +65,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
             let data = content.data.clone();
             tokio::spawn(async move {
                 let config = FilePickerConfig::new()
-                    .with_title("Save PDF file")
+                    .with_title(chatter_i18n::tr("Save PDF file"))
                     .with_default_path(
                         dirs::download_dir()
                             .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
@@ -243,9 +249,9 @@ mod android_renderer {
                     }
                     Err(error) if error != "PDF preview closed" => {
                         tracing::warn!(%error, "PDF preview failed");
-                        window
-                            .global::<crate::ChatPane>()
-                            .set_pdf_preview_error("Unable to preview PDF. Try Open externally.".into());
+                        window.global::<crate::ChatPane>().set_pdf_preview_error(
+                            chatter_i18n::tr("Unable to preview PDF. Try Open externally.").into(),
+                        );
                     }
                     Err(_) => {}
                 }
@@ -295,7 +301,12 @@ mod android_renderer {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "PDF page render failed");
-                        pane.set_pdf_preview_error("Unable to show this PDF page. Try Open externally.".into());
+                        pane.set_pdf_preview_error(
+                            chatter_i18n::tr(
+                                "Unable to show this PDF page. Try Open externally.",
+                            )
+                            .into(),
+                        );
                     }
                 }
             });
@@ -419,7 +430,12 @@ mod pdf_renderer {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "PDF page render failed");
-                        pane.set_pdf_preview_error("Unable to show this PDF page. Try Open externally.".into());
+                        pane.set_pdf_preview_error(
+                            chatter_i18n::tr(
+                                "Unable to show this PDF page. Try Open externally.",
+                            )
+                            .into(),
+                        );
                     }
                 }
             });

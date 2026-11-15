@@ -127,7 +127,9 @@ fn delete_selection(
     // the complete selection against storage before making any changes.
     if ordered_ids.is_empty() || ordered_ids.len() != selected_ids.borrow().len() {
         refresh_delete_everyone(w, ui_ctx, selected_ids, generation);
-        w.set_toast_message("The selected messages are no longer available.".into());
+        w.set_toast_message(
+            chatter_i18n::tr("The selected messages are no longer available.").into(),
+        );
         w.set_toast_visible(true);
         return;
     }
@@ -161,7 +163,12 @@ fn delete_selection(
         if snapshot.is_none() || (everyone && !snapshot.unwrap().actions.can_delete_everyone) {
             pending_completion.set(false);
             if let Some(w) = weak.upgrade() {
-                w.set_toast_message("The selected messages are no longer available for deletion.".into());
+                w.set_toast_message(
+                    chatter_i18n::tr(
+                        "The selected messages are no longer available for deletion.",
+                    )
+                    .into(),
+                );
                 w.set_toast_visible(true);
                 refresh_delete_everyone(&w, &ui_ctx, &selected_ids, &generation);
             }
@@ -239,9 +246,16 @@ fn delete_selection(
             let error = failure.to_string();
             tracing::warn!(%error, everyone, "Selected-message deletion failed");
             let message = match failure {
-                SelectedDeleteFailureReason::Unavailable
-                | SelectedDeleteFailureReason::NotEligible => error,
-                _ => format!("Could not finish deleting selected messages: {error}"),
+                SelectedDeleteFailureReason::Unavailable => {
+                    chatter_i18n::tr("The selected messages are no longer available.")
+                }
+                SelectedDeleteFailureReason::NotEligible => {
+                    chatter_i18n::tr("These messages can no longer be deleted for everyone.")
+                }
+                _ => chatter_i18n::trf(
+                    "Could not finish deleting selected messages: {}",
+                    &[&error],
+                ),
             };
             w.set_toast_message(message.into());
             w.set_toast_visible(true);
@@ -250,7 +264,9 @@ fn delete_selection(
     }) {
         pending.set(false);
         tracing::error!(%error, "Could not schedule selected-message deletion");
-        w.set_toast_message("Could not start deleting selected messages.".into());
+        w.set_toast_message(
+            chatter_i18n::tr("Could not start deleting selected messages.").into(),
+        );
         w.set_toast_visible(true);
     }
 }
@@ -383,7 +399,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if !snapshot.copy_text.is_empty() {
                         std::thread::spawn(move || super::actions::copy_text(&snapshot.copy_text));
                         // Same confirmation as a single message's Copy.
-                        w.set_toast_message("Copied".into());
+                        w.set_toast_message(chatter_i18n::tr("Copied").into());
                         w.set_toast_variant("success".into());
                         w.set_toast_visible(true);
                     }
@@ -436,11 +452,12 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let sources: Vec<String> = snapshot.targets.iter()
                         .map(|(sender, ts)| format!("{sender}:{ts}"))
                         .collect();
-                    let preview = if sources.len() == 1 {
-                        "1 message".to_string()
-                    } else {
-                        format!("{} messages", sources.len())
-                    };
+                    let preview = chatter_i18n::trn(
+                        "{n} message",
+                        "{n} messages",
+                        sources.len() as u64,
+                        &[],
+                    );
                     exit(&w, &selected_ids, &generation);
                     super::actions::open_forward_modal(&w, &ui_ctx, sources, preview);
                 }) {

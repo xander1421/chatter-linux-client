@@ -68,19 +68,21 @@ pub fn shared_tabs(counts: &[(String, u32)]) -> Vec<SharedTabData> {
         .filter_map(|id| {
             let count = counts.iter().find(|(c, _)| c == id).map(|(_, n)| *n)?;
             if count == 0 { return None; }
-            let noun = match (*id, count) {
-                ("photo", 1) => "photo", ("photo", _) => "photos",
-                ("video", 1) => "video", ("video", _) => "videos",
-                ("audio", 1) => "audio file", ("audio", _) => "audio files",
-                ("link", 1) => "shared link", ("link", _) => "shared links",
-                ("voice", 1) => "voice message", ("voice", _) => "voice messages",
-                ("gif", 1) => "GIF", ("gif", _) => "GIFs",
-                ("file", 1) => "file", _ => "files",
+            let n = u64::from(count);
+            let label = match *id {
+                "photo" => chatter_i18n::trn("{n} photo", "{n} photos", n, &[]),
+                "video" => chatter_i18n::trn("{n} video", "{n} videos", n, &[]),
+                "audio" => chatter_i18n::trn("{n} audio file", "{n} audio files", n, &[]),
+                "link" => chatter_i18n::trn("{n} shared link", "{n} shared links", n, &[]),
+                "voice" => chatter_i18n::trn("{n} voice message", "{n} voice messages", n, &[]),
+                "gif" => chatter_i18n::trn("{n} GIF", "{n} GIFs", n, &[]),
+                "file" => chatter_i18n::trn("{n} file", "{n} files", n, &[]),
+                _ => return None,
             };
             Some(SharedTabData {
                 id: (*id).to_string(),
                 count: count as i32,
-                label: format!("{count} {noun}"),
+                label,
             })
         })
         .collect()

@@ -182,12 +182,37 @@ pub fn initials_from_name(name: &str) -> String {
         .to_uppercase()
 }
 
-/// Format a count with singular/plural form.
-pub fn format_count(count: i32, singular: &str, plural: &str) -> String {
-    if count == 1 {
-        format!("1 {}", singular)
-    } else {
-        format!("{} {}", count, plural)
+/// Thread reply count shown under a root bubble ("1 reply", "0 replies").
+fn reply_count_text(count: i32) -> String {
+    chatter_i18n::trn("{n} reply", "{n} replies", count.max(0) as u64, &[])
+}
+
+/// Stored send-failure text, translated for the bubble. The database keeps the
+/// English sentence so retries can still match it.
+fn display_failure_reason(reason: &str) -> String {
+    match reason {
+        "Message not submitted" => chatter_i18n::tr("Message not submitted"),
+        "No Tor route" => chatter_i18n::tr("No Tor route"),
+        "Not delivered" => chatter_i18n::tr("Not delivered"),
+        "Shield is getting ready — will send automatically" => {
+            chatter_i18n::tr("Shield is getting ready — will send automatically")
+        }
+        "Not allowed" => chatter_i18n::tr("Not allowed"),
+        "You are muted" => chatter_i18n::tr("You are muted"),
+        "Message too long" => chatter_i18n::tr("Message too long"),
+        "Message rejected" => chatter_i18n::tr("Message rejected"),
+        "Sign in required" => chatter_i18n::tr("Sign in required"),
+        "Delivery unconfirmed" => chatter_i18n::tr("Delivery unconfirmed"),
+        "Identity changed" => chatter_i18n::tr("Identity changed"),
+        "Key not verified" => chatter_i18n::tr("Key not verified"),
+        "Membership not verified" => chatter_i18n::tr("Membership not verified"),
+        "Conversation unavailable" => chatter_i18n::tr("Conversation unavailable"),
+        "Cannot send message" => chatter_i18n::tr("Cannot send message"),
+        "Secure channel setup timed out. Tap Retry" => {
+            chatter_i18n::tr("Secure channel setup timed out. Tap Retry")
+        }
+        "Waiting for connection" => chatter_i18n::tr("Waiting for connection"),
+        other => other.to_string(),
     }
 }
 
@@ -211,7 +236,7 @@ pub fn message_to_row(
     sender_avatar: Option<Arc<[u8]>>,
 ) -> MessageRow {
     let reply_count = 0;
-    let reply_count_text = format_count(reply_count, "reply", "replies");
+    let reply_count_text = reply_count_text(reply_count);
 
     // Extract call information if this is a call message
     let (is_call, call_message_type, call_initiator_id, call_duration, call_is_video) =
@@ -237,21 +262,23 @@ pub fn message_to_row(
     // Extract content and system flag
     let (content, is_system) = match &msg.content {
         MessageContent::System(sys) => {
-            let description = if msg.conversation_type.is_secret_chat() {
+            // Secret chats say "after read" only on the chat row. The sidebar
+            // and `description` keep the timer without that phrase.
+            let content = if msg.conversation_type.is_secret_chat() {
                 match sys {
                     SystemMessage::DisappearingTimerChanged { seconds: 0 } => {
-                        "turned off disappearing messages".to_string()
+                        chatter_i18n::trf("{} turned off disappearing messages", &[&sender_name])
                     }
-                    SystemMessage::DisappearingTimerChanged { seconds } => format!(
-                        "set disappearing messages to {} after read",
-                        timer_label(*seconds)
+                    SystemMessage::DisappearingTimerChanged { seconds } => chatter_i18n::trf(
+                        "{} set disappearing messages to {} after read",
+                        &[&sender_name, &timer_label(*seconds)],
                     ),
-                    _ => sys.description_for(&msg.conversation_type),
+                    _ => sys.notice_line(sender_name, &msg.conversation_type),
                 }
             } else {
-                sys.description_for(&msg.conversation_type)
+                sys.notice_line(sender_name, &msg.conversation_type)
             };
-            (format!("{} {}", sender_name, description), true)
+            (content, true)
         }
         _ => (msg.as_text().unwrap_or("").to_string(), false),
     };
@@ -303,7 +330,11 @@ pub fn message_to_row(
             msg.failure_reason.as_deref(),
         )
         .to_owned(),
-        failure_reason: msg.failure_reason.clone().unwrap_or_default(),
+        failure_reason: msg
+            .failure_reason
+            .as_deref()
+            .map(display_failure_reason)
+            .unwrap_or_default(),
         can_retry: msg.can_retry_send(),
         is_pinned: msg.is_pinned,
         is_call,
@@ -352,7 +383,7 @@ pub fn apply_reply_counts(rows: &mut [MessageRow], counts: &HashMap<MessageId, u
         };
         if let Some(count) = counts.get(&id) {
             row.reply_count = *count as i32;
-            row.reply_count_text = format_count(row.reply_count, "reply", "replies");
+            row.reply_count_text = reply_count_text(row.reply_count);
         }
     }
 }

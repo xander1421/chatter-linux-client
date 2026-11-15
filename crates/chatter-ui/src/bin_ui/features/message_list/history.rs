@@ -182,7 +182,9 @@ pub(super) fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: Hi
             });
         }
         if jump {
-            w.set_toast_message("History is still loading. Try again in a moment.".into());
+            w.set_toast_message(
+                chatter_i18n::tr("History is still loading. Try again in a moment.").into(),
+            );
             w.set_toast_variant("info".into());
             w.set_toast_visible(true);
         }

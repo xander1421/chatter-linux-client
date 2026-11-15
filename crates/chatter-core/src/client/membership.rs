@@ -117,7 +117,7 @@ pub struct JoinRequestRow {
 pub struct ServerOperatedMember {
     pub id: String,
     pub name: String,
-    pub label: &'static str,
+    pub label: String,
 }
 
 /// Channel Settings' "Access" pane.
@@ -158,10 +158,9 @@ pub(crate) fn banner_for(
     verified: Option<&VerifiedChannel>,
 ) -> Option<MembershipBanner> {
     let at = |v: &VerifiedChannel| {
-        format!(
+        chatter_i18n::trf(
             "Verified revision {}, state code {}.",
-            v.state.revision,
-            state_code(v)
+            &[&v.state.revision, &state_code(v)],
         )
     };
     match verification {
@@ -169,32 +168,29 @@ pub(crate) fn banner_for(
         ChannelVerification::NotYetVerified => Some(MembershipBanner {
             severity: BannerSeverity::Warning,
             can_acknowledge: false,
-            title: "Membership not verified yet \u{2014} sending is paused".into(),
-            detail: "This device has no verified member list for this channel yet, so it does not know who may \
-                     receive your messages. Sending resumes once the channel's signed membership log verifies."
-                .into(),
+            title: chatter_i18n::tr("Membership not verified yet \u{2014} sending is paused"),
+            detail: chatter_i18n::tr(
+                "This device has no verified member list for this channel yet, so it does not know who may receive your messages. Sending resumes once the channel's signed membership log verifies.",
+            ),
         }),
         ChannelVerification::VerificationFailed => Some(MembershipBanner {
             severity: BannerSeverity::Warning,
             can_acknowledge: false,
-            title: "Membership could not be verified \u{2014} sending is paused".into(),
-            detail: format!(
-                "A change to this channel's member list was not signed by someone allowed to make it, or did not \
-                 match the list this device holds. It was not applied, and nobody it named receives your \
-                 messages. Sending resumes when a later change verifies. {}",
-                verified.map(at).unwrap_or_default()
+            title: chatter_i18n::tr(
+                "Membership could not be verified \u{2014} sending is paused",
+            ),
+            detail: chatter_i18n::trf(
+                "A change to this channel's member list was not signed by someone allowed to make it, or did not match the list this device holds. It was not applied, and nobody it named receives your messages. Sending resumes when a later change verifies. {}",
+                &[&verified.map(at).unwrap_or_default()],
             ),
         }),
         ChannelVerification::Fork => Some(MembershipBanner {
             severity: BannerSeverity::Alert,
             can_acknowledge: true,
-            title: "The server is showing members different member lists".into(),
-            detail: format!(
-                "Another member, or the server's log, has a different member list at a revision this device \
-                 already verified. Sending stays paused for this channel until you resume it. Compare the state \
-                 code below with another member over a channel you trust first: resuming sends only to the \
-                 members this device verified, and a new mismatch pauses it again. {}",
-                verified.map(at).unwrap_or_default()
+            title: chatter_i18n::tr("The server is showing members different member lists"),
+            detail: chatter_i18n::trf(
+                "Another member, or the server's log, has a different member list at a revision this device already verified. Sending stays paused for this channel until you resume it. Compare the state code below with another member over a channel you trust first: resuming sends only to the members this device verified, and a new mismatch pauses it again. {}",
+                &[&verified.map(at).unwrap_or_default()],
             ),
         }),
     }
@@ -212,7 +208,7 @@ pub(crate) fn public_badge(
         None => channel_type == ChannelType::Public,
     };
     if open {
-        PUBLIC_BADGE.to_string()
+        chatter_i18n::tr("Public \u{2014} anyone can join and read")
     } else {
         String::new()
     }
@@ -238,16 +234,22 @@ pub(crate) fn join_summary(
     let mut parts = Vec::new();
     if !open {
         // An open channel's public badge already says anyone can join.
-        parts.push("Invite only \u{2014} people join through an invitation or a join link.");
+        parts.push(chatter_i18n::tr(
+            "Invite only \u{2014} people join through an invitation or a join link.",
+        ));
     }
     if let Some(s) = state {
         parts.push(match s.policy.manage_invites {
-            ChannelRole::Owner => "Only the owner creates and revokes join links.",
-            ChannelRole::Admin => "Owners and admins create and revoke join links.",
-            ChannelRole::Moderator => {
-                "Owners, admins and moderators create and revoke join links."
+            ChannelRole::Owner => {
+                chatter_i18n::tr("Only the owner creates and revokes join links.")
             }
-            _ => "Members create and revoke join links.",
+            ChannelRole::Admin => {
+                chatter_i18n::tr("Owners and admins create and revoke join links.")
+            }
+            ChannelRole::Moderator => {
+                chatter_i18n::tr("Owners, admins and moderators create and revoke join links.")
+            }
+            _ => chatter_i18n::tr("Members create and revoke join links."),
         });
     }
     parts.join(" ")
@@ -276,12 +278,12 @@ fn allows(mine: Option<ChannelRole>, needed: ChannelRole) -> bool {
     mine.is_some_and(|r| r as i32 >= needed as i32)
 }
 
-fn role_label(role: ChannelRole) -> &'static str {
+fn role_label(role: ChannelRole) -> String {
     match role {
-        ChannelRole::Owner => "Owner",
-        ChannelRole::Admin => "Admin",
-        ChannelRole::Moderator => "Moderator",
-        _ => "Member",
+        ChannelRole::Owner => chatter_i18n::tr("Owner"),
+        ChannelRole::Admin => chatter_i18n::tr("Admin"),
+        ChannelRole::Moderator => chatter_i18n::tr("Moderator"),
+        _ => chatter_i18n::tr("Member"),
     }
 }
 
@@ -294,23 +296,31 @@ pub(crate) fn invite_rows(state: &MembershipState, now_nanos: u64) -> Vec<Invite
         .filter(|(_, i)| i.expires_at == 0 || i.expires_at > now_nanos)
         .filter(|(_, i)| i.max_uses == 0 || i.uses < i.max_uses)
         .map(|(key, i)| {
-            let mut parts = vec![format!("{} link", role_label(i.role))];
+            use chrono::Datelike;
+            let mut parts = vec![chatter_i18n::trf("{} link", &[&role_label(i.role)])];
             parts.push(if i.expires_at == 0 {
-                "no expiry".to_string()
+                chatter_i18n::tr("no expiry")
             } else {
                 let at = chrono::DateTime::from_timestamp_nanos(i.expires_at as i64);
-                format!(
-                    "expires {}",
-                    at.with_timezone(&chrono::Local).format("%b %d, %Y %H:%M")
-                )
+                let local = at.with_timezone(&chrono::Local);
+                let when = chatter_i18n::trf(
+                    "{} {}, {} {}",
+                    &[
+                        &crate::util::time::month_abbrev(local.month()),
+                        &local.format("%d"),
+                        &local.year(),
+                        &local.format("%H:%M"),
+                    ],
+                );
+                chatter_i18n::trf("expires {}", &[&when])
             });
             parts.push(if i.max_uses == 0 {
-                format!("{} used", i.uses)
+                chatter_i18n::trf("{} used", &[&i.uses])
             } else {
-                format!("{} of {} uses", i.uses, i.max_uses)
+                chatter_i18n::trf("{} of {} uses", &[&i.uses, &i.max_uses])
             });
             if i.needs_approval {
-                parts.push("needs approval".into());
+                parts.push(chatter_i18n::tr("needs approval"));
             }
             InviteLinkRow {
                 id: hex::encode(key),
@@ -488,7 +498,7 @@ impl ChatterClient {
                 .map(|i| ServerOperatedMember {
                     id: i.id,
                     name: i.name,
-                    label: SERVER_OPERATED_LABEL,
+                    label: chatter_i18n::tr("Server-operated member: can read"),
                 })
                 .collect(),
             Err(e) => {

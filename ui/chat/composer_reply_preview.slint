@@ -65,7 +65,7 @@ export component ComposerReplyPreview inherits GlassSurface {
             spacing: Spacing.xxs;
 
             Text {
-                text: "Reply to " + root.reply-to-sender;
+                text: @tr("Reply to {}", root.reply-to-sender);
                 color: Colors.primary;
                 font-size: Typography.sm;
                 font-weight: 600;
@@ -89,7 +89,7 @@ export component ComposerReplyPreview inherits GlassSurface {
                 background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
                 border-radius: Spacing.radius-chrome-inner;
                 accessible-role: button;
-                accessible-label: "Cancel reply";
+                accessible-label: @tr("Cancel reply");
                 accessible-action-default => { root.cancel-reply(); }
                 KeyFocus { border-radius: parent.border-radius; activate => { root.cancel-reply(); } }
 

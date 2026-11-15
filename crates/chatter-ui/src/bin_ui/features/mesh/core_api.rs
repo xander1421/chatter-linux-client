@@ -299,5 +299,5 @@ pub fn sender_display_name(ui_ctx: &Arc<ChatterClient>, message: &Message) -> St
         // A peer that has drifted out of range since it spoke. Its id is a hash
         // of a routing address and means nothing to anyone, so showing it is
         // strictly worse than admitting we no longer know who this was.
-        .unwrap_or_else(|| "Unknown peer".to_string())
+        .unwrap_or_else(|| chatter_i18n::tr("Unknown peer"))
 }

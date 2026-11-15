@@ -194,11 +194,15 @@ impl CallMessage {
         self.duration.map(|d| {
             let secs = d.num_seconds();
             if secs < 60 {
-                format!("{}s", secs)
+                chatter_i18n::trf("{}s", &[&secs])
             } else if secs < 3600 {
-                format!("{}m {}s", secs / 60, secs % 60)
+                let mins = secs / 60;
+                let rem = secs % 60;
+                chatter_i18n::trf("{}m {}s", &[&mins, &rem])
             } else {
-                format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+                let hours = secs / 3600;
+                let mins = (secs % 3600) / 60;
+                chatter_i18n::trf("{}h {}m", &[&hours, &mins])
             }
         })
     }

@@ -73,7 +73,7 @@ export component SelectionBar inherits GlassSurface {
             enabled: root.show;
             touch: root.touch;
             icon: Icons.x;
-            label: "Exit selection";
+            label: @tr("Exit selection");
             clicked => { root.cleared(); }
         }
 
@@ -92,7 +92,7 @@ export component SelectionBar inherits GlassSurface {
             enabled: root.show;
             touch: root.touch;
             icon: Icons.check;
-            label: "Select all";
+            label: @tr("Select all");
             clicked => { SelectionChrome.select-all(); }
         }
 
@@ -100,7 +100,7 @@ export component SelectionBar inherits GlassSurface {
             backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.copy;
-            label: "Copy selected";
+            label: @tr("Copy selected");
             enabled: root.show && root.count > 0;
             clicked => { root.copy-clicked(); }
         }
@@ -109,7 +109,7 @@ export component SelectionBar inherits GlassSurface {
             backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.send;
-            label: "Forward selected";
+            label: @tr("Forward selected");
             enabled: root.show && root.count > 0;
             clicked => { root.forward-clicked(); }
         }
@@ -118,7 +118,7 @@ export component SelectionBar inherits GlassSurface {
             backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.trash;
-            label: "Delete selected";
+            label: @tr("Delete selected");
             destructive: true;
             enabled: root.show && root.count > 0;
             clicked => { root.delete-clicked(); }

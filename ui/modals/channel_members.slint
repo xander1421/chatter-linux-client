@@ -127,15 +127,15 @@ export component ChannelMembersSection inherits Rectangle {
 
     // The members menu's mute choices.
     private property <[{label: string, minutes: int}]> mute-options: [
-        { label: "Mute 1h", minutes: 60 },
-        { label: "Mute 1 day", minutes: 1440 },
-        { label: "Mute until unmuted", minutes: 0 },
+        { label: @tr("Mute 1h"), minutes: 60 },
+        { label: @tr("Mute 1 day"), minutes: 1440 },
+        { label: @tr("Mute until unmuted"), minutes: 0 },
     ];
     // The assignable roles (ownership moves only by transfer), with labels.
     private property <[{role: string, label: string}]> role-options: [
-        { role: "member", label: "Member" },
-        { role: "moderator", label: "Moderator" },
-        { role: "admin", label: "Admin" },
+        { role: "member", label: @tr("Member") },
+        { role: "moderator", label: @tr("Moderator") },
+        { role: "admin", label: @tr("Admin") },
     ];
 
     members-layout := VerticalLayout {
@@ -149,7 +149,7 @@ export component ChannelMembersSection inherits Rectangle {
         spacing: Spacing.sm;
 
         Text {
-            text: "Members";
+            text: @tr("Members");
             color: Colors.text-primary;
             font-size: Typography.lg;
             font-weight: Typography.semibold;
@@ -170,14 +170,14 @@ export component ChannelMembersSection inherits Rectangle {
             width: max(invite-btn-text.width + Spacing.md * 2, Spacing.touch-target-min);
             height: Spacing.touch-target-min;
             accessible-role: button;
-            accessible-label: "Invite members";
+            accessible-label: @tr("Invite members");
             accessible-action-default => { root.invite-members(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.invite-members(); } }
             background: invite-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
             border-radius: Spacing.radius-sm;
 
             invite-btn-text := Text {
-                text: "+ Invite";
+                text: @tr("+ Invite");
                 color: Colors.on-action;
                 font-size: Typography.xs;
                 font-weight: Typography.medium;
@@ -196,14 +196,14 @@ export component ChannelMembersSection inherits Rectangle {
             width: max(invite-ch-btn-text.width + Spacing.md * 2, Spacing.touch-target-min);
             height: Spacing.touch-target-min;
             accessible-role: button;
-            accessible-label: "Invite members";
+            accessible-label: @tr("Invite members");
             accessible-action-default => { root.invite-channel-members(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.invite-channel-members(); } }
             background: invite-ch-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
             border-radius: Spacing.radius-sm;
 
             invite-ch-btn-text := Text {
-                text: "+ Invite";
+                text: @tr("+ Invite");
                 color: Colors.on-action;
                 font-size: Typography.xs;
                 font-weight: Typography.medium;
@@ -230,7 +230,7 @@ export component ChannelMembersSection inherits Rectangle {
     // Member list
     if root.members.length == 0: Text {
         width: parent.width;
-        text: root.loading ? "Loading members…" : "No members to show yet";
+        text: root.loading ? @tr("Loading members…") : @tr("No members to show yet");
         color: Colors.text-secondary;
         font-size: Typography.sm;
         wrap: word-wrap;
@@ -314,7 +314,7 @@ export component ChannelMembersSection inherits Rectangle {
 
                             invited-text := Text {
                                 x: Spacing.xs;
-                                text: "invited";
+                                text: @tr("member status" => "invited");
                                 color: Colors.info;
                                 font-size: Typography.xs;
                                 font-weight: Typography.medium;
@@ -332,7 +332,7 @@ export component ChannelMembersSection inherits Rectangle {
 
                             muted-text := Text {
                                 x: Spacing.xs;
-                                text: "muted";
+                                text: @tr("member moderation" => "muted");
                                 color: Colors.error;
                                 font-size: Typography.xs;
                                 font-weight: Typography.medium;
@@ -350,7 +350,7 @@ export component ChannelMembersSection inherits Rectangle {
 
                             unverified-text := Text {
                                 x: Spacing.xs;
-                                text: "unverified";
+                                text: @tr("member identity" => "unverified");
                                 color: Colors.warning;
                                 font-size: Typography.xs;
                                 font-weight: Typography.medium;
@@ -389,7 +389,7 @@ export component ChannelMembersSection inherits Rectangle {
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
-                    accessible-label: "Actions for " + member.display-name;
+                    accessible-label: @tr("Actions for {}", member.display-name);
                     accessible-action-default => {
                         root.menu-member = member;
                         root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
@@ -432,7 +432,7 @@ export component ChannelMembersSection inherits Rectangle {
             background: Colors.divider;
         }
         if row.kind == "banned-header": Text {
-            text: "Banned";
+            text: @tr("member list" => "Banned");
             color: Colors.text-primary;
             font-size: Typography.base;
             font-weight: Typography.semibold;
@@ -466,7 +466,7 @@ export component ChannelMembersSection inherits Rectangle {
 
             Button {
                 height: Spacing.touch-target-min;
-                text: "Unban";
+                text: @tr("Unban");
                 variant: "secondary";
                 clicked => { root.unban-member(row.banned.user-id); }
             }
@@ -512,7 +512,7 @@ export component ChannelMembersSection inherits Rectangle {
                         vertical-alignment: center;
                     } }
                     if !root.is-private-group && root.can-manage-members: HorizontalLayout { padding-left: Spacing.md; Text {
-                        text: "ROLE";
+                        text: @tr("ROLE");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         height: 24px;
@@ -534,7 +534,7 @@ export component ChannelMembersSection inherits Rectangle {
                     if root.menu-member.can-mute: Rectangle { height: 1px; background: Colors.divider; }
                     if root.menu-member.can-mute && root.menu-member.muted: MemberMenuItem {
                         icon: Icons.volume-2;
-                        label: "Unmute";
+                        label: @tr("member moderation" => "Unmute");
                         clicked => {
                             root.role-picker-user = "";
                             root.set-member-muted(root.menu-member.user-id, false, 0);
@@ -542,7 +542,7 @@ export component ChannelMembersSection inherits Rectangle {
                     }
                     if root.menu-member.can-mute && !root.menu-member.muted: VerticalLayout {
                         HorizontalLayout { padding-left: Spacing.md; Text {
-                            text: "MUTE IN CHANNEL";
+                            text: @tr("MUTE IN CHANNEL");
                             color: Colors.text-muted;
                             font-size: Typography.xs;
                             height: 24px;
@@ -562,12 +562,12 @@ export component ChannelMembersSection inherits Rectangle {
                     }
                     if root.menu-member.can-make-owner: MemberMenuItem {
                         icon: Icons.shield;
-                        label: "Make owner…";
+                        label: @tr("Make owner…");
                         clicked => { root.confirm-action = "owner"; }
                     }
                     if root.menu-member.can-block && !root.menu-member.invited: MemberMenuItem {
                         icon: root.menu-member.blocked ? Icons.unlock : Icons.lock;
-                        label: root.menu-member.blocked ? "Unblock in group" : "Block in group";
+                        label: root.menu-member.blocked ? @tr("Unblock in group") : @tr("Block in group");
                         clicked => {
                             root.role-picker-user = "";
                             root.block-member(root.menu-member.user-id, !root.menu-member.blocked);
@@ -578,14 +578,14 @@ export component ChannelMembersSection inherits Rectangle {
                     }
                     if root.can-manage-members && root.menu-member.role != "owner": MemberMenuItem {
                         icon: Icons.trash;
-                        label: root.menu-member.invited && root.is-private-group ? "Cancel invite"
-                            : root.is-private-group ? "Remove from group" : "Remove from channel";
+                        label: root.menu-member.invited && root.is-private-group ? @tr("Cancel invite")
+                            : root.is-private-group ? @tr("Remove from group") : @tr("Remove from channel");
                         destructive: true;
                         clicked => { root.confirm-action = "remove"; }
                     }
                     if root.menu-member.can-ban: MemberMenuItem {
                         icon: Icons.shield;
-                        label: "Ban";
+                        label: @tr("Ban");
                         destructive: true;
                         clicked => { root.confirm-action = "ban"; }
                     }
@@ -608,12 +608,14 @@ export component ChannelMembersSection inherits Rectangle {
                 Text {
                     width: confirm-content.width;
                     text: root.confirm-action == "ban"
-                        ? "Ban " + root.menu-member.display-name + "? They will be removed and can't rejoin."
+                        ? @tr("Ban {}? They will be removed and can't rejoin.", root.menu-member.display-name)
                         : root.confirm-action == "owner"
-                        ? "Make " + root.menu-member.display-name + " the owner of " + (root.is-private-group ? "" : "#") + root.channel-name + "? You'll become an admin."
+                        ? @tr("Make {0} the owner of {1}? You'll become an admin.", root.menu-member.display-name, (root.is-private-group ? "" : "#") + root.channel-name)
                         : root.menu-member.invited && root.is-private-group
-                        ? "Cancel " + root.menu-member.display-name + "'s invite?"
-                        : "Remove " + root.menu-member.display-name + (root.is-private-group ? " from this group?" : " from this channel?");
+                        ? @tr("Cancel {}'s invite?", root.menu-member.display-name)
+                        : root.is-private-group
+                        ? @tr("Remove {} from this group?", root.menu-member.display-name)
+                        : @tr("Remove {} from this channel?", root.menu-member.display-name);
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     wrap: word-wrap;
@@ -623,14 +625,14 @@ export component ChannelMembersSection inherits Rectangle {
                     spacing: Spacing.sm;
                     Button {
                         height: Spacing.touch-target-min;
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "secondary";
                         horizontal-stretch: 1;
                         clicked => { root.confirm-action = ""; }
                     }
                     Button {
                         height: Spacing.touch-target-min;
-                        text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : root.menu-member.invited && root.is-private-group ? "Cancel invite" : "Remove";
+                        text: root.confirm-action == "ban" ? @tr("Ban") : root.confirm-action == "owner" ? @tr("Make owner") : root.menu-member.invited && root.is-private-group ? @tr("Cancel invite") : @tr("Remove");
                         variant: root.confirm-action == "owner" ? "primary" : "destructive";
                         horizontal-stretch: 1;
                         clicked => {

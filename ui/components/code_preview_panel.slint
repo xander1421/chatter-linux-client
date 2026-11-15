@@ -97,14 +97,14 @@ export component CodePreviewPanel inherits Rectangle {
                     // Copy all button
                     HeaderButton {
                         icon: Icons.copy;
-                        label: "Copy";
+                        label: @tr("Copy");
                         clicked => { root.copy-clicked(); }
                     }
 
                     // Open external button
                     HeaderButton {
                         icon: Icons.link;
-                        label: "Open externally";
+                        label: @tr("Open externally");
                         clicked => { root.open-external-clicked(); }
                     }
 

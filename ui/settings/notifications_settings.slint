@@ -18,7 +18,7 @@ export component NotificationsSettings inherits VerticalLayout {
 
     // Section header
     Text {
-        text: "Notifications";
+        text: @tr("Notifications");
         color: Colors.text-primary;
         font-size: Typography.xl;
         font-weight: Typography.semibold;
@@ -38,28 +38,28 @@ export component NotificationsSettings inherits VerticalLayout {
             init => { NotificationDelivery.load(); }
 
         push-row := ToggleRow {
-            accessible-text: "Account push notifications";
+            accessible-text: @tr("Account push notifications");
             label-spacing: Spacing.sm;
             checked <=> NotificationDelivery.push-enabled;
             disabled: NotificationDelivery.busy || !NotificationDelivery.loaded;
             toggled(value) => { NotificationDelivery.push-enabled-changed(value); }
 
             Text {
-                text: "Account push notifications";
+                text: @tr("Account push notifications");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: push-row.label-width;
-                text: "Allow server push notifications for all devices on this account. Device notification settings still apply.";
+                text: @tr("Allow server push notifications for all devices on this account. Device notification settings still apply.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
             }
         }
         if NotificationDelivery.busy: Text {
-            text: "Saving or loading notification preferences…";
+            text: @tr("Saving or loading notification preferences…");
             color: Colors.text-muted;
             font-size: Typography.xs;
         }
@@ -72,7 +72,7 @@ export component NotificationsSettings inherits VerticalLayout {
         }
         if NotificationDelivery.error != "": Button {
             touch: root.mobile-platform;
-            text: "Retry";
+            text: @tr("Retry");
             variant: "ghost";
             disabled: NotificationDelivery.busy;
             clicked => { NotificationDelivery.load(); }
@@ -98,7 +98,7 @@ export component NotificationsSettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Notification content";
+                text: @tr("Notification content");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -106,16 +106,16 @@ export component NotificationsSettings inherits VerticalLayout {
 
             Text {
                 width: max(0px, parent.width - parent.padding * 2);
-                text: "What message notifications show on this device";
+                text: @tr("What message notifications show on this device");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
             }
 
             for opt in [
-                { key: "name_and_message", label: "Name and message" },
-                { key: "name_only", label: "Name only" },
-                { key: "none", label: "No name or content" },
+                { key: "name_and_message", label: @tr("Name and message") },
+                { key: "name_only", label: @tr("Name only") },
+                { key: "none", label: @tr("No name or content") },
             ]: Rectangle {
                 property <bool> selected: root.notification-detail == opt.key;
                 height: Spacing.touch-target-min;
@@ -195,7 +195,7 @@ export component NotificationsSettings inherits VerticalLayout {
         min-height: Spacing.touch-target-min;
         background: sound-touch.has-hover ? Colors.surface-hover : Colors.surface;
         accessible-role: button;
-        accessible-label: "Sound and vibration";
+        accessible-label: @tr("Sound and vibration");
         accessible-action-default => { NotificationSound.open-system-settings(); }
         KeyFocus { border-radius: parent.border-radius; activate => { NotificationSound.open-system-settings(); } }
 
@@ -208,13 +208,13 @@ export component NotificationsSettings inherits VerticalLayout {
                 spacing: Spacing.xxs;
 
                 Text {
-                    text: "Sound and vibration";
+                    text: @tr("Sound and vibration");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                 }
                 Text {
-                    text: "Opens this device's settings for message notifications";
+                    text: @tr("Opens this device's settings for message notifications");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -252,19 +252,19 @@ export component NotificationsSettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Notification sound";
+            accessible-text: @tr("Notification sound");
             checked <=> NotificationSound.enabled;
             toggled(value) => { NotificationSound.enabled-changed(value); }
 
             Text {
-                text: "Notification sound";
+                text: @tr("Notification sound");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: sound-row.label-width;
-                text: "Play a sound when a message notification arrives";
+                text: @tr("Play a sound when a message notification arrives");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;

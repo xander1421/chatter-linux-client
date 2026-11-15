@@ -71,24 +71,24 @@ impl ChannelError {
     #[must_use]
     pub fn user_message(&self) -> String {
         match self {
-            Self::NotLoggedIn => "You're signed out.".to_string(),
+            Self::NotLoggedIn => chatter_i18n::tr("You're signed out."),
             Self::NotAuthorized | Self::Network(NetworkError::PermissionDenied) => {
-                "You don't have permission to do that.".to_string()
+                chatter_i18n::tr("You don't have permission to do that.")
             }
-            Self::ChannelNotFound(_) => "Channel not found.".to_string(),
+            Self::ChannelNotFound(_) => chatter_i18n::tr("Channel not found."),
             Self::InvalidInput(m) | Self::Network(NetworkError::InvalidRequest(m)) => {
                 let reason = m.rsplit(": ").next().unwrap_or(m);
                 let mut c = reason.chars();
                 c.next()
                     .map(|f| f.to_uppercase().chain(c).collect::<String>() + ".")
-                    .unwrap_or_else(|| "Something went wrong. Try again.".to_string())
+                    .unwrap_or_else(|| chatter_i18n::tr("Something went wrong. Try again."))
             }
             Self::Network(NetworkError::RateLimited) => {
-                "Too many requests. Try again later.".to_string()
+                chatter_i18n::tr("Too many requests. Try again later.")
             }
-            Self::Network(_) => "Couldn't reach the server. Try again.".to_string(),
+            Self::Network(_) => chatter_i18n::tr("Couldn't reach the server. Try again."),
             Self::Storage(_) | Self::SenderKeyRotationFailed(_) => {
-                "Something went wrong. Try again.".to_string()
+                chatter_i18n::tr("Something went wrong. Try again.")
             }
         }
     }

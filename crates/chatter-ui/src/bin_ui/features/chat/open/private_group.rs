@@ -99,7 +99,7 @@ pub fn load_private_group_messages(
                 .set_conversation_read_only(removed);
             w.global::<crate::ChatPane>()
                 .set_composer_notice(if removed {
-                    "You were removed from the group".into()
+                    chatter_i18n::tr("You were removed from the group").into()
                 } else {
                     "".into()
                 });
@@ -206,7 +206,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                         .as_text()
                         .filter(|t| !t.is_empty())
                         .map(|t| ui_ctx.truncate_message_preview(&t))
-                        .unwrap_or_else(|| "[Pinned message]".to_string());
+                        .unwrap_or_else(|| chatter_i18n::tr("[Pinned message]"));
                     (ids, preview)
                 };
                 if !owner.is_current() {

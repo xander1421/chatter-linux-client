@@ -94,7 +94,7 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
     let is_video = matches!(call_type, CallType::Video);
     let display_name = ui_ctx
         .my_display_name()
-        .unwrap_or_else(|| "Anonymous".to_string());
+        .unwrap_or_else(|| chatter_i18n::tr("Anonymous"));
     let initials = initials_from_name(&display_name);
 
     let local_participant = CallParticipantData {
@@ -146,10 +146,9 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
     w.global::<crate::CallView>().set_active_call_visible(true);
 }
 
-pub(super) const CALL_FAILED: &str = "Call failed — couldn't connect";
-/// Shown when the microphone prompt is refused; the call cannot work without it.
-#[cfg(target_os = "android")]
-pub(super) const MIC_DENIED: &str = "Calls need microphone access — allow it to call.";
+pub(super) fn call_failed() -> String {
+    chatter_i18n::tr("Call failed — couldn't connect")
+}
 
 /// Take the call view back down and say why.
 ///
@@ -202,7 +201,10 @@ fn spawn_start(
                 return;
             }
             if !permissions::has(permissions::RECORD_AUDIO) {
-                fail_call(&weak, MIC_DENIED);
+                fail_call(
+                    &weak,
+                    &chatter_i18n::tr("Calls need microphone access — allow it to call."),
+                );
                 return;
             }
         }
@@ -221,7 +223,10 @@ fn spawn_start(
         }
         if ui_ctx.auth_snapshot().session_revision != revision {
             attempt.cancel();
-            fail_call(&weak, "Your session changed. Start the call again.");
+            fail_call(
+                &weak,
+                &chatter_i18n::tr("Your session changed. Start the call again."),
+            );
             return;
         }
         start_call_impl(
@@ -255,13 +260,16 @@ async fn start_call_impl(
         Some(id) => id,
         None => {
             tracing::error!("No user ID available");
-            fail_call(&weak, "You are not signed in, so the call was not placed.");
+            fail_call(
+                &weak,
+                &chatter_i18n::tr("You are not signed in, so the call was not placed."),
+            );
             return;
         }
     };
     let display_name = ui_ctx
         .my_display_name()
-        .unwrap_or_else(|| "Anonymous".to_string());
+        .unwrap_or_else(|| chatter_i18n::tr("Anonymous"));
     let channel_name = weak
         .upgrade()
         .map(|w| w.global::<crate::ChatPane>().get_channel_name().to_string())
@@ -285,7 +293,9 @@ async fn start_call_impl(
         _ = attempt.cancelled() => task.await,
         _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
             attempt.cancel();
-            if current_start(generation) { fail_call(&weak, CALL_FAILED); }
+            if current_start(generation) {
+                fail_call(&weak, &call_failed());
+            }
             // Keep ownership: dropping this JoinHandle would detach setup.
             task.await
         }
@@ -304,12 +314,12 @@ async fn start_call_impl(
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
             tracing::error!(error = %e, "Failed to start call");
-            fail_call(&weak, CALL_FAILED);
+            fail_call(&weak, &call_failed());
             return;
         }
         Err(join_error) => {
             tracing::error!(%join_error, "Call start task did not finish");
-            fail_call(&weak, CALL_FAILED);
+            fail_call(&weak, &call_failed());
             return;
         }
     };

@@ -50,7 +50,7 @@ export component SidebarHeader inherits GlassSurface {
             opacity: root.search-overlay-open ? 0 : 1;
             animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
             accessible-role: button;
-            accessible-label: "Search";
+            accessible-label: @tr("Search");
             accessible-action-default => { root.search-clicked(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.search-clicked(); } }
             if root.native-desktop: Rectangle {
@@ -79,7 +79,7 @@ export component SidebarHeader inherits GlassSurface {
                 VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.native-desktop ? 16px : root.quick-link-slot;
                     HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                 }
-                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                Text { text: @tr("Search"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
             }
             search-touch := TouchArea { y: root.native-desktop ? 36px : 0px; height: root.native-desktop ? 28px : parent.height; enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
             // Create — New Chat / New Channel / New Section. Two-pane only; a
@@ -95,7 +95,7 @@ export component SidebarHeader inherits GlassSurface {
                 x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
                 y: root.native-desktop ? 0px : (parent.height - self.height) / 2;
                 icon: Icons.plus;
-                label: "Create";
+                label: @tr("Create");
                 clicked => { root.create-clicked(); }
             }
             // Phones only: the two-pane sidebar is too narrow for a third
@@ -125,7 +125,7 @@ export component SidebarHeader inherits GlassSurface {
                 glyph: root.header-control-glyph;
                 x: parent.width - self.width - Spacing.sm; y: root.native-desktop ? 0px : (parent.height - self.height) / 2;
                 icon: Icons.onion;
-                label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
+                label: AnonMode.enabled ? @tr("Shield on - tap to turn off") : @tr("Shield off - tap to turn on");
                 active: AnonMode.enabled;
                 clicked => { root.anon-mode-clicked(); }
                 // Tor status dot: green=connected, amber=CONNECTING ONLY,

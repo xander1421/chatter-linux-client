@@ -94,8 +94,12 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
                 tracing::error!(%error, "mesh: could not load the conversation");
                 crate::run_history_ui!(weak, owner, |w| {
                     w.global::<crate::ChatPane>().set_loading_messages(false);
-                    w.global::<MeshGlobal>()
-                        .set_notice("Could not load this mesh conversation. Open it again to retry.".into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::tr(
+                            "Could not load this mesh conversation. Open it again to retry.",
+                        )
+                        .into(),
+                    );
                 });
                 return;
             }
@@ -194,10 +198,12 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     // alongside whatever gets typed into it.
     window.global::<crate::ChatPane>().set_composer_placeholder(
         match row.kind {
-            "geohash" => format!("Message #{} — public to this area", row.scope),
-            "room" => "Message everyone in radio range".to_string(),
-            "private-channel" => format!("Message invited devices in {}", row.title),
-            _ => format!("Message {} over the mesh", row.title),
+            "geohash" => chatter_i18n::trf("Message #{} — public to this area", &[&row.scope]),
+            "room" => chatter_i18n::tr("Message everyone in radio range"),
+            "private-channel" => {
+                chatter_i18n::trf("Message invited devices in {}", &[&row.title])
+            }
+            _ => chatter_i18n::trf("Message {} over the mesh", &[&row.title]),
         }
         .into(),
     );

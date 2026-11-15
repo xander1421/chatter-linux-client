@@ -77,29 +77,26 @@ impl KeyRecoveryNeed {
     /// What to tell the user. Core data, not UI copy: which of these a user
     /// sees decides whether they retype a PIN, wait, or accept losing their
     /// conversations, and that decision must not be re-derived per front end.
-    pub fn user_message(self) -> &'static str {
+    pub fn user_message(self) -> String {
         match self {
-            Self::NoPinProvided => {
-                "This device has no encryption keys. Enter your PIN to restore them from your backup."
-            }
-            Self::WrongPin => {
-                "That PIN did not unlock your key backup. Check the PIN and try again."
-            }
-            Self::NoBackup => {
-                "No key backup was found for this account. Your previous conversations cannot be recovered. \
-                 You can start over with new encryption keys — your contacts will be asked to verify you again."
-            }
-            Self::BackupDestroyed => {
-                "Your key backup was destroyed after too many incorrect PIN attempts. Your previous conversations \
-                 cannot be recovered. You can start over with new encryption keys — your contacts will be asked \
-                 to verify you again."
-            }
-            Self::RateLimited => {
-                "Too many recovery attempts. Wait before trying your PIN again — your backup is still intact."
-            }
-            Self::Unavailable => {
-                "Could not reach the key backup service. Your keys are still safe; try again when you are online."
-            }
+            Self::NoPinProvided => chatter_i18n::tr(
+                "This device has no encryption keys. Enter your PIN to restore them from your backup.",
+            ),
+            Self::WrongPin => chatter_i18n::tr(
+                "That PIN did not unlock your key backup. Check the PIN and try again.",
+            ),
+            Self::NoBackup => chatter_i18n::tr(
+                "No key backup was found for this account. Your previous conversations cannot be recovered. You can start over with new encryption keys — your contacts will be asked to verify you again.",
+            ),
+            Self::BackupDestroyed => chatter_i18n::tr(
+                "Your key backup was destroyed after too many incorrect PIN attempts. Your previous conversations cannot be recovered. You can start over with new encryption keys — your contacts will be asked to verify you again.",
+            ),
+            Self::RateLimited => chatter_i18n::tr(
+                "Too many recovery attempts. Wait before trying your PIN again — your backup is still intact.",
+            ),
+            Self::Unavailable => chatter_i18n::tr(
+                "Could not reach the key backup service. Your keys are still safe; try again when you are online.",
+            ),
         }
     }
 }

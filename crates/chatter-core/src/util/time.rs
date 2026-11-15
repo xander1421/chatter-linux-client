@@ -19,6 +19,63 @@ pub fn format_message_time(sent_at: DateTime<Utc>) -> String {
     sent_at.with_timezone(&Local).format("%H:%M").to_string()
 }
 
+/// English month abbreviation (`%b`): "Jan" … "Dec".
+pub fn month_abbrev(month: u32) -> String {
+    match month {
+        1 => chatter_i18n::tr("Jan"),
+        2 => chatter_i18n::tr("Feb"),
+        3 => chatter_i18n::tr("Mar"),
+        4 => chatter_i18n::tr("Apr"),
+        5 => chatter_i18n::trc("month abbreviation", "May"),
+        6 => chatter_i18n::tr("Jun"),
+        7 => chatter_i18n::tr("Jul"),
+        8 => chatter_i18n::tr("Aug"),
+        9 => chatter_i18n::tr("Sep"),
+        10 => chatter_i18n::tr("Oct"),
+        11 => chatter_i18n::tr("Nov"),
+        12 => chatter_i18n::tr("Dec"),
+        _ => String::new(),
+    }
+}
+
+/// English weekday abbreviation (`%a`): "Mon" … "Sun".
+pub fn weekday_abbrev(day: chrono::Weekday) -> String {
+    use chrono::Weekday::{Fri, Mon, Sat, Sun, Thu, Tue, Wed};
+    match day {
+        Mon => chatter_i18n::tr("Mon"),
+        Tue => chatter_i18n::tr("Tue"),
+        Wed => chatter_i18n::tr("Wed"),
+        Thu => chatter_i18n::tr("Thu"),
+        Fri => chatter_i18n::tr("Fri"),
+        Sat => chatter_i18n::tr("Sat"),
+        Sun => chatter_i18n::tr("Sun"),
+    }
+}
+
+/// English weekday name (`%A`): "Monday" … "Sunday".
+pub fn weekday_name(day: chrono::Weekday) -> String {
+    use chrono::Weekday::{Fri, Mon, Sat, Sun, Thu, Tue, Wed};
+    match day {
+        Mon => chatter_i18n::tr("Monday"),
+        Tue => chatter_i18n::tr("Tuesday"),
+        Wed => chatter_i18n::tr("Wednesday"),
+        Thu => chatter_i18n::tr("Thursday"),
+        Fri => chatter_i18n::tr("Friday"),
+        Sat => chatter_i18n::tr("Saturday"),
+        Sun => chatter_i18n::tr("Sunday"),
+    }
+}
+
+/// "%b %-d", for example "Mar 4".
+pub fn format_month_day(month: u32, day: u32) -> String {
+    chatter_i18n::trfc("month day", "{0} {1}", &[&month_abbrev(month), &day])
+}
+
+/// "%b %-d, %Y", for example "Mar 4, 2025".
+pub fn format_month_day_year(month: u32, day: u32, year: i32) -> String {
+    chatter_i18n::trfc("month day, year", "{0} {1}, {2}", &[&month_abbrev(month), &day, &year])
+}
+
 /// Local day chip above a message: "Today", "Yesterday", a weekday within the
 /// week, then "Mar 4" (this year) or "Mar 4, 2025".
 pub fn day_label(datetime: DateTime<Utc>) -> String {
@@ -32,28 +89,33 @@ fn day_label_at(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
     use chrono::Datelike;
     let days_ago = (today - day).num_days();
     match days_ago {
-        0 => "Today".to_string(),
-        1 => "Yesterday".to_string(),
-        2..=6 => day.format("%A").to_string(),
-        _ if day.year() == today.year() => day.format("%b %-d").to_string(),
-        _ => day.format("%b %-d, %Y").to_string(),
+        0 => chatter_i18n::tr("Today"),
+        1 => chatter_i18n::tr("Yesterday"),
+        2..=6 => weekday_name(day.weekday()),
+        _ if day.year() == today.year() => format_month_day(day.month(), day.day()),
+        _ => format_month_day_year(day.month(), day.day(), day.year()),
     }
 }
 
 /// A moment for message details: "Today, 12:16:37", "Yesterday, 09:02:11",
 /// otherwise "21 Oct 2026, 18:40:05" — local time, as Signal's message info.
 pub fn format_detail_time(at: DateTime<Utc>) -> String {
+    use chrono::Datelike;
     let local = at.with_timezone(&Local);
     let today = Local::now().date_naive();
     let day = local.date_naive();
     let date = if day == today {
-        "Today".to_string()
+        chatter_i18n::tr("Today")
     } else if today.pred_opt() == Some(day) {
-        "Yesterday".to_string()
+        chatter_i18n::tr("Yesterday")
     } else {
-        local.format("%-d %b %Y").to_string()
+        chatter_i18n::trf(
+            "{} {} {}",
+            &[&local.format("%-d"), &month_abbrev(local.month()), &local.year()],
+        )
     };
-    format!("{date}, {}", local.format("%H:%M:%S"))
+    let clock = local.format("%H:%M:%S");
+    chatter_i18n::trf("{}, {}", &[&date, &clock])
 }
 
 #[cfg(test)]

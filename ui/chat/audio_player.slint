@@ -53,8 +53,8 @@ export component AudioPlayer inherits HorizontalLayout {
         border-radius: root.button-size / 2;
         // TalkBack had no node for it: a voice message could not be played.
         accessible-role: button;
-        accessible-label: root.is-download-failed ? "Retry download"
-            : (root.is-this-playing && root.is-media-playing) ? "Pause voice message" : "Play voice message";
+        accessible-label: root.is-download-failed ? @tr("Retry download")
+            : (root.is-this-playing && root.is-media-playing) ? @tr("Pause voice message") : @tr("Play voice message");
         accessible-action-default => { root.play-clicked(root.attachment-id); }
         KeyFocus { border-radius: parent.border-radius; activate => { root.play-clicked(root.attachment-id); } }
         background: play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
@@ -143,7 +143,7 @@ export component AudioPlayer inherits HorizontalLayout {
         }
 
         Text {
-            text: root.is-download-failed ? "Download failed · tap to retry" : (root.is-this-playing ? root.audio-elapsed + " / " + root.duration-display : root.duration-display);
+            text: root.is-download-failed ? @tr("Download failed · tap to retry") : (root.is-this-playing ? @tr("{0} / {1}", root.audio-elapsed, root.duration-display) : root.duration-display);
             color: root.is-download-failed ? Colors.primary : Colors.text-muted;
             font-size: Typography.xs;
         }

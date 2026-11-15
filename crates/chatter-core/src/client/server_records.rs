@@ -39,7 +39,10 @@ impl ChatterClient {
                 if row.kind == "device-linked" {
                     if let Some(session) = sessions.as_ref().and_then(|sessions| sessions.iter()
                         .find(|session| session.device_id == row.device_id && row.device_id != 0)) {
-                        row.body = format!("{} was linked to your account.", session.device_info);
+                        row.body = chatter_i18n::trf(
+                            "{} was linked to your account.",
+                            &[&session.device_info],
+                        );
                     }
                 }
                 if row.kind == "channel-invite" {
@@ -67,9 +70,9 @@ impl ChatterClient {
                     if row.kind == "friend-request" || row.kind == "friend-accepted" {
                         row.title = name;
                     } else if !name.starts_with("User ") {
-                        row.body = crate::domain::message::format_preview_body(
-                            &format!("{} · ", name), &row.body, None,
-                        );
+                        let isolated =
+                            crate::domain::message::format_preview_body("", &row.body, None);
+                        row.body = chatter_i18n::trf("{} · {}", &[&name, &isolated]);
                     }
                     if row.kind == "friend-request" {
                         if let Some(ref received) = received {
@@ -83,13 +86,15 @@ impl ChatterClient {
                                 _ => "Status unavailable",
                             }.into();
                             row.body = match row.status.as_str() {
-                                "Pending" => "Sent you a friend request",
-                                "Accepted" => "You accepted this request",
-                                "Declined" => "You declined this request",
-                                "Blocked" => "This request is blocked",
-                                "No longer pending" => "This request is no longer active",
-                                _ => "Friend request",
-                            }.into();
+                                "Pending" => chatter_i18n::tr("Sent you a friend request"),
+                                "Accepted" => chatter_i18n::tr("You accepted this request"),
+                                "Declined" => chatter_i18n::tr("You declined this request"),
+                                "Blocked" => chatter_i18n::tr("This request is blocked"),
+                                "No longer pending" => {
+                                    chatter_i18n::tr("This request is no longer active")
+                                }
+                                _ => chatter_i18n::tr("Friend request"),
+                            };
                         }
                     }
                 }
@@ -131,7 +136,10 @@ impl ChatterClient {
             if let Some(session) = self.list_sessions().await.ok().and_then(|sessions| {
                 sessions.into_iter().find(|session| session.device_id == detail.device_id)
             }) {
-                detail.body = format!("{} was linked to your account.", session.device_info);
+                detail.body = chatter_i18n::trf(
+                    "{} was linked to your account.",
+                    &[&session.device_info],
+                );
             }
         }
         Ok(detail)

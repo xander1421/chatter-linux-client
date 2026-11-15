@@ -363,21 +363,31 @@ impl Message {
             // to ENDED (`file_channel_call_event`), so it says which, as its
             // bubble does; "Incoming call" outlived the call it named.
             MessageContent::Call(call) => {
-                let noun = if call.is_video { "video call" } else { "call" };
                 let channel = matches!(self.conversation_type, ConversationType::Channel);
+                let video = call.is_video;
                 let what = match call.call_type {
-                    CallMessageType::Missed => format!("Missed {noun}"),
-                    CallMessageType::Declined => format!("Declined {noun}"),
-                    CallMessageType::Started if channel => {
-                        if call.is_video { "Video call started" } else { "Call started" }.to_string()
+                    CallMessageType::Missed if video => chatter_i18n::tr("Missed video call"),
+                    CallMessageType::Missed => chatter_i18n::tr("Missed call"),
+                    CallMessageType::Declined if video => chatter_i18n::tr("Declined video call"),
+                    CallMessageType::Declined => chatter_i18n::tr("Declined call"),
+                    CallMessageType::Started if channel && video => {
+                        chatter_i18n::tr("Video call started")
                     }
-                    CallMessageType::Ended if channel => {
-                        if call.is_video { "Video call ended" } else { "Call ended" }.to_string()
+                    CallMessageType::Started if channel => chatter_i18n::tr("Call started"),
+                    CallMessageType::Ended if channel && video => {
+                        chatter_i18n::tr("Video call ended")
                     }
-                    _ if current_user_id == Some(&call.initiator_id) => format!("Outgoing {noun}"),
-                    _ => format!("Incoming {noun}"),
+                    CallMessageType::Ended if channel => chatter_i18n::tr("Call ended"),
+                    _ if current_user_id == Some(&call.initiator_id) && video => {
+                        chatter_i18n::tr("Outgoing video call")
+                    }
+                    _ if current_user_id == Some(&call.initiator_id) => {
+                        chatter_i18n::tr("Outgoing call")
+                    }
+                    _ if video => chatter_i18n::tr("Incoming video call"),
+                    _ => chatter_i18n::tr("Incoming call"),
                 };
-                return format!("{}\u{1F4DE} {}", pin, what);
+                return format!("{pin}\u{1F4DE} {what}");
             }
             MessageContent::System(system) => {
                 return format!("{}{}", pin, system.description_for(&self.conversation_type));
@@ -394,14 +404,22 @@ impl Message {
         } else if let Some(label) = attachment_label {
             label.to_string()
         } else if att_count > 0 {
-            let suffix = if att_count == 1 { "" } else { "s" };
-            format!("\u{1F4CE} {} attachment{}", att_count, suffix)
+            chatter_i18n::trn(
+                "\u{1F4CE} {n} attachment",
+                "\u{1F4CE} {n} attachments",
+                att_count as u64,
+                &[],
+            )
         } else {
-            "[Message]".to_string()
+            chatter_i18n::tr("[Message]")
         };
         let max = (!text.is_empty()).then_some(200);
+        let isolated = format_preview_body("", &body, max);
         if is_own {
-            format!("{pin}{}", format_preview_body("You: ", &body, max))
+            format!(
+                "{pin}{}",
+                chatter_i18n::trf("You: {}", &[&isolated])
+            )
         } else if matches!(
             &self.conversation_type,
             ConversationType::Channel | ConversationType::AnonGroup | ConversationType::Mesh
@@ -410,12 +428,12 @@ impl Message {
                 .and_then(|name| name.split_whitespace().next())
                 .unwrap_or("");
             if name.is_empty() {
-                format!("{pin}{}", format_preview_body("", &body, max))
+                format!("{pin}{isolated}")
             } else {
-                format!("{pin}{}", format_preview_body(&format!("{name}: "), &body, max))
+                format!("{pin}{}", chatter_i18n::trf("{}: {}", &[&name, &isolated]))
             }
         } else {
-            format!("{pin}{}", format_preview_body("", &body, max))
+            format!("{pin}{isolated}")
         }
     }
 }

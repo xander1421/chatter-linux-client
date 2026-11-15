@@ -33,14 +33,14 @@ export component PrivacySettings inherits VerticalLayout {
 
     // Section header
     Text {
-        text: "Privacy";
+        text: @tr("Privacy");
         color: Colors.text-primary;
         font-size: Typography.xl;
         font-weight: Typography.semibold;
     }
 
     Text {
-        text: "Control what information you share with others";
+        text: @tr("Control what information you share with others");
         color: Colors.text-muted;
         font-size: Typography.sm;
     }
@@ -62,7 +62,7 @@ export component PrivacySettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Who can see my photo and name";
+                text: @tr("Who can see my photo and name");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -70,16 +70,16 @@ export component PrivacySettings inherits VerticalLayout {
 
             Text {
                 width: max(0px, parent.width - parent.padding * 2);
-                text: "Everyone else sees your initials. Narrowing this gives your profile a new key, so people who could see it before can't.";
+                text: @tr("Everyone else sees your initials. Narrowing this gives your profile a new key, so people who could see it before can't.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
             }
 
             for opt in [
-                { key: "everyone", label: "Everyone" },
-                { key: "contacts", label: "My contacts" },
-                { key: "nobody", label: "Nobody" },
+                { key: "everyone", label: @tr("Everyone") },
+                { key: "contacts", label: @tr("My contacts") },
+                { key: "nobody", label: @tr("Nobody") },
             ]: Rectangle {
                 property <bool> selected: (root.profile-visibility-pending != "" ? root.profile-visibility-pending : root.profile-visibility) == opt.key;
                 height: Spacing.touch-target-min;
@@ -140,14 +140,14 @@ export component PrivacySettings inherits VerticalLayout {
 
                 Text {
                     width: parent.width;
-                    text: "Enter your PIN to change this";
+                    text: @tr("Enter your PIN to change this");
                     color: Colors.text-secondary;
                     font-size: Typography.xs;
                     wrap: word-wrap;
                 }
 
                 Input {
-                    placeholder: "PIN";
+                    placeholder: @tr("PIN");
                     password: true;
                     text <=> root.profile-visibility-pin;
                 }
@@ -158,7 +158,7 @@ export component PrivacySettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Cancel";
+                        text: @tr("Cancel");
                         variant: "secondary";
                         disabled: root.profile-visibility-busy;
                         clicked => { root.profile-visibility-cancelled(); }
@@ -166,7 +166,7 @@ export component PrivacySettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Confirm";
+                        text: @tr("Confirm");
                         loading: root.profile-visibility-busy;
                         disabled: root.profile-visibility-busy || root.profile-visibility-pin == "";
                         clicked => {
@@ -210,7 +210,7 @@ export component PrivacySettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Shield";
+            accessible-text: @tr("Shield");
             checked <=> root.shield-switch;
             toggled(value) => {
                 root.shield-switch = AnonMode.enabled;
@@ -218,7 +218,7 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             Text {
-                text: "Shield";
+                text: @tr("Shield");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -226,8 +226,8 @@ export component PrivacySettings inherits VerticalLayout {
             Text {
                 width: shield-row.label-width;
                 text: AnonMode.onion-built
-                    ? "Hide channels and Saved messages, send DMs through anonymous mailboxes, and route traffic over Tor. Turning it on asks for your PIN."
-                    : "Hide channels and Saved messages and send DMs through anonymous mailboxes. Turning it on asks for your PIN.";
+                    ? @tr("Hide channels and Saved messages, send DMs through anonymous mailboxes, and route traffic over Tor. Turning it on asks for your PIN.")
+                    : @tr("Hide channels and Saved messages and send DMs through anonymous mailboxes. Turning it on asks for your PIN.");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -251,7 +251,7 @@ export component PrivacySettings inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Who can find me by my username";
+                text: @tr("Who can find me by my username");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -259,16 +259,16 @@ export component PrivacySettings inherits VerticalLayout {
             Text {
                 width: max(0px, parent.width - parent.padding * 2);
                 text: root.username-discoverable
-                    ? "Anyone who types your exact username can find you"
-                    : "Only people with your friend code or username link can find you";
+                    ? @tr("Anyone who types your exact username can find you")
+                    : @tr("Only people with your friend code or username link can find you");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
             }
 
             for opt in [
-                { discoverable: true, label: "Everyone" },
-                { discoverable: false, label: "Nobody" },
+                { discoverable: true, label: @tr("Everyone") },
+                { discoverable: false, label: @tr("Nobody") },
             ]: Rectangle {
                 property <bool> selected: root.username-discoverable == opt.discoverable;
                 height: Spacing.touch-target-min;
@@ -355,7 +355,7 @@ export component PrivacySettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Read receipts";
+            accessible-text: @tr("Read receipts");
             checked <=> root.read-receipts-enabled;
             toggled(value) => {
                 root.read-receipts-enabled = value;
@@ -363,14 +363,14 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             Text {
-                text: "Read receipts";
+                text: @tr("Read receipts");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: read-receipts-row.label-width;
-                text: "Let others know when you've read their messages";
+                text: @tr("Let others know when you've read their messages");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -393,7 +393,7 @@ export component PrivacySettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            accessible-text: "Typing indicators";
+            accessible-text: @tr("Typing indicators");
             checked <=> root.typing-indicators-enabled;
             toggled(value) => {
                 root.typing-indicators-enabled = value;
@@ -401,14 +401,14 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             Text {
-                text: "Typing indicators";
+                text: @tr("Typing indicators");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
             }
             Text {
                 width: typing-indicators-row.label-width;
-                text: "Show when you're typing a message";
+                text: @tr("Show when you're typing a message");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;

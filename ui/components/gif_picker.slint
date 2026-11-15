@@ -38,7 +38,7 @@ component GifTile inherits Rectangle {
     animate opacity { duration: Materials.motion-quick; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(root.stagger-index, 8) * 18ms / Appearance.animation-speed; }
     background: root.ready && (area.has-hover || area.pressed) ? Materials.hover : Colors.inset;
     accessible-role: button;
-    accessible-label: root.gif.failed ? "GIF " + root.gif.id + ", preview unavailable" : "GIF " + root.gif.id;
+    accessible-label: root.gif.failed ? @tr("GIF {}, preview unavailable", root.gif.id) : @tr("GIF {}", root.gif.id);
     accessible-enabled: root.ready;
     accessible-action-default => { if root.ready { root.picked(root.gif.id, root.gif.full-url); } }
 
@@ -178,7 +178,7 @@ export component GifPicker inherits GlassSurface {
                     if root.show-recent: Text {
                         y: 0px;
                         height: root.section-header;
-                        text: "Recent";
+                        text: @tr("Recent");
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: Typography.semibold;
@@ -205,7 +205,7 @@ export component GifPicker inherits GlassSurface {
                     if root.show-recent && (root.show-results || root.loading): Text {
                         y: root.results-top;
                         height: root.section-header;
-                        text: root.loading ? "Loading trending…" : "Trending";
+                        text: root.loading ? @tr("Loading trending…") : @tr("Trending");
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: Typography.semibold;
@@ -249,14 +249,14 @@ export component GifPicker inherits GlassSurface {
                         }
 
                         Text {
-                            text: root.failed ? "Couldn't load GIFs" : (root.show-search-results ? "No GIFs found" : "No trending GIFs");
+                            text: root.failed ? @tr("Couldn't load GIFs") : (root.show-search-results ? @tr("No GIFs found") : @tr("No trending GIFs"));
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             horizontal-alignment: center;
                         }
 
                         Text {
-                            text: root.failed ? "The GIF service is unavailable." : (root.show-search-results ? "Try a different search term" : "Try again later.");
+                            text: root.failed ? @tr("The GIF service is unavailable.") : (root.show-search-results ? @tr("Try a different search term") : @tr("Try again later."));
                             wrap: word-wrap;
                             color: Colors.text-muted;
                             font-size: Typography.xs;
@@ -266,7 +266,7 @@ export component GifPicker inherits GlassSurface {
                         if root.failed: HorizontalLayout {
                             alignment: center;
                             Button {
-                                text: "Retry";
+                                text: @tr("Retry");
                                 variant: "secondary";
                                 clicked => { root.search(root.search-query); }
                             }
@@ -279,7 +279,7 @@ export component GifPicker inherits GlassSurface {
                         y: parent.height - root.attribution-height;
                         width: parent.width;
                         height: root.attribution-height;
-                        text: "Powered by Klipy";
+                        text: @tr("Powered by Klipy");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;

@@ -23,35 +23,34 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
             let cat = meta.category();
             // Only an in-app recording is a voice note; picked audio is music.
             let voice = SharedCategory::of(meta) == SharedCategory::Voice;
-            let emoji = match cat {
-                FileCategory::Image => "📷",
-                FileCategory::Video => "🎬",
-                FileCategory::Audio if voice => "🎤",
-                FileCategory::Audio => "🎵",
-                FileCategory::Document => "📄",
-                FileCategory::Code => "📝",
-                FileCategory::Archive => "📦",
-                FileCategory::Other => "📎",
+            return match cat {
+                FileCategory::Image => chatter_i18n::tr("📷 Photo"),
+                FileCategory::Video => chatter_i18n::tr("🎬 Video"),
+                FileCategory::Audio if voice => chatter_i18n::tr("🎤 Voice message"),
+                FileCategory::Audio => chatter_i18n::tr("🎵 Music"),
+                FileCategory::Document => chatter_i18n::tr("📄 Document"),
+                FileCategory::Code => chatter_i18n::tr("📝 Code"),
+                FileCategory::Archive => chatter_i18n::tr("📦 Archive"),
+                FileCategory::Other => chatter_i18n::tr("📎 File"),
             };
-            let name = match cat {
-                FileCategory::Image => "Photo",
-                FileCategory::Video => "Video",
-                FileCategory::Audio if voice => "Voice message",
-                FileCategory::Audio => "Music",
-                FileCategory::Document => "Document",
-                FileCategory::Code => "Code",
-                FileCategory::Archive => "Archive",
-                FileCategory::Other => "File",
-            };
-            return format!("{} {}", emoji, name);
         }
-        return format!("📎 {} attachments", attachments.len());
+        return chatter_i18n::trn(
+            "📎 {n} attachment",
+            "📎 {n} attachments",
+            attachments.len() as u64,
+            &[],
+        );
     }
     if !message.attachments.is_empty() {
         if message.attachments.len() == 1 {
-            return "📎 Attachment".to_string();
+            return chatter_i18n::tr("📎 Attachment");
         }
-        return format!("📎 {} attachments", message.attachments.len());
+        return chatter_i18n::trn(
+            "📎 {n} attachment",
+            "📎 {n} attachments",
+            message.attachments.len() as u64,
+            &[],
+        );
     }
     String::new()
 }

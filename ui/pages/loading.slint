@@ -7,7 +7,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component LoadingPage inherits Rectangle {
-    in property <string> message: "Loading...";
+    in property <string> message: @tr("Loading...");
     in property <string> secondary-message: "";
 
     background: Materials.ambient;

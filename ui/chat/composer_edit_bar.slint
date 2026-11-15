@@ -31,7 +31,7 @@ export component ComposerEditBar inherits Rectangle {
             }
 
             Text {
-                text: "Editing message";
+                text: @tr("Editing message");
                 color: Colors.primary;
                 font-size: Typography.sm;
                 font-weight: 500;
@@ -46,7 +46,7 @@ export component ComposerEditBar inherits Rectangle {
             background: cancel-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
             border-radius: Spacing.radius-sm;
             accessible-role: button;
-            accessible-label: "Cancel edit";
+            accessible-label: @tr("Cancel edit");
             accessible-action-default => { root.cancel-edit(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.cancel-edit(); } }
 

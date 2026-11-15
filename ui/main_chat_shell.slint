@@ -467,7 +467,7 @@ export component MainChatShell inherits Rectangle {
                     vertical-stretch: 1;
                     background: Colors.background;
                     Text {
-                        text: "Select a conversation";
+                        text: @tr("Select a conversation");
                         color: Colors.text-muted;
                         font-size: Typography.lg;
                         horizontal-alignment: center;
@@ -516,8 +516,8 @@ export component MainChatShell inherits Rectangle {
             width: 8px;
             height: parent.height;
             accessible-role: button;
-            accessible-label: "Resize sidebar";
-            accessible-description: "Drag to resize. Left and right arrows adjust width; Home collapses; End restores the default width.";
+            accessible-label: @tr("Resize sidebar");
+            accessible-description: @tr("Drag to resize. Left and right arrows adjust width; Home collapses; End restores the default width.");
             accessible-action-default => {
                 SidebarPane.resize-sidebar(DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width);
                 SidebarPane.toggle-sidebar();

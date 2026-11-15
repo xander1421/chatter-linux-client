@@ -59,7 +59,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                         &client,
                         owner,
                         session_revision,
-                        format!("Could not update the reaction: {e}"),
+                        chatter_i18n::trf("Could not update the reaction: {}", &[&e]),
                     );
                     return;
                 }

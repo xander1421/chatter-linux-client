@@ -102,7 +102,9 @@ pub(super) fn load_shared_tabs(
                         != (Some(peer_id), Some(conversation), generation) { return; }
                     let host = w.global::<crate::ModalHostState>();
                     host.set_profile_shared_loading(false);
-                    host.set_profile_shared_error("Could not load shared content. Try again.".into());
+                    host.set_profile_shared_error(
+                        chatter_i18n::tr("Could not load shared content. Try again.").into(),
+                    );
                 });
                 return;
             }
@@ -259,7 +261,9 @@ fn request_shared_page(
                 Err(error) => {
                     tracing::warn!(%error, "Could not load shared content page");
                     w.global::<crate::ModalHostState>()
-                        .set_profile_shared_error("Could not load shared content. Try again.".into());
+                        .set_profile_shared_error(
+                            chatter_i18n::tr("Could not load shared content. Try again.").into(),
+                        );
                     return;
                 }
             };
@@ -334,7 +338,7 @@ fn request_shared_page(
 }
 
 /// Only the painted profile title changes; indexed filenames and jump IDs stay intact.
-fn shared_content_display_title<'a>(category: &str, title: &'a str) -> &'a str {
+fn shared_content_display_title(category: &str, title: &str) -> String {
     if category == "voice" {
         // Recorded labels have appeared with spaces and underscores. Reuse the
         // attachment predicate after normalizing those separators for display only.
@@ -344,10 +348,10 @@ fn shared_content_display_title<'a>(category: &str, title: &'a str) -> &'a str {
             .collect::<Vec<_>>()
             .join(" ");
         if chatter_core::domain::attachment::is_generic_voice_note_filename(&normalized) {
-            return "Voice message";
+            return chatter_i18n::tr("Voice message");
         }
     }
-    title
+    title.to_owned()
 }
 
 /// Wire the shared-content drawer: tab switches, paging, and opening an item.

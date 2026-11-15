@@ -17,7 +17,7 @@ export component ChannelAccessSection inherits VerticalLayout {
     // under-measured line squeezed Create link onto the Join requests text.
     Text {
         width: parent.width;
-        text: "Access";
+        text: @tr("Access");
         color: Colors.text-primary;
         font-size: Typography.lg;
         font-weight: Typography.semibold;
@@ -81,14 +81,14 @@ export component ChannelAccessSection inherits VerticalLayout {
         spacing: Spacing.sm;
 
         Text {
-            text: "Join links";
+            text: @tr("Join links");
             color: Colors.text-secondary;
             font-size: Typography.sm;
             font-weight: Typography.medium;
         }
         Text {
             width: parent.width;
-            text: "Anyone with a link can join. The link can be copied only now, when it is created.";
+            text: @tr("Anyone with a link can join. The link can be copied only now, when it is created.");
             color: Colors.text-muted;
             font-size: Typography.xs;
             wrap: word-wrap;
@@ -96,18 +96,18 @@ export component ChannelAccessSection inherits VerticalLayout {
 
         approval-row := ToggleRow {
             checked <=> root.link-needs-approval;
-            accessible-text: "Require approval";
+            accessible-text: @tr("Require approval");
             // Preferred height must measure both labels beside the switch, not at their unwrapped width.
             Text {
                 width: approval-row.label-width;
-                text: "Require approval";
+                text: @tr("Require approval");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
             Text {
                 width: approval-row.label-width;
-                text: "People who use the link wait until an admin lets them in";
+                text: @tr("People who use the link wait until an admin lets them in");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
@@ -118,7 +118,7 @@ export component ChannelAccessSection inherits VerticalLayout {
             alignment: start;
             Button {
                 height: Spacing.touch-target-min;
-                text: "Create link";
+                text: @tr("Create link");
                 variant: "primary";
                 disabled: MembershipGlobal.access-busy;
                 loading: MembershipGlobal.access-busy;
@@ -143,7 +143,7 @@ export component ChannelAccessSection inherits VerticalLayout {
                     alignment: start;
                     Button {
                         height: Spacing.touch-target-min;
-                        text: "Copy link";
+                        text: @tr("Copy link");
                         variant: "secondary";
                         clicked => { MembershipGlobal.copy-link(MembershipGlobal.new-link); }
                     }
@@ -164,7 +164,7 @@ export component ChannelAccessSection inherits VerticalLayout {
             }
             Button {
                 height: Spacing.touch-target-min;
-                text: "Revoke";
+                text: @tr("Revoke");
                 variant: "destructive";
                 disabled: MembershipGlobal.access-busy;
                 clicked => { MembershipGlobal.revoke-link(root.channel-id, link.id); }
@@ -177,7 +177,7 @@ export component ChannelAccessSection inherits VerticalLayout {
         spacing: Spacing.sm;
 
         Text {
-            text: MembershipGlobal.join-requests.length == 0 ? "No join requests" : "Join requests";
+            text: MembershipGlobal.join-requests.length == 0 ? @tr("No join requests") : @tr("Join requests");
             color: Colors.text-secondary;
             font-size: Typography.sm;
             font-weight: Typography.medium;
@@ -196,14 +196,14 @@ export component ChannelAccessSection inherits VerticalLayout {
                 alignment: start;
                 Button {
                     height: Spacing.touch-target-min;
-                    text: "Approve";
+                    text: @tr("Approve");
                     variant: "primary";
                     disabled: MembershipGlobal.access-busy;
                     clicked => { MembershipGlobal.approve-request(root.channel-id, req.user-id); }
                 }
                 Button {
                     height: Spacing.touch-target-min;
-                    text: "Reject";
+                    text: @tr("Reject");
                     variant: "secondary";
                     disabled: MembershipGlobal.access-busy;
                     clicked => { MembershipGlobal.reject-request(root.channel-id, req.user-id); }

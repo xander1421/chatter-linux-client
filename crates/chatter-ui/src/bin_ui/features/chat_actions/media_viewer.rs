@@ -172,7 +172,7 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
         .set_media_viewer_has_next(index.is_some_and(|i| i + 1 < items.len()));
     w.global::<crate::ChatPane>().set_media_viewer_position(
         index
-            .map(|i| format!("{} / {}", i + 1, items.len()))
+            .map(|i| chatter_i18n::trf("{} / {}", &[&(i + 1), &items.len()]))
             .unwrap_or_default()
             .into(),
     );
@@ -221,8 +221,9 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                     .set_media_viewer_has_previous(index > 0);
                 w.global::<crate::ChatPane>()
                     .set_media_viewer_has_next(index + 1 < all.len());
-                w.global::<crate::ChatPane>()
-                    .set_media_viewer_position(format!("{} / {}", index + 1, all.len()).into());
+                w.global::<crate::ChatPane>().set_media_viewer_position(
+                    chatter_i18n::trf("{} / {}", &[&(index + 1), &all.len()]).into(),
+                );
                 w.global::<crate::ChatPane>()
                     .set_media_viewer_previous_thumbnail(
                         previous
@@ -361,7 +362,9 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                             w.set_toast_variant("success".into());
                         }
                         Err(_) => {
-                            w.set_toast_message("Unable to export this media".into());
+                            w.set_toast_message(
+                                chatter_i18n::tr("Unable to export this media").into(),
+                            );
                             w.set_toast_variant("error".into());
                         }
                     }
@@ -400,16 +403,16 @@ fn stream_export(
         let mut chunk = reader.read_range(offset, expected);
         if chunk.len() != expected {
             chunk.zeroize();
-            return Err("Incomplete authenticated read".into());
+            return Err(chatter_i18n::tr("Incomplete authenticated read"));
         }
         let result = output.write_all(&chunk);
         chunk.zeroize();
-        result.map_err(|_| "Download write failed")?;
+        result.map_err(|_| chatter_i18n::tr("Download write failed"))?;
         offset += expected;
     }
     output
         .sync_all()
-        .map_err(|_| "Unable to finish download".to_string())?;
+        .map_err(|_| chatter_i18n::tr("Unable to finish download"))?;
     check()
 }
 
@@ -423,14 +426,16 @@ pub(crate) fn export(
         if client.auth_snapshot().session_revision == revision {
             Ok(())
         } else {
-            Err("Session changed".to_string())
+            Err(chatter_i18n::tr("Session changed"))
         }
     };
-    let attachment = client.get_attachment(id).ok_or("Attachment unavailable")?;
+    let attachment = client
+        .get_attachment(id)
+        .ok_or_else(|| chatter_i18n::tr("Attachment unavailable"))?;
     // Whole-file authentication precedes creating any plaintext destination.
     let reader = client
         .open_attachment_range(id)
-        .map_err(|_| "Authenticated source unavailable")?;
+        .map_err(|_| chatter_i18n::tr("Authenticated source unavailable"))?;
     check()?;
     #[cfg(target_os = "android")]
     {
@@ -444,66 +449,71 @@ pub(crate) fn export(
             session
                 .file
                 .as_mut()
-                .ok_or("Export descriptor unavailable")?,
+                .ok_or_else(|| chatter_i18n::tr("Export descriptor unavailable"))?,
             check,
         )?;
         session.finish()?;
         return Ok(if copy {
-            "Image copied"
+            chatter_i18n::tr("Image copied")
         } else {
-            "Saved to Chatter downloads"
-        }
-        .into());
+            chatter_i18n::tr("Saved to Chatter downloads")
+        });
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         if copy {
             // Image decoding is bounded by ImageProcessor, and encoded input is bounded too.
             if reader.plaintext_size() > 32 * 1024 * 1024 {
-                return Err("Image too large for clipboard".into());
+                return Err(chatter_i18n::tr("Image too large for clipboard"));
             }
             let image = chatter_core::media::ImageProcessor::load_from_memory(
                 &reader.read_range(0, reader.plaintext_size()),
             )
-            .map_err(|_| "Image decoding failed")?
+            .map_err(|_| chatter_i18n::tr("Image decoding failed"))?
             .to_rgba8();
             let (width, height) = image.dimensions();
             check()?;
             // Keep ownership for the application lifetime on Wayland and X11.
-            let mut clipboard = CLIPBOARD.lock().map_err(|_| "Clipboard unavailable")?;
+            let mut clipboard =
+                CLIPBOARD.lock().map_err(|_| chatter_i18n::tr("Clipboard unavailable"))?;
             if clipboard.is_none() {
-                *clipboard = Some(arboard::Clipboard::new().map_err(|_| "Clipboard unavailable")?);
+                *clipboard = Some(
+                    arboard::Clipboard::new()
+                        .map_err(|_| chatter_i18n::tr("Clipboard unavailable"))?,
+                );
             }
             clipboard
                 .as_mut()
-                .ok_or("Clipboard unavailable")?
+                .ok_or_else(|| chatter_i18n::tr("Clipboard unavailable"))?
                 .set_image(arboard::ImageData {
                     width: width as usize,
                     height: height as usize,
                     bytes: std::borrow::Cow::Owned(image.into_raw()),
                 })
-                .map_err(|_| "Image copy failed")?;
-            return Ok("Image copied".into());
+                .map_err(|_| chatter_i18n::tr("Image copy failed"))?;
+            return Ok(chatter_i18n::tr("Image copied"));
         }
         let folder = dirs::download_dir()
-            .ok_or("Downloads folder unavailable")?
+            .ok_or_else(|| chatter_i18n::tr("Downloads folder unavailable"))?
             .join("Chatter");
-        std::fs::create_dir_all(&folder).map_err(|_| "Unable to create download folder")?;
+        std::fs::create_dir_all(&folder)
+            .map_err(|_| chatter_i18n::tr("Unable to create download folder"))?;
         let safe = export_basename(&attachment.metadata.name);
         let destination = folder.join(format!("{id}-{safe}"));
         let (path, mut output) =
-            create_export_file(&destination).map_err(|_| "Download cannot be created")?;
+            create_export_file(&destination)
+                .map_err(|_| chatter_i18n::tr("Download cannot be created"))?;
         if let Err(error) = stream_export(&reader, &mut output, check) {
             drop(output);
             let _ = std::fs::remove_file(path);
             return Err(error);
         }
-        Ok("Saved to Downloads/Chatter".into())
+        Ok(chatter_i18n::tr("Saved to Downloads/Chatter"))
     }
     #[cfg(target_os = "ios")]
     {
         let _ = (attachment, reader, copy);
-        Err("Media export unavailable".into())
+        Err(chatter_i18n::tr("Media export unavailable"))
     }
 }
 

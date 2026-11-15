@@ -71,6 +71,8 @@ required-features = ["ui-test-debug"]
 [dependencies]
 chatter-ui-slint = { path = "../chatter-ui-slint" }
 chatter-core = { path = "../chatter-core", default-features = false }
+chatter-i18n = { path = "../chatter-i18n" }
+sys-locale = "0.3"
 
 # ============================================================================
 # UI Framework - Slint

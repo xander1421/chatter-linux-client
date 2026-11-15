@@ -156,12 +156,14 @@ pub(super) fn wire_profile_and_deletion(window: &MainWindow, ui_ctx: &Arc<Chatte
                         tracing::error!("Account deletion failed");
                         let msg = match e {
                             chatter_core::client::AccountError::InvalidPassword => {
-                                "Incorrect password. Try again."
+                                chatter_i18n::tr("Incorrect password. Try again.")
                             }
-                            chatter_core::client::AccountError::NotLoggedIn => {
-                                "Your session ended. Sign in again before deleting your account."
-                            }
-                            _ => "Could not delete your account. Check your connection and try again.",
+                            chatter_core::client::AccountError::NotLoggedIn => chatter_i18n::tr(
+                                "Your session ended. Sign in again before deleting your account.",
+                            ),
+                            _ => chatter_i18n::tr(
+                                "Could not delete your account. Check your connection and try again.",
+                            ),
                         };
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {

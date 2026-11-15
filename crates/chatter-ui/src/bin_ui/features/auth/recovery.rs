@@ -38,15 +38,21 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // user must be told, or they believe a backup still protects
                     // them when none does. It is destroyed on every recovery, so
                     // the notice fires whenever the flag is set.
-                    let backup_notice = if result.key_backup_invalidated {
-                        " Your previous PIN-based backup was invalidated by this recovery — set up a new backup from Settings after signing in."
+                    let msg = if result.key_backup_invalidated {
+                        chatter_i18n::trf(
+                            "Account recovered successfully! {} recovery codes remaining. \
+                             Your previous PIN-based backup was invalidated by this recovery — \
+                             set up a new backup from Settings after signing in. \
+                             Please sign in with your new credentials.",
+                            &[&result.remaining_codes],
+                        )
                     } else {
-                        ""
+                        chatter_i18n::trf(
+                            "Account recovered successfully! {} recovery codes remaining. \
+                             Please sign in with your new credentials.",
+                            &[&result.remaining_codes],
+                        )
                     };
-                    let msg = format!(
-                        "Account recovered successfully! {} recovery codes remaining.{} Please sign in with your new credentials.",
-                        result.remaining_codes, backup_notice
-                    );
                     tracing::info!(
                         "Account recovery succeeded, {} codes remaining, key_backup_invalidated={}",
                         result.remaining_codes, result.key_backup_invalidated
