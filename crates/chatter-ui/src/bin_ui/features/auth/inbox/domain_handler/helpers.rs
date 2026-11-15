@@ -27,26 +27,31 @@ pub(super) fn accepts_event_kind(active: ConversationType, event: ConversationTy
     }
 }
 
-/// Update a chat-list row's unread badge.
+/// Update a conversation row's unread badge, in the chat list or the
+/// Archived list — whichever holds the row. Archived rows are patched in
+/// place like loose ones: every local read lands here, and nothing else
+/// reaches the archived model short of a full list rebuild.
 pub(crate) fn update_unread_count(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
     channel_id: &str,
     count: u32,
 ) {
-    let rows = window.global::<crate::SidebarPane>().get_chat_rows();
-    for i in 0..rows.row_count() {
-        if let Some(mut row) = rows.row_data(i) {
-            if row.conversation_id.as_str() == channel_id {
-                if row.unread_count == count as i32 {
+    let pane = window.global::<crate::SidebarPane>();
+    for rows in [pane.get_chat_rows(), pane.get_archived_rows()] {
+        for i in 0..rows.row_count() {
+            if let Some(mut row) = rows.row_data(i) {
+                if row.conversation_id.as_str() == channel_id {
+                    if row.unread_count == count as i32 {
+                        return;
+                    }
+                    row.unread_count = count as i32;
+                    crate::bin_ui::converters::channel::refresh_row_accessible_label(&mut row);
+                    rows.set_row_data(i, row);
+                    crate::bin_ui::features::sidebar::refresh_flat_rows(window);
+                    recompute_total_unread(window, ui_ctx);
                     return;
                 }
-                row.unread_count = count as i32;
-                crate::bin_ui::converters::channel::refresh_row_accessible_label(&mut row);
-                rows.set_row_data(i, row);
-                crate::bin_ui::features::sidebar::refresh_flat_rows(window);
-                recompute_total_unread(window, ui_ctx);
-                return;
             }
         }
     }
