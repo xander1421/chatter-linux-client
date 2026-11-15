@@ -754,8 +754,8 @@ export component Sidebar inherits Rectangle {
                             accessible-role: button;
                             accessible-label: "New channel";
                             accessible-action-default => { root.create-channel-clicked(); }
-                            Image { source: Icons.plus; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                colorize: c-new-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
+                            Image { source: Icons.plus; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 16px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                colorize: c-new-touch.has-hover ? Colors.text-primary : DesktopChrome.macos ? Colors.text-secondary : Colors.text-muted; }
                             c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-channel-clicked(); } }
                         } }
                     }

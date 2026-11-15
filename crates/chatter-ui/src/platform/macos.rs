@@ -90,7 +90,15 @@ fn inset_buttons(window: &NSWindow) {
     let Some(close) = window.standardWindowButton(NSWindowButton::CloseButton) else {
         return;
     };
-    let horizontal_offset = 18.0 - close.frame().origin.x;
+    let Some(zoom) = window.standardWindowButton(NSWindowButton::ZoomButton) else {
+        return;
+    };
+    // Center the actual native group over the 88pt rail inside its 8pt
+    // window gutter. Keep AppKit's button sizes and spacing intact.
+    let group_left = close.frame().origin.x;
+    let group_right = zoom.frame().origin.x + zoom.frame().size.width;
+    let rail_center = 8.0 + f64::from(TRAFFIC_LIGHTS_WIDTH) / 2.0;
+    let horizontal_offset = rail_center - (group_left + group_right) / 2.0;
     for kind in [
         NSWindowButton::CloseButton,
         NSWindowButton::MiniaturizeButton,
