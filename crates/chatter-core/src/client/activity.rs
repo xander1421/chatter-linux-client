@@ -22,7 +22,7 @@ impl ChatterClient {
         // The foreground ntfy connection cannot wake a suspended iOS app.
         // Do not present its subscription as native push registration.
         #[cfg(target_os = "ios")]
-        let push = "Unavailable on iPhone";
+        let push = chatter_i18n::tr("Unavailable on iPhone");
         #[cfg(not(target_os = "ios"))]
         let push = if self.push_url.lock().is_none() {
             chatter_i18n::tr("Off")

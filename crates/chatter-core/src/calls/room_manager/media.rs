@@ -286,6 +286,13 @@ impl RoomManager {
     ) -> Result<(), CallError> {
         let local_id = self.room.read().as_ref().ok_or(CallError::NotInCall)?
             .local_participant().identity().to_string();
+        let publication = self.camera_track_sid.read().clone().ok_or(CallError::NotInCall)?;
+        let generation = self.camera_operation_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst).wrapping_add(1);
+        let still_current = || {
+            self.camera_published.load(std::sync::atomic::Ordering::SeqCst)
+                && self.camera_track_sid.read().as_ref() == Some(&publication)
+                && self.camera_operation_generation.load(std::sync::atomic::Ordering::SeqCst) == generation
+        };
         let (source, old_path, old_config) = {
             let capture = self.video_capture.read();
             let source = capture.active_source().ok_or(CallError::CameraUnavailable)?;
@@ -299,22 +306,33 @@ impl RoomManager {
                 screen_share: false,
             }
         });
-        self.video_capture.write().stop();
-        let replacement = self.video_capture.write().start_with_source(
-            device_path, Some(config.unwrap_or_else(|| old_config.clone())), preview.clone(), Some(source.clone()),
-        );
+        let replacement = {
+            let mut capture = self.video_capture.write();
+            if !still_current() { return Err(CallError::CallEnded); }
+            capture.stop();
+            capture.start_with_source(
+                device_path, Some(config.unwrap_or_else(|| old_config.clone())), preview.clone(), Some(source.clone()),
+            )
+        };
         let changed = match replacement {
             Ok((_, ready)) => matches!(tokio::time::timeout(std::time::Duration::from_secs(60), ready).await, Ok(Ok(()))),
             Err(_) => false,
         };
+        if !still_current() { return Err(CallError::CallEnded); }
         if changed { return Ok(()); }
-        self.video_capture.write().stop();
-        let restore = self.video_capture.write().start_with_source(
-            Some(&old_path), Some(old_config), preview, Some(source),
-        );
+        let restore = {
+            let mut capture = self.video_capture.write();
+            // Camera-off/end can run while first-frame readiness is pending.
+            // Hold the capture lock across ownership checking and restart so
+            // a stale switch cannot undo that stop or replace a newer track.
+            if !still_current() { return Err(CallError::CallEnded); }
+            capture.stop();
+            capture.start_with_source(Some(&old_path), Some(old_config), preview, Some(source))
+        };
         if let Ok((_, ready)) = restore {
             if !matches!(tokio::time::timeout(std::time::Duration::from_secs(60), ready).await, Ok(Ok(()))) {
-                self.video_capture.write().stop();
+                let mut capture = self.video_capture.write();
+                if still_current() { capture.stop(); }
             }
         }
         Err(CallError::CameraUnavailable)
@@ -600,13 +618,17 @@ impl RoomManager {
     /// capture loop ends, so remote viewers freeze on the last frame instead of
     /// showing the avatar. Mirrors `stop_screen_share`.
     pub async fn stop_camera(&self) {
+        #[cfg(target_os = "ios")]
+        self.camera_operation_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.camera_capture_retained.store(false, std::sync::atomic::Ordering::SeqCst);
+        // Invalidate pending startup/rollback before waiting for capture's
+        // lock. A switch that resumes after this stop must not restart it.
+        self.camera_published
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         {
             let mut capture = self.video_capture.write();
             capture.stop();
         }
-        self.camera_published
-            .store(false, std::sync::atomic::Ordering::SeqCst);
         let sid = self.camera_track_sid.write().take();
         let Some(sid) = sid else { return };
         let local_participant = {

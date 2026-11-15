@@ -18,6 +18,8 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
+        UIBackgroundModes:
+          - audio
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations:
@@ -93,6 +95,8 @@ targets:
           - CoreAudio
           - -framework
           - CoreMedia
+          - -framework
+          - CoreVideo
           - -framework
           - VideoToolbox
           - -framework

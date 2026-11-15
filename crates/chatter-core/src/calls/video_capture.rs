@@ -363,13 +363,18 @@ impl VideoCapture {
             config.fps
         );
 
-        let video_source = existing_source.unwrap_or_else(|| NativeVideoSource::new(
-            VideoResolution {
+        #[cfg(target_os = "ios")]
+        let resolution = if config.width <= 640 {
+            VideoResolution { width: 480, height: 640 }
+        } else {
+            VideoResolution { width: 720, height: 1280 }
+        };
+        #[cfg(not(target_os = "ios"))]
+        let resolution = VideoResolution {
                 width: config.width,
                 height: config.height,
-            },
-            false,
-        ));
+        };
+        let video_source = existing_source.unwrap_or_else(|| NativeVideoSource::new(resolution, false));
 
         let source_clone = video_source.clone();
         let running = self.running.clone();

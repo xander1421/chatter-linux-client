@@ -110,6 +110,19 @@ final class DeviceControl: XCTestCase {
                 ).firstMatch.exists {
                     alert.buttons.matching(NSPredicate(format: "label == %@", "Allow")).firstMatch.tap()
                 }
+            } else if let pairs = step.dropFirstIfPrefixed("tap-sequence:") {
+                // Deliberately omit per-tap settling for rapid-toggle races.
+                for pair in pairs.split(separator: ";") {
+                    let values = pair.split(separator: ",").compactMap { Double($0) }
+                    guard values.count == 2, values.allSatisfy({ (0...1).contains($0) }) else {
+                        XCTFail("Invalid tap sequence: \(pairs)")
+                        return
+                    }
+                    app.coordinate(withNormalizedOffset: CGVector(dx: values[0], dy: values[1])).tap()
+                }
+                Thread.sleep(forTimeInterval: 1.5)
+            } else if let label = step.dropFirstIfPrefixed("expect-button:") {
+                XCTAssertTrue(app.buttons[String(label)].firstMatch.waitForExistence(timeout: 5), "Missing app button: \(label)")
             } else if let label = step.dropFirstIfPrefixed("tap-button:") {
                 let button = app.buttons[String(label)].firstMatch
                 guard button.waitForExistence(timeout: 5) else {
@@ -117,6 +130,7 @@ final class DeviceControl: XCTestCase {
                     return
                 }
                 button.tap()
+                Thread.sleep(forTimeInterval: 1.5)
             } else if let secs = step.dropFirstIfPrefixed("wait:").flatMap(Double.init) {
                 // For steps that kick off slow work (registration does key
                 // generation + several RPCs) — screenshot after it settles.

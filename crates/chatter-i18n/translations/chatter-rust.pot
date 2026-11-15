@@ -3377,3 +3377,6 @@ msgstr ""
 #: crates/chatter-ui/src/platform/android/notifications.rs:583 crates/chatter-core/src/services/notification_service/mod.rs:198
 msgid "New message"
 msgstr ""
+
+msgid "Unavailable on iPhone"
+msgstr ""

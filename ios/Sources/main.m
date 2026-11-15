@@ -86,7 +86,12 @@ void *chatter_ios_camera_start(bool front, uint32_t width, uint32_t fps,
     [capture.output setSampleBufferDelegate:capture queue:capture.frames];
     [capture.session beginConfiguration];
     NSString *preset = width <= 640 ? AVCaptureSessionPreset640x480 : AVCaptureSessionPreset1280x720;
-    if ([capture.session canSetSessionPreset:preset]) capture.session.sessionPreset = preset;
+    if (![capture.session canSetSessionPreset:preset]) {
+      [capture.session commitConfiguration];
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      return NULL;
+    }
+    capture.session.sessionPreset = preset;
     if (![capture.session canAddInput:input]) {
       [capture.session commitConfiguration];
       [capture.output setSampleBufferDelegate:nil queue:NULL];
@@ -102,12 +107,21 @@ void *chatter_ios_camera_start(bool front, uint32_t width, uint32_t fps,
     AVCaptureConnection *connection = [capture.output connectionWithMediaType:AVMediaTypeVideo];
     // The shared mobile UI is portrait. Rotate the actual planes so both
     // LiveKit and the local preview receive the same upright frame.
+    BOOL portrait = NO;
     if (@available(iOS 17.0, *)) {
-      if ([connection isVideoRotationAngleSupported:90]) connection.videoRotationAngle = 90;
+      if ([connection isVideoRotationAngleSupported:90]) {
+        connection.videoRotationAngle = 90;
+        portrait = YES;
+      }
     } else if (connection.isVideoOrientationSupported) {
       connection.videoOrientation = AVCaptureVideoOrientationPortrait;
+      portrait = YES;
     }
     [capture.session commitConfiguration];
+    if (!portrait) {
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      return NULL;
+    }
     double targetFPS = MAX(1, MIN(fps, 30));
     for (AVFrameRateRange *range in device.activeFormat.videoSupportedFrameRateRanges) {
       if (range.minFrameRate <= targetFPS && targetFPS <= range.maxFrameRate && [device lockForConfiguration:&error]) {
