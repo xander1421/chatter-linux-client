@@ -230,7 +230,7 @@ pub fn hide_for_profile(w: &MainWindow) {
 }
 
 /// The open conversation's timer onto the header.
-fn refresh_header(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+pub(crate) fn refresh_header(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let conv = ui_ctx.active_conversation();
     let ctx = ui_ctx.clone();
     let weak = w.as_weak();

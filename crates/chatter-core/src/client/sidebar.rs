@@ -306,7 +306,7 @@ impl ChatterClient {
             ),
             // The stored name of the note-to-self channel is its internal
             // `saved_messages_<uuid>` id, not something to show a person.
-            ConversationType::SavedMessages => "Saved messages".to_string(),
+            ConversationType::SavedMessages => chatter_i18n::tr("Saved messages"),
             _ => self
                 .sections()
                 .get_conversation_metadata(&conversation_id.to_string(), conversation_type)

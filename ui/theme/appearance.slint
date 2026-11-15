@@ -16,6 +16,11 @@ export global Appearance {
     in-out property <string> language: "system";
     in property <[LanguageOption]> languages;
     callback language-changed(string);
+    // Message rows already on screen were rendered by Rust in the old
+    // language. Set when the language changes; `reload-messages` fires once
+    // Settings, which covers the conversation, closes.
+    in-out property <bool> messages-stale: false;
+    callback reload-messages();
     in-out property <bool> keyboard-focus-visible: false;
     // Settings › Appearance › Reduce animations. Written from Rust with what
     // core persisted; the settings page writes it back and fires

@@ -39,12 +39,46 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_language = ui_ctx.clone();
     let weak_language = window.as_weak();
     appearance.on_language_changed(move |value: SharedString| {
+        // The composer placeholder is pushed from Rust. Keep its wording in
+        // the outgoing language so it can be recognised and replaced below.
+        let old_message = chatter_i18n::tr("Type a message...");
+        let old_reply = chatter_i18n::tr("Type your reply...");
         if let Err(e) = ui_ctx_language.set_app_language(value.as_str()) {
             tracing::error!("Failed to save language: {}", e);
         }
         let saved = apply_language(&ui_ctx_language.app_language());
         if let Some(w) = weak_language.upgrade() {
             w.global::<crate::Appearance>().set_language(saved.into());
+            // Slint re-renders its own @tr text. Text that Rust pushed into
+            // the UI was rendered in the old language and stays until
+            // something pushes it again: the row previews, and the open
+            // conversation's timer banner and composer placeholder.
+            crate::bin_ui::features::sidebar::refresh_draft_rows(&w, &ui_ctx_language);
+            crate::bin_ui::features::chat::disappearing::refresh_header(&w, &ui_ctx_language);
+            let pane = w.global::<crate::ChatPane>();
+            let shown = pane.get_composer_placeholder();
+            if shown.as_str() == old_message {
+                pane.set_composer_placeholder(chatter_i18n::tr("Type a message...").into());
+            } else if shown.as_str() == old_reply {
+                pane.set_composer_placeholder(chatter_i18n::tr("Type your reply...").into());
+            }
+            // The rows of the conversation under Settings are reloaded when
+            // Settings closes: reloading now would navigate away from it. A
+            // phone has no conversation open behind Settings.
+            if !w.get_is_mobile_platform() {
+                w.global::<crate::Appearance>().set_messages_stale(true);
+            }
+        }
+    });
+
+    let ui_ctx_reload = ui_ctx.clone();
+    let weak_reload = window.as_weak();
+    appearance.on_reload_messages(move || {
+        if let Some(w) = weak_reload.upgrade() {
+            crate::bin_ui::features::chat::open::select_conversation(
+                &w,
+                ui_ctx_reload.active_conversation(),
+            );
         }
     });
 

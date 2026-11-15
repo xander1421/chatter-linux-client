@@ -5,6 +5,7 @@ import { JarvisPane } from "app_jarvis_pane.slint";
 import { AuthFlow } from "app_auth_flow.slint";
 import { SettingsPane } from "app_settings_pane.slint";
 import { Spacing } from "theme/spacing.slint";
+import { Appearance } from "theme/appearance.slint";
 import { SettingsScreen } from "settings/settings_screen.slint";
 
 export component AppSettingsHost inherits Rectangle {
@@ -14,6 +15,14 @@ export component AppSettingsHost inherits Rectangle {
     callback toggle-anon-mode();
 
     background: transparent;
+
+    private property <bool> settings-open: ModalHostState.settings-open;
+    changed settings-open => {
+        if !self.settings-open && Appearance.messages-stale {
+            Appearance.messages-stale = false;
+            Appearance.reload-messages();
+        }
+    }
 
     // Settings screen — pushed from the account menu (full-screen page, the
     // tab bar hidden under it). z -1 rather than 0 because what Settings

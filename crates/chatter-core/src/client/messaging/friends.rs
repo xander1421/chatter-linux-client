@@ -118,7 +118,7 @@ impl ChatterClient {
                 out.push(ForwardDestination {
                     kind: CT::SavedMessages,
                     id: channel_id.to_string(),
-                    name: "Saved messages".to_string(),
+                    name: chatter_i18n::tr("Saved messages"),
                     private_channel: false,
                 });
             }

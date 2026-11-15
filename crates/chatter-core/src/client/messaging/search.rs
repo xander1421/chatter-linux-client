@@ -116,7 +116,7 @@ impl ChatterClient {
         if !self.anon_mode_enabled() {
             entries.push(entry(
                 "saved-messages".into(),
-                "Saved messages".into(),
+                chatter_i18n::tr("Saved messages"),
                 "saved_messages",
                 String::new(),
                 0,
