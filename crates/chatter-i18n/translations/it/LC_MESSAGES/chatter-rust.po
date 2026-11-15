@@ -3905,3 +3905,6 @@ msgstr "Rifiuta"
 #: crates/chatter-core/src/services/notification_service/mod.rs:198
 msgid "New message"
 msgstr "Nuovo messaggio"
+
+msgid "Unavailable on iPhone"
+msgstr "Non disponibile su iPhone"

@@ -3919,3 +3919,6 @@ msgstr "Rechazar"
 #: crates/chatter-core/src/services/notification_service/mod.rs:198
 msgid "New message"
 msgstr "Mensaje nuevo"
+
+msgid "Unavailable on iPhone"
+msgstr "No disponible en iPhone"

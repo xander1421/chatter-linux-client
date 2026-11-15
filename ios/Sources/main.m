@@ -10,7 +10,147 @@
 // the smoke half goes away with CHATTER_RUST_UI. Don't grow it.
 
 #import <UIKit/UIKit.h>
+#import <AVFoundation/AVFoundation.h>
+#import <CoreVideo/CoreVideo.h>
 #include <stdbool.h>
+
+// Camera buffers are borrowed only for the callback. The retained session is
+// owned by Rust's capture thread, and stop drains delivery before Rust drops
+// its context. This session never changes the call's shared audio session.
+typedef void (*ChatterCameraFrame)(void *, const uint8_t *, size_t,
+                                  const uint8_t *, size_t, uint32_t, uint32_t, int64_t);
+@interface ChatterCameraCapture : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
+@property(nonatomic, strong) AVCaptureSession *session;
+@property(nonatomic, strong) AVCaptureVideoDataOutput *output;
+@property(nonatomic, strong) dispatch_queue_t frames;
+@property(nonatomic) void *context;
+@property(nonatomic) ChatterCameraFrame callback;
+@end
+
+@implementation ChatterCameraCapture
+- (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sample
+       fromConnection:(AVCaptureConnection *)connection {
+  CVPixelBufferRef pixel = CMSampleBufferGetImageBuffer(sample);
+  if (!pixel || CVPixelBufferGetPixelFormatType(pixel) != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+      CVPixelBufferGetPlaneCount(pixel) != 2 ||
+      CVPixelBufferLockBaseAddress(pixel, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
+  self.callback(self.context, CVPixelBufferGetBaseAddressOfPlane(pixel, 0),
+                CVPixelBufferGetBytesPerRowOfPlane(pixel, 0),
+                CVPixelBufferGetBaseAddressOfPlane(pixel, 1),
+                CVPixelBufferGetBytesPerRowOfPlane(pixel, 1),
+                (uint32_t)CVPixelBufferGetWidth(pixel), (uint32_t)CVPixelBufferGetHeight(pixel),
+                (int64_t)(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample)) * 1000000));
+  CVPixelBufferUnlockBaseAddress(pixel, kCVPixelBufferLock_ReadOnly);
+}
+@end
+
+static AVCaptureDevice *chatterCameraDevice(bool front) {
+  return [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                          mediaType:AVMediaTypeVideo
+                                           position:front ? AVCaptureDevicePositionFront : AVCaptureDevicePositionBack];
+}
+
+bool chatter_ios_camera_available(bool front) {
+  @autoreleasepool { return chatterCameraDevice(front) != nil; }
+}
+
+void *chatter_ios_camera_start(bool front, uint32_t width, uint32_t fps,
+                               void *context, ChatterCameraFrame callback) {
+  @autoreleasepool {
+    AVAuthorizationStatus permission = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+    if (permission == AVAuthorizationStatusNotDetermined) {
+      // Capture runs off the UI thread. A bounded wait leaves the call usable
+      // if the system permission dialog is left unanswered.
+      dispatch_semaphore_t answered = dispatch_semaphore_create(0);
+      [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
+        dispatch_semaphore_signal(answered);
+      }];
+      if (dispatch_semaphore_wait(answered, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC))) return NULL;
+      permission = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+    }
+    if (permission != AVAuthorizationStatusAuthorized || !callback) return NULL;
+    AVCaptureDevice *device = chatterCameraDevice(front);
+    NSError *error = nil;
+    AVCaptureDeviceInput *input = device ? [AVCaptureDeviceInput deviceInputWithDevice:device error:&error] : nil;
+    if (!input) return NULL;
+    ChatterCameraCapture *capture = [ChatterCameraCapture new];
+    capture.context = context;
+    capture.callback = callback;
+    capture.frames = dispatch_queue_create("app.chatter.camera.frames", DISPATCH_QUEUE_SERIAL);
+    capture.session = [AVCaptureSession new];
+    capture.session.automaticallyConfiguresApplicationAudioSession = NO;
+    capture.output = [AVCaptureVideoDataOutput new];
+    capture.output.alwaysDiscardsLateVideoFrames = YES;
+    capture.output.videoSettings = @{ (NSString *)kCVPixelBufferPixelFormatTypeKey:
+                                      @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) };
+    [capture.output setSampleBufferDelegate:capture queue:capture.frames];
+    [capture.session beginConfiguration];
+    if (![capture.session canAddInput:input]) {
+      [capture.session commitConfiguration];
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      return NULL;
+    }
+    [capture.session addInput:input];
+    NSString *preset = width <= 640 ? AVCaptureSessionPreset640x480 : AVCaptureSessionPreset1280x720;
+    if (![capture.session canSetSessionPreset:preset]) {
+      [capture.session commitConfiguration];
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      return NULL;
+    }
+    capture.session.sessionPreset = preset;
+    if (![capture.session canAddOutput:capture.output]) {
+      [capture.session commitConfiguration];
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      return NULL;
+    }
+    [capture.session addOutput:capture.output];
+    AVCaptureConnection *connection = [capture.output connectionWithMediaType:AVMediaTypeVideo];
+    // The shared mobile UI is portrait. Rotate the actual planes so both
+    // LiveKit and the local preview receive the same upright frame.
+    BOOL portrait = NO;
+    if (@available(iOS 17.0, *)) {
+      if ([connection isVideoRotationAngleSupported:90]) {
+        connection.videoRotationAngle = 90;
+        portrait = YES;
+      }
+    } else if (connection.isVideoOrientationSupported) {
+      connection.videoOrientation = AVCaptureVideoOrientationPortrait;
+      portrait = YES;
+    }
+    [capture.session commitConfiguration];
+    if (!portrait) {
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      return NULL;
+    }
+    double targetFPS = MAX(1, MIN(fps, 30));
+    for (AVFrameRateRange *range in device.activeFormat.videoSupportedFrameRateRanges) {
+      if (range.minFrameRate <= targetFPS && targetFPS <= range.maxFrameRate && [device lockForConfiguration:&error]) {
+        device.activeVideoMinFrameDuration = CMTimeMake(1, (int32_t)targetFPS);
+        device.activeVideoMaxFrameDuration = CMTimeMake(1, (int32_t)targetFPS);
+        [device unlockForConfiguration];
+        break;
+      }
+    }
+    [capture.session startRunning];
+    if (!capture.session.isRunning) {
+      [capture.session stopRunning];
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      dispatch_sync(capture.frames, ^{});
+      return NULL;
+    }
+    return (__bridge_retained void *)capture;
+  }
+}
+
+void chatter_ios_camera_stop(void *session) {
+  if (!session) return;
+  @autoreleasepool {
+    ChatterCameraCapture *capture = (__bridge_transfer ChatterCameraCapture *)session;
+    [capture.session stopRunning];
+    [capture.output setSampleBufferDelegate:nil queue:NULL];
+    dispatch_sync(capture.frames, ^{});
+  }
+}
 
 // Called by chatter-ui's shared clipboard adapter. Recovery codes are kept on
 // this device only and expire after the same 60 seconds used on other platforms.
