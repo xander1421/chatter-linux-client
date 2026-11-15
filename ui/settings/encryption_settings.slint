@@ -137,7 +137,6 @@ export component EncryptionSettings inherits VerticalLayout {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
-            min-height: root.compact-mode ? 128px : Spacing.button-height;
             accessible-text: @tr("Allow sealed sender from anyone");
             checked <=> root.sealed-sender-unrestricted;
             toggled(value) => {
@@ -146,10 +145,12 @@ export component EncryptionSettings inherits VerticalLayout {
             }
 
             Text {
+                width: sealed-sender-row.label-width;
                 text: @tr("Allow sealed sender from anyone");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: sealed-sender-row.label-width;

@@ -3979,3 +3979,7 @@ msgstr "Operațiunea pe canal a eșuat ({})."
 #: crates/chatter-core/src/client/channels.rs
 msgid "Channel operation failed: {}"
 msgstr "Operațiunea pe canal a eșuat: {}"
+
+#: crates/chatter-core/src/client/activity.rs
+msgid "Registered"
+msgstr "Înregistrat"

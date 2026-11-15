@@ -218,10 +218,12 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             Text {
+                width: shield-row.label-width;
                 text: @tr("Shield");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: shield-row.label-width;
@@ -363,10 +365,12 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             Text {
+                width: read-receipts-row.label-width;
                 text: @tr("Read receipts");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: read-receipts-row.label-width;
@@ -401,10 +405,12 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             Text {
+                width: typing-indicators-row.label-width;
                 text: @tr("Typing indicators");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
+                wrap: word-wrap;
             }
             Text {
                 width: typing-indicators-row.label-width;

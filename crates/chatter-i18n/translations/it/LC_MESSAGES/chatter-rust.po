@@ -3948,3 +3948,7 @@ msgstr "Operazione sul canale non riuscita ({})."
 #: crates/chatter-core/src/client/channels.rs
 msgid "Channel operation failed: {}"
 msgstr "Operazione sul canale non riuscita: {}"
+
+#: crates/chatter-core/src/client/activity.rs
+msgid "Registered"
+msgstr "Registrato"

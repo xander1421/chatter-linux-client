@@ -5938,3 +5938,23 @@ msgstr "Chatter non riesce ad avviarsi"
 #: ui/startup_error.slint:44
 msgid "Hide details"
 msgstr "Nascondi dettagli"
+
+#: ui/chat/chat_header.slint ui/modals/channel_settings.slint
+msgid "{n} member"
+msgid_plural "{n} members"
+msgstr[0] "{n} membro"
+msgstr[1] "{n} membri"
+
+#: ui/chat/chat_header.slint ui/modals/channel_settings.slint
+msgid "{n} invited"
+msgid_plural "{n} invited"
+msgstr[0] "{n} invitato"
+msgstr[1] "{n} invitati"
+
+#: ui/activity/activity_sheet.slint
+msgid "STATUS"
+msgstr "STATO"
+
+#: ui/activity/activity_sheet.slint
+msgid "ACTIVITY"
+msgstr "ATTIVITÀ"

@@ -51,10 +51,12 @@ export component AISettings inherits VerticalLayout {
                 }
 
                 Text {
+                    width: cloud-ai-row.label-width;
                     text: @tr("Use cloud AI");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
+                    wrap: word-wrap;
                 }
                 Text {
                     width: cloud-ai-row.label-width;

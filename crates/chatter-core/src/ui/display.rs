@@ -62,7 +62,7 @@ impl ChatterClient {
             Some(id) => self.quote_author_name(id, || sender),
             None => sender,
         };
-        let date = message.created_at.with_timezone(&chrono::Local).format("%b %-d, %Y");
+        let date = crate::util::time::format_date(message.created_at);
         let time = crate::util::time::format_message_time(message.created_at.clone());
         let caption = message.as_text().unwrap_or_default().trim().to_owned();
         Some((sender, format!("{date} · {time}"), caption))

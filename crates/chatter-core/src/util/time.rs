@@ -76,6 +76,20 @@ pub fn format_month_day_year(month: u32, day: u32, year: i32) -> String {
     chatter_i18n::trfc("month day, year", "{0} {1}, {2}", &[&month_abbrev(month), &day, &year])
 }
 
+/// A local calendar date in the language in force: "Mar 4, 2025".
+pub fn format_date(datetime: DateTime<Utc>) -> String {
+    use chrono::Datelike;
+    let local = datetime.with_timezone(&Local);
+    format_month_day_year(local.month(), local.day(), local.year())
+}
+
+/// A local date and time without the year: "Mar 4, 09:02".
+pub fn format_date_time(datetime: DateTime<Utc>) -> String {
+    use chrono::Datelike;
+    let local = datetime.with_timezone(&Local);
+    format!("{}, {}", format_month_day(local.month(), local.day()), local.format("%H:%M"))
+}
+
 /// Local day chip above a message: "Today", "Yesterday", a weekday within the
 /// week, then "Mar 4" (this year) or "Mar 4, 2025".
 pub fn day_label(datetime: DateTime<Utc>) -> String {

@@ -14,6 +14,7 @@ fn refresh_status(window: &MainWindow, client: &ChatterClient) {
     let status = client.activity_status();
     let global = window.global::<ActivityGlobal>();
     global.set_push_status(status.push.into());
+    global.set_push_registered(status.push_registered);
     global.set_last_connected(status.last_connected
         .map(chatter_core::util::time::format_detail_time)
         .unwrap_or_else(|| chatter_i18n::tr("Never")).into());
