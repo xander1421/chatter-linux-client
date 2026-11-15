@@ -100,6 +100,8 @@ pub struct AudioCapture {
     frame_tx: Option<FrameWorker>,
     stream_failed: Arc<AtomicBool>,
     recovery_muted: Option<bool>,
+    #[cfg(target_os = "ios")]
+    audio_session: Option<crate::media::ios_audio_session::AudioSession>,
 }
 
 impl AudioCapture {
@@ -117,6 +119,8 @@ impl AudioCapture {
             frame_tx: None,
             stream_failed: Arc::new(AtomicBool::new(false)),
             recovery_muted: None,
+            #[cfg(target_os = "ios")]
+            audio_session: None,
         }
     }
 
@@ -293,6 +297,9 @@ impl AudioCapture {
         }
         #[cfg(not(target_os = "android"))]
         {
+            #[cfg(target_os = "ios")]
+            let ios_audio_session = crate::media::ios_audio_session::AudioSession::acquire(true)
+                .map_err(CallError::TrackPublishFailed)?;
             let host = cpal::default_host();
 
             // Find the requested device or use default
@@ -430,6 +437,8 @@ impl AudioCapture {
 
             self.running.store(!muted, Ordering::SeqCst);
             self.stream = Some(stream);
+            #[cfg(target_os = "ios")]
+            { self.audio_session = Some(ios_audio_session); }
             self.audio_source = Some(audio_source.clone());
             self.frame_tx = Some(frame_tx);
 
@@ -579,6 +588,8 @@ impl AudioCapture {
         if let Some(stream) = self.stream.take() {
             drop(stream);
         }
+        #[cfg(target_os = "ios")]
+        self.audio_session.take();
         self.audio_source = None;
         self.recovery_muted = None;
         self.stream_failed.store(false, Ordering::SeqCst);

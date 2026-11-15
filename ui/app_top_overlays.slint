@@ -282,7 +282,7 @@ export component AppTopOverlays inherits Rectangle {
         // The composer edge is measured in window coordinates; this overlay
         // starts below the status bar and shrinks with the keyboard.
         x: self.phone ? Spacing.sm : max(Spacing.sm, min(SidebarPane.sidebar-hidden ? 16px
-            : (SidebarPane.sidebar-collapsed ? 80px : 280px), root.width - self.width - Spacing.sm));
+            : root.sidebar-menu-width, root.width - self.width - Spacing.sm));
         y: max(Spacing.sm, ChatPane.mention-composer-top - root.safe-area-top - self.height - Spacing.sm);
 
         suggestion-selected(id, display) => {

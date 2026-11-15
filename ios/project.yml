@@ -18,12 +18,18 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Chatter
+                UISceneDelegateClassName: SlintWindowSceneDelegate
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         # Declared up front so the smoke build and the eventual call UI use the
         # same bundle — iOS kills the app on first use if these are missing.
         NSCameraUsageDescription: Chatter uses the camera for video calls.
-        NSMicrophoneUsageDescription: Chatter uses the microphone for calls.
+        NSMicrophoneUsageDescription: Chatter uses the microphone for voice messages and calls.
         NSPhotoLibraryUsageDescription: Chatter attaches photos to messages.
         # iOS 14+ gates any connection to a LAN peer behind this prompt; the
         # gRPC channel is a raw socket, so without it connect() just times out.
@@ -67,6 +73,8 @@ targets:
           - $(SRCROOT)/build/lib
         OTHER_LDFLAGS:
           - $(inherited)
+          # Preserve Objective-C categories in the static WebRTC library.
+          - -ObjC
           - -lchatter_ios
           - -lc++
           # Frameworks the Rust side references but can't auto-link from a
@@ -85,6 +93,12 @@ targets:
           - CoreAudio
           - -framework
           - CoreMedia
+          - -framework
+          - VideoToolbox
+          - -framework
+          - MetalKit
+          - -framework
+          - Network
     # Default build runs chatter-core's on-device smoke harness. For the real
     # Slint UI (links clean, not yet run on a device):
     #   CHATTER_IOS_FEATURES=ui xcodebuild … \

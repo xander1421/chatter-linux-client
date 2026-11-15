@@ -32,11 +32,28 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Chatter connects to your Chatter server on the local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Chatter uses the microphone for calls.</string>
+	<string>Chatter uses the microphone for voice messages and calls.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Chatter attaches photos to messages.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Chatter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>SlintWindowSceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

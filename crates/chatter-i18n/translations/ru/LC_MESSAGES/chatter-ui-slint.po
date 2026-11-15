@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chatter\n"
-"POT-Creation-Date: 2026-11-14 21:34+0000\n"
+"POT-Creation-Date: 2026-11-15 02:14+0000\n"
 "Language: ru\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -9,12 +9,12 @@ msgstr ""
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 
-#: ui/activity/activity_bell.slint:66 ui/sidebar/sidebar_footer.slint:134
+#: ui/activity/activity_bell.slint:66 ui/sidebar/sidebar_footer.slint:136
 msgid "Activity, {} unread"
 msgstr "События, непрочитано: {}"
 
 #: ui/activity/activity_bell.slint:66 ui/activity/activity_sheet.slint:116
-#: ui/sidebar/sidebar_footer.slint:134 ui/sidebar/sidebar_footer.slint:287
+#: ui/sidebar/sidebar_footer.slint:136 ui/sidebar/sidebar_footer.slint:272
 msgid "Activity"
 msgstr "События"
 
@@ -111,7 +111,7 @@ msgid "Push"
 msgstr "Push"
 
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
-#: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:264
+#: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:249
 msgid "Mesh"
 msgstr "Меш"
 
@@ -193,7 +193,7 @@ msgstr "Shield выключен"
 msgid "Shield unavailable: this build has no Tor onion service"
 msgstr "Shield недоступен: в этой сборке нет onion-службы Tor"
 
-#: ui/anon_mode/shield_onboarding.slint:43 ui/sidebar/sidebar_header.slint:109
+#: ui/anon_mode/shield_onboarding.slint:43 ui/sidebar/sidebar_header.slint:128
 msgid "Shield on - tap to turn off"
 msgstr "Shield включён — нажмите, чтобы выключить"
 
@@ -210,12 +210,12 @@ msgstr ""
 "IP-адрес. Первое подключение может занять до минуты."
 
 #. the taskbar and window switcher show while the window is in the back.
-#: ui/app.slint:76
+#: ui/app.slint:78
 msgid "Chatter ({})"
 msgstr "Chatter ({})"
 
 #. the taskbar and window switcher show while the window is in the back.
-#: ui/app.slint:76 ui/pages/account_recovery.slint:80 ui/pages/login.slint:115
+#: ui/app.slint:78 ui/pages/account_recovery.slint:80 ui/pages/login.slint:115
 msgid "Chatter"
 msgstr "Chatter"
 
@@ -370,111 +370,111 @@ msgstr "Выбрать динамик"
 msgid "Select screen to share"
 msgstr "Выбрать экран для демонстрации"
 
-#: ui/calls/active_call_view.slint:123 ui/calls/active_call_view.slint:183
+#: ui/calls/active_call_view.slint:121 ui/calls/active_call_view.slint:181
 msgid "You"
 msgstr "Вы"
 
-#: ui/calls/active_call_view.slint:198
+#: ui/calls/active_call_view.slint:196
 msgid "Switch camera"
 msgstr "Сменить камеру"
 
-#: ui/calls/active_call_view.slint:298
-msgid "Call information"
-msgstr "О звонке"
-
-#: ui/calls/active_call_view.slint:305
-msgid "Call duration"
-msgstr "Длительность звонка"
-
-#: ui/calls/active_call_view.slint:307 ui/calls/return_to_call_bar.slint:117
-msgid "Calling…"
-msgstr "Вызов…"
-
-#: ui/calls/active_call_view.slint:315
-msgid "Call participants"
-msgstr "Участники звонка"
-
-#: ui/calls/active_call_view.slint:327
-msgid "Exit full screen"
-msgstr "Выйти из полноэкранного режима"
-
-#: ui/calls/active_call_view.slint:327
-msgid "Full screen"
-msgstr "На весь экран"
-
-#: ui/calls/active_call_view.slint:336
+#: ui/calls/active_call_view.slint:300
 msgid "Call participants grid"
 msgstr "Сетка участников звонка"
 
-#: ui/calls/active_call_view.slint:415
+#: ui/calls/active_call_view.slint:383
 msgid "Unmute {} for you"
 msgstr "Включить у себя звук участника {}"
 
-#: ui/calls/active_call_view.slint:416
+#: ui/calls/active_call_view.slint:384
 msgid "Mute {} for you"
 msgstr "Выключить у себя звук участника {}"
 
-#: ui/calls/active_call_view.slint:429
+#: ui/calls/active_call_view.slint:397
 msgid "Resume {}'s video for you"
 msgstr "Возобновить у себя видео участника {}"
 
-#: ui/calls/active_call_view.slint:430
+#: ui/calls/active_call_view.slint:398
 msgid "Pause {}'s video for you"
 msgstr "Приостановить у себя видео участника {}"
 
-#: ui/calls/active_call_view.slint:470
+#: ui/calls/active_call_view.slint:438
 msgid "Sharing your screen"
 msgstr "Вы показываете экран"
 
-#: ui/calls/active_call_view.slint:485
+#: ui/calls/active_call_view.slint:453
 msgid "Stop screen sharing"
 msgstr "Остановить демонстрацию экрана"
 
-#: ui/calls/active_call_view.slint:492
+#: ui/calls/active_call_view.slint:460
 msgid "Stop"
 msgstr "Стоп"
 
-#: ui/calls/active_call_view.slint:515
+#: ui/calls/active_call_view.slint:483
 msgid "Show all call participants"
 msgstr "Показать всех участников"
 
-#: ui/calls/active_call_view.slint:549
+#: ui/calls/active_call_view.slint:517
 msgid "Pin {}"
 msgstr "Закрепить {}"
 
-#: ui/calls/active_call_view.slint:589
+#: ui/calls/active_call_view.slint:559
+msgid "Call information"
+msgstr "О звонке"
+
+#: ui/calls/active_call_view.slint:566
+msgid "Call duration"
+msgstr "Длительность звонка"
+
+#: ui/calls/active_call_view.slint:568 ui/calls/return_to_call_bar.slint:117
+msgid "Calling…"
+msgstr "Вызов…"
+
+#: ui/calls/active_call_view.slint:578
+msgid "Call participants"
+msgstr "Участники звонка"
+
+#: ui/calls/active_call_view.slint:590
+msgid "Exit full screen"
+msgstr "Выйти из полноэкранного режима"
+
+#: ui/calls/active_call_view.slint:590
+msgid "Full screen"
+msgstr "На весь экран"
+
+#: ui/calls/active_call_view.slint:603
 msgid "Call verification"
 msgstr "Проверка звонка"
 
-#: ui/calls/active_call_view.slint:590
+#: ui/calls/active_call_view.slint:604
 msgid "Compare these four emojis with everyone in the call."
 msgstr "Сверьте эти четыре эмодзи со всеми участниками звонка."
 
-#: ui/calls/active_call_view.slint:596
+#: ui/calls/active_call_view.slint:610
 msgid "Call verification emoji 1: {}"
 msgstr "Эмодзи проверки звонка 1: {}"
 
-#: ui/calls/active_call_view.slint:597
+#: ui/calls/active_call_view.slint:611
 msgid "Call verification emoji 2: {}"
 msgstr "Эмодзи проверки звонка 2: {}"
 
-#: ui/calls/active_call_view.slint:598
+#: ui/calls/active_call_view.slint:612
 msgid "Call verification emoji 3: {}"
 msgstr "Эмодзи проверки звонка 3: {}"
 
-#: ui/calls/active_call_view.slint:599
+#: ui/calls/active_call_view.slint:613
 msgid "Call verification emoji 4: {}"
 msgstr "Эмодзи проверки звонка 4: {}"
 
-#: ui/calls/active_call_view.slint:603
+#: ui/calls/active_call_view.slint:617
 msgid "Call key version {}"
 msgstr "Версия ключа звонка {}"
 
-#: ui/calls/active_call_view.slint:613
+#: ui/calls/active_call_view.slint:627
 msgid "Call verification pending"
 msgstr "Ожидание проверки звонка"
 
-#: ui/calls/active_call_view.slint:614
+#: ui/calls/active_call_view.slint:628
 msgid "Verification pending"
 msgstr "Ожидание проверки"
 
@@ -526,8 +526,8 @@ msgstr "Показать экран"
 msgid "End call"
 msgstr "Завершить звонок"
 
-#: ui/calls/call_history_screen.slint:118 ui/sidebar/sidebar.slint:66
-#: ui/sidebar/sidebar.slint:578
+#: ui/calls/call_history_screen.slint:118 ui/sidebar/sidebar.slint:68
+#: ui/sidebar/sidebar.slint:619
 msgid "Calls"
 msgstr "Звонки"
 
@@ -791,71 +791,71 @@ msgstr "Все в {} получат уведомление."
 msgid "Start call"
 msgstr "Начать звонок"
 
-#: ui/chat/chat_header.slint:180 ui/chat/chat_header.slint:520
+#: ui/chat/chat_header.slint:181 ui/chat/chat_header.slint:521
 #: ui/mesh/mesh_compose_sheet.slint:113
 msgid "Back"
 msgstr "Назад"
 
-#: ui/chat/chat_header.slint:335
+#: ui/chat/chat_header.slint:336
 msgid "Typing"
 msgstr "Печатает"
 
-#: ui/chat/chat_header.slint:385 ui/sidebar/dm_list_item.slint:196
+#: ui/chat/chat_header.slint:386 ui/sidebar/dm_list_item.slint:196
 msgid "Secret chat"
 msgstr "Секретный чат"
 
-#: ui/chat/chat_header.slint:441
+#: ui/chat/chat_header.slint:442
 msgid "Jarvis is thinking..."
 msgstr "Jarvis думает..."
 
-#: ui/chat/chat_header.slint:467
+#: ui/chat/chat_header.slint:468
 msgid "Voice call"
 msgstr "Аудиозвонок"
 
-#: ui/chat/chat_header.slint:490 ui/mesh/mesh_info_sheet.slint:220
+#: ui/chat/chat_header.slint:491 ui/mesh/mesh_info_sheet.slint:220
 #: ui/modals/invite_member.slint:255
 msgid "Invite"
 msgstr "Пригласить"
 
-#: ui/chat/chat_header.slint:498 ui/components/modal.slint:55
+#: ui/chat/chat_header.slint:499 ui/components/modal.slint:55
 msgid "More options"
 msgstr "Другие действия"
 
-#: ui/chat/chat_header.slint:571 ui/mesh/mesh_list_item.slint:34
+#: ui/chat/chat_header.slint:572 ui/mesh/mesh_list_item.slint:34
 msgid "Waiting for a carrier"
 msgstr "Ждём курьера"
 
-#: ui/chat/chat_header.slint:572
+#: ui/chat/chat_header.slint:573
 msgid "Verified ✓"
 msgstr "Проверено ✓"
 
-#: ui/chat/chat_header.slint:572
+#: ui/chat/chat_header.slint:573
 msgid "Not verified ›"
 msgstr "Не проверено ›"
 
-#: ui/chat/chat_header.slint:573 ui/mesh/mesh_info_sheet.slint:104
+#: ui/chat/chat_header.slint:574 ui/mesh/mesh_info_sheet.slint:104
 msgid "Private group · invited devices"
 msgstr "Закрытая группа · приглашённые устройства"
 
-#: ui/chat/chat_header.slint:575 ui/mesh/mesh_list.slint:13
+#: ui/chat/chat_header.slint:576 ui/mesh/mesh_list.slint:13
 msgid "{n} relay"
 msgid_plural "{n} relays"
 msgstr[0] "{n} ретранслятор"
 msgstr[1] "{n} ретранслятора"
 msgstr[2] "{n} ретрансляторов"
 
-#: ui/chat/chat_header.slint:576
+#: ui/chat/chat_header.slint:577
 msgid "{n} nearby"
 msgid_plural "{n} nearby"
 msgstr[0] "{n} рядом"
 msgstr[1] "{n} рядом"
 msgstr[2] "{n} рядом"
 
-#: ui/chat/chat_header.slint:588
+#: ui/chat/chat_header.slint:589
 msgid "Open mesh conversation information"
 msgstr "Открыть сведения о меш-чате"
 
-#: ui/chat/chat_header.slint:605
+#: ui/chat/chat_header.slint:606
 msgid "Conversation info"
 msgstr "О чате"
 
@@ -925,47 +925,47 @@ msgctxt "call action"
 msgid "Join"
 msgstr "Присоединиться"
 
-#: ui/chat/chat_layout.slint:655 ui/mesh/mesh_peer_sheet.slint:273
+#: ui/chat/chat_layout.slint:662 ui/mesh/mesh_peer_sheet.slint:273
 #: ui/modals/friends_blocked_tab.slint:132
 msgid "Unblock"
 msgstr "Разблокировать"
 
-#: ui/chat/chat_layout.slint:660 ui/components/unified_search.slint:963
+#: ui/chat/chat_layout.slint:667 ui/components/unified_search.slint:963
 #: ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102
 #: ui/modals/friends_requests_tab.slint:580
 msgid "Join"
 msgstr "Присоединиться"
 
-#: ui/chat/chat_layout.slint:670 ui/mesh/mesh_list.slint:108
+#: ui/chat/chat_layout.slint:677 ui/mesh/mesh_list.slint:108
 #: ui/modals/friends_requests_tab.slint:177
 msgid "Decline"
 msgstr "Отклонить"
 
-#: ui/chat/chat_layout.slint:677 ui/modals/friends_requests_tab.slint:166
+#: ui/chat/chat_layout.slint:684 ui/modals/friends_requests_tab.slint:166
 msgid "Accept"
 msgstr "Принять"
 
-#: ui/chat/chat_layout.slint:879
+#: ui/chat/chat_layout.slint:886
 msgid "Search GIFs"
 msgstr "Поиск GIF"
 
-#: ui/chat/chat_layout.slint:879 ui/components/emoji_picker.slint:137
+#: ui/chat/chat_layout.slint:886 ui/components/emoji_picker.slint:137
 msgid "Search emoji"
 msgstr "Поиск эмодзи"
 
-#: ui/chat/chat_layout.slint:891
+#: ui/chat/chat_layout.slint:898
 msgid "Search emoji and GIFs"
 msgstr "Поиск эмодзи и GIF"
 
-#: ui/chat/chat_layout.slint:907 ui/components/emoji_picker.slint:166
+#: ui/chat/chat_layout.slint:914 ui/components/emoji_picker.slint:166
 msgid "Clear search"
 msgstr "Очистить поиск"
 
-#: ui/chat/chat_layout.slint:965
+#: ui/chat/chat_layout.slint:972
 msgid "Emoji"
 msgstr "Эмодзи"
 
-#: ui/chat/chat_layout.slint:965
+#: ui/chat/chat_layout.slint:972
 msgid "GIFs"
 msgstr "GIF"
 
@@ -1315,36 +1315,36 @@ msgstr "Значок видеозвонка"
 msgid "Call icon"
 msgstr "Значок звонка"
 
-#: ui/chat/message_composer.slint:339
+#: ui/chat/message_composer.slint:346
 msgid "Mg"
 msgstr "Mg"
 
-#: ui/chat/message_composer.slint:573
+#: ui/chat/message_composer.slint:580
 msgid "Show keyboard"
 msgstr "Показать клавиатуру"
 
-#: ui/chat/message_composer.slint:573
+#: ui/chat/message_composer.slint:580
 msgid "Close picker"
 msgstr "Закрыть панель"
 
-#: ui/chat/message_composer.slint:573
+#: ui/chat/message_composer.slint:580
 msgid "Emoji & GIF picker"
 msgstr "Выбор эмодзи и GIF"
 
 #. what was typed (Android bridge maps value → text).
-#: ui/chat/message_composer.slint:639
+#: ui/chat/message_composer.slint:646
 msgid "Message input"
 msgstr "Поле сообщения"
 
-#: ui/chat/message_composer.slint:747
+#: ui/chat/message_composer.slint:754
 msgid "Attach file"
 msgstr "Прикрепить файл"
 
-#: ui/chat/message_composer.slint:764
+#: ui/chat/message_composer.slint:771
 msgid "Record voice message"
 msgstr "Записать голосовое"
 
-#: ui/chat/message_composer.slint:796
+#: ui/chat/message_composer.slint:803
 msgid "Send message"
 msgstr "Отправить сообщение"
 
@@ -1594,7 +1594,7 @@ msgstr "{0} говорит: {1}"
 msgid "Not sent"
 msgstr "Не отправлено"
 
-#: ui/chat/message_item.slint:792 ui/sidebar/sidebar_footer.slint:229
+#: ui/chat/message_item.slint:792 ui/sidebar/sidebar_footer.slint:231
 msgid "AI"
 msgstr "AI"
 
@@ -1723,45 +1723,45 @@ msgstr "Копировать выбранное"
 msgid "Forward selected"
 msgstr "Переслать выбранное"
 
-#: ui/chat/thread_panel.slint:245
+#: ui/chat/thread_panel.slint:248
 msgid "Thread"
 msgstr "Обсуждение"
 
-#: ui/chat/thread_panel.slint:246 ui/modals/pinned_messages.slint:28
+#: ui/chat/thread_panel.slint:249 ui/modals/pinned_messages.slint:28
 msgid "{n} pinned message"
 msgid_plural "{n} pinned messages"
 msgstr[0] "{n} закреплённое сообщение"
 msgstr[1] "{n} закреплённых сообщения"
 msgstr[2] "{n} закреплённых сообщений"
 
-#: ui/chat/thread_panel.slint:308
+#: ui/chat/thread_panel.slint:311
 msgid "Original message from {0}: {1}"
 msgstr "Исходное сообщение от {0}: {1}"
 
-#: ui/chat/thread_panel.slint:422 ui/modals/pinned_messages.slint:51
+#: ui/chat/thread_panel.slint:425 ui/modals/pinned_messages.slint:51
 msgid "No pinned messages"
 msgstr "Нет закреплённых"
 
-#: ui/chat/thread_panel.slint:422
+#: ui/chat/thread_panel.slint:425
 msgid "No replies yet"
 msgstr "Пока нет ответов"
 
-#: ui/chat/thread_panel.slint:429
+#: ui/chat/thread_panel.slint:432
 msgid "Be the first to reply!"
 msgstr "Напишите первый ответ!"
 
-#: ui/chat/thread_panel.slint:448 ui/chat/thread_panel.slint:461
+#: ui/chat/thread_panel.slint:451 ui/chat/thread_panel.slint:464
 msgid "Load earlier replies"
 msgstr "Загрузить предыдущие ответы"
 
-#: ui/chat/thread_panel.slint:727
+#: ui/chat/thread_panel.slint:730
 msgid "Unpin message"
 msgid_plural "Unpin all {n} messages"
 msgstr[0] "Открепить сообщение"
 msgstr[1] "Открепить все {n} сообщения"
 msgstr[2] "Открепить все {n} сообщений"
 
-#: ui/chat/thread_panel.slint:755
+#: ui/chat/thread_panel.slint:758
 msgid "Reply in thread..."
 msgstr "Ответить в обсуждении..."
 
@@ -1909,7 +1909,7 @@ msgid "Reconnecting (attempt {})…"
 msgstr "Переподключение (попытка {})…"
 
 #: ui/components/connection_banner.slint:217
-#: ui/sidebar/sidebar_footer.slint:357
+#: ui/sidebar/sidebar_footer.slint:342
 msgid "Server unreachable"
 msgstr "Сервер недоступен"
 
@@ -2101,7 +2101,7 @@ msgid "Sign in"
 msgstr "Войти"
 
 #: ui/components/mobile_bottom_nav.slint:216
-#: ui/sidebar/sidebar_footer.slint:103 ui/sidebar/sidebar_footer.slint:249
+#: ui/sidebar/sidebar_footer.slint:105
 msgid "Chats"
 msgstr "Чаты"
 
@@ -2109,7 +2109,7 @@ msgstr "Чаты"
 msgid "Contacts"
 msgstr "Контакты"
 
-#: ui/components/mobile_bottom_nav.slint:259 ui/sidebar/sidebar_footer.slint:78
+#: ui/components/mobile_bottom_nav.slint:259 ui/sidebar/sidebar_footer.slint:80
 msgid "Profile"
 msgstr "Профиль"
 
@@ -2530,9 +2530,21 @@ msgstr "Выключить звук видео"
 msgid "Unmute video"
 msgstr "Включить звук видео"
 
-#: ui/main_chat_shell.slint:468
+#: ui/main_chat_shell.slint:470
 msgid "Select a conversation"
 msgstr "Выберите чат"
+
+#: ui/main_chat_shell.slint:519
+msgid "Resize sidebar"
+msgstr "Изменить ширину боковой панели"
+
+#: ui/main_chat_shell.slint:520
+msgid ""
+"Drag to resize. Left and right arrows adjust width; Home collapses; End "
+"restores the default width."
+msgstr ""
+"Перетащите, чтобы изменить ширину. Стрелки влево и вправо меняют ширину; "
+"Home сворачивает панель; End возвращает ширину по умолчанию."
 
 #: ui/mesh/mesh_compose_sheet.slint:92 ui/mesh/mesh_compose_sheet.slint:149
 msgid "New private group"
@@ -3407,56 +3419,56 @@ msgstr "Исключить {} из этого канала?"
 msgid "Make owner"
 msgstr "Сделать владельцем"
 
-#: ui/modals/channel_notifications.slint:22
-#: ui/settings/settings_screen.slint:612
+#: ui/modals/channel_notifications.slint:23
+#: ui/settings/settings_screen.slint:614
 msgid "Notifications"
 msgstr "Уведомления"
 
-#: ui/modals/channel_notifications.slint:32
+#: ui/modals/channel_notifications.slint:33
 msgid "Mute group"
 msgstr "Без звука в группе"
 
-#: ui/modals/channel_notifications.slint:46
+#: ui/modals/channel_notifications.slint:47
 msgid "You won't receive any notifications from this group"
 msgstr "Уведомления из этой группы приходить не будут"
 
-#: ui/modals/channel_notifications.slint:46
+#: ui/modals/channel_notifications.slint:47
 msgid "You won't receive any notifications from this channel"
 msgstr "Уведомления из этого канала приходить не будут"
 
-#: ui/modals/channel_notifications.slint:60
+#: ui/modals/channel_notifications.slint:61
 msgid "When not muted, notify me for:"
 msgstr "Когда уведомления включены:"
 
-#: ui/modals/channel_notifications.slint:76
+#: ui/modals/channel_notifications.slint:77
 msgid "All messages"
 msgstr "Все сообщения"
 
-#: ui/modals/channel_notifications.slint:112
+#: ui/modals/channel_notifications.slint:113
 msgid "Get notified for every message"
 msgstr "Уведомление о каждом сообщении"
 
-#: ui/modals/channel_notifications.slint:135
+#: ui/modals/channel_notifications.slint:136
 msgid "Mentions only"
 msgstr "Только упоминания"
 
-#: ui/modals/channel_notifications.slint:171
+#: ui/modals/channel_notifications.slint:172
 msgid "When someone mentions you or everyone"
 msgstr "Когда упоминают вас или всех"
 
-#: ui/modals/channel_notifications.slint:194
+#: ui/modals/channel_notifications.slint:195
 msgid "Nothing"
 msgstr "Ничего"
 
-#: ui/modals/channel_notifications.slint:230
+#: ui/modals/channel_notifications.slint:231
 msgid "Never notify (still shows unread badge)"
 msgstr "Не уведомлять (значок непрочитанного останется)"
 
-#: ui/modals/channel_notifications.slint:251 ui/modals/create_channel.slint:616
+#: ui/modals/channel_notifications.slint:252 ui/modals/create_channel.slint:616
 msgid "AI assistant"
 msgstr "Помощник AI"
 
-#: ui/modals/channel_notifications.slint:265
+#: ui/modals/channel_notifications.slint:266
 msgid ""
 "Allow remote AI to read this channel when you explicitly ask it something "
 "here. Off by default."
@@ -3626,7 +3638,7 @@ msgid "Hosted Ollama"
 msgstr "Ollama на сервере"
 
 #: ui/modals/create_channel.slint:159 ui/settings/account_menu.slint:214
-#: ui/sidebar/create_menu.slint:170 ui/sidebar/sidebar.slint:727
+#: ui/sidebar/create_menu.slint:170 ui/sidebar/sidebar.slint:768
 msgid "New channel"
 msgstr "Новый канал"
 
@@ -3701,7 +3713,6 @@ msgid "Rename section"
 msgstr "Переименовать раздел"
 
 #: ui/modals/create_section.slint:70 ui/sidebar/create_menu.slint:117
-#: ui/sidebar/sidebar.slint:742
 msgid "New section"
 msgstr "Новый раздел"
 
@@ -3778,17 +3789,17 @@ msgstr "ЛС"
 msgid "Share"
 msgstr "Поделиться"
 
-#: ui/modals/friends.slint:146 ui/sidebar/sidebar.slint:759
+#: ui/modals/friends.slint:146 ui/sidebar/sidebar.slint:787
 msgid "Add a friend"
 msgstr "Добавить друга"
 
-#: ui/modals/friends.slint:188 ui/sidebar/sidebar.slint:65
-#: ui/sidebar/sidebar.slint:548
+#: ui/modals/friends.slint:188 ui/sidebar/sidebar.slint:67
+#: ui/sidebar/sidebar.slint:583
 msgid "Friends"
 msgstr "Друзья"
 
-#: ui/modals/friends.slint:189 ui/sidebar/sidebar.slint:67
-#: ui/sidebar/sidebar.slint:677
+#: ui/modals/friends.slint:189 ui/sidebar/sidebar.slint:69
+#: ui/sidebar/sidebar.slint:718
 msgid "Requests"
 msgstr "Запросы"
 
@@ -4169,7 +4180,7 @@ msgid "Ctrl + 0"
 msgstr "Ctrl + 0"
 
 #: ui/modals/keyboard_shortcuts.slint:134 ui/settings/account_menu.slint:201
-#: ui/sidebar/sidebar.slint:480 ui/sidebar/sidebar.slint:493
+#: ui/sidebar/sidebar.slint:499 ui/sidebar/sidebar.slint:522
 msgid "Saved messages"
 msgstr "Избранное"
 
@@ -4665,7 +4676,9 @@ msgstr "Заблокировать {}?"
 msgid ""
 "Blocked people can't call or message you. You can unblock them from their "
 "profile or Contacts › Blocked."
-msgstr "Заблокированные не смогут звонить вам и писать. Разблокировать можно в профиле или в разделе «Контакты» › «Заблокированные»."
+msgstr ""
+"Заблокированные не смогут звонить вам и писать. Разблокировать можно в "
+"профиле или в разделе «Контакты» › «Заблокированные»."
 
 #: ui/modals/user_profile.slint:826
 msgid "Contact name"
@@ -5001,7 +5014,7 @@ msgid "Find people you know on Chatter"
 msgstr "Найдите знакомых в Chatter"
 
 #: ui/pages/welcome.slint:202 ui/pages/welcome.slint:235
-#: ui/sidebar/sidebar.slint:768
+#: ui/sidebar/sidebar.slint:796
 msgid "Browse channels"
 msgstr "Смотреть каналы"
 
@@ -5088,8 +5101,8 @@ msgstr ""
 msgid "My profile"
 msgstr "Мой профиль"
 
-#: ui/settings/account_menu.slint:229 ui/settings/settings_screen.slint:264
-#: ui/sidebar/sidebar_footer.slint:340
+#: ui/settings/account_menu.slint:229 ui/settings/settings_screen.slint:265
+#: ui/sidebar/sidebar_footer.slint:325
 msgid "Settings"
 msgstr "Настройки"
 
@@ -5097,7 +5110,7 @@ msgstr "Настройки"
 msgid "Night mode"
 msgstr "Ночной режим"
 
-#: ui/settings/account_settings.slint:66 ui/settings/settings_screen.slint:276
+#: ui/settings/account_settings.slint:66 ui/settings/settings_screen.slint:277
 msgid "Account"
 msgstr "Аккаунт"
 
@@ -5270,7 +5283,7 @@ msgstr ""
 msgid "Delete forever"
 msgstr "Удалить навсегда"
 
-#: ui/settings/ai_settings.slint:28 ui/settings/settings_screen.slint:282
+#: ui/settings/ai_settings.slint:28 ui/settings/settings_screen.slint:283
 msgid "Remote AI"
 msgstr "Облачный AI"
 
@@ -5341,7 +5354,7 @@ msgid "Assistant memory"
 msgstr "Память помощника"
 
 #: ui/settings/appearance_settings.slint:19
-#: ui/settings/settings_screen.slint:614
+#: ui/settings/settings_screen.slint:616
 msgid "Appearance"
 msgstr "Оформление"
 
@@ -5482,7 +5495,7 @@ msgstr "Оба сочетания"
 msgid "Search shortcut {}"
 msgstr "Клавиши поиска {}"
 
-#: ui/settings/devices_settings.slint:32 ui/settings/settings_screen.slint:279
+#: ui/settings/devices_settings.slint:32 ui/settings/settings_screen.slint:280
 msgid "Linked devices"
 msgstr "Привязанные устройства"
 
@@ -5519,7 +5532,7 @@ msgid "Approved, waiting to finish linking (until {})"
 msgstr "Одобрено, ждём завершения привязки (до {})"
 
 #: ui/settings/encryption_settings.slint:21
-#: ui/settings/settings_screen.slint:615
+#: ui/settings/settings_screen.slint:617
 msgid "Encryption"
 msgstr "Шифрование"
 
@@ -5606,7 +5619,7 @@ msgstr "Звук уведомления"
 msgid "Play a sound when a message notification arrives"
 msgstr "Проигрывать звук, когда приходит уведомление о сообщении"
 
-#: ui/settings/privacy_settings.slint:36 ui/settings/settings_screen.slint:277
+#: ui/settings/privacy_settings.slint:36 ui/settings/settings_screen.slint:278
 msgid "Privacy"
 msgstr "Конфиденциальность"
 
@@ -5691,7 +5704,7 @@ msgstr "Индикатор набора текста"
 msgid "Show when you're typing a message"
 msgstr "Показывать, когда вы печатаете"
 
-#: ui/settings/settings_screen.slint:283 ui/settings/settings_screen.slint:617
+#: ui/settings/settings_screen.slint:284 ui/settings/settings_screen.slint:619
 msgid "About"
 msgstr "О приложении"
 
@@ -5835,71 +5848,71 @@ msgstr "Выйти из этой группы? Она исчезнет с это
 msgid "Leave this channel? You won't get new messages."
 msgstr "Выйти из этого канала? Новые сообщения приходить не будут."
 
-#: ui/sidebar/sidebar.slint:65 ui/sidebar/sidebar.slint:539
-#: ui/sidebar/sidebar.slint:552
+#: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
+#: ui/sidebar/sidebar.slint:587
 msgid "Add contact"
 msgstr "Добавить контакт"
 
-#: ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:459
-#: ui/sidebar/sidebar_header.slint:48
+#: ui/sidebar/sidebar.slint:70 ui/sidebar/sidebar.slint:470
+#: ui/sidebar/sidebar_header.slint:53
 msgid "Search"
 msgstr "Поиск"
 
 #. "Archived Chats" bar; its chevron is the way back.
-#: ui/sidebar/sidebar.slint:69 ui/sidebar/sidebar.slint:397
+#: ui/sidebar/sidebar.slint:71 ui/sidebar/sidebar.slint:408
 msgid "Archived chats"
 msgstr "Архивные чаты"
 
-#: ui/sidebar/sidebar.slint:70 ui/sidebar/sidebar.slint:397
+#: ui/sidebar/sidebar.slint:72 ui/sidebar/sidebar.slint:408
 msgid "Back to chats"
 msgstr "К чатам"
 
 #. "Archived Chats" bar; its chevron is the way back.
-#: ui/sidebar/sidebar.slint:428
+#: ui/sidebar/sidebar.slint:439
 msgid "Archived"
 msgstr "Архив"
 
-#: ui/sidebar/sidebar.slint:448
+#: ui/sidebar/sidebar.slint:459
 msgid "No archived chats"
 msgstr "Нет архивных чатов"
 
-#: ui/sidebar/sidebar.slint:569
+#: ui/sidebar/sidebar.slint:610
 msgid "Calls, {} missed"
 msgstr "Звонки, пропущено {}"
 
-#: ui/sidebar/sidebar.slint:758
+#: ui/sidebar/sidebar.slint:786
 msgid "No conversations"
 msgstr "Нет чатов"
 
-#: ui/sidebar/sidebar.slint:920
+#: ui/sidebar/sidebar.slint:948
 msgid "Conversations"
 msgstr "Чаты"
 
-#: ui/sidebar/sidebar.slint:968
+#: ui/sidebar/sidebar.slint:996
 msgid "New mesh conversation"
 msgstr "Новый меш-чат"
 
-#: ui/sidebar/sidebar_footer.slint:147
+#: ui/sidebar/sidebar_footer.slint:149
 msgid "New activity"
 msgstr "Новое событие"
 
-#: ui/sidebar/sidebar_footer.slint:179 ui/sidebar/sidebar_footer.slint:364
+#: ui/sidebar/sidebar_footer.slint:181 ui/sidebar/sidebar_footer.slint:349
 msgid "Collapse sidebar"
 msgstr "Свернуть боковую панель"
 
-#: ui/sidebar/sidebar_footer.slint:197
+#: ui/sidebar/sidebar_footer.slint:199
 msgid "Anon mode (active) - tap to disable"
 msgstr "Анонимный режим включён — нажмите, чтобы выключить"
 
-#: ui/sidebar/sidebar_footer.slint:197 ui/sidebar/sidebar_footer.slint:200
+#: ui/sidebar/sidebar_footer.slint:199 ui/sidebar/sidebar_footer.slint:202
 msgid "Anon mode"
 msgstr "Анонимный режим"
 
-#: ui/sidebar/sidebar_footer.slint:364 ui/sidebar/sidebar_footer.slint:366
+#: ui/sidebar/sidebar_footer.slint:349 ui/sidebar/sidebar_footer.slint:351
 msgid "Expand sidebar"
 msgstr "Развернуть боковую панель"
 
-#: ui/sidebar/sidebar_header.slint:109
+#: ui/sidebar/sidebar_header.slint:128
 msgid "Shield off - tap to turn on"
 msgstr "Shield выключен — нажмите, чтобы включить"
 

@@ -23,6 +23,10 @@ name = "video_present_bench"
 path = "examples/video_present_bench.rs"
 required-features = ["desktop"]
 
+[[test]]
+name = "ui_sidebar_resize"
+required-features = ["ui-test-debug"]
+
 # These suites query Slint elements by type/label and need compiler metadata.
 [[test]]
 name = "ui_wiring"
@@ -124,7 +128,7 @@ glutin_egl_sys = { version = "0.7", optional = true }
 # in the dependency graph transitively (winit's macOS backend is built on it), so
 # this doesn't add a new crate family, just a direct edge to one already present.
 objc2 = { version = "0.6", optional = true }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSView"], optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSView", "NSButton", "NSControl"], optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 
 # ============================================================================
@@ -170,7 +174,7 @@ webrtc-sys-build = "=0.3.18"
 [features]
 # `onion` is default: secret chats (anonymous DMs/groups) ride Tor only, and a
 # build without it would have none (owner decision 2026-10-10).
-default = ["desktop", "jarvis", "onion"]
+default = ["desktop", "onion"]
 # Emit Slint element metadata for the headless UI query suites.
 ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a
@@ -203,6 +207,7 @@ desktop-gstreamer = [
     "dep:gstreamer-gl-egl", "dep:glutin_egl_sys", "chatter-core/desktop-gstreamer",
 ]
 local-ai = ["chatter-core/local-ai"]
+# Future-release assistant; opt-in only until desktop/mobile support is ready.
 jarvis = ["chatter-core/jarvis"]
 # The create-channel "AI assistant" template. OFF by default: nothing on that
 # path can supply the provider API key the server requires unconditionally
@@ -249,6 +254,7 @@ experimental-swappy = ["dep:i-slint-renderer-skia", "i-slint-renderer-skia/exper
 # desktop uses — it cross-compiles and links for aarch64-apple-ios and renders
 # correctly on device. No livekit, no gstreamer, no arboard, no pdfium.
 ios = ["dep:i-slint-backend-winit", "dep:winit", "slint/backend-winit", "slint/renderer-skia", "slint/std", "chatter-core/ios"]
+ios-calls = ["ios", "call-ui", "dep:livekit", "chatter-core/media"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)

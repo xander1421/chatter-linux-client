@@ -1,0 +1,11 @@
+// Native desktop chrome density, set once by platform startup.
+export global DesktopChrome {
+    in property <bool> macos: false;
+    in property <length> frame-inset: 0px;
+    out property <length> sidebar-width: 256px;
+    out property <length> rail-width: 68px;
+    out property <length> rail-gap: 2px;
+    out property <length> rail-glyph: 24px;
+    out property <length> window-radius: 16px;
+    out property <length> panel-radius: max(4px, window-radius - frame-inset);
+}

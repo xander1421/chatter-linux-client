@@ -20,6 +20,7 @@ export component AppSettingsHost inherits Rectangle {
     // opens (Sessions, Link device, Recovery codes, ...) is declared above
     // and has to draw over it.
     if ModalHostState.settings-open: SettingsScreen {
+        active-section <=> SettingsPane.navigation-section;
         z: -1;
         width: parent.width;
         height: parent.height;

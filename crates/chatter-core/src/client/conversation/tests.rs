@@ -136,7 +136,7 @@ async fn attachments_do_not_forward_into_a_secret_chat() {
 /// A client with a temp datastore and nothing behind its server URL — the
 /// storage half of `mark_as_read` is what these tests are about. Keyring is
 /// pointed at its in-memory mock (same reason as `client::tests`).
-fn test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
+pub(super) fn test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
     static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
     MOCK_KEYRING.call_once(|| {
         keyring::set_default_store(crate::system::keyring::test_credential_store());

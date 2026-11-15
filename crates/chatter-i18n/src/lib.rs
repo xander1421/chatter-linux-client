@@ -70,9 +70,12 @@ mod tests {
 
     #[test]
     fn locale_maps_to_a_shipped_language_or_english() {
-        assert_eq!(language_for_locale("pt_BR.UTF-8").code, "pt");
-        assert_eq!(language_for_locale("ro-RO").code, "ro");
-        assert_eq!(language_for_locale("UK").code, "uk");
+        for language in LANGUAGES {
+            let code = language.code;
+            assert_eq!(language_for_locale(&format!("{code}_XX.UTF-8")).code, code);
+            assert_eq!(language_for_locale(&format!("{code}-XX")).code, code);
+            assert_eq!(language_for_locale(&code.to_uppercase()).code, code);
+        }
         assert_eq!(language_for_locale("ja_JP").code, "en");
         assert_eq!(language_for_locale("").code, "en");
         assert_eq!(language_for_locale("C").code, "en");

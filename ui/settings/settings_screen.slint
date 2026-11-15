@@ -1,3 +1,4 @@
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { AccountSettings } from "account_settings.slint";
 import { DevicesSettings } from "devices_settings.slint";
@@ -282,7 +283,8 @@ export component SettingsScreen inherits Rectangle {
                     { id: "ai", label: @tr("Remote AI"), enabled: true },
                     { id: "about", label: @tr("About"), enabled: true }
                 ]: Rectangle {
-                    height: root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
+                    visible: item.id != "ai" || JarvisGlobal.enabled;
+                    height: !self.visible ? 0px : root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
                     border-radius: Spacing.radius-md;
                     background: active-section == item.id ? Colors.row-selected :
                                (nav-touch.pressed && item.enabled ? Materials.pressed
@@ -489,7 +491,7 @@ export component SettingsScreen inherits Rectangle {
                         }
 
                         // AI Assistant section
-                        if active-section == "ai": AISettings {
+                        if active-section == "ai" && JarvisGlobal.enabled: AISettings {
                             open-memory() => { root.ai-open-memory(); }
                             ai-prefer-cloud <=> root.ai-prefer-cloud;
                             cloud-ai-api-key <=> root.cloud-ai-api-key;
@@ -613,7 +615,7 @@ export component SettingsScreen inherits Rectangle {
                         devices-tab := SectionTab { section: "devices"; text: @tr("Linked devices"); active <=> root.active-section; touch: root.mobile-platform; }
                         appearance-tab := SectionTab { section: "appearance"; text: @tr("Appearance"); active <=> root.active-section; touch: root.mobile-platform; }
                         encryption-tab := SectionTab { section: "encryption"; text: @tr("Encryption"); active <=> root.active-section; touch: root.mobile-platform; }
-                        ai-tab := SectionTab { section: "ai"; text: "AI"; active <=> root.active-section; touch: root.mobile-platform; }
+                        ai-tab := SectionTab { visible: JarvisGlobal.enabled; width: JarvisGlobal.enabled ? self.preferred-width : 0px; section: "ai"; text: "AI"; active <=> root.active-section; touch: root.mobile-platform; }
                         about-tab := SectionTab { section: "about"; text: @tr("About"); active <=> root.active-section; touch: root.mobile-platform; }
                     }
                 }

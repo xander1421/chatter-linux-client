@@ -1859,25 +1859,19 @@ msgstr "online"
 msgid "Message request"
 msgstr "Cerere de mesaj"
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:156
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:148
 msgid "Device link"
 msgstr "Link de asociere"
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:158
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:198
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:180
 msgid "Link copied to clipboard."
 msgstr "Link copiat în clipboard."
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:159
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:200
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:182
 msgid "Unable to copy link. Please try again."
 msgstr "Linkul nu a putut fi copiat. Încearcă din nou."
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:166
-msgid "Clipboard copy is unavailable on this device."
-msgstr "Copierea în clipboard nu este disponibilă pe acest dispozitiv."
-
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:248
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:228
 msgid "post-link bring-up failed: {}"
 msgstr "Pornirea după asociere a eșuat: {}"
 
@@ -1991,12 +1985,12 @@ msgid "Camera is available once the call connects."
 msgstr "Camera este disponibilă după ce apelul se conectează."
 
 #: crates/chatter-ui/src/bin_ui/features/calls/active.rs:146
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:194
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:204
 msgid "Camera permission is needed for video calls"
 msgstr "Este nevoie de permisiunea pentru cameră la apelurile video"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/active.rs:159
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:900
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:911
 msgid "Camera unavailable"
 msgstr "Cameră indisponibilă"
 
@@ -2004,38 +1998,38 @@ msgstr "Cameră indisponibilă"
 msgid "Could not switch camera"
 msgstr "Camera nu a putut fi schimbată"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:262
+#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:264
 msgid "Screen share unavailable until the call connects."
 msgstr "Partajarea ecranului este indisponibilă până se conectează apelul."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:270
+#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:272
 msgid "Screen share unavailable"
 msgstr "Partajarea ecranului este indisponibilă"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:119
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:126
 msgid "Screen sharing is available once the call connects."
 msgstr "Partajarea ecranului este disponibilă după ce apelul se conectează."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:162
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:287
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:347
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:169
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:294
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:354
 msgid "Could not list screens. Try again."
 msgstr "Ecranele nu au putut fi listate. Încearcă din nou."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:201
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:208
 msgid "Could not switch microphones. Try again."
 msgstr "Microfonul nu a putut fi schimbat. Încearcă din nou."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:236
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:243
 msgid "Could not switch speakers. Try again."
 msgstr "Difuzorul nu a putut fi schimbat. Încearcă din nou."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:269
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:335
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:276
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:342
 msgid "That screen is no longer available."
 msgstr "Acel ecran nu mai este disponibil."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:301
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:308
 msgid "Could not share that screen. Try again."
 msgstr "Acel ecran nu a putut fi partajat. Încearcă din nou."
 
@@ -2073,19 +2067,19 @@ msgstr "Necunoscut"
 msgid "In progress"
 msgstr "În curs"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:175
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:604
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:925
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:185
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:615
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:936
 #: crates/chatter-core/src/client/auth.rs:17
 #: crates/chatter-core/src/domain/message/entity.rs:380
 msgid "Call ended"
 msgstr "Apel încheiat"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:189
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:199
 msgid "Microphone permission is needed for calls"
 msgstr "Este nevoie de permisiunea pentru microfon la apeluri"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:251
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:262
 #: crates/chatter-core/src/client/conversation_listing.rs:345
 #: crates/chatter-core/src/client/search_visible.rs:329
 #: crates/chatter-core/src/client/search_visible.rs:339
@@ -2094,44 +2088,44 @@ msgstr "Este nevoie de permisiunea pentru microfon la apeluri"
 msgid "You"
 msgstr "Tu"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:606
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:617
 #: crates/chatter-core/src/domain/message/entity.rs:370
 #: crates/chatter-core/src/services/activity_service.rs:343
 msgid "Missed call"
 msgstr "Apel pierdut"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:926
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:937
 msgid "Call declined"
 msgstr "Apel refuzat"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:927
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:938
 #: crates/chatter-core/src/ui/format.rs:125
 msgid "No answer"
 msgstr "Fără răspuns"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:933
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:944
 msgid "Connection lost"
 msgstr "Conexiune pierdută"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:145
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:150
 msgid "Call failed — couldn't connect"
 msgstr "Apelul a eșuat — nu s-a putut conecta"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:201
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:206
 msgid "Calls need microphone access — allow it to call."
 msgstr "Apelurile au nevoie de acces la microfon — permite-l ca să poți suna."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:213
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:228
 msgid "Your session changed. Start the call again."
 msgstr "Sesiunea s-a schimbat. Pornește apelul din nou."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:250
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:265
 msgid "You are not signed in, so the call was not placed."
 msgstr "Nu ești conectat, deci apelul nu a fost pornit."
 
 #: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:97
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:257
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:937
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:272
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:943
 #: crates/chatter-core/src/ui/display.rs:143
 msgid "Anonymous"
 msgstr "Anonim"
@@ -2555,15 +2549,15 @@ msgstr "Alege atașamentul"
 msgid "Can't attach {}"
 msgstr "Nu se poate atașa {}"
 
-#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:105
+#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:122
 msgid "Open a chat to attach a file."
 msgstr "Deschide o conversație ca să atașezi un fișier."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:116
+#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:133
 msgid "Open a conversation before dropping a file."
 msgstr "Deschide o conversație înainte să plasezi un fișier în ea."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:134
+#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:151
 msgid ""
 "Couldn't attach that file. Check that it is still available and try again."
 msgstr ""
@@ -2604,21 +2598,21 @@ msgstr ""
 msgid "Allow microphone access to record a voice message"
 msgstr "Permite accesul la microfon ca să înregistrezi un mesaj vocal"
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:150
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:152
 msgid "No microphone found. Connect one to record a voice message."
 msgstr ""
 "Nu s-a găsit niciun microfon. Conectează unul ca să înregistrezi un mesaj "
 "vocal."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:154
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:156
 msgid "Couldn't record a voice message. Please try again."
 msgstr "Mesajul vocal nu a putut fi înregistrat. Încearcă din nou."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:193
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:195
 msgid "Recording ready (5 minute limit)"
 msgstr "Înregistrarea este gata (limită de 5 minute)"
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:303
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:305
 msgid "Upload failed. Tap Send to retry."
 msgstr "Încărcarea a eșuat. Atinge Trimite ca să reîncerci."
 
@@ -3453,42 +3447,42 @@ msgstr "Model salvat."
 msgid "Could not save model: {}"
 msgstr "Modelul nu a putut fi salvat: {}"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:100
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:105
 msgid "Could not open the backup destination."
 msgstr "Destinația copiei de rezervă nu a putut fi deschisă."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:109
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:114
 msgid "Export message backup"
 msgstr "Exportă copia de rezervă a mesajelor"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:111
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:179
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:116
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:189
 msgid "Chatter backup"
 msgstr "Copie de rezervă Chatter"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:168
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:178
 msgid "Could not open the backup file."
 msgstr "Fișierul copiei de rezervă nu a putut fi deschis."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:177
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:187
 msgid "Restore message backup"
 msgstr "Restaurează copia de rezervă a mesajelor"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:211
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:221
 msgid "Server backup updated ({} rows)"
 msgstr "Copia de rezervă de pe server a fost actualizată (înregistrări: {})"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:213
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:223
 msgid "Could not back up messages. Check your connection and PIN, then retry."
 msgstr ""
 "Mesajele nu au putut fi salvate în copia de rezervă. Verifică conexiunea și "
 "PIN-ul, apoi reîncearcă."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:243
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "Înregistrări restaurate: {} (deja prezente sau păstrate local: {})"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:247
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
 msgid ""
 "This backup was made by a newer version of Chatter. Update the app to "
 "restore it."
@@ -3496,29 +3490,29 @@ msgstr ""
 "Această copie de rezervă a fost făcută de o versiune mai nouă de Chatter. "
 "Actualizează aplicația ca să o restaurezi."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:250
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 "Copia de rezervă nu a putut fi restaurată. Verifică parola pentru copia de "
 "rezervă sau PIN-ul, apoi reîncearcă."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:66
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:71
 msgid "Could not prepare the backup file."
 msgstr "Fișierul copiei de rezervă nu a putut fi pregătit."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:79
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:133
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:84
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:138
 msgid "Could not export backup. Check available storage and retry."
 msgstr ""
 "Copia de rezervă nu a putut fi exportată. Verifică spațiul disponibil și "
 "reîncearcă."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:89
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:131
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:94
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:136
 msgid "Backup exported ({} rows)"
 msgstr "Copie de rezervă exportată (înregistrări: {})"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:93
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:98
 msgid "Could not save the backup file."
 msgstr "Fișierul copiei de rezervă nu a putut fi salvat."
 
@@ -3610,8 +3604,8 @@ msgstr "Setarea Fără sunet nu a putut fi actualizată"
 msgid "Couldn't change archive: {}"
 msgstr "Arhivarea nu a putut fi schimbată: {}"
 
-#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:252
-#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:306
+#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:253
+#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:307
 msgid "Private"
 msgstr "Privată"
 
@@ -3687,32 +3681,32 @@ msgstr "Dosarul nu a putut fi redenumit: {}"
 msgid "Couldn't change folder icon: {}"
 msgstr "Pictograma dosarului nu a putut fi schimbată: {}"
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:417
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:423
 msgid "The quoted message is unavailable."
 msgstr "Mesajul citat nu este disponibil."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:513
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:519
 msgid "Couldn't send your reply. Try again."
 msgstr "Răspunsul nu a putut fi trimis. Încearcă din nou."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:519
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:525
 msgid "Couldn't send your reply. It's kept with this thread."
 msgstr "Răspunsul nu a putut fi trimis. Este păstrat în acest fir de discuție."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:523
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:529
 msgid "Couldn't send your reply. It's saved as this thread's draft."
 msgstr ""
 "Răspunsul nu a putut fi trimis. Este salvat ca ciornă a acestui fir de "
 "discuție."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:599
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:605
 msgid "Your earlier reply that didn't send is back in the box."
 msgstr ""
 "Răspunsul tău anterior, care nu a fost trimis, este din nou în câmpul de "
 "scriere."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:820
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:850
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:826
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:856
 #: crates/chatter-core/src/ui/message_row.rs:187
 msgid "{n} reply"
 msgid_plural "{n} replies"
@@ -3839,41 +3833,41 @@ msgctxt "day month"
 msgid "{0} {1}"
 msgstr "{0} {1}"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:171
-msgid "Starting verified update…"
-msgstr "Se pornește actualizarea verificată…"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:185
-msgid "Could not restart into the verified update"
-msgstr "Aplicația nu a putut fi repornită cu actualizarea verificată"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:208
-msgid "Large download on cellular. Tap Download now to continue."
-msgstr "Descărcare mare pe date mobile. Atinge Descarcă acum ca să continui."
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:227
-msgid "Downloading and verifying…"
-msgstr "Se descarcă și se verifică…"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:236
-msgid "Downloading {}%"
-msgstr "Se descarcă {}%"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:294
-msgid "Could not stage Linux update"
-msgstr "Actualizarea Linux nu a putut fi pregătită"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:57
-msgid "You're up to date"
-msgstr "Ești la zi"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:91
+#: crates/chatter-ui/src/bin_ui/features/update.rs:104
 msgid "Update not installed: Update install failed"
 msgstr "Actualizarea nu a fost instalată: instalarea actualizării a eșuat"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:93
+#: crates/chatter-ui/src/bin_ui/features/update.rs:106
 msgid "Update not installed: {}"
 msgstr "Actualizarea nu a fost instalată: {}"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:184
+msgid "Starting verified update…"
+msgstr "Se pornește actualizarea verificată…"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:198
+msgid "Could not restart into the verified update"
+msgstr "Aplicația nu a putut fi repornită cu actualizarea verificată"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:221
+msgid "Large download on cellular. Tap Download now to continue."
+msgstr "Descărcare mare pe date mobile. Atinge Descarcă acum ca să continui."
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:240
+msgid "Downloading and verifying…"
+msgstr "Se descarcă și se verifică…"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:249
+msgid "Downloading {}%"
+msgstr "Se descarcă {}%"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:307
+msgid "Could not stage Linux update"
+msgstr "Actualizarea Linux nu a putut fi pregătită"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:70
+msgid "You're up to date"
+msgstr "Ești la zi"
 
 #: crates/chatter-ui/src/platform/android/activity.rs:29
 msgid "Android runtime has no JavaVM"

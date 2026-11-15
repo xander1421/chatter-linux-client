@@ -212,6 +212,9 @@ export component ThreadPanel inherits Rectangle {
         // the two panes share one top row instead of stepping.
         GlassSurface {
             material-level: 2;
+            material-tint: root.pinned-mode ? Materials.chat-chrome : Materials.regular;
+            darkening: root.pinned-mode ? Materials.chat-darkening : 1.0;
+            show-edge: !root.pinned-mode;
             elevation: 3;
 
             height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;

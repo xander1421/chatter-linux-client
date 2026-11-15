@@ -112,6 +112,16 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                 }
+                #[cfg(target_os = "ios")]
+                if let Err(error) = chatter_core::media::AudioRecorder::request_microphone_permission().await {
+                    if ui_ctx.call_session_is_current(revision) {
+                        fail_incoming_call(&weak, &ui_ctx, revision, &call_id_str, &error);
+                    }
+                    tokio::spawn(async move {
+                        let _ = ui_ctx.decline_presented_incoming_call_in_session(&call_id_str, revision).await;
+                    });
+                    return;
+                }
                 tracing::info!(target: "call_setup::accept_permissions_ready", "Call setup diagnostic");
                 tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active, revision));
             })
@@ -204,8 +214,9 @@ fn fail_incoming_call(
     ui_ctx: &Arc<ChatterClient>,
     revision: u64,
     call_id: &str,
-    message: String,
+    message: impl Into<String>,
 ) {
+    let message = message.into();
     let weak = weak.clone();
     let ui_ctx = ui_ctx.clone();
     let expected = call_id.to_owned();

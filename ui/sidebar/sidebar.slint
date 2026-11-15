@@ -1,3 +1,5 @@
+import { DesktopChrome } from "../theme/desktop_chrome.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { Materials } from "../theme/materials.slint";
 // Sidebar — plain conversation content with shared chrome materials.
 //
@@ -119,7 +121,7 @@ export component Sidebar inherits Rectangle {
             // A row inserted above the visible conversations must not move
             // the content already under the user's finger.
             if (root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
-                    ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
+                    ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
                     : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm))) {
                 central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
             }
@@ -157,7 +159,7 @@ export component Sidebar inherits Rectangle {
     callback focus-target(int, int, bool, bool, bool) -> int;
     function focus-step(move-by: int) {
         root.focus-index = root.focus-target(root.focus-index, move-by,
-            root.mobile-mode, AnonMode.enabled, root.total-pending-requests > 0);
+            root.mobile-mode || root.collapsed, AnonMode.enabled, root.total-pending-requests > 0);
         if (move-by == -2) {
             central-scroll.viewport-y = 0px;
         } else if (move-by == 2) {
@@ -240,7 +242,8 @@ export component Sidebar inherits Rectangle {
     // target, no cavern.
     // Collapsed, a quick link is a rail row like a conversation's (48px) so
     // every slot in the rail is one size.
-    property <length> quick-link-height: (root.touch ? 56px : root.collapsed ? 48px : 34px) * Appearance.text-grow;
+    property <length> quick-link-height: root.collapsed && DesktopChrome.macos ? 36px
+        : (root.touch ? 56px : root.collapsed ? 48px : 34px) * Appearance.text-grow;
     // The panel's first row, pinned above the scroll. On desktop it takes the
     // shared header height so it and the conversation header beside it read as
     // one row across the seam — and on macOS that is the row the traffic
@@ -250,7 +253,7 @@ export component Sidebar inherits Rectangle {
     // plus the scroll's top padding they sat ~80dp apart (owner, 2026-09-26).
     // A two-pane tablet sits beside a touch-height conversation header.
     property <length> top-row-height: root.mobile-mode ? root.quick-link-height
-        : root.touch ? Spacing.header-height-touch : Spacing.header-height;
+        : root.touch ? Spacing.header-height-touch : DesktopChrome.macos ? 72px : Spacing.header-height;
     property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
     property <brush> quick-link-text-color: Colors.text-primary;
     property <length> quick-link-icon-size: root.touch ? 24px : 14px;
@@ -277,18 +280,26 @@ export component Sidebar inherits Rectangle {
     property <length> footer-icon-size: root.touch ? 36px : 24px;
     // One size for every button in the collapsed rail's bottom cluster, so the
     // container height below stays in step with them.
-    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : 44px;
+    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : DesktopChrome.macos ? 36px : 44px;
     // The visual plate inside a rail row. Smaller than the row so adjacent slots
     // do not touch; the row stays the touch target, the slot is what you see.
     // 44px everywhere: the conversation rows' collapsed slot
     // (channel_list_item.slint `slot-size`), so the rail reads as one column.
-    property <length> rail-slot-size: 44px;
+    property <length> rail-slot-size: DesktopChrome.macos ? 36px : 44px;
+    property <length> rail-gap: DesktopChrome.macos ? DesktopChrome.rail-gap : Spacing.sm;
+    property <length> rail-divider-height: DesktopChrome.macos ? 8px : Spacing.md;
+    property <length> rail-footer-height: !root.touch ? 0px : DesktopChrome.macos
+        ? root.rail-button-count * root.rail-icon-size + root.rail-button-count * root.rail-gap
+            + root.rail-divider-height + Spacing.sm
+        : root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm
+            + Spacing.lg + Spacing.md + Spacing.sm;
     property <length> rail-slot-radius: Spacing.radius-lg;
-    property <brush> rail-slot-bg: Colors.surface-control;
+    property <brush> rail-slot-bg: DesktopChrome.macos ? transparent : Colors.surface-control;
     // Shield, AI, Chats, Activity, Mesh (when compiled), expand, Settings,
     // profile. The Activity bell was added without counting it, so the rail
     // footer was one slot short and the profile avatar hung off the bottom.
-    property <int> rail-button-count: MeshGlobal.enabled ? 8 : 7;
+    property <int> rail-button-count: (root.touch ? 5 : 4) + (MeshGlobal.enabled ? 1 : 0)
+        + (JarvisGlobal.enabled && JarvisGlobal.opted-in ? 1 : 0);
 
     // ── Sizing ──
     // Always a side panel, on every platform: collapsed to the icon rail or
@@ -303,9 +314,9 @@ export component Sidebar inherits Rectangle {
     // navigation always-available, which is why the panel does not have to.
     // `mobile-width` is fed the window width by app.slint.
     width: root.hidden ? Spacing.sidebar-width-hidden
-         : root.collapsed ? (root.touch ? 68px : Spacing.sidebar-width-collapsed)
+         : root.collapsed ? (root.touch ? 68px : DesktopChrome.macos ? DesktopChrome.rail-width : Spacing.sidebar-width-collapsed)
          : root.mobile-mode ? root.mobile-width
-         : Spacing.sidebar-width;
+         : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width;
     visible: !root.hidden;
     // Neo 2.0: sidebar is a raised surface with right-edge highlight.
     // In Anon Mode, slightly shift the surface tint toward primary so the
@@ -324,7 +335,7 @@ export component Sidebar inherits Rectangle {
     // panel's edges, so the panel's own corners must curve with them: square,
     // the opaque surface filled the notch outside each rounded corner. Not
     // on a phone, where the panel is the (transparent) page.
-    border-radius: root.mobile-mode ? Spacing.none : Spacing.radius-chrome;
+    border-radius: root.mobile-mode ? Spacing.none : DesktopChrome.frame-inset > 0px ? DesktopChrome.panel-radius : Spacing.radius-chrome;
     // No `border-width` here: this is a right-EDGE highlight in intent and
     // Slint's border draws all four sides. On a phone that traced a hairline
     // rectangle around the whole display; on desktop it now also ran a line
@@ -381,14 +392,14 @@ export component Sidebar inherits Rectangle {
                 // The pinned title and the floating footer stay outside the
                 // virtualized content; only their scroll clearance is a row.
                 padding-top: idx == 0
-                    ? (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                    ? (root.collapsed ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                         + (root.mobile-mode ? Spacing.none : Spacing.sm)
                     : Spacing.none;
                 padding-bottom: entry.kind == "bottom"
                     ? (root.mobile-mode
                         ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
                             + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none)
-                        : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg + Spacing.md + Spacing.sm : Spacing.button-height)
+                        : (root.collapsed ? root.rail-footer-height : Spacing.button-height)
                             + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md)
                     : Spacing.none;
                 if entry.kind == "archive-entry" || entry.kind == "archive-back": Rectangle {
@@ -461,7 +472,7 @@ export component Sidebar inherits Rectangle {
                     TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: @tr("Search"); tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
                 }
@@ -472,15 +483,33 @@ export component Sidebar inherits Rectangle {
                     property <bool> press-active: false;
                     property <length> press-x: 0px;
                     property <length> press-y: 0px;
-                    background: root.saved-open && !root.collapsed ? Colors.row-selected
-                        : self.press-active ? Colors.surface-control-hover
-                        : (!root.mobile-mode && saved-touch.has-hover) ? Colors.surface-hover : transparent;
-                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    // Match the chat rows' inset and radius without moving
+                    // the quick link's icon or label.
+                    Rectangle {
+                        x: root.collapsed ? 0px : Spacing.xs;
+                        width: parent.width - 2 * self.x;
+                        height: parent.height;
+                        border-radius: root.collapsed ? 0px : Spacing.radius-md;
+                        background: root.saved-open && !root.collapsed ? Colors.row-selected
+                            : parent.press-active ? Colors.surface-control-hover
+                            : (!root.mobile-mode && saved-touch.has-hover) ? Colors.surface-hover : transparent;
+                        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    }
                     accessible-role: list-item;
                     accessible-label: @tr("Saved messages");
                     accessible-action-default => { root.saved-messages-clicked(); }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
+                    Rectangle {
+                        opacity: root.saved-open && !root.collapsed ? 1 : 0;
+                        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                        x: Spacing.xs;
+                        width: 2px;
+                        height: 24px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: self.width / 2;
+                        background: Colors.selected-indicator;
+                    }
                     if !root.collapsed: HorizontalLayout {
                         padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
@@ -491,7 +520,7 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: @tr("Saved messages"); tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.saved-open ? Colors.row-selected : root.rail-slot-bg; Image { source: Icons.bookmark; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: root.saved-open ? Colors.text-primary : Colors.text-secondary; } } } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.saved-open ? Colors.row-selected : root.rail-slot-bg; Image { source: Icons.bookmark; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: root.saved-open ? Colors.text-primary : Colors.text-secondary; } } } }
                     }
                     // Open in the rail: the same accent pill and filled slot a
                     // selected conversation gets (channel_list_item.slint).
@@ -530,11 +559,17 @@ export component Sidebar inherits Rectangle {
                 // is the duplication that made the phone layout read as two
                 // navigation systems at once.
 
-                if entry.kind == "friends" && !root.mobile-mode: Rectangle {
+                if entry.kind == "friends" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
-                    background: friends-touch.pressed ? Colors.surface-control-hover
-                        : friends-touch.has-hover ? Colors.surface-hover : transparent;
-                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    Rectangle {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * self.x;
+                        height: parent.height;
+                        border-radius: Spacing.radius-md;
+                        background: friends-touch.pressed ? Colors.surface-control-hover
+                            : friends-touch.has-hover ? Colors.surface-hover : transparent;
+                        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    }
                     accessible-role: list-item;
                     accessible-label: AnonMode.enabled ? @tr("Add contact") : @tr("Friends");
                     accessible-action-default => { root.friends-clicked(); }
@@ -550,7 +585,7 @@ export component Sidebar inherits Rectangle {
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
                 }
@@ -560,11 +595,17 @@ export component Sidebar inherits Rectangle {
                 // Friends); on a two-pane tablet or desktop there is no tab
                 // bar, and this row is the only way in.
 
-                if entry.kind == "calls" && !root.mobile-mode: Rectangle {
+                if entry.kind == "calls" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
-                    background: calls-touch.pressed ? Colors.surface-control-hover
-                        : calls-touch.has-hover ? Colors.surface-hover : transparent;
-                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    Rectangle {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * self.x;
+                        height: parent.height;
+                        border-radius: Spacing.radius-md;
+                        background: calls-touch.pressed ? Colors.surface-control-hover
+                            : calls-touch.has-hover ? Colors.surface-hover : transparent;
+                        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    }
                     accessible-role: list-item;
                     accessible-label: root.missed-call-count > 0 ? @tr("Calls, {} missed", root.missed-call-count) : @tr("Calls");
                     border-width: parent.roving-highlight ? 2px : 0px;
@@ -600,7 +641,7 @@ export component Sidebar inherits Rectangle {
                         tooltip-text: @tr("Calls"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                            Image { source: Icons.phone; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                            Image { source: Icons.phone; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                             if root.missed-call-count > 0: Rectangle {
                                 x: parent.width - 8px; y: -2px;
                                 width: 12px; height: 12px; border-radius: 6px;
@@ -677,7 +718,7 @@ export component Sidebar inherits Rectangle {
                         tooltip-text: @tr("Requests"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                            Image { source: Icons.user-plus; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                            Image { source: Icons.user-plus; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                             if root.total-pending-requests > 0: Rectangle {
                                 x: parent.width - 8px; y: -2px;
                                 width: 12px; height: 12px; border-radius: 6px;
@@ -714,8 +755,8 @@ export component Sidebar inherits Rectangle {
 
                 if entry.kind == "channel-actions" && root.collapsed && !AnonMode.enabled: VerticalLayout {
                     spacing: Spacing.xs;
-                    padding-top: Spacing.xs;
-                    padding-bottom: Spacing.xs;
+                    padding-top: DesktopChrome.macos ? 0px : Spacing.xs;
+                    padding-bottom: DesktopChrome.macos ? 0px : Spacing.xs;
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
@@ -726,26 +767,13 @@ export component Sidebar inherits Rectangle {
                             accessible-role: button;
                             accessible-label: @tr("New channel");
                             accessible-action-default => { root.create-channel-clicked(); }
-                            Image { source: Icons.plus; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                colorize: c-new-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
+                            Image { source: Icons.plus; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 16px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                colorize: c-new-touch.has-hover ? Colors.text-primary : DesktopChrome.macos ? Colors.text-secondary : Colors.text-muted; }
                             c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-channel-clicked(); } }
                         } }
                     }
 
-                    TooltipArea {
-                        height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: @tr("New section"); tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Rectangle {
-                            width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
-                            background: c-sec-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
-                            accessible-role: button;
-                            accessible-label: @tr("New section");
-                            accessible-action-default => { root.create-section-clicked(); }
-                            Image { source: Icons.folder; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                colorize: c-sec-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
-                            c-sec-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-section-clicked(); } }
-                        } }
-                    }
+
                 }
 
 
@@ -873,7 +901,7 @@ export component Sidebar inherits Rectangle {
             height: root.height;
             viewport-height: mesh-content.preferred-height;
             mesh-content := VerticalLayout {
-                padding-top: (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                padding-top: (root.collapsed ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                     + (root.mobile-mode ? Spacing.none : Spacing.sm);
                 padding-bottom: root.bottom-inset + Spacing.md;
                 MeshList {
@@ -987,7 +1015,7 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        if !root.mobile-mode: SidebarFooter {
+        if !root.mobile-mode && (!root.collapsed || root.touch): SidebarFooter {
             panel-width: root.width;
             panel-height: root.height;
             collapsed: root.collapsed;
@@ -995,6 +1023,9 @@ export component Sidebar inherits Rectangle {
             mesh-available: MeshGlobal.enabled;
             active-tab: root.active-tab;
             rail-button-count: root.rail-button-count;
+            rail-gap: root.rail-gap;
+            rail-divider-height: root.rail-divider-height;
+            rail-footer-height: root.rail-footer-height;
             rail-icon-size: root.rail-icon-size;
             rail-slot-size: root.rail-slot-size;
             rail-slot-radius: root.rail-slot-radius;

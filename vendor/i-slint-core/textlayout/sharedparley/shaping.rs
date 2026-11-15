@@ -85,7 +85,13 @@ impl LayoutWithoutLineBreaksBuilder {
         if let Some(ref font_request) = self.font_request {
             // Prefer the bundled emoji font over older platform emoji fallbacks,
             // which may have a skin-tone modifier but lack its newer base glyph.
-            let emoji_family = parley::style::FontFamilyName::named("Noto Color Emoji");
+            let emoji_family = parley::style::FontFamilyName::named(if cfg!(target_vendor = "apple") {
+                // CoreText renders Apple's native color font; the bundled
+                // CBDT/CBLC Noto face produces blank glyphs on this backend.
+                "Apple Color Emoji"
+            } else {
+                "Noto Color Emoji"
+            });
             let fallback_family_iter = sharedfontique::FALLBACK_FAMILIES
                 .into_iter()
                 .map(parley::style::FontFamilyName::Generic);

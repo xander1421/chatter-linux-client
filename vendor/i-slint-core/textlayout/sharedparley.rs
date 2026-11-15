@@ -64,7 +64,10 @@ impl FontContext {
                     self.inner.collection.family_name(*id).is_some_and(|n| n.contains("Emoji"))
                 })
                 .collect();
-            if !emoji.is_empty() {
+            // CoreText cannot draw the bundled CBDT/CBLC emoji font. Keep
+            // Apple's system Emoji fallback for mixed text and VS16 clusters,
+            // as well as the explicit Apple Color Emoji family used by UI.
+            if !cfg!(target_vendor = "apple") && !emoji.is_empty() {
                 self.inner
                     .collection
                     .append_generic_families(fontique::GenericFamily::Emoji, emoji.into_iter());
@@ -996,7 +999,41 @@ mod chatter_tests {
         ctx.register_static_font(include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf"));
         let first = ctx.collection.generic_families(fontique::GenericFamily::Emoji).next();
         let name = first.and_then(|id| ctx.collection.family_name(id).map(alloc::string::String::from));
-        assert_eq!(name.as_deref(), Some("Noto Color Emoji"));
+        // Without system fonts, Apple platforms have no usable Emoji fallback here;
+        // registering Noto must not override the native fallback in real UI.
+        let expected = if cfg!(target_vendor = "apple") { None } else { Some("Noto Color Emoji") };
+        assert_eq!(name.as_deref(), expected);
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn mixed_text_emoji_uses_native_drawable_font() {
+        let mut ctx = FontContext::new(parley::FontContext::default());
+        ctx.register_static_font(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"));
+        let noto = include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf");
+        ctx.register_static_font(noto);
+        let builder = LayoutWithoutLineBreaksBuilder::new(
+            Some(FontRequest { family: Some("Inter".into()), ..Default::default() }),
+            TextWrap::NoWrap,
+            None,
+            ScaleFactor::new(1.0),
+        );
+        let text = "Apple QA: mixed text 🚀";
+        let mut layout = builder.build(&mut ctx, text, None, None);
+        layout.break_all_lines(None);
+        let mut found = false;
+        for line in layout.lines() {
+            for run in line.runs() {
+                for cluster in run.clusters() {
+                    if text[cluster.text_range()].contains('🚀') {
+                        found = true;
+                        assert!(run.font().data.as_ref() != noto.as_slice(), "Apple platforms must not shape emoji with bundled Noto");
+                        assert!(cluster.glyphs().all(|glyph| glyph.id != 0));
+                    }
+                }
+            }
+        }
+        assert!(found, "emoji must survive shaping beside ordinary text");
     }
 
     #[test]

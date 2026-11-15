@@ -7,7 +7,7 @@ use std::sync::Arc;
 use slint::ComponentHandle;
 
 use crate::{CallParticipantData, MainWindow};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::calls::ScreenCapture;
 use chatter_core::client::ChatterClient;
 use slint::{Model, ModelRc, SharedString, VecModel};
@@ -207,7 +207,9 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             move || {
                 let _ui_ctx = ui_ctx.clone();
                 let _weak = weak.clone();
-                #[cfg(not(target_os = "android"))]
+                #[cfg(target_os = "ios")]
+                camera_error(&_weak, "Screen sharing is not available on iPhone yet.");
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 slint::spawn_local(async move {
                     let new_state = !_ui_ctx.call_is_screen_sharing().await;
                     if new_state {

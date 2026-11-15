@@ -465,6 +465,27 @@ impl ChatterClient {
         let _ = repo.set(settings_keys::SIDEBAR_COLLAPSED, &collapsed);
     }
 
+    /// Preferred expanded desktop sidebar width in logical pixels.
+    pub fn sidebar_width(&self) -> Option<f32> {
+        use crate::storage::repositories::settings_repo::SettingsRepository;
+        use crate::storage::settings_keys;
+        SettingsRepository::new(self.services.database.clone())
+            .get::<f32>(settings_keys::SIDEBAR_WIDTH)
+            .ok()
+            .flatten()
+            .filter(|width| width.is_finite() && (220.0..=480.0).contains(width))
+    }
+
+    pub fn set_sidebar_width(&self, width: f32) {
+        if !width.is_finite() || !(220.0..=480.0).contains(&width) {
+            return;
+        }
+        use crate::storage::repositories::settings_repo::SettingsRepository;
+        use crate::storage::settings_keys;
+        let repo = SettingsRepository::new(self.services.database.clone());
+        let _ = repo.set(settings_keys::SIDEBAR_WIDTH, &width);
+    }
+
     /// Read the user's search-shortcut preference (defaults to `Both`).
     pub fn get_search_shortcut(&self) -> crate::services::search::SearchShortcut {
         use crate::storage::repositories::settings_repo::{SettingsRepository, keys};

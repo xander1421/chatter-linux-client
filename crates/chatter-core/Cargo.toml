@@ -266,6 +266,11 @@ open = { version = "5.3.3", optional = true }
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain", "protected"], optional = true }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-avf-audio = { version = "0.3.2", default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes", "block2"] }
+block2 = "0.6.2"
+objc2 = "0.6.5"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-async-io-crypto-rust"], optional = true }
 # notify-rust's close() discards the daemon's error. Own the call D-Bus
@@ -338,7 +343,7 @@ name = "attachment_decrypt"
 harness = false
 
 [features]
-default = ["desktop-system", "desktop-media", "jarvis"]
+default = ["desktop-system", "desktop-media"]
 # Select the DEVELOPMENT sealed-sender trust root (config.rs) instead of the
 # production one. Its private key is committed in plaintext at
 # deploy/vault/init-and-unseal.sh, so a build with this feature trusts sender

@@ -114,6 +114,11 @@ impl Keyring {
 
         // 1. Unique ID for this DB
         let path_str = db_path.to_string_lossy();
+        // iOS relocates an app's data container when installing an update.
+        // The relative database location remains stable, and Keychain already
+        // isolates this app's credentials from other apps.
+        #[cfg(target_os = "ios")]
+        let path_str = ios_database_identity(&path_str);
         let mut hasher = Sha256::new();
         hasher.update(path_str.as_bytes());
         let hash = hasher.finalize();
@@ -340,6 +345,14 @@ impl Keyring {
     }
 }
 
+#[cfg(any(target_os = "ios", test))]
+fn ios_database_identity(path: &str) -> &str {
+    path.split_once("/Containers/Data/Application/")
+        .and_then(|(_, relative)| relative.split_once('/'))
+        .map(|(_, relative)| relative)
+        .unwrap_or(path)
+}
+
 // Note: No Default impl - Keyring requires a database path
 
 /// Maps keyring crate errors to SystemError.
@@ -458,6 +471,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn ios_database_identity_survives_container_relocation() {
+        let old = "/private/var/mobile/Containers/Data/Application/OLD/Library/Application Support/com.chatter.chatter/chatter.db";
+        let new = "/private/var/mobile/Containers/Data/Application/NEW/Library/Application Support/com.chatter.chatter/chatter.db";
+        assert_eq!(ios_database_identity(old), ios_database_identity(new));
+        assert_ne!(ios_database_identity(old), ios_database_identity(&new.replace("chatter.db", "other.db")));
+        assert_eq!(ios_database_identity("/tmp/test.db"), "/tmp/test.db");
+    }
 
     // Note: These tests require a running Secret Service (GNOME Keyring/KWallet).
     // They may fail in CI environments without a keyring daemon.

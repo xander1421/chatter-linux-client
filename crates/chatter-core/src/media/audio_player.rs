@@ -66,6 +66,9 @@ pub struct AudioPlayer {
     current_source: Option<AudioSource>,
     /// Duration of the current audio file.
     current_duration: Option<Duration>,
+    // Drop the CPAL output before its shared iOS session lease.
+    #[cfg(target_os = "ios")]
+    audio_session: Option<super::ios_audio_session::AudioSession>,
 }
 
 // cpal's CoreAudio backend holds a `Box<dyn FnMut()>` property-listener callback
@@ -87,6 +90,8 @@ impl AudioPlayer {
             sink: None,
             current_source: None,
             current_duration: None,
+            #[cfg(target_os = "ios")]
+            audio_session: None,
         })
     }
 
@@ -283,6 +288,9 @@ impl AudioPlayer {
             ));
         }
         if self.stream.is_none() {
+            #[cfg(target_os = "ios")]
+            let audio_session = super::ios_audio_session::AudioSession::acquire(false)
+                .map_err(MediaError::PlaybackError)?;
             // Each output owns its flag, so an old callback cannot invalidate
             // a replacement stream. Never close/reopen on the audio thread.
             let failed = Arc::new(AtomicBool::new(false));
@@ -301,6 +309,8 @@ impl AudioPlayer {
                 })?;
             self.output_failed = failed;
             self.stream = Some(stream);
+            #[cfg(target_os = "ios")]
+            { self.audio_session = Some(audio_session); }
         }
         let sink = Player::connect_new(
             self.stream
@@ -368,6 +378,8 @@ impl AudioPlayer {
         // Loading another source must open fresh hardware instead of queueing
         // it onto a mixer whose device callback no longer runs.
         self.stream.take();
+        #[cfg(target_os = "ios")]
+        self.audio_session.take();
     }
 
     /// Seeks to a specific position.

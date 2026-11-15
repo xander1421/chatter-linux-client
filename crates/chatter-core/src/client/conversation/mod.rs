@@ -232,7 +232,7 @@ fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u
     // undeleted row.
     if message.conversation_type == ConversationType::SavedMessages {
         actions.delete_for_everyone = false;
-        actions.react = false;
+        actions.react = is_own && actions.react;
         actions.edit = is_own
             && !message.is_deleted
             && !matches!(message.delivery_status.as_str(), "failed" | "sending")

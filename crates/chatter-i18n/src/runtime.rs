@@ -32,6 +32,8 @@ const CATALOGS: &[&str] = &[
     catalog!("uk"),
 ];
 
+const _: () = assert!(CATALOGS.len() == LANGUAGES.len(), "one catalog per LANGUAGES row");
+
 /// Index into [`LANGUAGES`] of the language in force.
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
@@ -122,10 +124,10 @@ fn parse(po: &str) -> Catalog {
     catalog
 }
 
-/// Which plural form `n` takes in the language at `index` — the same rules as
-/// the catalogs' `Plural-Forms` headers.
-fn plural_class(index: usize, n: u64) -> usize {
-    match LANGUAGES[index].code {
+/// Which plural form `n` takes in the language `code` — the same rules as the
+/// catalogs' `Plural-Forms` headers.
+fn plural_class(code: &str, n: u64) -> usize {
+    match code {
         "fr" => usize::from(n > 1),
         "ro" => {
             if n == 1 {
@@ -193,7 +195,7 @@ pub fn trn(singular: &str, plural: &str, n: u64, args: &[&dyn Display]) -> Strin
     } else {
         catalog(index)
             .get(singular)
-            .and_then(|forms| forms.get(plural_class(index, n)))
+            .and_then(|forms| forms.get(plural_class(LANGUAGES[index].code, n)))
             .map_or(english, String::as_str)
     };
     fill(&text.replace("{n}", &n.to_string()), args)
@@ -234,11 +236,10 @@ mod tests {
 
     #[test]
     fn plural_classes_follow_the_catalog_headers() {
-        let index = |code| LANGUAGES.iter().position(|language| language.code == code).unwrap();
-        assert_eq!([1, 2, 5, 11, 21, 22].map(|n| plural_class(index("ru"), n)), [0, 1, 2, 2, 0, 1]);
-        assert_eq!([0, 1, 2, 19, 20, 101].map(|n| plural_class(index("ro"), n)), [1, 0, 1, 1, 2, 1]);
-        assert_eq!([0, 1, 2].map(|n| plural_class(index("fr"), n)), [0, 0, 1]);
-        assert_eq!([0, 1, 2].map(|n| plural_class(index("de"), n)), [1, 0, 1]);
+        assert_eq!([1, 2, 5, 11, 21, 22].map(|n| plural_class("ru", n)), [0, 1, 2, 2, 0, 1]);
+        assert_eq!([0, 1, 2, 19, 20, 101].map(|n| plural_class("ro", n)), [1, 0, 1, 1, 2, 1]);
+        assert_eq!([0, 1, 2].map(|n| plural_class("fr", n)), [0, 0, 1]);
+        assert_eq!([0, 1, 2].map(|n| plural_class("de", n)), [1, 0, 1]);
     }
 
     #[test]

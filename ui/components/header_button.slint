@@ -1,3 +1,4 @@
+import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { GlassSurface } from "glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 // HeaderButton — the ONE control that sits in a header or title row.
@@ -65,7 +66,7 @@ export component HeaderButton inherits Rectangle {
     accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
 
-    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    width: root.touch ? Spacing.header-action-box-touch : DesktopChrome.macos ? 32px : Spacing.header-action-box;
     min-height: self.width;
 
     // Keeping opacity below the root lets childless header controls share

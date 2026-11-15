@@ -62,6 +62,7 @@ use crate::MainWindow;
 /// Wire the Back key and the Slint-side stack operations. No core access:
 /// this is pure UI-shell navigation state.
 pub fn wire(window: &MainWindow) {
+    mouse_history::wire(window);
     let weak = window.as_weak();
     window.on_back_pressed(move || {
         if let Some(w) = weak.upgrade() {
@@ -525,3 +526,5 @@ fn background_app() {
 /// does; never quit the window out from under the user.
 #[cfg(not(target_os = "android"))]
 fn background_app() {}
+
+mod mouse_history;

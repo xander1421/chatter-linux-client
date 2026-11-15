@@ -82,7 +82,7 @@ pins match the actual production server; local syntax checks cannot prove that.
 The existing Rust compile-time guards remain active.
 
 It runs a locked release build with
-`--no-default-features --features desktop,jarvis,mesh,quic,onion`
+`--no-default-features --features desktop,mesh,quic,onion`
 (full GStreamer decoding, LiveKit calls, desktop integration and the
 mesh/QUIC/Tor transports). Secret chats and Shield also need the provisioned v3
 `CHATTER_ONION_ADDR` pinned; without it they fail closed and the script warns.

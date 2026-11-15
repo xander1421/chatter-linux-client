@@ -17,6 +17,21 @@ export global SidebarPane {
     in property <string> user-presence-status: "online";
     // Manual presence mode chosen in the status picker ("auto" default).
     in-out property <string> user-presence-mode: "auto";
+    in-out property <length> sidebar-preferred-width: 0px;
+    // Dragging across the threshold changes presentation; the expanded width
+    // survives collapse and responsive window-size changes.
+    public function resize-sidebar(width: length) {
+        if width < 180px {
+            root.sidebar-user-collapsed = true;
+            root.sidebar-collapsed = true;
+            root.small-screen-expanded = false;
+        } else {
+            root.sidebar-preferred-width = clamp(width, 220px, 480px);
+            root.sidebar-user-collapsed = false;
+            root.sidebar-collapsed = false;
+            root.small-screen-expanded = true;
+        }
+    }
     in-out property <bool> sidebar-collapsed: false;
     // Expanded by the user on a window below 800 px, where the panel is a
     // rail by default. Session-only; reset when the window size class changes.

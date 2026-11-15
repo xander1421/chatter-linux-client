@@ -388,6 +388,12 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 }
                 if let Some(w) = weak.upgrade() {
+                    // Opening the pinned page reuses this panel without an
+                    // active thread. Its rows may arrive before this queued
+                    // close runs; do not erase the newly opened page.
+                    if w.global::<crate::ChatPane>().get_thread_pinned_mode() {
+                        return;
+                    }
                     w.global::<crate::ChatPane>()
                         .set_thread_panel_visible(false);
                     w.global::<crate::ChatPane>()

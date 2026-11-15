@@ -37,7 +37,7 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
 
         HeaderButton {
             touch: root.touch;
-            icon: Icons.shield;
+            icon: Icons.onion;
             label: !AnonMode.shield-available
                 ? @tr("Shield unavailable: this build has no Tor onion service")
                 : AnonMode.enabled ? @tr("Shield on - tap to turn off") : @tr("Shield off - tap to connect over Tor");

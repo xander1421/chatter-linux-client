@@ -1842,25 +1842,19 @@ msgstr "en ligne"
 msgid "Message request"
 msgstr "Demande de message"
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:156
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:148
 msgid "Device link"
 msgstr "Association d'appareil"
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:158
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:198
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:180
 msgid "Link copied to clipboard."
 msgstr "Lien copié dans le presse-papiers."
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:159
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:200
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:182
 msgid "Unable to copy link. Please try again."
 msgstr "Impossible de copier le lien. Réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:166
-msgid "Clipboard copy is unavailable on this device."
-msgstr "La copie dans le presse-papiers n'est pas disponible sur cet appareil."
-
-#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:248
+#: crates/chatter-ui/src/bin_ui/features/auth/link_device.rs:228
 msgid "post-link bring-up failed: {}"
 msgstr "Échec de la mise en route après l'association : {}"
 
@@ -1980,12 +1974,12 @@ msgid "Camera is available once the call connects."
 msgstr "La caméra sera disponible une fois l'appel connecté."
 
 #: crates/chatter-ui/src/bin_ui/features/calls/active.rs:146
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:194
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:204
 msgid "Camera permission is needed for video calls"
 msgstr "L'autorisation de la caméra est nécessaire pour les appels vidéo"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/active.rs:159
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:900
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:911
 msgid "Camera unavailable"
 msgstr "Caméra indisponible"
 
@@ -1993,39 +1987,39 @@ msgstr "Caméra indisponible"
 msgid "Could not switch camera"
 msgstr "Impossible de changer de caméra"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:262
+#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:264
 msgid "Screen share unavailable until the call connects."
 msgstr ""
 "Le partage d'écran est indisponible tant que l'appel n'est pas connecté."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:270
+#: crates/chatter-ui/src/bin_ui/features/calls/active.rs:272
 msgid "Screen share unavailable"
 msgstr "Partage d'écran indisponible"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:119
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:126
 msgid "Screen sharing is available once the call connects."
 msgstr "Le partage d'écran sera disponible une fois l'appel connecté."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:162
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:287
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:347
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:169
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:294
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:354
 msgid "Could not list screens. Try again."
 msgstr "Impossible de lister les écrans. Réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:201
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:208
 msgid "Could not switch microphones. Try again."
 msgstr "Impossible de changer de micro. Réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:236
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:243
 msgid "Could not switch speakers. Try again."
 msgstr "Impossible de changer de haut-parleur. Réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:269
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:335
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:276
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:342
 msgid "That screen is no longer available."
 msgstr "Cet écran n'est plus disponible."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:301
+#: crates/chatter-ui/src/bin_ui/features/calls/device_picker.rs:308
 msgid "Could not share that screen. Try again."
 msgstr "Impossible de partager cet écran. Réessayez."
 
@@ -2063,19 +2057,19 @@ msgstr "Inconnu"
 msgid "In progress"
 msgstr "En cours"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:175
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:604
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:925
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:185
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:615
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:936
 #: crates/chatter-core/src/client/auth.rs:17
 #: crates/chatter-core/src/domain/message/entity.rs:380
 msgid "Call ended"
 msgstr "Appel terminé"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:189
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:199
 msgid "Microphone permission is needed for calls"
 msgstr "L'autorisation du micro est nécessaire pour les appels"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:251
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:262
 #: crates/chatter-core/src/client/conversation_listing.rs:345
 #: crates/chatter-core/src/client/search_visible.rs:329
 #: crates/chatter-core/src/client/search_visible.rs:339
@@ -2084,44 +2078,44 @@ msgstr "L'autorisation du micro est nécessaire pour les appels"
 msgid "You"
 msgstr "Vous"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:606
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:617
 #: crates/chatter-core/src/domain/message/entity.rs:370
 #: crates/chatter-core/src/services/activity_service.rs:343
 msgid "Missed call"
 msgstr "Appel manqué"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:926
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:937
 msgid "Call declined"
 msgstr "Appel refusé"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:927
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:938
 #: crates/chatter-core/src/ui/format.rs:125
 msgid "No answer"
 msgstr "Sans réponse"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:933
+#: crates/chatter-ui/src/bin_ui/features/calls/incoming.rs:944
 msgid "Connection lost"
 msgstr "Connexion perdue"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:145
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:150
 msgid "Call failed — couldn't connect"
 msgstr "Échec de l'appel — connexion impossible"
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:201
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:206
 msgid "Calls need microphone access — allow it to call."
 msgstr "Autorisez l'accès au micro pour passer des appels."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:213
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:228
 msgid "Your session changed. Start the call again."
 msgstr "Votre session a changé. Relancez l'appel."
 
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:250
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:265
 msgid "You are not signed in, so the call was not placed."
 msgstr "Vous n'êtes pas connecté, l'appel n'a donc pas été passé."
 
 #: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:97
-#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:257
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:937
+#: crates/chatter-ui/src/bin_ui/features/calls/outgoing.rs:272
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:943
 #: crates/chatter-core/src/ui/display.rs:143
 msgid "Anonymous"
 msgstr "Anonyme"
@@ -2545,15 +2539,15 @@ msgstr "Choisir une pièce jointe"
 msgid "Can't attach {}"
 msgstr "Impossible de joindre {}"
 
-#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:105
+#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:122
 msgid "Open a chat to attach a file."
 msgstr "Ouvrez une discussion pour joindre un fichier."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:116
+#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:133
 msgid "Open a conversation before dropping a file."
 msgstr "Ouvrez une discussion avant de déposer un fichier."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:134
+#: crates/chatter-ui/src/bin_ui/features/composer/drag_drop.rs:151
 msgid ""
 "Couldn't attach that file. Check that it is still available and try again."
 msgstr ""
@@ -2594,19 +2588,19 @@ msgstr ""
 msgid "Allow microphone access to record a voice message"
 msgstr "Autorisez l'accès au micro pour enregistrer un message vocal"
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:150
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:152
 msgid "No microphone found. Connect one to record a voice message."
 msgstr "Aucun micro trouvé. Branchez-en un pour enregistrer un message vocal."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:154
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:156
 msgid "Couldn't record a voice message. Please try again."
 msgstr "Impossible d'enregistrer un message vocal. Réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:193
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:195
 msgid "Recording ready (5 minute limit)"
 msgstr "Enregistrement prêt (limite de 5 minutes)"
 
-#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:303
+#: crates/chatter-ui/src/bin_ui/features/composer/voice.rs:305
 msgid "Upload failed. Tap Send to retry."
 msgstr "Échec de l'envoi. Appuyez sur Envoyer pour réessayer."
 
@@ -3446,42 +3440,42 @@ msgstr "Modèle enregistré."
 msgid "Could not save model: {}"
 msgstr "Impossible d'enregistrer le modèle : {}"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:100
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:105
 msgid "Could not open the backup destination."
 msgstr "Impossible d'ouvrir la destination de la sauvegarde."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:109
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:114
 msgid "Export message backup"
 msgstr "Exporter la sauvegarde des messages"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:111
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:179
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:116
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:189
 msgid "Chatter backup"
 msgstr "Sauvegarde Chatter"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:168
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:178
 msgid "Could not open the backup file."
 msgstr "Impossible d'ouvrir le fichier de sauvegarde."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:177
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:187
 msgid "Restore message backup"
 msgstr "Restaurer la sauvegarde des messages"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:211
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:221
 msgid "Server backup updated ({} rows)"
 msgstr "Sauvegarde serveur mise à jour ({} lignes)"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:213
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:223
 msgid "Could not back up messages. Check your connection and PIN, then retry."
 msgstr ""
 "Impossible de sauvegarder les messages. Vérifiez votre connexion et votre "
 "PIN, puis réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:243
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "{} lignes restaurées ({} déjà présentes ou conservées localement)"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:247
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
 msgid ""
 "This backup was made by a newer version of Chatter. Update the app to "
 "restore it."
@@ -3489,29 +3483,29 @@ msgstr ""
 "Cette sauvegarde a été créée par une version plus récente de Chatter. Mettez "
 "l'application à jour pour la restaurer."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:250
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 "Impossible de restaurer la sauvegarde. Vérifiez votre phrase secrète ou "
 "votre PIN, puis réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:66
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:71
 msgid "Could not prepare the backup file."
 msgstr "Impossible de préparer le fichier de sauvegarde."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:79
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:133
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:84
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:138
 msgid "Could not export backup. Check available storage and retry."
 msgstr ""
 "Impossible d'exporter la sauvegarde. Vérifiez l'espace disponible et "
 "réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:89
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:131
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:94
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:136
 msgid "Backup exported ({} rows)"
 msgstr "Sauvegarde exportée ({} lignes)"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:93
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:98
 msgid "Could not save the backup file."
 msgstr "Impossible d'enregistrer le fichier de sauvegarde."
 
@@ -3603,8 +3597,8 @@ msgstr "Impossible de modifier la sourdine"
 msgid "Couldn't change archive: {}"
 msgstr "Impossible de modifier l'archivage : {}"
 
-#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:252
-#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:306
+#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:253
+#: crates/chatter-ui/src/bin_ui/features/sidebar/navigation.rs:307
 msgid "Private"
 msgstr "Privé"
 
@@ -3683,32 +3677,32 @@ msgstr "Impossible de renommer la section : {}"
 msgid "Couldn't change folder icon: {}"
 msgstr "Impossible de modifier l'icône de la section : {}"
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:417
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:423
 msgid "The quoted message is unavailable."
 msgstr "Le message cité est indisponible."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:513
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:519
 msgid "Couldn't send your reply. Try again."
 msgstr "Impossible d'envoyer votre réponse. Réessayez."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:519
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:525
 msgid "Couldn't send your reply. It's kept with this thread."
 msgstr "Impossible d'envoyer votre réponse. Elle est conservée avec ce fil."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:523
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:529
 msgid "Couldn't send your reply. It's saved as this thread's draft."
 msgstr ""
 "Impossible d'envoyer votre réponse. Elle est enregistrée comme brouillon de "
 "ce fil."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:599
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:605
 msgid "Your earlier reply that didn't send is back in the box."
 msgstr ""
 "Votre réponse précédente, qui n'avait pas été envoyée, est de retour dans le "
 "champ."
 
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:820
-#: crates/chatter-ui/src/bin_ui/features/thread.rs:850
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:826
+#: crates/chatter-ui/src/bin_ui/features/thread.rs:856
 #: crates/chatter-core/src/ui/message_row.rs:187
 msgid "{n} reply"
 msgid_plural "{n} replies"
@@ -3834,43 +3828,43 @@ msgctxt "day month"
 msgid "{0} {1}"
 msgstr "{0} {1}"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:171
+#: crates/chatter-ui/src/bin_ui/features/update.rs:104
+msgid "Update not installed: Update install failed"
+msgstr "Mise à jour non installée : échec de l'installation"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:106
+msgid "Update not installed: {}"
+msgstr "Mise à jour non installée : {}"
+
+#: crates/chatter-ui/src/bin_ui/features/update.rs:184
 msgid "Starting verified update…"
 msgstr "Démarrage de la mise à jour vérifiée…"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:185
+#: crates/chatter-ui/src/bin_ui/features/update.rs:198
 msgid "Could not restart into the verified update"
 msgstr "Impossible de redémarrer sur la mise à jour vérifiée"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:208
+#: crates/chatter-ui/src/bin_ui/features/update.rs:221
 msgid "Large download on cellular. Tap Download now to continue."
 msgstr ""
 "Téléchargement volumineux en données mobiles. Appuyez sur Télécharger "
 "maintenant pour continuer."
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:227
+#: crates/chatter-ui/src/bin_ui/features/update.rs:240
 msgid "Downloading and verifying…"
 msgstr "Téléchargement et vérification…"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:236
+#: crates/chatter-ui/src/bin_ui/features/update.rs:249
 msgid "Downloading {}%"
 msgstr "Téléchargement {} %"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:294
+#: crates/chatter-ui/src/bin_ui/features/update.rs:307
 msgid "Could not stage Linux update"
 msgstr "Impossible de préparer la mise à jour Linux"
 
-#: crates/chatter-ui/src/bin_ui/features/update.rs:57
+#: crates/chatter-ui/src/bin_ui/features/update.rs:70
 msgid "You're up to date"
 msgstr "Vous êtes à jour"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:91
-msgid "Update not installed: Update install failed"
-msgstr "Mise à jour non installée : échec de l'installation"
-
-#: crates/chatter-ui/src/bin_ui/features/update.rs:93
-msgid "Update not installed: {}"
-msgstr "Mise à jour non installée : {}"
 
 #: crates/chatter-ui/src/platform/android/activity.rs:29
 msgid "Android runtime has no JavaVM"

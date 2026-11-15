@@ -14,6 +14,11 @@ impl ConversationHandle {
             .channel_id()
             .ok_or(ConversationError::NoConversation)?;
         let kinds = match self.conversation {
+            ActiveConversation::Channel(_)
+                if self.storage_kind()? == ConversationType::SavedMessages =>
+            {
+                vec![ConversationType::SavedMessages]
+            }
             ActiveConversation::Channel(_) => {
                 vec![ConversationType::Channel, ConversationType::AnonGroup]
             }
@@ -80,7 +85,6 @@ impl ConversationHandle {
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> Result<bool, ConversationError> {
-        self.require_remote_message_actions()?;
         // Per-user check — the summary aggregate would flip other users'
         // reactions off.
         let snapshot = self
@@ -124,7 +128,6 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         remove: bool,
     ) -> ConversationResult {
-        self.require_remote_message_actions()?;
         let scope = self
             .reaction_snapshot(target_author, target_sent_timestamp)?
             .ok_or_else(|| {
@@ -143,6 +146,37 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         remove: bool,
     ) -> ConversationResult {
+        if scope.kind == ConversationType::SavedMessages {
+            let auth = self.client.auth_state().get();
+            let own = auth.current_user_id.ok_or_else(|| {
+                ConversationError::Other("Reaction requires a signed-in user".into())
+            })?;
+            if self.storage_scope_as(Some(own))? != *scope {
+                return Err(ConversationError::Other(
+                    "Saved reaction scope changed".into(),
+                ));
+            }
+            let session =
+                crate::state::send_session::SendSession::capture(self.client.auth_state());
+            let current = self.client.auth_state().get();
+            if current.current_user_id != Some(own)
+                || current.session_revision != auth.session_revision
+            {
+                return Err(ConversationError::Other(
+                    "Account changed while reacting".into(),
+                ));
+            }
+            session.check()?;
+            return persist_saved_reaction(
+                &self.client.messages().message_repo,
+                scope,
+                own,
+                target_author,
+                target_sent_timestamp,
+                emoji,
+                remove,
+            );
+        }
         self.require_remote_message_actions()?;
         require_remote_message_kind(&scope.kind)?;
         self.reaction_snapshot_for_scope(scope, target_author, target_sent_timestamp)?
@@ -310,6 +344,51 @@ where
     if !persist(action_ts)? {
         return Err(ConversationError::Other(
             "Reaction action superseded while sending".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Saved reactions stay in the account's local Saved scope. No channel/DM
+/// dispatch is possible, even when another kind shares the author and clock.
+pub(super) fn persist_saved_reaction(
+    repo: &crate::storage::MessageRepository,
+    scope: &crate::domain::reaction::ReactionScope,
+    own: UserId,
+    author: &UserId,
+    sent_at: u64,
+    emoji: &str,
+    remove: bool,
+) -> ConversationResult {
+    if scope.kind != ConversationType::SavedMessages
+        || scope.id != ChannelId::from(own)
+        || *author != own
+        || emoji.is_empty()
+        || emoji.len() > 128
+    {
+        return Err(ConversationError::Other(
+            "Invalid Saved reaction target or emoji".into(),
+        ));
+    }
+    let message = scoped_stored_message(repo, scope, author, sent_at)?;
+    if !stored_message_menu(
+        &message,
+        true,
+        crate::util::time::TimestampNanos::now().as_u64(),
+    )
+    .actions
+    .react
+    {
+        return Err(ConversationError::Other(
+            "This Saved message cannot be reacted to".into(),
+        ));
+    }
+    let clock = repo.allocate_reaction_clock(&own)?;
+    if !crate::services::MessageService::record_reaction_completion_with_repo(
+        repo, &own, scope, author, sent_at, &own, emoji, remove, clock,
+    )? {
+        return Err(ConversationError::Other(
+            "Saved reaction was superseded".into(),
         ));
     }
     Ok(())

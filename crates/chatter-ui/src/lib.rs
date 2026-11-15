@@ -804,8 +804,27 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
     // Touch platform: touch-sized targets and gestures. The phone layout
     // (single pane, bottom nav) is NOT implied — app.slint's `compact-layout`
     // picks it from the window's logical width, so a tablet gets two panes.
+    #[cfg(target_os = "macos")]
+    window.global::<crate::DesktopChrome>().set_macos(true);
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    window.global::<crate::DesktopChrome>().set_frame_inset(8.0);
     #[cfg(any(target_os = "android", target_os = "ios"))]
     window.set_is_mobile_platform(true);
+    #[cfg(target_os = "ios")]
+    {
+        use i_slint_backend_winit::WinitWindowAccessor;
+        window.global::<crate::InputPolicy>().set_dismiss_after_send(true);
+        window.global::<crate::InputPolicy>().set_keyboard_includes_safe_area(true);
+        let weak = window.as_weak();
+        window.global::<crate::InputPolicy>().on_dismiss_native_keyboard(move || {
+            if let Some(w) = weak.upgrade() {
+                // A destroyed Slint TextInput cannot deliver FocusOut. Resign
+                // UIKit's responder explicitly when its route has gone away.
+                w.window().with_winit_window(|native| native.set_ime_allowed(false));
+            }
+        });
+    }
+
 
     // Let the notification "Accept" activity-intent drive the in-app accept flow.
     #[cfg(target_os = "android")]
@@ -1251,6 +1270,8 @@ fn dev_auto_register(
 /// Phase 2: Sync event loop (runs OUTSIDE block_on — rt.enter() keeps reactor accessible).
 /// Slint owns the thread. Tokio worker threads handle async I/O.
 fn app_run(state: AppState) {
+    #[cfg(target_vendor = "apple")]
+    state.window.global::<Typography>().set_font_family_emoji("Apple Color Emoji".into());
     // macOS: the native NSWindow only exists once the platform window has
     // actually been created, which needs at least one event-loop iteration
     // after the window is shown (see platform::macos's docs) — in practice a
@@ -1268,6 +1289,13 @@ fn app_run(state: AppState) {
             if crate::platform::macos::apply_unified_titlebar(w.window()) {
                 w.set_macos_titlebar_height(crate::platform::macos::TITLEBAR_HEIGHT);
                 w.set_macos_traffic_lights_width(crate::platform::macos::TRAFFIC_LIGHTS_WIDTH);
+                // AppKit finishes its titlebar layout after the style change.
+                let weak = w.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+                    if let Some(w) = weak.upgrade() {
+                        crate::platform::macos::refresh_window_button_insets(w.window());
+                    }
+                });
                 timer_handle.stop();
             } else {
                 let left = attempts_left.get().saturating_sub(1);

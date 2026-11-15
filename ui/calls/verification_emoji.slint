@@ -1,0 +1,78 @@
+// Bitmap glyphs extracted from our bundled Noto Color Emoji font.
+// Keep call verification artwork identical on CoreText and FreeType platforms.
+import { Typography } from "../theme/typography.slint";
+
+export component VerificationEmoji inherits Image {
+    in property <string> emoji;
+    width: Typography.lg;
+    height: Typography.lg;
+    image-fit: contain;
+    source: root.artwork(root.emoji);
+    pure function artwork(value: string) -> image {
+        if value == "🐶" || value == "🐶️" { return @image-url("../../assets/call-verification/1f436.png"); }
+        if value == "🐱" || value == "🐱️" { return @image-url("../../assets/call-verification/1f431.png"); }
+        if value == "🐭" || value == "🐭️" { return @image-url("../../assets/call-verification/1f42d.png"); }
+        if value == "🐹" || value == "🐹️" { return @image-url("../../assets/call-verification/1f439.png"); }
+        if value == "🐰" || value == "🐰️" { return @image-url("../../assets/call-verification/1f430.png"); }
+        if value == "🦊" || value == "🦊️" { return @image-url("../../assets/call-verification/1f98a.png"); }
+        if value == "🐻" || value == "🐻️" { return @image-url("../../assets/call-verification/1f43b.png"); }
+        if value == "🐼" || value == "🐼️" { return @image-url("../../assets/call-verification/1f43c.png"); }
+        if value == "🐨" || value == "🐨️" { return @image-url("../../assets/call-verification/1f428.png"); }
+        if value == "🐯" || value == "🐯️" { return @image-url("../../assets/call-verification/1f42f.png"); }
+        if value == "🦁" || value == "🦁️" { return @image-url("../../assets/call-verification/1f981.png"); }
+        if value == "🐮" || value == "🐮️" { return @image-url("../../assets/call-verification/1f42e.png"); }
+        if value == "🐷" || value == "🐷️" { return @image-url("../../assets/call-verification/1f437.png"); }
+        if value == "🐸" || value == "🐸️" { return @image-url("../../assets/call-verification/1f438.png"); }
+        if value == "🐵" || value == "🐵️" { return @image-url("../../assets/call-verification/1f435.png"); }
+        if value == "🐔" || value == "🐔️" { return @image-url("../../assets/call-verification/1f414.png"); }
+        if value == "🌸" || value == "🌸️" { return @image-url("../../assets/call-verification/1f338.png"); }
+        if value == "🌺" || value == "🌺️" { return @image-url("../../assets/call-verification/1f33a.png"); }
+        if value == "🌻" || value == "🌻️" { return @image-url("../../assets/call-verification/1f33b.png"); }
+        if value == "🌹" || value == "🌹️" { return @image-url("../../assets/call-verification/1f339.png"); }
+        if value == "🌴" || value == "🌴️" { return @image-url("../../assets/call-verification/1f334.png"); }
+        if value == "🌵" || value == "🌵️" { return @image-url("../../assets/call-verification/1f335.png"); }
+        if value == "🍀" || value == "🍀️" { return @image-url("../../assets/call-verification/1f340.png"); }
+        if value == "🍁" || value == "🍁️" { return @image-url("../../assets/call-verification/1f341.png"); }
+        if value == "🌙" || value == "🌙️" { return @image-url("../../assets/call-verification/1f319.png"); }
+        if value == "⭐" || value == "⭐️" { return @image-url("../../assets/call-verification/2b50.png"); }
+        if value == "🌈" || value == "🌈️" { return @image-url("../../assets/call-verification/1f308.png"); }
+        if value == "☀" || value == "☀️" { return @image-url("../../assets/call-verification/2600.png"); }
+        if value == "❄" || value == "❄️" { return @image-url("../../assets/call-verification/2744.png"); }
+        if value == "🔥" || value == "🔥️" { return @image-url("../../assets/call-verification/1f525.png"); }
+        if value == "💧" || value == "💧️" { return @image-url("../../assets/call-verification/1f4a7.png"); }
+        if value == "🌊" || value == "🌊️" { return @image-url("../../assets/call-verification/1f30a.png"); }
+        if value == "🚀" || value == "🚀️" { return @image-url("../../assets/call-verification/1f680.png"); }
+        if value == "✈" || value == "✈️" { return @image-url("../../assets/call-verification/2708.png"); }
+        if value == "🚂" || value == "🚂️" { return @image-url("../../assets/call-verification/1f682.png"); }
+        if value == "🚗" || value == "🚗️" { return @image-url("../../assets/call-verification/1f697.png"); }
+        if value == "⛵" || value == "⛵️" { return @image-url("../../assets/call-verification/26f5.png"); }
+        if value == "🎸" || value == "🎸️" { return @image-url("../../assets/call-verification/1f3b8.png"); }
+        if value == "🎺" || value == "🎺️" { return @image-url("../../assets/call-verification/1f3ba.png"); }
+        if value == "🎹" || value == "🎹️" { return @image-url("../../assets/call-verification/1f3b9.png"); }
+        if value == "📱" || value == "📱️" { return @image-url("../../assets/call-verification/1f4f1.png"); }
+        if value == "💻" || value == "💻️" { return @image-url("../../assets/call-verification/1f4bb.png"); }
+        if value == "🔑" || value == "🔑️" { return @image-url("../../assets/call-verification/1f511.png"); }
+        if value == "💎" || value == "💎️" { return @image-url("../../assets/call-verification/1f48e.png"); }
+        if value == "🎁" || value == "🎁️" { return @image-url("../../assets/call-verification/1f381.png"); }
+        if value == "🎈" || value == "🎈️" { return @image-url("../../assets/call-verification/1f388.png"); }
+        if value == "🎯" || value == "🎯️" { return @image-url("../../assets/call-verification/1f3af.png"); }
+        if value == "🏆" || value == "🏆️" { return @image-url("../../assets/call-verification/1f3c6.png"); }
+        if value == "🍎" || value == "🍎️" { return @image-url("../../assets/call-verification/1f34e.png"); }
+        if value == "🍊" || value == "🍊️" { return @image-url("../../assets/call-verification/1f34a.png"); }
+        if value == "🍋" || value == "🍋️" { return @image-url("../../assets/call-verification/1f34b.png"); }
+        if value == "🍇" || value == "🍇️" { return @image-url("../../assets/call-verification/1f347.png"); }
+        if value == "🍓" || value == "🍓️" { return @image-url("../../assets/call-verification/1f353.png"); }
+        if value == "🍕" || value == "🍕️" { return @image-url("../../assets/call-verification/1f355.png"); }
+        if value == "🍔" || value == "🍔️" { return @image-url("../../assets/call-verification/1f354.png"); }
+        if value == "🍩" || value == "🍩️" { return @image-url("../../assets/call-verification/1f369.png"); }
+        if value == "❤" || value == "❤️" { return @image-url("../../assets/call-verification/2764.png"); }
+        if value == "💙" || value == "💙️" { return @image-url("../../assets/call-verification/1f499.png"); }
+        if value == "💚" || value == "💚️" { return @image-url("../../assets/call-verification/1f49a.png"); }
+        if value == "💜" || value == "💜️" { return @image-url("../../assets/call-verification/1f49c.png"); }
+        if value == "🖤" || value == "🖤️" { return @image-url("../../assets/call-verification/1f5a4.png"); }
+        if value == "⚡" || value == "⚡️" { return @image-url("../../assets/call-verification/26a1.png"); }
+        if value == "💫" || value == "💫️" { return @image-url("../../assets/call-verification/1f4ab.png"); }
+        if value == "🔔" || value == "🔔️" { return @image-url("../../assets/call-verification/1f514.png"); }
+        return @image-url("");
+    }
+}

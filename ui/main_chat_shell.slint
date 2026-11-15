@@ -1,3 +1,4 @@
+import { DesktopChrome } from "theme/desktop_chrome.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { JarvisPane } from "app_jarvis_pane.slint";
@@ -55,6 +56,7 @@ export component MainChatShell inherits Rectangle {
     in property <length> safe-area-bottom;
     in property <bool> server-unreachable;
     in property <bool> sidebar-is-rail;
+    in property <length> sidebar-panel-width;
     in-out property <bool> sidebar-user-collapsed;
     in-out property <length> viewer-origin-height;
     in-out property <length> viewer-origin-width;
@@ -74,8 +76,7 @@ export component MainChatShell inherits Rectangle {
         // the pushed modal layer (0).
     property <length> normal-sidebar-offset:
         SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
-        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
-        : Spacing.sidebar-width;
+        : root.sidebar-panel-width;
     property <bool> call-hides-sidebar: !root.compact-layout && CallView.active-call-visible
         && root.width - root.normal-sidebar-offset < 308px;
     // Only the settled, unobstructed compact chat has an opaque ChatLayout
@@ -126,6 +127,7 @@ export component MainChatShell inherits Rectangle {
             server-unreachable: root.server-unreachable;
             connection-status: root.connection-status;
             sidebar-is-rail: root.sidebar-is-rail;
+            sidebar-panel-width: root.sidebar-panel-width;
             sidebar-user-collapsed <=> root.sidebar-user-collapsed;
             window-width: root.width;
             toggle-anon-mode() => { root.toggle-anon-mode(); }
@@ -480,9 +482,11 @@ export component MainChatShell inherits Rectangle {
                 visible: ChatPane.thread-panel-visible;
                 composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
                 touch: root.is-mobile-platform;
-                x: parent.width - self.width;
+                // Pinned pages share the conversation chrome's desktop gutter.
+                property <length> page-inset: ChatPane.thread-pinned-mode && !root.compact-layout ? Spacing.xs : 0px;
+                x: parent.width - self.width - self.page-inset;
                 y: 0;
-                width: chat-panel-area.thread-panel-w;
+                width: max(0px, chat-panel-area.thread-panel-w - 2 * self.page-inset);
                 height: 100%;
                 context-menu-anchor-bottom <=> root.context-menu-anchor-bottom;
                 context-menu-anchor-left <=> root.context-menu-anchor-left;
@@ -501,6 +505,62 @@ export component MainChatShell inherits Rectangle {
             }
 
         } // end chat-panel-area Rectangle
+        // Keep the resize target mounted across the rail/list transition so
+        // the pointer stays captured while crossing the collapse threshold.
+        if !root.is-mobile-platform && !SidebarPane.sidebar-hidden
+            && !CallView.active-call-fullscreen && !root.call-hides-sidebar: resize-edge := Rectangle {
+            property <length> start-pointer-x;
+            property <length> start-width;
+            z: 2;
+            x: root.normal-sidebar-offset - 4px;
+            width: 8px;
+            height: parent.height;
+            accessible-role: button;
+            accessible-label: @tr("Resize sidebar");
+            accessible-description: @tr("Drag to resize. Left and right arrows adjust width; Home collapses; End restores the default width.");
+            accessible-action-default => {
+                SidebarPane.resize-sidebar(DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width);
+                SidebarPane.toggle-sidebar();
+            }
+            resize-keys := FocusScope {
+                key-pressed(event) => {
+                    if event.text == Key.LeftArrow || event.text == Key.RightArrow {
+                        SidebarPane.resize-sidebar(root.sidebar-is-rail
+                            ? (event.text == Key.RightArrow ? 220px : 0px)
+                            : event.text == Key.LeftArrow && root.normal-sidebar-offset <= 220px ? 0px
+                            : root.normal-sidebar-offset + (event.text == Key.RightArrow ? 16px : -16px));
+                        SidebarPane.toggle-sidebar();
+                        return accept;
+                    }
+                    if event.text == Key.Home || event.text == Key.End {
+                        SidebarPane.resize-sidebar(event.text == Key.Home ? 0px
+                            : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width);
+                        SidebarPane.toggle-sidebar();
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+            resize-touch := TouchArea {
+                mouse-cursor: col-resize;
+                moved => {
+                    if self.pressed {
+                        SidebarPane.resize-sidebar(resize-edge.start-width + self.mouse-x
+                            + self.absolute-position.x - resize-edge.start-pointer-x);
+                    }
+                }
+                pointer-event(event) => {
+                    if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                        resize-edge.start-width = root.normal-sidebar-offset;
+                        resize-edge.start-pointer-x = self.mouse-x + self.absolute-position.x;
+                        resize-keys.focus();
+                    }
+                    if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                        SidebarPane.toggle-sidebar();
+                    }
+                }
+            }
+        }
         // Only the leading edge handles the gesture.
         if root.compact-layout && SidebarPane.mobile-show-chat: AppEdgeSwipe {
             x: 0px;

@@ -135,5 +135,8 @@ pub unsafe extern "C" fn chatter_ios_string_free(s: *mut c_char) {
 #[unsafe(no_mangle)]
 pub extern "C" fn chatter_ios_run_ui() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    rt.block_on(chatter_ui::app_main());
+    // UIApplicationMain keeps this block_on poll alive. Match the desktop
+    // entry: Tokio's cooperative budget cannot reset while Slint owns the
+    // thread, so a finite budget eventually makes UI futures spin forever.
+    rt.block_on(tokio::task::unconstrained(chatter_ui::app_main()));
 }

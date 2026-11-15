@@ -7,6 +7,8 @@
 pub mod audio_player;
 pub mod album;
 pub mod audio_recorder;
+#[cfg(target_os = "ios")]
+pub(crate) mod ios_audio_session;
 pub mod decoder;
 pub mod display_frame;
 #[cfg(all(
