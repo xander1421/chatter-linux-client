@@ -287,17 +287,22 @@ impl RoomManager {
         let local_id = self.room.read().as_ref().ok_or(CallError::NotInCall)?
             .local_participant().identity().to_string();
         let publication = self.camera_track_sid.read().clone().ok_or(CallError::NotInCall)?;
-        let generation = self.camera_operation_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst).wrapping_add(1);
-        let still_current = || {
-            self.camera_published.load(std::sync::atomic::Ordering::SeqCst)
-                && self.camera_track_sid.read().as_ref() == Some(&publication)
-                && self.camera_operation_generation.load(std::sync::atomic::Ordering::SeqCst) == generation
-        };
         let (source, old_path, old_config) = {
             let capture = self.video_capture.read();
             let source = capture.active_source().ok_or(CallError::CameraUnavailable)?;
             let (path, config) = capture.reconnect_selection();
             (source, path, config)
+        };
+        // The published source keeps its portrait dimensions across a lens
+        // switch. A different native preset needs a fresh publication.
+        if config.as_ref().is_some_and(|next| (next.width <= 640) != (old_config.width <= 640)) {
+            return Err(CallError::TrackPublishFailed("Turn the camera off before changing its resolution".into()));
+        }
+        let generation = self.camera_operation_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst).wrapping_add(1);
+        let still_current = || {
+            self.camera_published.load(std::sync::atomic::Ordering::SeqCst)
+                && self.camera_track_sid.read().as_ref() == Some(&publication)
+                && self.camera_operation_generation.load(std::sync::atomic::Ordering::SeqCst) == generation
         };
         let preview = self.shared_frames.as_ref().map(|shared| {
             super::super::video_capture::LocalPreview {

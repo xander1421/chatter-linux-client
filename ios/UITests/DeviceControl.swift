@@ -112,13 +112,19 @@ final class DeviceControl: XCTestCase {
                 }
             } else if let pairs = step.dropFirstIfPrefixed("tap-sequence:") {
                 // Deliberately omit per-tap settling for rapid-toggle races.
-                for pair in pairs.split(separator: ";") {
-                    let values = pair.split(separator: ",").compactMap { Double($0) }
-                    guard values.count == 2, values.allSatisfy({ (0...1).contains($0) }) else {
+                guard !pairs.isEmpty else { XCTFail("Empty tap sequence"); return }
+                var points: [CGVector] = []
+                for pair in pairs.split(separator: ";", omittingEmptySubsequences: false) {
+                    let values = pair.split(separator: ",", omittingEmptySubsequences: false)
+                    guard values.count == 2, let x = Double(values[0]), let y = Double(values[1]),
+                          (0...1).contains(x), (0...1).contains(y) else {
                         XCTFail("Invalid tap sequence: \(pairs)")
                         return
                     }
-                    app.coordinate(withNormalizedOffset: CGVector(dx: values[0], dy: values[1])).tap()
+                    points.append(CGVector(dx: x, dy: y))
+                }
+                for point in points {
+                    app.coordinate(withNormalizedOffset: point).tap()
                 }
                 Thread.sleep(forTimeInterval: 1.5)
             } else if let label = step.dropFirstIfPrefixed("expect-button:") {

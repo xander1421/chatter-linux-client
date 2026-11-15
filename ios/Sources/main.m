@@ -85,6 +85,12 @@ void *chatter_ios_camera_start(bool front, uint32_t width, uint32_t fps,
                                       @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) };
     [capture.output setSampleBufferDelegate:capture queue:capture.frames];
     [capture.session beginConfiguration];
+    if (![capture.session canAddInput:input]) {
+      [capture.session commitConfiguration];
+      [capture.output setSampleBufferDelegate:nil queue:NULL];
+      return NULL;
+    }
+    [capture.session addInput:input];
     NSString *preset = width <= 640 ? AVCaptureSessionPreset640x480 : AVCaptureSessionPreset1280x720;
     if (![capture.session canSetSessionPreset:preset]) {
       [capture.session commitConfiguration];
@@ -92,12 +98,6 @@ void *chatter_ios_camera_start(bool front, uint32_t width, uint32_t fps,
       return NULL;
     }
     capture.session.sessionPreset = preset;
-    if (![capture.session canAddInput:input]) {
-      [capture.session commitConfiguration];
-      [capture.output setSampleBufferDelegate:nil queue:NULL];
-      return NULL;
-    }
-    [capture.session addInput:input];
     if (![capture.session canAddOutput:capture.output]) {
       [capture.session commitConfiguration];
       [capture.output setSampleBufferDelegate:nil queue:NULL];
