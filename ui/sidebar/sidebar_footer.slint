@@ -193,8 +193,9 @@ export component SidebarFooter inherits GlassSurface {
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
                 alignment: end; spacing: root.rail-gap; padding-bottom: Spacing.sm;
-                // Ungated, like the expanded header shield.
-                TooltipArea {
+                // Touch only: the desktop rail keeps the Shield in the expanded
+                // header and gives the height to the list.
+                if root.touch: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? @tr("Anon mode (active) - tap to disable") : @tr("Anon mode");
                     tooltip-enabled: true; placement: "right";

@@ -32,7 +32,10 @@ component SectionTab inherits Button {
     hover-enabled: !self.touch;
     height: Spacing.touch-target-min;
     variant: self.active == self.section ? "secondary" : "ghost";
-    clicked => { self.active = self.section; }
+    // Fired on every tap, also on the chip that is already active: a strip
+    // dragged aside leaves it half shown, and no section change follows.
+    callback reveal();
+    clicked => { self.active = self.section; self.reveal(); }
 }
 
 export component SettingsScreen inherits Rectangle {
@@ -586,20 +589,22 @@ export component SettingsScreen inherits Rectangle {
                             : need <= ai-tab.x - Spacing.xs ? ai-tab.x - Spacing.xs
                             : about-tab.x - Spacing.xs;
                     }
-                    function reveal-active() {
-                        self.viewport-x = -(self.section == "privacy" ? self.snap(privacy-tab.x + privacy-tab.width)
+                    // Where the strip has to rest for the active chip to show whole.
+                    property <length> reveal-x: (self.section == "privacy" ? self.snap(privacy-tab.x + privacy-tab.width)
                             : self.section == "notifications" ? self.snap(notifications-tab.x + notifications-tab.width)
                             : self.section == "devices" ? self.snap(devices-tab.x + devices-tab.width)
                             : self.section == "appearance" ? self.snap(appearance-tab.x + appearance-tab.width)
                             : self.section == "encryption" ? self.snap(encryption-tab.x + encryption-tab.width)
                             : self.section == "ai" ? self.snap(ai-tab.x + ai-tab.width)
                             : self.section == "about" ? self.snap(about-tab.x + about-tab.width) : 0px);
-                    }
+                    function reveal-active() { self.viewport-x = -self.reveal-x; }
                     property <string> section: root.active-section;
                     init => { self.reveal-active(); }
                     changed section => { self.reveal-active(); }
-                    // Re-run on a width change: at init the row may not be laid out yet.
-                    changed width => { self.reveal-active(); }
+                    // The resting place follows everything it is computed from, not
+                    // only the strip's width: chips laid out after init, a resize
+                    // into compact mode, labels re-translated on a language switch.
+                    changed reveal-x => { self.reveal-active(); }
 
                     tab-layout := HorizontalLayout {
                         // Own width, not the viewport's: the snap above reads the
@@ -609,14 +614,14 @@ export component SettingsScreen inherits Rectangle {
                         spacing: Spacing.xxs;
                         padding: Spacing.xs;
 
-                        account-tab := SectionTab { section: "account"; text: @tr("Account"); active <=> root.active-section; touch: root.mobile-platform; }
-                        privacy-tab := SectionTab { section: "privacy"; text: @tr("Privacy"); active <=> root.active-section; touch: root.mobile-platform; }
-                        notifications-tab := SectionTab { section: "notifications"; text: @tr("Notifications"); active <=> root.active-section; touch: root.mobile-platform; }
-                        devices-tab := SectionTab { section: "devices"; text: @tr("Linked devices"); active <=> root.active-section; touch: root.mobile-platform; }
-                        appearance-tab := SectionTab { section: "appearance"; text: @tr("Appearance"); active <=> root.active-section; touch: root.mobile-platform; }
-                        encryption-tab := SectionTab { section: "encryption"; text: @tr("Encryption"); active <=> root.active-section; touch: root.mobile-platform; }
-                        ai-tab := SectionTab { visible: JarvisGlobal.enabled; width: JarvisGlobal.enabled ? self.preferred-width : 0px; section: "ai"; text: "AI"; active <=> root.active-section; touch: root.mobile-platform; }
-                        about-tab := SectionTab { section: "about"; text: @tr("About"); active <=> root.active-section; touch: root.mobile-platform; }
+                        account-tab := SectionTab { section: "account"; text: @tr("Account"); active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
+                        privacy-tab := SectionTab { section: "privacy"; text: @tr("Privacy"); active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
+                        notifications-tab := SectionTab { section: "notifications"; text: @tr("Notifications"); active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
+                        devices-tab := SectionTab { section: "devices"; text: @tr("Linked devices"); active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
+                        appearance-tab := SectionTab { section: "appearance"; text: @tr("Appearance"); active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
+                        encryption-tab := SectionTab { section: "encryption"; text: @tr("Encryption"); active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
+                        ai-tab := SectionTab { visible: JarvisGlobal.enabled; width: JarvisGlobal.enabled ? self.preferred-width : 0px; section: "ai"; text: "AI"; active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
+                        about-tab := SectionTab { section: "about"; text: @tr("About"); active <=> root.active-section; touch: root.mobile-platform; reveal => { tabs.reveal-active(); } }
                     }
                 }
                 if tabs.viewport-x < 0px: Rectangle {

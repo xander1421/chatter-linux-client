@@ -832,7 +832,7 @@ fn rebuild_archived_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterCli
         use crate::bin_ui::converters::ChatRowExt;
         use slint::Model;
         let active = ui_ctx.active_conversation();
-        let rows = rows
+        let mut rows = rows
             .into_iter()
             .map(|row| {
                 let mut row = row.to_slint();
@@ -841,6 +841,16 @@ fn rebuild_archived_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterCli
                 row
             })
             .collect::<Vec<_>>();
+        // As in `apply_chat_list`: the snapshot may predate the open
+        // conversation's mark-read, so its badge is re-read now. Only when
+        // the open conversation is an archived one.
+        if let Some(row) = rows.iter_mut().find(|row| row.is_selected) {
+            row.unread_count = ui_ctx.unread_badges(&active).row as i32;
+            if row.unread_count == 0 {
+                row.mention_count = 0;
+            }
+            crate::bin_ui::converters::channel::refresh_row_accessible_label(row);
+        }
         let pane = w.global::<crate::SidebarPane>();
         let model = pane.get_archived_rows();
         if let Some(vec) = model
