@@ -25,6 +25,7 @@ const CATALOGS: &[&str] = &[
     catalog!("de"),
     catalog!("es"),
     catalog!("fr"),
+    catalog!("it"),
     catalog!("pt"),
     catalog!("ro"),
     catalog!("ru"),
@@ -44,7 +45,7 @@ pub fn set_language(code: &str) {
 type Catalog = HashMap<String, Vec<String>>;
 
 fn catalog(index: usize) -> &'static Catalog {
-    static PARSED: [OnceLock<Catalog>; 8] = [const { OnceLock::new() }; 8];
+    static PARSED: [OnceLock<Catalog>; CATALOGS.len()] = [const { OnceLock::new() }; CATALOGS.len()];
     PARSED[index].get_or_init(|| parse(CATALOGS[index]))
 }
 
