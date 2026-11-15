@@ -3969,3 +3969,43 @@ msgstr "Neue Nachricht"
 
 msgid "Unavailable on iPhone"
 msgstr "Auf dem iPhone nicht verfügbar"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel: {}"
+msgstr "Du wurdest in diesem Kanal gesperrt: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel."
+msgstr "Du wurdest in diesem Kanal gesperrt."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel: {}"
+msgstr "Du wurdest aus diesem Kanal entfernt: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel."
+msgstr "Du wurdest aus diesem Kanal entfernt."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were muted in this channel."
+msgstr "Du wurdest in diesem Kanal stummgeschaltet."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were unmuted in this channel."
+msgstr "Deine Stummschaltung in diesem Kanal wurde aufgehoben."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Your ban was lifted."
+msgstr "Deine Sperre wurde aufgehoben."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "A moderation action was applied to your account."
+msgstr "Für dein Konto wurde eine Moderationsmaßnahme angewendet."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed ({})."
+msgstr "Kanalvorgang fehlgeschlagen ({})."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed: {}"
+msgstr "Kanalvorgang fehlgeschlagen: {}"

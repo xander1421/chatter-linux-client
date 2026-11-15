@@ -3893,8 +3893,8 @@ msgid "Share your private code to start a secret chat"
 msgstr "Поделитесь личным кодом, чтобы начать секретный чат"
 
 #: ui/modals/friends_friends_tab.slint:60
-msgid "Use the Add friend tab to connect"
-msgstr "Чтобы начать, откройте вкладку «Добавить друга»"
+msgid "Use + to add a friend"
+msgstr "Нажмите +, чтобы добавить друга"
 
 #: ui/modals/friends_friends_tab.slint:200
 msgid "Message {}"

@@ -3925,3 +3925,43 @@ msgstr "Нове повідомлення"
 
 msgid "Unavailable on iPhone"
 msgstr "Недоступно на iPhone"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel: {}"
+msgstr "Вас заблоковано в цьому каналі: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel."
+msgstr "Вас заблоковано в цьому каналі."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel: {}"
+msgstr "Вас вилучено з цього каналу: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel."
+msgstr "Вас вилучено з цього каналу."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were muted in this channel."
+msgstr "Вам заборонено писати в цьому каналі."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were unmuted in this channel."
+msgstr "Вам знову можна писати в цьому каналі."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Your ban was lifted."
+msgstr "Ваше блокування знято."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "A moderation action was applied to your account."
+msgstr "До вашого облікового запису застосовано захід модерації."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed ({})."
+msgstr "Не вдалося виконати дію з каналом ({})."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed: {}"
+msgstr "Не вдалося виконати дію з каналом: {}"

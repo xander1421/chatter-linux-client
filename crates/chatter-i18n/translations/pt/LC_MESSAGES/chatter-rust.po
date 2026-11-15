@@ -3909,3 +3909,43 @@ msgstr "Nova mensagem"
 
 msgid "Unavailable on iPhone"
 msgstr "Indisponível no iPhone"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel: {}"
+msgstr "Você foi banido deste canal: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were banned from this channel."
+msgstr "Você foi banido deste canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel: {}"
+msgstr "Você foi removido deste canal: {}"
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were removed from this channel."
+msgstr "Você foi removido deste canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were muted in this channel."
+msgstr "Você foi silenciado neste canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "You were unmuted in this channel."
+msgstr "Você não está mais silenciado neste canal."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Your ban was lifted."
+msgstr "Seu banimento foi removido."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "A moderation action was applied to your account."
+msgstr "Uma ação de moderação foi aplicada à sua conta."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed ({})."
+msgstr "A operação do canal falhou ({})."
+
+#: crates/chatter-core/src/client/channels.rs
+msgid "Channel operation failed: {}"
+msgstr "A operação do canal falhou: {}"

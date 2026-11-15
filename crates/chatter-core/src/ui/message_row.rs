@@ -154,7 +154,7 @@ impl MessageRow {
         let body = (self.is_system && is_own)
             .then(|| self.content.strip_prefix(self.sender_name.as_str()))
             .flatten()
-            .map(|rest| format!("You{rest}"))
+            .map(|rest| format!("{}{rest}", chatter_i18n::tr("You")))
             .unwrap_or_else(|| self.content.clone());
 
         // For own messages with empty status, default to "sent"

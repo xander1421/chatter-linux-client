@@ -44,6 +44,17 @@ export component EncryptionSettings inherits VerticalLayout {
 
         preferred-height: identity-content.preferred-height;
 
+        // Measures the Copy label so the hint beside it leaves the button its
+        // full width (Button: sm text, md padding each side).
+        copy-measure := Text {
+            x: 0;
+            y: 0;
+            visible: false;
+            text: @tr("Copy");
+            font-size: Typography.sm;
+            font-weight: Typography.medium;
+        }
+
         identity-content := VerticalLayout {
             padding: Spacing.md;
             spacing: Spacing.sm;
@@ -84,7 +95,7 @@ export component EncryptionSettings inherits VerticalLayout {
                 alignment: space-between;
 
                 Text {
-                    width: max(0px, parent.width - (root.compact-mode ? 0px : Spacing.button-min-width));
+                    width: max(0px, parent.width - (root.compact-mode ? 0px : max(Spacing.button-min-width, copy-measure.preferred-width + Spacing.md * 2)));
                     text: @tr("To verify a contact, compare safety numbers from their profile");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
