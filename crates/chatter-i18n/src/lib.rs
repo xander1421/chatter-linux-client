@@ -33,6 +33,7 @@ pub const SOURCE: Language = Language { code: "en", native_name: "English", engl
 /// Every language the app offers, source language first.
 pub const LANGUAGES: &[Language] = &[
     SOURCE,
+    Language { code: "de", native_name: "Deutsch", english_name: "German" },
 ];
 
 /// Directory holding the catalogs, for `chatter-ui-slint`'s build script.
