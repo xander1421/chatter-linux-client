@@ -159,7 +159,7 @@ export component Sidebar inherits Rectangle {
     callback focus-target(int, int, bool, bool, bool) -> int;
     function focus-step(move-by: int) {
         root.focus-index = root.focus-target(root.focus-index, move-by,
-            root.mobile-mode || root.collapsed, AnonMode.enabled, root.total-pending-requests > 0);
+            root.mobile-mode || (root.collapsed && root.touch), AnonMode.enabled, root.total-pending-requests > 0);
         if (move-by == -2) {
             central-scroll.viewport-y = 0px;
         } else if (move-by == 2) {
@@ -288,17 +288,17 @@ export component Sidebar inherits Rectangle {
     property <length> rail-slot-size: DesktopChrome.macos ? 36px : 44px;
     property <length> rail-gap: DesktopChrome.macos ? DesktopChrome.rail-gap : Spacing.sm;
     property <length> rail-divider-height: DesktopChrome.macos ? 8px : Spacing.md;
-    property <length> rail-footer-height: !root.touch ? 0px : DesktopChrome.macos
+    property <length> rail-footer-height: DesktopChrome.macos
         ? root.rail-button-count * root.rail-icon-size + root.rail-button-count * root.rail-gap
             + root.rail-divider-height + Spacing.sm
         : root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm
             + Spacing.lg + Spacing.md + Spacing.sm;
     property <length> rail-slot-radius: Spacing.radius-lg;
     property <brush> rail-slot-bg: DesktopChrome.macos ? transparent : Colors.surface-control;
-    // Shield, AI, Chats, Activity, Mesh (when compiled), expand, Settings,
-    // profile. The Activity bell was added without counting it, so the rail
-    // footer was one slot short and the profile avatar hung off the bottom.
-    property <int> rail-button-count: (root.touch ? 5 : 4) + (MeshGlobal.enabled ? 1 : 0)
+    // Activity, profile, Settings; touch adds the Shield and expand. AI and
+    // Mesh when enabled. Every slot the footer draws must be counted here,
+    // or the profile avatar hangs off the bottom.
+    property <int> rail-button-count: (root.touch ? 5 : 3) + (MeshGlobal.enabled ? 1 : 0)
         + (JarvisGlobal.enabled && JarvisGlobal.opted-in ? 1 : 0);
 
     // ── Sizing ──
@@ -559,13 +559,13 @@ export component Sidebar inherits Rectangle {
                 // is the duplication that made the phone layout read as two
                 // navigation systems at once.
 
-                if entry.kind == "friends" && !root.mobile-mode && !root.collapsed: Rectangle {
+                if entry.kind == "friends" && !root.mobile-mode && (!root.collapsed || !root.touch): Rectangle {
                     height: root.quick-link-height;
                     Rectangle {
-                        x: Spacing.xs;
+                        x: root.collapsed ? 0px : Spacing.xs;
                         width: parent.width - 2 * self.x;
                         height: parent.height;
-                        border-radius: Spacing.radius-md;
+                        border-radius: root.collapsed ? 0px : Spacing.radius-md;
                         background: friends-touch.pressed ? Colors.surface-control-hover
                             : friends-touch.has-hover ? Colors.surface-hover : transparent;
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
@@ -595,13 +595,13 @@ export component Sidebar inherits Rectangle {
                 // Friends); on a two-pane tablet or desktop there is no tab
                 // bar, and this row is the only way in.
 
-                if entry.kind == "calls" && !root.mobile-mode && !root.collapsed: Rectangle {
+                if entry.kind == "calls" && !root.mobile-mode && (!root.collapsed || !root.touch): Rectangle {
                     height: root.quick-link-height;
                     Rectangle {
-                        x: Spacing.xs;
+                        x: root.collapsed ? 0px : Spacing.xs;
                         width: parent.width - 2 * self.x;
                         height: parent.height;
-                        border-radius: Spacing.radius-md;
+                        border-radius: root.collapsed ? 0px : Spacing.radius-md;
                         background: calls-touch.pressed ? Colors.surface-control-hover
                             : calls-touch.has-hover ? Colors.surface-hover : transparent;
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
@@ -1015,7 +1015,7 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        if !root.mobile-mode && (!root.collapsed || root.touch): SidebarFooter {
+        if !root.mobile-mode: SidebarFooter {
             panel-width: root.width;
             panel-height: root.height;
             collapsed: root.collapsed;

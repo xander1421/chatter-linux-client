@@ -93,10 +93,12 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     drag(&w, &[240.0, 100.0]);
     width(&w, 68.0);
     assert!(sidebar.get_sidebar_user_collapsed());
-    for label in ["Profile", "Settings", "Anon mode", "Activity"] {
-        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_none(),
-            "{label} should be omitted from the collapsed footer");
+    // The desktop rail keeps its navigation; the Shield stays in the header.
+    for label in ["Profile", "Settings", "Activity", "Friends", "Calls"] {
+        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_some(),
+            "{label} should be reachable from the collapsed rail");
     }
+    assert!(ElementHandle::find_by_accessible_label(&w, "Anon mode").next().is_none());
     // Retain the last expanded width, rather than saving the 68px rail.
     assert_eq!(sidebar.get_sidebar_preferred_width(), 240.0);
     // Keep the same pointer capture while the handle jumps from rail to list.
