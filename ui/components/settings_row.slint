@@ -19,6 +19,13 @@ export component SettingsRow inherits Rectangle {
     in property <bool> touch: false;
     callback clicked();
 
+    // Width left for the title and detail beside the icon and the action
+    // button or chevron.
+    private property <length> text-width: max(0px, root.width - Spacing.md * 2 - Spacing.button-icon
+        - (root.show-chevron || root.action-label != "" ? Spacing.md * 2 : Spacing.md)
+        - (root.action-label != "" ? max(Spacing.button-min-width, action-measure.preferred-width + Spacing.md * 2)
+            : root.show-chevron ? Spacing.button-icon : 0px));
+
     min-height: root.touch ? Spacing.list-row-height-touch : Spacing.button-height;
     preferred-height: max(self.min-height, row-content.preferred-height);
     border-radius: Spacing.radius-md;
@@ -73,13 +80,13 @@ export component SettingsRow inherits Rectangle {
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
                 vertical-alignment: center;
-                overflow: elide;
+                // Translated titles run longer than the English ones: wrap
+                // beside the action button rather than being cut by it.
+                width: root.text-width;
+                wrap: word-wrap;
             }
             if root.detail != "": Text {
-                width: max(0px, root.width - Spacing.md * 2 - Spacing.button-icon
-                    - (root.show-chevron || root.action-label != "" ? Spacing.md * 2 : Spacing.md)
-                    - (root.action-label != "" ? max(Spacing.button-min-width, action-measure.preferred-width + Spacing.md * 2)
-                        : root.show-chevron ? Spacing.button-icon : 0px));
+                width: root.text-width;
                 text: root.detail;
                 color: root.detail-color;
                 font-size: Typography.xs;

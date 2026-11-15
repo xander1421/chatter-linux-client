@@ -5128,7 +5128,7 @@ msgstr "Neues Passwort bestätigen"
 
 #: ui/settings/account_settings.slint:262
 msgid "Recovery codes"
-msgstr "Wiederherstellungscodes"
+msgstr "Wiederherstellungs-Codes"
 
 #: ui/settings/account_settings.slint:263
 msgid "Lost or used up your codes? Get a new set."
