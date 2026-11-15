@@ -1,3 +1,4 @@
+import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Chat header component
@@ -129,7 +130,7 @@ export component ChatHeader inherits GlassSurface {
     in property <bool> mobile: false;
     // Both from Spacing: on desktop this row and the panel's first row beside
     // it are the same row across the seam, so they read one number.
-    property <length> header-height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
+    property <length> header-height: root.mobile ? Spacing.header-height-touch : DesktopChrome.macos ? 44px * Appearance.text-grow : Spacing.header-height;
     property <length> header-avatar: root.mobile ? 40px : 28px;
     // Every button in this row is the shared HeaderButton (touch: mobile), so
     // back, call, pin and ⋯ are one box and one glyph on one axis.

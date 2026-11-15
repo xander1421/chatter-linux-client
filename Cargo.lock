@@ -1970,6 +1970,7 @@ dependencies = [
  "bincode 2.0.1",
  "blind-rsa-signatures",
  "block-padding",
+ "block2 0.6.2",
  "bytes",
  "cbc",
  "chacha20poly1305 0.11.0",
@@ -2020,6 +2021,8 @@ dependencies = [
  "mp4san",
  "muda 0.21.2",
  "notify-rust",
+ "objc2 0.6.5",
+ "objc2-avf-audio",
  "oboe",
  "opaque-ke",
  "open",
@@ -9360,6 +9363,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
 ]

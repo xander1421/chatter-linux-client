@@ -1,3 +1,4 @@
+import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { Materials } from "../theme/materials.slint";
 // Sidebar — plain conversation content with shared chrome materials.
@@ -120,7 +121,7 @@ export component Sidebar inherits Rectangle {
             // A row inserted above the visible conversations must not move
             // the content already under the user's finger.
             if (root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
-                    ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
+                    ? (DesktopChrome.macos ? root.titlebar-height + 12px : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
                     : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm))) {
                 central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
             }
@@ -158,7 +159,7 @@ export component Sidebar inherits Rectangle {
     callback focus-target(int, int, bool, bool, bool) -> int;
     function focus-step(move-by: int) {
         root.focus-index = root.focus-target(root.focus-index, move-by,
-            root.mobile-mode, AnonMode.enabled, root.total-pending-requests > 0);
+            root.mobile-mode || root.collapsed, AnonMode.enabled, root.total-pending-requests > 0);
         if (move-by == -2) {
             central-scroll.viewport-y = 0px;
         } else if (move-by == 2) {
@@ -251,7 +252,7 @@ export component Sidebar inherits Rectangle {
     // plus the scroll's top padding they sat ~80dp apart (owner, 2026-09-26).
     // A two-pane tablet sits beside a touch-height conversation header.
     property <length> top-row-height: root.mobile-mode ? root.quick-link-height
-        : root.touch ? Spacing.header-height-touch : Spacing.header-height;
+        : root.touch ? Spacing.header-height-touch : DesktopChrome.macos ? 72px : Spacing.header-height;
     property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
     property <brush> quick-link-text-color: Colors.text-primary;
     property <length> quick-link-icon-size: root.touch ? 24px : 14px;
@@ -285,11 +286,11 @@ export component Sidebar inherits Rectangle {
     // (channel_list_item.slint `slot-size`), so the rail reads as one column.
     property <length> rail-slot-size: 44px;
     property <length> rail-slot-radius: Spacing.radius-lg;
-    property <brush> rail-slot-bg: Colors.surface-control;
+    property <brush> rail-slot-bg: DesktopChrome.macos ? transparent : Colors.surface-control;
     // Shield, AI, Chats, Activity, Mesh (when compiled), expand, Settings,
     // profile. The Activity bell was added without counting it, so the rail
     // footer was one slot short and the profile avatar hung off the bottom.
-    property <int> rail-button-count: 6 + (MeshGlobal.enabled ? 1 : 0)
+    property <int> rail-button-count: 5 + (MeshGlobal.enabled ? 1 : 0)
         + (JarvisGlobal.enabled && JarvisGlobal.opted-in ? 1 : 0);
 
     // ── Sizing ──
@@ -326,7 +327,7 @@ export component Sidebar inherits Rectangle {
     // panel's edges, so the panel's own corners must curve with them: square,
     // the opaque surface filled the notch outside each rounded corner. Not
     // on a phone, where the panel is the (transparent) page.
-    border-radius: root.mobile-mode ? Spacing.none : Spacing.radius-chrome;
+    border-radius: root.mobile-mode ? Spacing.none : DesktopChrome.frame-inset > 0px ? DesktopChrome.panel-radius : Spacing.radius-chrome;
     // No `border-width` here: this is a right-EDGE highlight in intent and
     // Slint's border draws all four sides. On a phone that traced a hairline
     // rectangle around the whole display; on desktop it now also ran a line
@@ -383,7 +384,7 @@ export component Sidebar inherits Rectangle {
                 // The pinned title and the floating footer stay outside the
                 // virtualized content; only their scroll clearance is a row.
                 padding-top: idx == 0
-                    ? (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                    ? (root.collapsed ? (DesktopChrome.macos ? root.titlebar-height + 12px : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                         + (root.mobile-mode ? Spacing.none : Spacing.sm)
                     : Spacing.none;
                 padding-bottom: entry.kind == "bottom"
@@ -550,7 +551,7 @@ export component Sidebar inherits Rectangle {
                 // is the duplication that made the phone layout read as two
                 // navigation systems at once.
 
-                if entry.kind == "friends" && !root.mobile-mode: Rectangle {
+                if entry.kind == "friends" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
                     background: friends-touch.pressed ? Colors.surface-control-hover
                         : friends-touch.has-hover ? Colors.surface-hover : transparent;
@@ -580,7 +581,7 @@ export component Sidebar inherits Rectangle {
                 // Friends); on a two-pane tablet or desktop there is no tab
                 // bar, and this row is the only way in.
 
-                if entry.kind == "calls" && !root.mobile-mode: Rectangle {
+                if entry.kind == "calls" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
                     background: calls-touch.pressed ? Colors.surface-control-hover
                         : calls-touch.has-hover ? Colors.surface-hover : transparent;
@@ -752,20 +753,7 @@ export component Sidebar inherits Rectangle {
                         } }
                     }
 
-                    TooltipArea {
-                        height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: "New section"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Rectangle {
-                            width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
-                            background: c-sec-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
-                            accessible-role: button;
-                            accessible-label: "New section";
-                            accessible-action-default => { root.create-section-clicked(); }
-                            Image { source: Icons.folder; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                colorize: c-sec-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
-                            c-sec-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-section-clicked(); } }
-                        } }
-                    }
+
                 }
 
 
@@ -893,7 +881,7 @@ export component Sidebar inherits Rectangle {
             height: root.height;
             viewport-height: mesh-content.preferred-height;
             mesh-content := VerticalLayout {
-                padding-top: (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                padding-top: (root.collapsed ? (DesktopChrome.macos ? root.titlebar-height + 12px : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                     + (root.mobile-mode ? Spacing.none : Spacing.sm);
                 padding-bottom: root.bottom-inset + Spacing.md;
                 MeshList {

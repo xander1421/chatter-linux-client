@@ -61,6 +61,8 @@ pub struct AudioPlayback {
 struct OutputStream {
     _stream: cpal::Stream,
     enabled: Arc<AtomicBool>,
+    #[cfg(target_os = "ios")]
+    _audio_session: crate::media::ios_audio_session::AudioSession,
 }
 
 /// The receive queues keep their session format across device replacements.
@@ -597,6 +599,9 @@ impl AudioPlayback {
     #[cfg(not(target_os = "android"))]
     fn build_typed_stream<T>(&self, device: &Device, config: StreamConfig) -> Result<OutputStream, CallError>
     where T: cpal::SizedSample + cpal::FromSample<f32> {
+        #[cfg(target_os = "ios")]
+        let audio_session = crate::media::ios_audio_session::AudioSession::acquire(false)
+            .map_err(CallError::DeviceError)?;
         let mut output = DesktopOutput::new(*self.sample_rate.read(), *self.channels.read(),
             config.sample_rate, config.channels);
         let mixer = self.streams.clone();
@@ -626,7 +631,11 @@ impl AudioPlayback {
         ).map_err(|e| CallError::DeviceError(format!("Failed to build output stream: {e}")))?;
         stream.play().map_err(|e|
             CallError::DeviceError(format!("Failed to start audio playback: {e}")))?;
-        Ok(OutputStream { _stream: stream, enabled })
+        Ok(OutputStream {
+            _stream: stream, enabled,
+            #[cfg(target_os = "ios")]
+            _audio_session: audio_session,
+        })
     }
 
     /// Add a remote audio track for playback.

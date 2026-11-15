@@ -8,9 +8,9 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::AudioDeviceData;
 use crate::MainWindow;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ScreenSourceData;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::calls::{ScreenCapture, ScreenSourceType};
 use chatter_core::client::ChatterClient;
 
@@ -90,6 +90,13 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak.clone();
             let ui_ctx = ui_ctx.clone();
             move || {
+                #[cfg(target_os = "ios")]
+                {
+                    if let Some(w) = weak.upgrade() {
+                        picker_error(&w, "Screen sharing is not available on iPhone yet.");
+                    }
+                    return;
+                }
                 #[cfg(target_os = "android")]
                 {
                     let _ = &ui_ctx;
@@ -98,7 +105,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     return;
                 }
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     let weak = weak.clone();
                     let ui_ctx = ui_ctx.clone();
@@ -231,13 +238,13 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx = ui_ctx.clone();
             let weak = weak.clone();
             move |source_id| {
-                #[cfg(target_os = "android")]
+                #[cfg(any(target_os = "android", target_os = "ios"))]
                 {
                     let _ = (source_id, &ui_ctx, &weak);
-                    tracing::warn!("Screen source selection not available on Android");
+                    tracing::warn!("Screen source selection not available on this platform");
                     return;
                 }
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     let source_id_str = source_id.to_string();
                     tracing::info!("Screen source selected: {}", source_id_str);

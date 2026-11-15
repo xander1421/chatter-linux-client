@@ -70,7 +70,9 @@ final class DeviceControl: XCTestCase {
             add(dump)
         }
 
-        // `x,y` taps, `wait:N` sleeps, `home` backgrounds, `activate` resumes.
+        // `x,y` taps, `hold:x,y` opens a message menu, `wait:N` sleeps,
+        // `home` backgrounds, `activate` resumes, `swipe-back` leaves a chat.
+        // `expect-keyboard-visible` / `expect-keyboard-hidden` check UIKit state.
         // Steps are separated by `|`, and every one
         // gets a screenshot so a failure shows which step it stopped on.
         for (i, raw) in (env["CHATTER_STEPS"] ?? "").split(separator: "|").enumerated() {
@@ -80,23 +82,49 @@ final class DeviceControl: XCTestCase {
             if step.hasPrefix("text:") {
                 XCTFail("typing is not automatable on Slint/iOS — see the note at the top of this file. Type by hand, then drive taps.")
                 return
+            } else if step == "expect-keyboard-hidden" {
+                XCTAssertFalse(app.keyboards.firstMatch.exists, "Native keyboard should be dismissed")
+            } else if step == "expect-keyboard-visible" {
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Native keyboard should be visible")
+            } else if step == "swipe-back" {
+                let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.025, dy: 0.5))
+                let destination = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+                edge.press(forDuration: 0.05, thenDragTo: destination)
+                Thread.sleep(forTimeInterval: 1.5)
             } else if step == "home" {
                 XCUIDevice.shared.press(.home)
                 Thread.sleep(forTimeInterval: 1.5)
             } else if step == "activate" {
                 app.activate()
                 Thread.sleep(forTimeInterval: 1.5)
+            } else if step == "allow-microphone" {
+                // Grant only the microphone prompt triggered by the preceding
+                // recording tap. Never accept an unrelated system alert.
+                let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+                let alert = springboard.alerts.firstMatch
+                if alert.exists && alert.staticTexts.containing(
+                    NSPredicate(format: "label CONTAINS[c] %@", "microphone")
+                ).firstMatch.exists {
+                    alert.buttons.matching(NSPredicate(format: "label == %@", "Allow")).firstMatch.tap()
+                }
             } else if let secs = step.dropFirstIfPrefixed("wait:").flatMap(Double.init) {
                 // For steps that kick off slow work (registration does key
                 // generation + several RPCs) — screenshot after it settles.
                 Thread.sleep(forTimeInterval: secs)
             } else {
-                let parts = step.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                let hold = step.hasPrefix("hold:")
+                let coordinates = hold ? String(step.dropFirst(5)) : step
+                let parts = coordinates.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
                 guard parts.count == 2, (0...1).contains(parts[0]), (0...1).contains(parts[1]) else {
                     XCTFail("step must be `x,y` (0..1) or `wait:N` — got \(step)")
                     return
                 }
-                app.coordinate(withNormalizedOffset: CGVector(dx: parts[0], dy: parts[1])).tap()
+                let point = app.coordinate(withNormalizedOffset: CGVector(dx: parts[0], dy: parts[1]))
+                if hold {
+                    point.press(forDuration: 0.8)
+                } else {
+                    point.tap()
+                }
                 Thread.sleep(forTimeInterval: 1.5)
             }
 

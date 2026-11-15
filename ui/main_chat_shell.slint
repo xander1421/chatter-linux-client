@@ -1,3 +1,4 @@
+import { DesktopChrome } from "theme/desktop_chrome.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { JarvisPane } from "app_jarvis_pane.slint";
@@ -74,7 +75,7 @@ export component MainChatShell inherits Rectangle {
         // the pushed modal layer (0).
     property <length> normal-sidebar-offset:
         SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
-        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
+        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? 80px : Spacing.sidebar-width-collapsed)
         : Spacing.sidebar-width;
     property <bool> call-hides-sidebar: !root.compact-layout && CallView.active-call-visible
         && root.width - root.normal-sidebar-offset < 308px;

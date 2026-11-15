@@ -1,3 +1,4 @@
+import { InputPolicy } from "../theme/input_policy.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { VoiceRecording } from "voice_recording.slint";
@@ -285,7 +286,13 @@ export component MessageComposer inherits GlassSurface {
     // can send several messages in a row.
     function reset-after-send() {
         root.text = "";
-        root.reset-composition();
+        if InputPolicy.dismiss-after-send {
+            text-input.clear-focus();
+            root.input-dismissed();
+            InputPolicy.dismiss-native-keyboard();
+        } else {
+            root.reset-composition();
+        }
     }
 
     // Make the input method finish composing. Dropping focus is the only handle

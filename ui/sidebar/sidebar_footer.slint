@@ -1,3 +1,4 @@
+import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { ActivityUi } from "../activity/activity_bell.slint";
@@ -43,7 +44,9 @@ export component SidebarFooter inherits GlassSurface {
             width: root.panel-width;
             y: root.panel-height - self.height;
             material-level: 2;
-            elevation: 3;
+            material-enabled: !DesktopChrome.macos;
+            show-edge: !DesktopChrome.macos;
+            elevation: DesktopChrome.macos ? 0 : 3;
 
             // Derived, not a magic number: this was hardcoded at 140px, which
             // fit the three 32px buttons the rail used to have and silently
@@ -240,23 +243,6 @@ export component SidebarFooter inherits GlassSurface {
                         // The virtual assistant channel's fixed id is the nil UUID
                         // (chatter-core client/jarvis.rs jarvis_channel_id).
                         TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
-                    } }
-                }
-
-                TooltipArea {
-                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: "Chats"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Chats";
-                        accessible-action-default => { root.tab-selected("chats"); }
-                        border-width: rail-chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        rail-chats-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("chats"); return accept; } return reject; }
-                        }
-                        height: root.rail-slot-size; border-radius: root.rail-slot-radius;
-                        background: root.active-tab == "chats" ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.message-circle; width: 20px; height: 20px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        TouchArea { clicked => { root.tab-selected("chats"); } }
                     } }
                 }
 

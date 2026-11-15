@@ -23,6 +23,8 @@ chatter-ui = { path = "../chatter-ui", default-features = false, features = ["io
 [features]
 default = []
 ui = ["dep:chatter-ui"]
+# Native calling bring-up, separate from the lean messaging build.
+calls = ["ui", "chatter-ui/ios-calls"]
 
 [lints]
 workspace = true

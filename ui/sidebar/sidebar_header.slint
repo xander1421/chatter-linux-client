@@ -1,3 +1,4 @@
+import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -12,6 +13,10 @@ import { GlassSurface } from "../components/glass_surface.slint";
 // chat header / composer / dock (owner 2026-11-05: it was a flat grey surface).
 export component SidebarHeader inherits GlassSurface {
     material-level: 2;
+    private property <bool> native-desktop: DesktopChrome.macos && !root.touch;
+    material-enabled: !root.native-desktop;
+    show-edge: !root.native-desktop;
+    elevation: root.native-desktop ? 0 : 3;
     in property <length> panel-width;
     in property <length> top-row-height;
     in property <length> quick-link-inset;
@@ -48,34 +53,47 @@ export component SidebarHeader inherits GlassSurface {
             accessible-label: "Search";
             accessible-action-default => { root.search-clicked(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.search-clicked(); } }
+            if root.native-desktop: Rectangle {
+                x: 8px;
+                y: 36px;
+                width: parent.width - 16px;
+                height: 28px;
+                border-radius: 8px;
+                background: Colors.surface-control;
+            }
             HorizontalLayout {
+                y: root.native-desktop ? 36px : 0px;
+                height: root.native-desktop ? 28px : parent.height;
+                width: parent.width;
                 // The phone's floating surface starts one `sm` inside the
                 // list. Cancel that inset so this slot keeps the same centre
                 // as Saved Messages and the conversation avatars below it.
                 // macOS traffic lights still reserve their titlebar space.
-                padding-left: root.quick-link-inset - parent.x + root.traffic-lights-width;
+                padding-left: root.native-desktop ? 16px : root.quick-link-inset - parent.x + root.traffic-lights-width;
                 // Clear of the two header controls drawn over this row's end.
-                padding-right: Spacing.sm + 2 * (root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box) + Spacing.header-action-gap;
+                padding-right: root.native-desktop ? Spacing.sm : Spacing.sm + 2 * (root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box) + Spacing.header-action-gap;
                 spacing: Spacing.sm;
                 alignment: start;
                 // Use the same column on phones, tablets and desktop so the
                 // lens and label track the rows at every touch density.
-                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.native-desktop ? 16px : root.quick-link-slot;
                     HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                 }
                 Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
             }
-            search-touch := TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+            search-touch := TouchArea { y: root.native-desktop ? 36px : 0px; height: root.native-desktop ? 28px : parent.height; enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
             // Create — New Chat / New Channel / New Section. Two-pane only; a
             // phone has the floating button on the Chats tab instead. Left of
             // the Shield toggle.
             if !root.mobile-mode: HeaderButton {
                 touch: root.touch;
-                active: true;
+                active: !root.native-desktop;
+                plain: root.native-desktop;
+                height: root.native-desktop ? 32px : parent.height;
                 shell: root.header-control-shell;
                 glyph: root.header-control-glyph;
                 x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
-                y: (parent.height - self.height) / 2;
+                y: root.native-desktop ? 0px : (parent.height - self.height) / 2;
                 icon: Icons.plus;
                 label: "Create";
                 clicked => { root.create-clicked(); }
@@ -87,7 +105,7 @@ export component SidebarHeader inherits GlassSurface {
                 server-unreachable: root.server-unreachable;
                 connection-status: root.connection-status;
                 x: parent.width - self.width * 2 - Spacing.sm - Spacing.header-action-gap;
-                y: (parent.height - self.height) / 2;
+                y: root.native-desktop ? 0px : (parent.height - self.height) / 2;
             }
             // Shield toggle — the chat list's own header control (owner decision
             // 2026-09-26: Shield is a mode of this list, not a tab). Declared
@@ -101,10 +119,11 @@ export component SidebarHeader inherits GlassSurface {
             // AnonMode.onion-built — without Tor it would be a permanent red.
             HeaderButton {
                 touch: root.touch;
-                plain: root.mobile-mode;
+                plain: root.mobile-mode || root.native-desktop;
+                height: root.native-desktop ? 32px : parent.height;
                 shell: root.header-control-shell;
                 glyph: root.header-control-glyph;
-                x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
+                x: parent.width - self.width - Spacing.sm; y: root.native-desktop ? 0px : (parent.height - self.height) / 2;
                 icon: Icons.shield;
                 label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
                 active: AnonMode.enabled;

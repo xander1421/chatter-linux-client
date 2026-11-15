@@ -1,3 +1,5 @@
+import { DesktopChrome } from "theme/desktop_chrome.slint";
+import { InputPolicy } from "theme/input_policy.slint";
 import { AppViewTransition } from "app_view_transition.slint";
 import { AppCallLifecycle } from "app_call_lifecycle.slint";
 import { AppModalTransitions } from "app_modal_transitions.slint";
@@ -95,8 +97,15 @@ export component MainWindow inherits Window {
     // `WindowInsets.Type.ime()` respectively, so they must both be subtracted
     // from the content area to lift the composer above the keyboard.
     property <length> safe-area-top: root.safe-area-insets.top;
-    property <length> safe-area-bottom: root.safe-area-insets.bottom
-        + max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve);
+    property <length> safe-area-bottom: InputPolicy.keyboard-includes-safe-area
+        ? max(root.safe-area-insets.bottom,
+            max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve))
+        : root.safe-area-insets.bottom
+            + max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve);
+    // These children live inside the already-inset content rectangle. UIKit
+    // home-indicator clearance belongs to that rectangle, not each child.
+    property <length> content-bottom-inset: InputPolicy.keyboard-includes-safe-area
+        ? 0px : root.safe-area-bottom;
     private property <length> composer-keyboard-reserve: 0px;
     in-out property <float> remembered-keyboard-height-px: 0;
     in-out property <float> remembered-keyboard-width-px: 0;
@@ -182,8 +191,14 @@ export component MainWindow inherits Window {
     // per-header leading offsets missed those routes and squeezed Search.
     in property <length> macos-titlebar-height: 0px;
     in property <length> macos-traffic-lights-width: 0px;
+    // The chat header shares the native title row. Full-width routes still
+    // reserve clearance because they have no sidebar around the traffic lights.
+    property <bool> native-chat-row: root.current-view == "main"
+        && SidebarPane.active-tab == "chats" && !ModalHostState.settings-open
+        && root.active-modal == "none" && !SearchPane.unified-search-open
+        && !CallView.active-call-fullscreen && !ChatPane.image-viewer-visible;
     property <length> desktop-top-inset: root.macos-titlebar-height > 0px
-        ? root.macos-titlebar-height + Spacing.sm : 0px;
+        && !root.native-chat-row ? root.macos-titlebar-height : 0px;
     property <length> chat-traffic-lights-lead: 0px;
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
@@ -216,8 +231,8 @@ export component MainWindow inherits Window {
     // root.height put it a status bar's height low, over the dock.
     property <length> return-to-call-height: 116px;
     property <length> fab-y: root.height - root.safe-area-top - root.safe-area-bottom
-        - Spacing.fab-size - Spacing.xl
-        - (Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom)
+        - 2 * DesktopChrome.frame-inset - Spacing.fab-size - Spacing.xl
+        - (Spacing.bottom-nav-height + Spacing.sm + root.content-bottom-inset)
         - (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
 
     // ========== View routing ==========
@@ -356,7 +371,7 @@ export component MainWindow inherits Window {
             // app, and only a force-stop recovers it (§112y). Re-take focus whenever
             // the conversation pane or a modal closes, which is when the focused text
             // field goes away.
-            back-scope.focus();
+            root.release-text-focus();
             // The pickers belong to the conversation's composer; they are
             // app-level overlays, so leaving the chat has to close them or
             // they float over whatever screen comes next.
@@ -494,6 +509,7 @@ export component MainWindow inherits Window {
     public function release-text-focus() {
         root.cancel-composer-keyboard-handover();
         back-scope.focus();
+        InputPolicy.dismiss-native-keyboard();
     }
 
     // The composer's in-flight IME composition, mirrored from the live
@@ -735,9 +751,11 @@ export component MainWindow inherits Window {
             }
 
         Rectangle {
-            width: root.width;
-            height: max(0px, root.height - root.safe-area-top - root.safe-area-bottom - root.desktop-top-inset);
-            y: root.safe-area-top + root.desktop-top-inset;
+            x: DesktopChrome.frame-inset;
+            width: max(0px, root.width - 2 * DesktopChrome.frame-inset);
+            height: max(0px, root.height - root.safe-area-top - root.safe-area-bottom
+                - root.desktop-top-inset - 2 * DesktopChrome.frame-inset);
+            y: root.safe-area-top + root.desktop-top-inset + DesktopChrome.frame-inset;
 
             AuthPages {
                 width: parent.width;
@@ -793,11 +811,11 @@ export component MainWindow inherits Window {
                 is-mobile-platform : root.is-mobile-platform;
                 is-small-screen : root.is-small-screen;
                 keyboard-open : root.keyboard-open;
-                macos-titlebar-height : 0px;
-                macos-traffic-lights-width : 0px;
+                macos-titlebar-height : root.native-chat-row ? root.macos-titlebar-height : 0px;
+                macos-traffic-lights-width : root.native-chat-row ? root.macos-traffic-lights-width : 0px;
                 reply-focus-serial <=> root.reply-focus-serial;
                 return-to-call-height : root.return-to-call-height;
-                safe-area-bottom : root.safe-area-bottom;
+                safe-area-bottom : root.content-bottom-inset;
                 server-unreachable : root.server-unreachable;
                 sidebar-is-rail : root.sidebar-is-rail;
                 sidebar-user-collapsed <=> root.sidebar-user-collapsed;
@@ -838,7 +856,7 @@ export component MainWindow inherits Window {
             compact-layout : root.compact-layout;
             is-mobile-platform : root.is-mobile-platform;
             return-to-call-height : root.return-to-call-height;
-            safe-area-bottom : root.safe-area-bottom;
+            safe-area-bottom : root.content-bottom-inset;
         }
 
         AppSecondaryModals {
@@ -867,7 +885,7 @@ export component MainWindow inherits Window {
             height: parent.height;
             compact-layout : root.compact-layout;
             is-mobile-platform : root.is-mobile-platform;
-            safe-area-bottom : root.safe-area-bottom;
+            safe-area-bottom : root.content-bottom-inset;
             toggle-anon-mode() => { root.toggle-anon-mode(); }
         }
 
@@ -895,10 +913,10 @@ export component MainWindow inherits Window {
             safe-area-top: root.safe-area-top + root.desktop-top-inset;
             sidebar-menu-collapsed: !root.compact-layout && root.sidebar-is-rail;
             sidebar-menu-width: root.compact-layout ? root.width
-                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
+                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? 80px : Spacing.sidebar-width-collapsed)
                 : Spacing.sidebar-width;
             sidebar-menu-bottom-inset: root.bottom-nav-visible
-                ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+                ? Spacing.bottom-nav-height + Spacing.sm + root.content-bottom-inset
                     + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px)
                 : 0px;
             viewer-origin-height: root.viewer-origin-height;
@@ -919,7 +937,7 @@ export component MainWindow inherits Window {
             fab-y: root.fab-y;
             fab-visible: root.fab-visible;
             return-to-call-height: root.return-to-call-height;
-            safe-area-bottom: root.safe-area-bottom;
+            safe-area-bottom: root.content-bottom-inset;
             sidebar-user-collapsed <=> root.sidebar-user-collapsed;
             create-clicked => {
                 if (SidebarPane.active-tab == "contacts") {
@@ -960,4 +978,17 @@ export component MainWindow inherits Window {
         width: root.width;
         height: root.height;
     }
+    // A quiet window silhouette, including the native titlebar band.
+    if DesktopChrome.frame-inset > 0px: Rectangle {
+        z: 30;
+        x: 0.5px;
+        y: 0.5px;
+        width: parent.width - 1px;
+        height: parent.height - 1px;
+        border-radius: DesktopChrome.window-radius;
+        border-width: 1px;
+        border-color: Colors.text-primary.with-alpha(0.14);
+        background: transparent;
+    }
+
 }

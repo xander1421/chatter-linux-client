@@ -248,6 +248,7 @@ experimental-swappy = ["dep:i-slint-renderer-skia", "i-slint-renderer-skia/exper
 # desktop uses — it cross-compiles and links for aarch64-apple-ios and renders
 # correctly on device. No livekit, no gstreamer, no arboard, no pdfium.
 ios = ["dep:i-slint-backend-winit", "dep:winit", "slint/backend-winit", "slint/renderer-skia", "slint/std", "chatter-core/ios"]
+ios-calls = ["ios", "call-ui", "dep:livekit", "chatter-core/media"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)

@@ -138,6 +138,11 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
         .set_call_is_video_enabled(is_video);
     w.global::<crate::CallView>()
         .set_call_is_screen_sharing(false);
+    if w.get_compact_layout() {
+        // Give the phone's stage the screen from the first dialling frame.
+        w.global::<crate::CallView>().invoke_save_call_route();
+        w.global::<crate::CallView>().set_active_call_fullscreen(true);
+    }
     w.global::<crate::CallView>().set_active_call_visible(true);
 }
 
@@ -200,6 +205,16 @@ fn spawn_start(
                 fail_call(&weak, MIC_DENIED);
                 return;
             }
+        }
+        if !current_start(generation) {
+            return;
+        }
+        #[cfg(target_os = "ios")]
+        if let Err(error) = chatter_core::media::AudioRecorder::request_microphone_permission().await {
+            if current_start(generation) {
+                fail_call(&weak, &error);
+            }
+            return;
         }
         if !current_start(generation) {
             return;

@@ -804,8 +804,27 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
     // Touch platform: touch-sized targets and gestures. The phone layout
     // (single pane, bottom nav) is NOT implied — app.slint's `compact-layout`
     // picks it from the window's logical width, so a tablet gets two panes.
+    #[cfg(target_os = "macos")]
+    window.global::<crate::DesktopChrome>().set_macos(true);
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    window.global::<crate::DesktopChrome>().set_frame_inset(8.0);
     #[cfg(any(target_os = "android", target_os = "ios"))]
     window.set_is_mobile_platform(true);
+    #[cfg(target_os = "ios")]
+    {
+        use i_slint_backend_winit::WinitWindowAccessor;
+        window.global::<crate::InputPolicy>().set_dismiss_after_send(true);
+        window.global::<crate::InputPolicy>().set_keyboard_includes_safe_area(true);
+        let weak = window.as_weak();
+        window.global::<crate::InputPolicy>().on_dismiss_native_keyboard(move || {
+            if let Some(w) = weak.upgrade() {
+                // A destroyed Slint TextInput cannot deliver FocusOut. Resign
+                // UIKit's responder explicitly when its route has gone away.
+                w.window().with_winit_window(|native| native.set_ime_allowed(false));
+            }
+        });
+    }
+
 
     // Let the notification "Accept" activity-intent drive the in-app accept flow.
     #[cfg(target_os = "android")]

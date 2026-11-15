@@ -144,7 +144,8 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                             }
                             Err(error) => {
                                 tracing::warn!(%error, "Voice recording failed");
-                                let message = if error == chatter_core::client::NO_MICROPHONE {
+                                let message = if error == chatter_core::client::NO_MICROPHONE
+                                    || error == chatter_core::media::audio_recorder::MICROPHONE_PERMISSION_DENIED {
                                     error
                                 } else {
                                     "Couldn't record a voice message. Please try again.".into()
