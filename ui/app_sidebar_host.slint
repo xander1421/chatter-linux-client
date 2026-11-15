@@ -22,6 +22,7 @@ export component AppSidebarHost inherits Rectangle {
     in property <bool> server-unreachable;
     in property <string> connection-status;
     in property <bool> sidebar-is-rail;
+    in property <length> sidebar-panel-width;
     in-out property <bool> sidebar-user-collapsed;
     in property <length> window-width;
     callback toggle-anon-mode();
@@ -29,6 +30,7 @@ export component AppSidebarHost inherits Rectangle {
 
         background: transparent;
     Sidebar {
+        width: root.compact-layout ? parent.width : root.sidebar-panel-width;
         height: parent.height;
     x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
         // Keep the list mounted for the reverse push, but do not

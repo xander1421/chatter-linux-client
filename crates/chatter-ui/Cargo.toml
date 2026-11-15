@@ -23,6 +23,10 @@ name = "video_present_bench"
 path = "examples/video_present_bench.rs"
 required-features = ["desktop"]
 
+[[test]]
+name = "ui_sidebar_resize"
+required-features = ["ui-test-debug"]
+
 # These suites query Slint elements by type/label and need compiler metadata.
 [[test]]
 name = "ui_wiring"

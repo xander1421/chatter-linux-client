@@ -174,7 +174,7 @@ export component SidebarFooter inherits GlassSurface {
                 // There is no rail on mobile to collapse into — the list either
                 // is the screen or the conversation is — so the control has
                 // nothing to do there.
-                if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                if root.touch: VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
@@ -207,7 +207,7 @@ export component SidebarFooter inherits GlassSurface {
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                         background: AnonMode.enabled ? Colors.row-selected : root.rail-slot-bg;
-                        Image { source: Icons.shield; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        Image { source: Icons.onion; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
                         // Tor status dot: green=connected, amber=CONNECTING ONLY,
                         // red=error, muted=off. See the expanded shield above.
@@ -316,7 +316,7 @@ export component SidebarFooter inherits GlassSurface {
                     }
                     TouchArea { clicked => { root.profile-clicked(); } }
                     HorizontalLayout { alignment: center;
-                        Avatar { size: 40px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
+                        Avatar { size: DesktopChrome.macos ? 32px : 40px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
                             presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                         }
                     }
@@ -344,7 +344,7 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }
-                TooltipArea {
+                if root.touch: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;

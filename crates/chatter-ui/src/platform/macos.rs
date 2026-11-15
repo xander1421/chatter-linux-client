@@ -22,7 +22,9 @@ use raw_window_handle::HasWindowHandle;
 pub const TITLEBAR_HEIGHT: f32 = 34.0;
 
 /// Leading clearance for the inset traffic lights, including trailing air.
-pub const TRAFFIC_LIGHTS_WIDTH: f32 = 88.0;
+pub const TRAFFIC_LIGHTS_WIDTH: f32 = 80.0;
+/// Collapsed sidebar width, matching DesktopChrome.rail-width.
+const RAIL_WIDTH: f32 = 68.0;
 
 /// Apply the unified-toolbar titlebar style to the window backing `window`.
 ///
@@ -93,11 +95,11 @@ fn inset_buttons(window: &NSWindow) {
     let Some(zoom) = window.standardWindowButton(NSWindowButton::ZoomButton) else {
         return;
     };
-    // Center the actual native group over the 88pt rail inside its 8pt
+    // Center the actual native group over the 68pt rail inside its 8pt
     // window gutter. Keep AppKit's button sizes and spacing intact.
     let group_left = close.frame().origin.x;
     let group_right = zoom.frame().origin.x + zoom.frame().size.width;
-    let rail_center = 8.0 + f64::from(TRAFFIC_LIGHTS_WIDTH) / 2.0;
+    let rail_center = 8.0 + f64::from(RAIL_WIDTH) / 2.0;
     let horizontal_offset = rail_center - (group_left + group_right) / 2.0;
     for kind in [
         NSWindowButton::CloseButton,

@@ -36,12 +36,9 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         match event {
             #[cfg(target_os = "macos")]
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-                let weak = weak.clone();
-                slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
-                    if let Some(w) = weak.upgrade() {
-                        crate::platform::macos::refresh_window_button_insets(w.window());
-                    }
-                });
+                // AppKit has laid out its controls before delivering resize.
+                // Correct them in the same event, before the next frame.
+                crate::platform::macos::refresh_window_button_insets(_win);
                 EventResult::Propagate
             }
             WindowEvent::MouseInput { state, button: MouseButton::Back | MouseButton::Forward, .. } => {

@@ -121,7 +121,7 @@ export component Sidebar inherits Rectangle {
             // A row inserted above the visible conversations must not move
             // the content already under the user's finger.
             if (root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
-                    ? (DesktopChrome.macos ? root.titlebar-height + 4px : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
+                    ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
                     : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm))) {
                 central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
             }
@@ -242,7 +242,8 @@ export component Sidebar inherits Rectangle {
     // target, no cavern.
     // Collapsed, a quick link is a rail row like a conversation's (48px) so
     // every slot in the rail is one size.
-    property <length> quick-link-height: (root.touch ? 56px : root.collapsed ? (DesktopChrome.macos ? 44px : 48px) : 34px) * Appearance.text-grow;
+    property <length> quick-link-height: root.collapsed && DesktopChrome.macos ? 36px
+        : (root.touch ? 56px : root.collapsed ? 48px : 34px) * Appearance.text-grow;
     // The panel's first row, pinned above the scroll. On desktop it takes the
     // shared header height so it and the conversation header beside it read as
     // one row across the seam — and on macOS that is the row the traffic
@@ -279,15 +280,15 @@ export component Sidebar inherits Rectangle {
     property <length> footer-icon-size: root.touch ? 36px : 24px;
     // One size for every button in the collapsed rail's bottom cluster, so the
     // container height below stays in step with them.
-    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : 44px;
+    property <length> rail-icon-size: root.touch ? Spacing.touch-target-min : DesktopChrome.macos ? 36px : 44px;
     // The visual plate inside a rail row. Smaller than the row so adjacent slots
     // do not touch; the row stays the touch target, the slot is what you see.
     // 44px everywhere: the conversation rows' collapsed slot
     // (channel_list_item.slint `slot-size`), so the rail reads as one column.
-    property <length> rail-slot-size: 44px;
+    property <length> rail-slot-size: DesktopChrome.macos ? 36px : 44px;
     property <length> rail-gap: DesktopChrome.macos ? DesktopChrome.rail-gap : Spacing.sm;
     property <length> rail-divider-height: DesktopChrome.macos ? 8px : Spacing.md;
-    property <length> rail-footer-height: DesktopChrome.macos
+    property <length> rail-footer-height: !root.touch ? 0px : DesktopChrome.macos
         ? root.rail-button-count * root.rail-icon-size + root.rail-button-count * root.rail-gap
             + root.rail-divider-height + Spacing.sm
         : root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm
@@ -297,7 +298,7 @@ export component Sidebar inherits Rectangle {
     // Shield, AI, Chats, Activity, Mesh (when compiled), expand, Settings,
     // profile. The Activity bell was added without counting it, so the rail
     // footer was one slot short and the profile avatar hung off the bottom.
-    property <int> rail-button-count: 5 + (MeshGlobal.enabled ? 1 : 0)
+    property <int> rail-button-count: (root.touch ? 5 : 4) + (MeshGlobal.enabled ? 1 : 0)
         + (JarvisGlobal.enabled && JarvisGlobal.opted-in ? 1 : 0);
 
     // ── Sizing ──
@@ -391,7 +392,7 @@ export component Sidebar inherits Rectangle {
                 // The pinned title and the floating footer stay outside the
                 // virtualized content; only their scroll clearance is a row.
                 padding-top: idx == 0
-                    ? (root.collapsed ? (DesktopChrome.macos ? root.titlebar-height + 4px : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                    ? (root.collapsed ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                         + (root.mobile-mode ? Spacing.none : Spacing.sm)
                     : Spacing.none;
                 padding-bottom: entry.kind == "bottom"
@@ -560,9 +561,15 @@ export component Sidebar inherits Rectangle {
 
                 if entry.kind == "friends" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
-                    background: friends-touch.pressed ? Colors.surface-control-hover
-                        : friends-touch.has-hover ? Colors.surface-hover : transparent;
-                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    Rectangle {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * self.x;
+                        height: parent.height;
+                        border-radius: Spacing.radius-md;
+                        background: friends-touch.pressed ? Colors.surface-control-hover
+                            : friends-touch.has-hover ? Colors.surface-hover : transparent;
+                        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    }
                     accessible-role: list-item;
                     accessible-label: AnonMode.enabled ? "Add contact" : "Friends";
                     accessible-action-default => { root.friends-clicked(); }
@@ -590,9 +597,15 @@ export component Sidebar inherits Rectangle {
 
                 if entry.kind == "calls" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
-                    background: calls-touch.pressed ? Colors.surface-control-hover
-                        : calls-touch.has-hover ? Colors.surface-hover : transparent;
-                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    Rectangle {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * self.x;
+                        height: parent.height;
+                        border-radius: Spacing.radius-md;
+                        background: calls-touch.pressed ? Colors.surface-control-hover
+                            : calls-touch.has-hover ? Colors.surface-hover : transparent;
+                        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    }
                     accessible-role: list-item;
                     accessible-label: root.missed-call-count > 0 ? "Calls, " + root.missed-call-count + " missed" : "Calls";
                     border-width: parent.roving-highlight ? 2px : 0px;
@@ -742,8 +755,8 @@ export component Sidebar inherits Rectangle {
 
                 if entry.kind == "channel-actions" && root.collapsed && !AnonMode.enabled: VerticalLayout {
                     spacing: Spacing.xs;
-                    padding-top: Spacing.xs;
-                    padding-bottom: Spacing.xs;
+                    padding-top: DesktopChrome.macos ? 0px : Spacing.xs;
+                    padding-bottom: DesktopChrome.macos ? 0px : Spacing.xs;
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
@@ -888,7 +901,7 @@ export component Sidebar inherits Rectangle {
             height: root.height;
             viewport-height: mesh-content.preferred-height;
             mesh-content := VerticalLayout {
-                padding-top: (root.collapsed ? (DesktopChrome.macos ? root.titlebar-height + 4px : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                padding-top: (root.collapsed ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                     + (root.mobile-mode ? Spacing.none : Spacing.sm);
                 padding-bottom: root.bottom-inset + Spacing.md;
                 MeshList {
@@ -1002,7 +1015,7 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        if !root.mobile-mode: SidebarFooter {
+        if !root.mobile-mode && (!root.collapsed || root.touch): SidebarFooter {
             panel-width: root.width;
             panel-height: root.height;
             collapsed: root.collapsed;

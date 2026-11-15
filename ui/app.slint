@@ -194,9 +194,7 @@ export component MainWindow inherits Window {
     // The chat header shares the native title row. Full-width routes still
     // reserve clearance because they have no sidebar around the traffic lights.
     property <bool> native-chat-row: root.current-view == "main"
-        && SidebarPane.active-tab == "chats" && !ModalHostState.settings-open
-        && root.active-modal == "none" && !SearchPane.unified-search-open
-        && !CallView.active-call-fullscreen && !ChatPane.image-viewer-visible;
+        && SidebarPane.active-tab == "chats" && !CallView.active-call-fullscreen;
     property <length> desktop-top-inset: root.macos-titlebar-height > 0px
         && !root.native-chat-row ? root.macos-titlebar-height : 0px;
     property <length> chat-traffic-lights-lead: 0px;
@@ -276,6 +274,13 @@ export component MainWindow inherits Window {
     // there. The sidebar, the chat's x and the menus all read this one value.
     property <bool> sidebar-is-rail: SidebarPane.sidebar-collapsed
         || (root.is-small-screen && !SidebarPane.small-screen-expanded);
+    property <length> sidebar-expanded-width: root.is-mobile-platform ? Spacing.sidebar-width
+        : clamp(SidebarPane.sidebar-preferred-width > 0px ? SidebarPane.sidebar-preferred-width
+            : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width,
+            220px, max(220px, min(480px, root.width - 2 * DesktopChrome.frame-inset - 320px)));
+    out property <length> sidebar-panel-width: root.sidebar-is-rail
+        ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? DesktopChrome.rail-width : Spacing.sidebar-width-collapsed)
+        : root.sidebar-expanded-width;
     // Both phone panes stay mounted until the push settles. The message list
     // therefore keeps its scroll position while the header and composer travel
     // with the conversation, and Back reverses the same movement.
@@ -818,6 +823,7 @@ export component MainWindow inherits Window {
                 safe-area-bottom : root.content-bottom-inset;
                 server-unreachable : root.server-unreachable;
                 sidebar-is-rail : root.sidebar-is-rail;
+                sidebar-panel-width: root.sidebar-panel-width;
                 sidebar-user-collapsed <=> root.sidebar-user-collapsed;
                 viewer-origin-height <=> root.viewer-origin-height;
                 viewer-origin-width <=> root.viewer-origin-width;
@@ -871,18 +877,20 @@ export component MainWindow inherits Window {
             exiting-modal : modal-transitions.exiting-modal;
             fab-y : root.fab-y;
             is-mobile-platform : root.is-mobile-platform;
-            macos-titlebar-height : 0px;
+            macos-titlebar-height : root.native-chat-row ? root.macos-titlebar-height : 0px;
             presented-modal : modal-transitions.presented-modal;
             safe-area-top : root.safe-area-top + root.desktop-top-inset;
             sidebar-is-rail : root.sidebar-is-rail;
+            sidebar-panel-width: root.sidebar-panel-width;
             window-height: root.height;
             submit-anon-mode-pin(arg0) => { root.submit-anon-mode-pin(arg0); }
         }
 
         AppSettingsHost {
             z: -1;
+            y: root.native-chat-row ? root.macos-titlebar-height : 0px;
             width: parent.width;
-            height: parent.height;
+            height: max(0px, parent.height - self.y);
             compact-layout : root.compact-layout;
             is-mobile-platform : root.is-mobile-platform;
             safe-area-bottom : root.content-bottom-inset;
@@ -913,8 +921,7 @@ export component MainWindow inherits Window {
             safe-area-top: root.safe-area-top + root.desktop-top-inset;
             sidebar-menu-collapsed: !root.compact-layout && root.sidebar-is-rail;
             sidebar-menu-width: root.compact-layout ? root.width
-                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? DesktopChrome.rail-width : Spacing.sidebar-width-collapsed)
-                : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width;
+                : root.sidebar-panel-width;
             sidebar-menu-bottom-inset: root.bottom-nav-visible
                 ? Spacing.bottom-nav-height + Spacing.sm + root.content-bottom-inset
                     + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px)

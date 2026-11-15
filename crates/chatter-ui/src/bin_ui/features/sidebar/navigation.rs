@@ -199,9 +199,9 @@ pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    ui_ctx.set_sidebar_collapsed(
-                        w.global::<crate::SidebarPane>().get_sidebar_collapsed(),
-                    );
+                    let pane = w.global::<crate::SidebarPane>();
+                    ui_ctx.set_sidebar_collapsed(pane.get_sidebar_user_collapsed());
+                    ui_ctx.set_sidebar_width(pane.get_sidebar_preferred_width());
                 }
             });
         });
@@ -210,6 +210,7 @@ pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 pub(crate) fn load_sidebar_collapsed_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let collapsed = ui_ctx.sidebar_collapsed();
     let pane = window.global::<crate::SidebarPane>();
+    pane.set_sidebar_preferred_width(ui_ctx.sidebar_width().unwrap_or(0.0));
     // A stored collapse is the user's choice: without this the first resize
     // at startup took it for the small-screen auto-collapse and expanded it.
     pane.set_sidebar_user_collapsed(collapsed);

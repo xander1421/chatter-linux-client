@@ -124,7 +124,7 @@ export component SidebarHeader inherits GlassSurface {
                 shell: root.header-control-shell;
                 glyph: root.header-control-glyph;
                 x: parent.width - self.width - Spacing.sm; y: root.native-desktop ? 0px : (parent.height - self.height) / 2;
-                icon: Icons.shield;
+                icon: Icons.onion;
                 label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
                 active: AnonMode.enabled;
                 clicked => { root.anon-mode-clicked(); }

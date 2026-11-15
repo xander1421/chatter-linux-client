@@ -37,6 +37,7 @@ export component AppSecondaryModals inherits Rectangle {
     in property <string> presented-modal;
     in property <length> safe-area-top;
     in property <bool> sidebar-is-rail;
+    in property <length> sidebar-panel-width;
     in property <length> window-height;
     callback submit-anon-mode-pin(string);
     function is-presented(name: string) -> bool {
@@ -110,7 +111,7 @@ export component AppSecondaryModals inherits Rectangle {
         show: SearchPane.unified-search-open;
         source-x: root.compact-layout ? Spacing.sm : 0px;
         source-y: root.macos-titlebar-height;
-        source-width: root.compact-layout ? root.width - 2 * Spacing.sm : root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
+        source-width: root.compact-layout ? root.width - 2 * Spacing.sm : root.sidebar-panel-width;
         conversations: SearchPane.unified-search-conversations;
         messages: SearchPane.unified-search-messages;
         discover-channels: SearchPane.unified-search-discover-channels;
