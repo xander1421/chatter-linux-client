@@ -40,6 +40,7 @@ pub const LANGUAGES: &[Language] = &[
     Language { code: "pt", native_name: "Português", english_name: "Portuguese" },
     Language { code: "ro", native_name: "Română", english_name: "Romanian" },
     Language { code: "ru", native_name: "Русский", english_name: "Russian" },
+    Language { code: "uk", native_name: "Українська", english_name: "Ukrainian" },
 ];
 
 /// Directory holding the catalogs, for `chatter-ui-slint`'s build script.
