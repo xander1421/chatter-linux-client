@@ -26,6 +26,7 @@ const CATALOGS: &[&str] = &[
     catalog!("es"),
     catalog!("fr"),
     catalog!("it"),
+    catalog!("pt"),
 ];
 
 const _: () = assert!(CATALOGS.len() == LANGUAGES.len(), "one catalog per LANGUAGES row");
