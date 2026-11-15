@@ -22,6 +22,7 @@ macro_rules! catalog {
 /// Catalog text per [`LANGUAGES`] row; the source language has none.
 const CATALOGS: &[&str] = &[
     "",
+    catalog!("de"),
 ];
 
 const _: () = assert!(CATALOGS.len() == LANGUAGES.len(), "one catalog per LANGUAGES row");
