@@ -13,7 +13,6 @@ use chatter_core::domain::ids::{ChannelId, UserId};
 use crate::MainWindow;
 use chatter_core::client::PageAnchor;
 
-use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
 
 // Notification delivery and the selection callback run on the UI thread.
@@ -276,9 +275,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         };
         super::show_chat_pane(&weak);
         tracing::info!(kind = "dm", stage = "slide_requested", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
-
-        // Stop any playing audio
-        stop_audio_playback();
 
         // Clear inline GIF animations
         crate::bin_ui::gif_state::clear_inline_gifs();

@@ -42,18 +42,9 @@ pub fn start_audio_progress_timer(window: &MainWindow) {
                 w.global::<crate::ChatPane>()
                     .set_audio_elapsed(elapsed.into());
 
-                // Completion comes from the player, including unknown durations.
-                if audio_state::playback_finished() {
-                    // Stop timer and clear state
-                    stop_audio_progress_timer();
-                    audio_state::clear_state();
-                    w.global::<crate::ChatPane>()
-                        .set_current_playing_attachment_id("".into());
-                    w.global::<crate::ChatPane>().set_is_media_playing(false);
-                    w.global::<crate::ChatPane>().set_audio_progress(0.0);
-                    w.global::<crate::ChatPane>()
-                        .set_audio_elapsed("0:00".into());
-                }
+                // Completion comes from the player, including unknown
+                // durations; the mini player decides what follows.
+                super::mini_player::tick(&w);
             }
         });
 
