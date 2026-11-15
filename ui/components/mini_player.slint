@@ -1,0 +1,118 @@
+// Mini player: controls for the loaded voice message / audio file while its
+// conversation is not the one on screen. Playback outlives the conversation
+// it started in, so these live in the app shell, above the list and the
+// chat, never over the composer or the tab bar.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { KeyFocus } from "key_focus.slint";
+import { DismissButton } from "dismiss_button.slint";
+
+export component MiniPlayer inherits Rectangle {
+    in property <string> title;
+    in property <string> sender;
+    in property <bool> playing;
+    in property <float> progress;
+    in property <string> elapsed;
+    in property <bool> touch;
+
+    callback toggle();  // play / pause
+    callback close();   // stop playback
+    callback open();    // return to the message
+
+    height: 48px;
+    background: Colors.surface;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: 16px;
+                background: play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
+                opacity: play-touch.pressed ? 0.82 : 1.0;
+                accessible-role: button;
+                accessible-label: root.playing ? @tr("Pause voice message") : @tr("Play voice message");
+                accessible-action-default => { root.toggle(); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.toggle(); } }
+
+                Image {
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    source: root.playing ? Icons.pause : Icons.play;
+                    colorize: Colors.text-primary;
+                }
+
+                play-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.toggle(); }
+                }
+            }
+        }
+
+        // Title and sender: the way back to the message.
+        Rectangle {
+            horizontal-stretch: 1;
+            accessible-role: button;
+            accessible-label: @tr("Go to message");
+            accessible-action-default => { root.open(); }
+            KeyFocus { activate => { root.open(); } }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: root.title;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: root.sender == "" ? root.elapsed : root.sender + " · " + root.elapsed;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    overflow: elide;
+                }
+            }
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.open(); }
+            }
+        }
+
+        DismissButton {
+            plain: true;
+            touch: root.touch;
+            clicked => { root.close(); }
+        }
+    }
+
+    // Progress along the bottom edge, which also separates the strip from
+    // the content below it.
+    Rectangle {
+        y: parent.height - self.height;
+        height: 2px;
+        background: Colors.border;
+    }
+    Rectangle {
+        x: 0px;
+        y: parent.height - self.height;
+        width: parent.width * clamp(root.progress, 0.0, 1.0);
+        height: 2px;
+        background: Colors.primary;
+        animate width { duration: Materials.motion-quick; easing: Materials.settle; }
+    }
+}
