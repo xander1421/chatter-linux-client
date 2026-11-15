@@ -913,8 +913,8 @@ export component MainWindow inherits Window {
             safe-area-top: root.safe-area-top + root.desktop-top-inset;
             sidebar-menu-collapsed: !root.compact-layout && root.sidebar-is-rail;
             sidebar-menu-width: root.compact-layout ? root.width
-                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? 80px : Spacing.sidebar-width-collapsed)
-                : Spacing.sidebar-width;
+                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? DesktopChrome.rail-width : Spacing.sidebar-width-collapsed)
+                : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width;
             sidebar-menu-bottom-inset: root.bottom-nav-visible
                 ? Spacing.bottom-nav-height + Spacing.sm + root.content-bottom-inset
                     + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px)

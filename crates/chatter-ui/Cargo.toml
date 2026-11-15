@@ -122,7 +122,7 @@ glutin_egl_sys = { version = "0.7", optional = true }
 # in the dependency graph transitively (winit's macOS backend is built on it), so
 # this doesn't add a new crate family, just a direct edge to one already present.
 objc2 = { version = "0.6", optional = true }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSView"], optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSView", "NSButton", "NSControl"], optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 
 # ============================================================================

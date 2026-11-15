@@ -75,8 +75,8 @@ export component MainChatShell inherits Rectangle {
         // the pushed modal layer (0).
     property <length> normal-sidebar-offset:
         SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
-        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? 80px : Spacing.sidebar-width-collapsed)
-        : Spacing.sidebar-width;
+        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : DesktopChrome.macos ? DesktopChrome.rail-width : Spacing.sidebar-width-collapsed)
+        : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width;
     property <bool> call-hides-sidebar: !root.compact-layout && CallView.active-call-visible
         && root.width - root.normal-sidebar-offset < 308px;
     // Only the settled, unobstructed compact chat has an opaque ChatLayout

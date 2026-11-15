@@ -34,6 +34,16 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.window().on_winit_window_event(move |_win, event| {
         match event {
+            #[cfg(target_os = "macos")]
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                let weak = weak.clone();
+                slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+                    if let Some(w) = weak.upgrade() {
+                        crate::platform::macos::refresh_window_button_insets(w.window());
+                    }
+                });
+                EventResult::Propagate
+            }
             WindowEvent::MouseInput { state, button: MouseButton::Back | MouseButton::Forward, .. } => {
                 // Both edges are consumed; navigate once per physical click.
                 if *state == ElementState::Pressed {

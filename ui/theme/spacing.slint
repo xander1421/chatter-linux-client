@@ -1,10 +1,9 @@
-import { DesktopChrome } from "desktop_chrome.slint";
 // Spacing and sizing tokens for Chatter.
 
 import { Appearance } from "appearance.slint";
 
 export global Spacing {
-    out property <length> radius-chrome: DesktopChrome.frame-inset > 0px ? DesktopChrome.panel-radius : 20px;
+    out property <length> radius-chrome: 20px;
     out property <length> radius-sheet: 24px;
     // Controls nested in chrome are concentric with it: inner radius = outer
     // radius − the inset between them, so the two curves run parallel. The

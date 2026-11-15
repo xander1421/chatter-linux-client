@@ -1289,6 +1289,13 @@ fn app_run(state: AppState) {
             if crate::platform::macos::apply_unified_titlebar(w.window()) {
                 w.set_macos_titlebar_height(crate::platform::macos::TITLEBAR_HEIGHT);
                 w.set_macos_traffic_lights_width(crate::platform::macos::TRAFFIC_LIGHTS_WIDTH);
+                // AppKit finishes its titlebar layout after the style change.
+                let weak = w.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+                    if let Some(w) = weak.upgrade() {
+                        crate::platform::macos::refresh_window_button_insets(w.window());
+                    }
+                });
                 timer_handle.stop();
             } else {
                 let left = attempts_left.get().saturating_sub(1);

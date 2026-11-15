@@ -10,21 +10,19 @@
 //! `fullSizeContentView` style mask bit.
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSView, NSWindowStyleMask, NSWindowTitleVisibility};
+use objc2_app_kit::{NSView, NSWindow, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility};
 use raw_window_handle::HasWindowHandle;
 
 /// Height of the transparent titlebar overlay, in logical points — the
-/// standard macOS unified-toolbar row. Fixed by AppKit: it doesn't change
-/// with window size or Retina scaling.
+/// clearance for the inset native controls. Logical points stay constant
+/// across window sizes and Retina scaling.
 ///
 /// The root layout reserves this band plus a small gap for all routes, so
 /// native window controls never overlap app controls or page headings.
-pub const TITLEBAR_HEIGHT: f32 = 28.0;
+pub const TITLEBAR_HEIGHT: f32 = 34.0;
 
-/// Leading width the three traffic lights occupy, in logical points: a 20pt
-/// left margin, three 12pt buttons, 8pt apart, plus trailing air. Content
-/// starting after this clears them at any window size.
-pub const TRAFFIC_LIGHTS_WIDTH: f32 = 78.0;
+/// Leading clearance for the inset traffic lights, including trailing air.
+pub const TRAFFIC_LIGHTS_WIDTH: f32 = 88.0;
 
 /// Apply the unified-toolbar titlebar style to the window backing `window`.
 ///
@@ -66,7 +64,55 @@ pub fn apply_unified_titlebar(window: &slint::Window) -> bool {
     ns_window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     let mask = ns_window.styleMask() | NSWindowStyleMask::FullSizeContentView;
     ns_window.setStyleMask(mask);
+    inset_buttons(&ns_window);
     true
+}
+
+/// AppKit may lay the buttons out again after resizing or leaving full screen.
+/// Reapply absolute insets so repeated calls never accumulate an offset.
+pub fn refresh_window_button_insets(window: &slint::Window) {
+    let slint_handle = window.window_handle();
+    let Ok(handle) = slint_handle.window_handle() else {
+        return;
+    };
+    let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    let Some(view) = (unsafe { Retained::retain(appkit.ns_view.as_ptr().cast::<NSView>()) }) else {
+        return;
+    };
+    if let Some(window) = view.window() {
+        inset_buttons(&window);
+    }
+}
+
+fn inset_buttons(window: &NSWindow) {
+    let Some(close) = window.standardWindowButton(NSWindowButton::CloseButton) else {
+        return;
+    };
+    let horizontal_offset = 18.0 - close.frame().origin.x;
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        let Some(button) = window.standardWindowButton(kind) else {
+            continue;
+        };
+        // SAFETY: this is AppKit's live standard button, accessed only from
+        // the main-thread window callback; its retained parent stays alive.
+        let Some(container) = (unsafe { button.superview() }) else {
+            continue;
+        };
+        let mut origin = button.frame().origin;
+        origin.x += horizontal_offset;
+        origin.y = if container.isFlipped() {
+            14.0
+        } else {
+            container.bounds().size.height - button.frame().size.height - 14.0
+        };
+        button.setFrameOrigin(origin);
+    }
 }
 
 /// Point GStreamer at the plugins `macos/bundle.sh` staged in the .app.
