@@ -172,7 +172,7 @@ return out
 "#;
     const PAGE_LOOP: &str = r#"f=/tmp/validated-dump.$$; c=0
 while :; do
-  redis-cli --raw EVAL "$DUMP_LUA" 0 "$c" > "$f" 2>&1
+  redis-cli --user chatter-admin --no-auth-warning --raw EVAL "$DUMP_LUA" 0 "$c" > "$f" 2>&1
   c=$(head -n1 "$f")
   case "$c" in ""|*[!0-9]*) echo "REDIS DUMP FAILED: $(cat "$f")"; break;; esac
   tail -n +2 "$f"
@@ -182,7 +182,7 @@ rm -f "$f""#;
     let out = std::process::Command::new("docker")
         .args(["compose", "exec", "-T"])
         .arg("-e")
-        .arg(format!("REDISCLI_AUTH={}", env_value("REDIS_PASSWORD")))
+        .arg(format!("REDISCLI_AUTH={}", env_value("REDIS_ADMIN_PASSWORD")))
         .arg("-e")
         .arg(format!("DUMP_LUA={DUMP_PAGE_LUA}"))
         .args(["redis", "sh", "-c", PAGE_LOOP])
@@ -945,7 +945,7 @@ fn row_ids(uid: &UserId) -> std::collections::HashSet<String> {
 /// Field names of one Redis hash (a device queue's envelopes).
 fn redis_hkeys(k: &str) -> std::collections::HashSet<String> {
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HKEYS '{k}' 2>/dev/null"
     ))
     .lines()
     .map(|l| l.trim().to_string())
@@ -999,15 +999,15 @@ async fn v0_detector_self_check() {
     let stream_field_marker = unique_marker();
     let stream_value_marker = unique_marker();
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli XADD '{stream_key}' '*' '{stream_field_marker}' '{stream_value_marker}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning XADD '{stream_key}' '*' '{stream_field_marker}' '{stream_value_marker}' >/dev/null 2>&1"
     ));
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HSET '{probe_key}' payload '{marker}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HSET '{probe_key}' payload '{marker}' >/dev/null 2>&1"
     ));
     let redis_all = redis_dump_all();
     let found_redis = redis_all.matches(&marker).count();
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli DEL '{probe_key}' '{stream_key}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning DEL '{probe_key}' '{stream_key}' >/dev/null 2>&1"
     ));
     assert!(
         found_redis > 0,
@@ -1098,7 +1098,7 @@ async fn v1_server_never_holds_plaintext() {
     // absent from it. Without this, "not found" and "not there" are the same
     // observation and the test is vacuous.
     let envelope_keys = sh(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --scan --pattern 'device_queue_envelopes:*' 2>/dev/null",
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning --scan --pattern 'device_queue_envelopes:*' 2>/dev/null",
     );
     let n_keys = envelope_keys
         .lines()
@@ -1290,7 +1290,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     let field = new_fields[0].clone();
 
     let json = sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HGET '{key}' '{field}' 2>/dev/null"
     ));
     let envelope_b64 = extract_between(&json, "\"envelope\":\"", "\"")
         .expect("could not extract envelope base64 from queued JSON");
@@ -1310,14 +1310,14 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     std::fs::write(&tmp, corrupted_json.trim()).expect("write temp json");
     // -x reads the value from stdin, avoiding shell-quoting the JSON payload.
     sh(&format!(
-        "cat '{}' | docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli -x HSET '{key}' '{field}' >/dev/null 2>&1",
+        "cat '{}' | docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning -x HSET '{key}' '{field}' >/dev/null 2>&1",
         tmp.display()
     ));
     let _ = std::fs::remove_file(&tmp);
 
     // ---- prove the corruption actually landed -----------------------------
     let readback = sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HGET '{key}' '{field}' 2>/dev/null"
     ));
     let stored_b64 = extract_between(&readback, "\"envelope\":\"", "\"")
         .expect("could not re-read envelope after corruption");
@@ -2090,7 +2090,7 @@ async fn v6_delivered_message_key_is_destroyed() {
             );
             let field = new_fields[0].clone();
             let json = sh(&format!(
-                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HGET '{key}' '{field}' 2>/dev/null"
             ));
             let b64 = extract_between(&json, "\"envelope\":\"", "\"")
                 .expect("could not extract envelope base64 from queued JSON");
@@ -2141,7 +2141,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     // polls. From B's point of view this message simply never arrived — the
     // legitimately-undelivered case Signal is designed to tolerate.
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{key}' '{field_u}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HDEL '{key}' '{field_u}' >/dev/null 2>&1"
     ));
     assert!(
         !hkeys(&key).contains(&field_u),
@@ -4723,7 +4723,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
             );
             let field = new_fields[0].clone();
             let json = sh(&format!(
-                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{queue_key}' '{field}' 2>/dev/null"
+                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HGET '{queue_key}' '{field}' 2>/dev/null"
             ));
             let b64 = extract_between(&json, "\"envelope\":\"", "\"")
                 .expect("could not extract envelope base64 from queued JSON");
@@ -4881,7 +4881,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     assert_ne!(b64_pre, b64_post, "captured the same envelope twice");
     // Withhold it, so B's live session does not decrypt it on reconnect.
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{queue_key}' '{post_field}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HDEL '{queue_key}' '{post_field}' >/dev/null 2>&1"
     ));
     assert!(
         !hkeys(&queue_key).contains(&post_field),
@@ -7127,7 +7127,7 @@ async fn v23_message_ordering_reorder_and_gap() {
             );
             let field = new_fields[0].clone();
             let json = sh(&format!(
-                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HGET '{key}' '{field}' 2>/dev/null"
+                "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HGET '{key}' '{field}' 2>/dev/null"
             ));
             let b64 = extract_between(&json, "\"envelope\":\"", "\"")
                 .expect("could not extract envelope base64 from queued JSON");
@@ -7181,7 +7181,7 @@ async fn v23_message_ordering_reorder_and_gap() {
     // this test alone controls the order in which B's session processes them.
     for f in [&f1, &f2, &f3] {
         sh(&format!(
-            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{key}' '{f}' >/dev/null 2>&1"
+            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --user chatter-admin --no-auth-warning HDEL '{key}' '{f}' >/dev/null 2>&1"
         ));
     }
     let remaining = hkeys(&key);
@@ -13891,8 +13891,8 @@ fn redis_relay_channel_event(user: &UserId, event_json: &str) -> i64 {
     let path = std::env::temp_dir().join(format!("v62-event-{}.json", uuid::Uuid::new_v4()));
     std::fs::write(&path, event_json).expect("write event json");
     let out = sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" \
-         redis_async_ops redis-cli -x PUBLISH user:{user}:channel_events < '{}'",
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" \
+         redis_async_ops redis-cli --user chatter-admin --no-auth-warning -x PUBLISH user:{user}:channel_events < '{}'",
         path.display()
     ));
     let _ = std::fs::remove_file(&path);
@@ -14038,8 +14038,8 @@ async fn v59_server_injected_member_gets_no_skdm() {
     // (`repository/redis` ListMembers -> GetChannel); a server-side add
     // refreshes it, so drop it as the server would.
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" \
-         redis redis-cli DEL channel:{gid} channel:member:{gid}:{uid_m}"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_ADMIN_PASSWORD=' .env | cut -d= -f2-)\" \
+         redis redis-cli --user chatter-admin --no-auth-warning DEL channel:{gid} channel:member:{gid}:{uid_m}"
     ));
     let signed_rows = psql(&format!(
         "select count(*) from channel_changes where channel_id = '{gid}'"
