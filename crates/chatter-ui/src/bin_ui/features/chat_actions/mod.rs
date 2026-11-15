@@ -10,7 +10,6 @@
 //! - `message_actions` - Message click, reply, react, thread callbacks
 //! - `attachment_view` - Main attachment viewing handler
 //! - `audio_seek` - Audio seek callback
-//! - `mini_player` - Audio controls outside the playing conversation
 //! - `transfer_status` - Download/upload progress updates
 
 use std::sync::Arc;
@@ -24,7 +23,6 @@ mod code_preview;
 mod links;
 pub(crate) mod media_viewer;
 mod message_actions;
-mod mini_player;
 mod pdf_preview;
 mod timers;
 mod transfer_status;
@@ -45,7 +43,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     message_actions::wire_close_image_viewer(window, ui_ctx);
     attachment_view::wire_view_attachment(window, ui_ctx);
     audio_seek::wire_audio_seek(window);
-    mini_player::wire(window, ui_ctx);
     code_preview::wire_code_preview_callbacks(window);
     pdf_preview::wire_pdf_preview_callbacks(window);
     video_player::wire_video_player_callbacks(window);

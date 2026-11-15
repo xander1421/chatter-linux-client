@@ -9,6 +9,7 @@ use chatter_core::domain::anon_group::AnonGroupId;
 
 use crate::MainWindow;
 
+use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
 use std::str::FromStr;
 
@@ -159,6 +160,8 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             super::show_chat_pane(&weak);
             let ui_ctx = ui_ctx.clone();
 
+            // Stop any playing audio when switching
+            stop_audio_playback();
             crate::bin_ui::gif_state::clear_inline_gifs();
 
             // Commit active-conversation state SYNCHRONOUSLY on the UI thread

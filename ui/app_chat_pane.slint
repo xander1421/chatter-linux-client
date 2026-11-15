@@ -94,14 +94,6 @@ export global ChatPane {
     in-out property <bool> is-media-playing: false;  // True when audio is actively playing (not paused)
     in-out property <float> audio-progress: 0.0;  // Playback progress 0.0-1.0
     in-out property <string> audio-elapsed: "0:00";  // Elapsed time display
-    // Mini player: shown while the loaded track's conversation is not the
-    // one on screen (chatter-core decides). Playing/progress/elapsed above.
-    in property <bool> mini-player-visible: false;
-    in property <string> mini-player-title: "";
-    in property <string> mini-player-sender: "";
-    callback mini-player-toggle();
-    callback mini-player-close();
-    callback mini-player-open();
     // ========== Image viewer state ==========
     in-out property <bool> image-viewer-visible: false;
     in property <image> image-viewer-source;

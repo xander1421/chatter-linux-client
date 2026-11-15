@@ -5977,7 +5977,3 @@ msgstr "СОСТОЯНИЕ"
 #: ui/activity/activity_sheet.slint
 msgid "ACTIVITY"
 msgstr "СОБЫТИЯ"
-
-#: ui/components/mini_player.slint
-msgid "Go to message"
-msgstr "Перейти к сообщению"

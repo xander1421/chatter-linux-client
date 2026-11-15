@@ -24,7 +24,7 @@ use chatter_core::ui::format::format_file_size;
 use crate::bin_ui::preview_state;
 use crate::bin_ui::video_state;
 
-use super::timers::start_video_progress_timer;
+use super::timers::{start_audio_progress_timer, start_video_progress_timer};
 use super::transfer_status::update_attachment_transfer_status;
 
 const MAX_VIEWER_EDGE: u32 = 2560;
@@ -78,7 +78,6 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak_window.upgrade() else {
                 return;
             };
-            super::mini_player::note_click(&w, &ui_ctx, attachment_id.as_str());
             let request = super::media_viewer::select(&w, attachment_id.as_str());
             // Revisiting an already-decoded static image: restore it in this
             // same tick (select() just blanked the source) and skip the whole
@@ -251,8 +250,6 @@ fn handle_local_attachment(
             toggle_audio_playback(&weak);
             return;
         }
-        play_audio(&weak, &ui_ctx, &att_id, attachment_id.as_str(), &mime_type, file_size);
-        return;
     }
 
     // Show preview immediately for static images (from thumbnail), then load full
@@ -397,6 +394,31 @@ fn handle_local_attachment(
         }
     }
 
+    // Same streaming path for large audio: rodio's decoder is Read+Seek, so it
+    // pulls decrypted ranges on demand instead of holding the whole track in RAM.
+    const AUDIO_STREAM_THRESHOLD: u64 = 4 * 1024 * 1024; // 4MB
+    if mime_type.starts_with("audio/") && file_size >= AUDIO_STREAM_THRESHOLD {
+        match ui_ctx.open_attachment_range(&att_id) {
+            Ok(dec) => {
+                play_audio_from_range(
+                    weak,
+                    std::sync::Arc::new(dec),
+                    &attachment_id.to_string(),
+                    &mime_type,
+                    request,
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Streaming audio open failed ({}), falling back to full decrypt",
+                    e
+                );
+                // fall through to full-decrypt path below
+            }
+        }
+    }
+
     #[cfg(target_os = "android")]
     if !is_audio
         && !is_image
@@ -527,7 +549,7 @@ fn handle_local_attachment(
 }
 
 /// Toggle audio playback (pause/resume).
-pub(super) fn toggle_audio_playback(weak: &slint::Weak<MainWindow>) {
+fn toggle_audio_playback(weak: &slint::Weak<MainWindow>) {
     let player_arc = audio_state::get_audio_player();
     if let Ok(mut player_guard) = player_arc.lock() {
         if let Some(ref mut player) = *player_guard {
@@ -623,12 +645,15 @@ fn display_decrypted_content(
     if !super::media_viewer::is_current(request) {
         return;
     }
+    let is_audio = mime_type.starts_with("audio/");
     let is_image = FileMetadata::is_image_file(filename, mime_type);
     let is_video = FileCategory::from_mime_and_filename(mime_type, filename) == FileCategory::Video;
     let is_code = FileMetadata::is_code_file(filename, mime_type);
     let is_pdf = mime_type == "application/pdf" || filename.to_lowercase().ends_with(".pdf");
 
-    if is_image {
+    if is_audio {
+        play_audio_from_buffer(weak, secure_buffer, attachment_id, request);
+    } else if is_image {
         display_image_from_buffer(
             weak,
             secure_buffer,
@@ -669,114 +694,100 @@ fn display_decrypted_content(
     }
 }
 
-/// Load and start an audio attachment whose content is on this device.
-/// `false` when it could not be played. Worker thread: decrypts.
-fn play_audio(
-    weak: &slint::Weak<MainWindow>,
-    ui_ctx: &ChatterClient,
-    att_id: &AttachmentId,
+/// Play audio from decrypted buffer.
+fn play_audio_from_buffer(
+    weak: slint::Weak<MainWindow>,
+    secure_buffer: chatter_core::prelude::SecureBuffer,
     attachment_id: &str,
-    mime_type: &str,
-    file_size: u64,
-) -> bool {
-    // rodio's decoder is Read+Seek, so a large track pulls decrypted ranges
-    // on demand instead of being held in RAM whole.
-    const AUDIO_STREAM_THRESHOLD: u64 = 4 * 1024 * 1024; // 4MB
-    let range = (file_size >= AUDIO_STREAM_THRESHOLD)
-        .then(|| ui_ctx.open_attachment_range(att_id))
-        .and_then(|opened| {
-            opened
-                .map_err(|e| {
-                    tracing::warn!("Streaming audio open failed ({e}), falling back to full decrypt")
-                })
-                .ok()
-        });
-    let memory = match range {
-        Some(_) => None,
-        None => match ui_ctx.decrypt_attachment_auto(att_id) {
-            Ok(buffer) => Some(buffer),
-            Err(e) => {
-                tracing::error!("Failed to decrypt audio: {}", e);
-                return false;
+    request: u64,
+) {
+    let player_arc = audio_state::get_audio_player();
+    match player_arc.lock() {
+        Ok(mut player_guard) => {
+            if let Some(ref mut player) = *player_guard {
+                let data = secure_buffer.as_slice().to_vec();
+                match player.load_from_memory(data) {
+                    Ok(duration) => {
+                        tracing::info!("Loaded audio from memory (duration: {:?})", duration);
+                        if let Err(e) = player.play() {
+                            tracing::error!("Failed to play audio: {}", e);
+                        } else {
+                            let att_id_for_state = attachment_id.to_string();
+                            audio_state::set_playing_with_duration(&att_id_for_state, duration);
+                            let att_id_for_ui = attachment_id.to_string();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    if !super::media_viewer::is_current(request) {
+                                        return;
+                                    }
+                                    w.global::<crate::ChatPane>()
+                                        .set_current_playing_attachment_id(att_id_for_ui.into());
+                                    w.global::<crate::ChatPane>().set_is_media_playing(true);
+                                    start_audio_progress_timer(&w);
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load audio from memory: {}", e);
+                    }
+                }
+            } else {
+                tracing::error!("Audio player not initialized");
             }
-        },
-    };
-
-    let Ok(mut player_guard) = audio_state::get_audio_player().lock() else {
-        tracing::error!("Failed to lock audio player");
-        return false;
-    };
-    let Some(player) = player_guard.as_mut() else {
-        tracing::error!("Audio player not initialized");
-        return false;
-    };
-    let loaded = match (range, memory) {
-        (Some(dec), _) => player.load_from_range(Arc::new(dec), Some(mime_type.to_string())),
-        (None, Some(buffer)) => player.load_from_memory(buffer.as_slice().to_vec()),
-        (None, None) => return false,
-    };
-    let duration = match loaded {
-        Ok(duration) => duration,
-        Err(e) => {
-            tracing::error!("Failed to load audio: {}", e);
-            return false;
         }
-    };
-    if let Err(e) = player.play() {
-        tracing::error!("Failed to play audio: {}", e);
-        return false;
+        Err(e) => {
+            tracing::error!("Failed to lock audio player: {}", e);
+        }
     }
-    audio_state::set_playing_with_duration(attachment_id, duration);
-    drop(player_guard);
-    // Not tied to the viewer request: the audio is already playing, and
-    // playback outlives both the viewer and the conversation.
-    super::mini_player::started(weak.clone(), attachment_id);
-    true
 }
 
-/// Play the track the queue advanced to, fetching it first when it has not
-/// been downloaded. Bypasses the media viewer: the user did not open anything.
-pub(super) fn play_queued_audio(
+/// Play large audio by streaming decrypted ranges on demand (no full decrypt).
+fn play_audio_from_range(
     weak: slint::Weak<MainWindow>,
-    ui_ctx: Arc<ChatterClient>,
-    att_id: AttachmentId,
+    dec: std::sync::Arc<chatter_core::media::CbcRangeDecryptor>,
+    attachment_id: &str,
+    mime_type: &str,
+    request: u64,
 ) {
-    std::thread::spawn(move || {
-        let still_queued = || {
-            ui_ctx
-                .now_playing()
-                .is_some_and(|track| track.attachment_id == att_id)
-        };
-        let play = || {
-            let mut attachment = ui_ctx.get_attachment(&att_id)?;
-            if attachment.content_location == ContentLocation::NotDownloaded {
-                ui_ctx
-                    .runtime_handle()
-                    .block_on(ui_ctx.download_attachment_to_filesystem(&att_id))
-                    .map_err(|e| tracing::warn!("Queued audio download failed: {e}"))
-                    .ok()?;
-                attachment = ui_ctx.get_attachment(&att_id)?;
+    let player_arc = audio_state::get_audio_player();
+    match player_arc.lock() {
+        Ok(mut player_guard) => {
+            if let Some(ref mut player) = *player_guard {
+                match player.load_from_range(dec, Some(mime_type.to_string())) {
+                    Ok(duration) => {
+                        tracing::info!("Loaded streaming audio (duration: {:?})", duration);
+                        if let Err(e) = player.play() {
+                            tracing::error!("Failed to play streaming audio: {}", e);
+                        } else {
+                            let att_id_for_state = attachment_id.to_string();
+                            audio_state::set_playing_with_duration(&att_id_for_state, duration);
+                            let att_id_for_ui = attachment_id.to_string();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    if !super::media_viewer::is_current(request) {
+                                        return;
+                                    }
+                                    w.global::<crate::ChatPane>()
+                                        .set_current_playing_attachment_id(att_id_for_ui.into());
+                                    w.global::<crate::ChatPane>().set_is_media_playing(true);
+                                    start_audio_progress_timer(&w);
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load streaming audio: {}", e);
+                    }
+                }
+            } else {
+                tracing::error!("Audio player not initialized");
             }
-            // Something else was started, or the player closed, meanwhile.
-            if !still_queued() {
-                return Some(true);
-            }
-            Some(
-                attachment.content_location == ContentLocation::OnFilesystem
-                    && play_audio(
-                        &weak,
-                        &ui_ctx,
-                        &att_id,
-                        &att_id.to_string(),
-                        &attachment.metadata.mime_type,
-                        attachment.metadata.size,
-                    ),
-            )
-        };
-        if !play().unwrap_or(false) && still_queued() {
-            let _ = weak.upgrade_in_event_loop(|w| super::mini_player::stop(&w));
         }
-    });
+        Err(e) => {
+            tracing::error!("Failed to lock audio player: {}", e);
+        }
+    }
 }
 
 /// Display image from decrypted buffer.

@@ -5987,7 +5987,3 @@ msgstr "СТАН"
 #: ui/activity/activity_sheet.slint
 msgid "ACTIVITY"
 msgstr "ПОДІЇ"
-
-#: ui/components/mini_player.slint
-msgid "Go to message"
-msgstr "Перейти до повідомлення"

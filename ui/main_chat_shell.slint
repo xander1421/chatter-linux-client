@@ -20,7 +20,6 @@ import { ChatLayout, MessageItemData } from "chat/chat_layout.slint";
 import { SelectionBar, SelectionChrome } from "chat/selection_bar.slint";
 import { EmojiData } from "components/emoji_picker.slint";
 import { EmojiData } from "components/mod.slint";
-import { MiniPlayer } from "components/mini_player.slint";
 
 // Main conversation shell: sidebar, call dock, chat pane and status notices.
 export component MainChatShell inherits Rectangle {
@@ -106,20 +105,6 @@ export component MainChatShell inherits Rectangle {
         VerticalLayout {
             width: 100%;
             height: parent.height;
-
-        // Above the list and the chat alike, so it covers neither the
-        // composer nor the bottom tab bar.
-        if ChatPane.mini-player-visible && !CallView.active-call-fullscreen: MiniPlayer {
-            title: ChatPane.mini-player-title;
-            sender: ChatPane.mini-player-sender;
-            playing: ChatPane.is-media-playing;
-            progress: ChatPane.audio-progress;
-            elapsed: ChatPane.audio-elapsed;
-            touch: root.is-mobile-platform;
-            toggle => { ChatPane.mini-player-toggle(); }
-            close => { ChatPane.mini-player-close(); }
-            open => { ChatPane.mini-player-open(); }
-        }
 
         Rectangle {
             vertical-stretch: 1;

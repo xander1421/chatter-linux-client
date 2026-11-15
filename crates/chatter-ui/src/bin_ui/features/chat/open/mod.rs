@@ -13,6 +13,7 @@ use slint::ComponentHandle;
 use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
+use crate::bin_ui::audio_state;
 
 /// Wire the conversation-open callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -187,4 +188,16 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
             w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
         }
     }
+}
+
+/// Stop any currently playing audio and clear state.
+pub(crate) fn stop_audio_playback() {
+    // Stop the audio player
+    if let Ok(mut guard) = audio_state::get_audio_player().lock() {
+        if let Some(ref mut player) = *guard {
+            player.stop();
+        }
+    }
+    // Clear the audio state
+    audio_state::clear_state();
 }

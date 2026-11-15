@@ -48,23 +48,7 @@ impl ChatterClient {
         message_id: Option<&crate::domain::ids::MessageId>,
         attachment_id: &crate::domain::ids::AttachmentId,
     ) -> Option<(String, String, String)> {
-        let message = self.attachment_owner(conversation, message_id, attachment_id)?;
-        let sender = self.message_sender_label(&message);
-        let date = crate::util::time::format_date(message.created_at);
-        let time = crate::util::time::format_message_time(message.created_at.clone());
-        let caption = message.as_text().unwrap_or_default().trim().to_owned();
-        Some((sender, format!("{date} · {time}"), caption))
-    }
-
-    /// The message of `conversation` carrying `attachment_id`: `message_id`
-    /// when it is that message, else found by scanning the conversation.
-    pub(crate) fn attachment_owner(
-        &self,
-        conversation: &crate::state::ActiveConversation,
-        message_id: Option<&crate::domain::ids::MessageId>,
-        attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> Option<crate::domain::message::Message> {
-        message_id
+        let message = message_id
             .and_then(|id| self.get_message_local(id))
             .filter(|message| !message.is_deleted && message.attachments.contains(attachment_id))
             .or_else(|| {
@@ -72,16 +56,16 @@ impl ChatterClient {
                     .ok()?
                     .into_iter()
                     .find(|message| !message.is_deleted && message.attachments.contains(attachment_id))
-            })
-    }
-
-    /// Sender name as shown beside a message's media: "You" for own messages.
-    pub(crate) fn message_sender_label(&self, message: &crate::domain::message::Message) -> String {
-        let sender = self.message_sender_display_name(message);
-        match message.sender_id.as_ref() {
+            })?;
+        let sender = self.message_sender_display_name(&message);
+        let sender = match message.sender_id.as_ref() {
             Some(id) => self.quote_author_name(id, || sender),
             None => sender,
-        }
+        };
+        let date = crate::util::time::format_date(message.created_at);
+        let time = crate::util::time::format_message_time(message.created_at.clone());
+        let caption = message.as_text().unwrap_or_default().trim().to_owned();
+        Some((sender, format!("{date} · {time}"), caption))
     }
 
     /// Sender display name, scoped to the conversation so anon channels show

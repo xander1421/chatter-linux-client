@@ -5958,7 +5958,3 @@ msgstr "STATO"
 #: ui/activity/activity_sheet.slint
 msgid "ACTIVITY"
 msgstr "ATTIVITÀ"
-
-#: ui/components/mini_player.slint
-msgid "Go to message"
-msgstr "Vai al messaggio"

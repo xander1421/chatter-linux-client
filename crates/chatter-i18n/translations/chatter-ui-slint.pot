@@ -5950,7 +5950,3 @@ msgstr ""
 #: ui/activity/activity_sheet.slint
 msgid "ACTIVITY"
 msgstr ""
-
-#: ui/components/mini_player.slint
-msgid "Go to message"
-msgstr ""

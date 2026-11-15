@@ -11,6 +11,7 @@ use chatter_core::domain::ids::ChannelId;
 use chatter_core::client::PageAnchor;
 use crate::{MainWindow, run_ui};
 
+use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
 
 /// Wire channel selected callback.
@@ -57,6 +58,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 "conversation_open"
             );
             let ui_ctx = ui_ctx_clone.clone();
+
+            // Stop any playing audio when switching channels
+            stop_audio_playback();
 
             // Clear inline GIF animations to free memory
             crate::bin_ui::gif_state::clear_inline_gifs();
