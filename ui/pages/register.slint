@@ -114,7 +114,7 @@ export component RegisterPage inherits Rectangle {
                 if current-step == 1: Rectangle { width: Spacing.header-action-box-touch; } // Spacer
                 
                 Text {
-                    text: "Create account";
+                    text: @tr("Create account");
                     color: Colors.text-primary;
                     font-size: Typography.lg;
                     font-weight: Typography.semibold;
@@ -123,7 +123,7 @@ export component RegisterPage inherits Rectangle {
                 }
                 
                 Text {
-                    text: "Step \{current-step} of \{total-steps}";
+                    text: @tr("Step {0} of {1}", current-step, total-steps);
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     vertical-alignment: center;
@@ -211,7 +211,7 @@ export component RegisterPage inherits Rectangle {
                             spacing: Spacing.md;
                             
                             Text {
-                                text: "Set up your profile";
+                                text: @tr("Set up your profile");
                                 color: Colors.text-primary;
                                 font-size: Typography.xl;
                                 font-weight: Typography.bold;
@@ -242,7 +242,7 @@ export component RegisterPage inherits Rectangle {
                                         border-radius: self.width / 2;
                                         background: prev-touch.pressed ? Colors.inset : transparent;
                                         accessible-role: button;
-                                        accessible-label: "Previous avatar";
+                                        accessible-label: @tr("Previous avatar");
                                         accessible-enabled: !root.loading && root.preset-count > 1;
                                         accessible-action-default => {
                                             root.select-default-avatar(Math.mod(root.selected-default-idx - 1 + root.preset-count, root.preset-count));
@@ -266,7 +266,7 @@ export component RegisterPage inherits Rectangle {
 
                                     Rectangle {
                                         accessible-role: button;
-                                        accessible-label: "Upload your own photo";
+                                        accessible-label: @tr("Upload your own photo");
                                         accessible-action-default => { root.select-avatar(); }
                                         KeyFocus { border-radius: parent.border-radius; activate => { root.select-avatar(); } }
                                         width: 96px;
@@ -317,7 +317,7 @@ export component RegisterPage inherits Rectangle {
                                         border-radius: self.width / 2;
                                         background: next-touch.pressed ? Colors.inset : transparent;
                                         accessible-role: button;
-                                        accessible-label: "Next avatar";
+                                        accessible-label: @tr("Next avatar");
                                         accessible-enabled: !root.loading && root.preset-count > 1;
                                         accessible-action-default => {
                                             root.select-default-avatar(Math.mod(root.selected-default-idx + 1, root.preset-count));
@@ -346,7 +346,7 @@ export component RegisterPage inherits Rectangle {
                                 if root.has-avatar: HorizontalLayout {
                                     alignment: center;
                                     Button {
-                                        text: "Remove photo";
+                                        text: @tr("Remove photo");
                                         variant: "secondary";
                                         disabled: root.loading;
                                         clicked => { root.remove-avatar(); }
@@ -356,7 +356,7 @@ export component RegisterPage inherits Rectangle {
 
                             // Display name
                             Input {
-                                placeholder: "Display name";
+                                placeholder: @tr("Display name");
                                 text <=> root.display-name;
                                 disabled: root.loading;
                                 edited(text) => { root.clear-error(); }
@@ -370,7 +370,7 @@ export component RegisterPage inherits Rectangle {
                             // input and registration reports a clash
                             // (OPEN-ITEMS §82).
                             username-field := Input {
-                                placeholder: "Username";
+                                placeholder: @tr("Username");
                                 text <=> root.username;
                                 disabled: root.loading;
                                 edited(text) => { root.clear-error(); }
@@ -383,7 +383,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Button {
-                                text: "Continue";
+                                text: @tr("Continue");
                                 variant: "primary";
                                 disabled: display-name == "" || username == "" || root.username-error != "";
                                 clicked => { current-step = 2; }
@@ -395,7 +395,7 @@ export component RegisterPage inherits Rectangle {
                             spacing: Spacing.md;
                             
                             Text {
-                                text: "Secure your account";
+                                text: @tr("Secure your account");
                                 color: Colors.text-primary;
                                 font-size: Typography.xl;
                                 font-weight: Typography.bold;
@@ -404,7 +404,7 @@ export component RegisterPage inherits Rectangle {
 
                             // Password
                             Input {
-                                placeholder: "Password";
+                                placeholder: @tr("Password");
                                 password: true;
                                 text <=> root.password;
                                 disabled: root.loading;
@@ -417,9 +417,9 @@ export component RegisterPage inherits Rectangle {
                             // Password strength meter (4 segments)
                             if root.password-strength > 0: VerticalLayout {
                                 accessible-role: text;
-                                accessible-label: "Password strength: " + (root.password-strength == 1 ? "Weak" :
-                                    root.password-strength == 2 ? "Fair" :
-                                    root.password-strength == 3 ? "Good" : "Strong");
+                                accessible-label: root.password-strength == 1 ? @tr("Password strength: Weak") :
+                                    root.password-strength == 2 ? @tr("Password strength: Fair") :
+                                    root.password-strength == 3 ? @tr("Password strength: Good") : @tr("Password strength: Strong");
                                 spacing: Spacing.xs;
                                 HorizontalLayout {
                                     spacing: Spacing.xs;
@@ -437,9 +437,9 @@ export component RegisterPage inherits Rectangle {
                                     }
                                 }
                                 Text {
-                                    text: root.password-strength == 1 ? "Weak" :
-                                          root.password-strength == 2 ? "Fair" :
-                                          root.password-strength == 3 ? "Good" : "Strong";
+                                    text: root.password-strength == 1 ? @tr("password strength" => "Weak") :
+                                          root.password-strength == 2 ? @tr("password strength" => "Fair") :
+                                          root.password-strength == 3 ? @tr("password strength" => "Good") : @tr("password strength" => "Strong");
                                     color: root.password-strength == 1 ? Colors.error : 
                                            root.password-strength == 2 ? Colors.warning :
                                            root.password-strength == 3 ? Colors.info : Colors.success;
@@ -449,17 +449,17 @@ export component RegisterPage inherits Rectangle {
 
                             // Confirm password
                             confirm-field := Input {
-                                placeholder: "Confirm password";
+                                placeholder: @tr("Confirm password");
                                 password: true;
                                 text <=> root.confirm-password;
                                 disabled: root.loading;
                                 error: password != "" && confirm-password != "" && !passwords-match;
-                                error-message: "Passwords do not match";
+                                error-message: @tr("Passwords do not match");
                                 edited(text) => { root.clear-error(); }
                             }
 
                             Button {
-                                text: "Continue";
+                                text: @tr("Continue");
                                 variant: "primary";
                                 disabled: password == "" || !passwords-match || password-strength < 2;
                                 clicked => { current-step = 3; }
@@ -471,7 +471,7 @@ export component RegisterPage inherits Rectangle {
                             spacing: Spacing.md;
                             
                             Text {
-                                text: "Create recovery PIN";
+                                text: @tr("Create recovery PIN");
                                 color: Colors.text-primary;
                                 font-size: Typography.xl;
                                 font-weight: Typography.bold;
@@ -479,7 +479,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Text {
-                                text: "Your PIN protects your encryption key backup. You'll need it to recover messages if you lose this device.";
+                                text: @tr("Your PIN protects your encryption key backup. You'll need it to recover messages if you lose this device.");
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
@@ -492,7 +492,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Input {
-                                placeholder: "Create a PIN (8+ characters)";
+                                placeholder: @tr("Create a PIN (8+ characters)");
                                 password: true;
                                 text <=> root.pin;
                                 disabled: root.loading;
@@ -510,8 +510,8 @@ export component RegisterPage inherits Rectangle {
                             // PIN strength (3 segments: weak/fair/strong)
                             if root.pin-strength > 0: HorizontalLayout {
                                 accessible-role: text;
-                                accessible-label: "PIN strength: " + (root.visible-pin-strength == 1 ? "Weak" :
-                                    root.visible-pin-strength == 2 ? "Fair" : "Strong");
+                                accessible-label: root.visible-pin-strength == 1 ? @tr("PIN strength: Weak") :
+                                    root.visible-pin-strength == 2 ? @tr("PIN strength: Fair") : @tr("PIN strength: Strong");
                                 spacing: Spacing.xs;
                                 height: 8px;
                                 Rectangle {
@@ -530,17 +530,17 @@ export component RegisterPage inherits Rectangle {
 
                             // Confirm PIN
                             Input {
-                                placeholder: "Confirm PIN";
+                                placeholder: @tr("Confirm PIN");
                                 password: true;
                                 text <=> root.confirm-pin;
                                 disabled: root.loading;
                                 error: pin != "" && confirm-pin != "" && !root.pins-match;
-                                error-message: "PINs do not match";
+                                error-message: @tr("PINs do not match");
                                 edited(text) => { root.clear-error(); }
                             }
 
                             Button {
-                                text: "Continue";
+                                text: @tr("Continue");
                                 variant: "primary";
                                 disabled: pin == "" || !pins-match || root.pin-error != "";
                                 clicked => { current-step = 4; }
@@ -552,7 +552,7 @@ export component RegisterPage inherits Rectangle {
                             spacing: Spacing.md;
                             
                             Text {
-                                text: "Finalize registration";
+                                text: @tr("Finalize registration");
                                 color: Colors.text-primary;
                                 font-size: Typography.xl;
                                 font-weight: Typography.bold;
@@ -562,13 +562,13 @@ export component RegisterPage inherits Rectangle {
                             // Direct endpoint configuration. Shield registers over Tor to
                             // the pinned onion service, so it has no URL to choose (§134).
                             if !AnonMode.enabled: Text {
-                                text: "Direct server URL";
+                                text: @tr("Direct server URL");
                                 color: Colors.text-secondary;
                                 font-size: Typography.sm;
                             }
 
                             if !AnonMode.enabled: Input {
-                                placeholder: "Direct server URL";
+                                placeholder: @tr("Direct server URL");
                                 text <=> root.server-url;
                                 disabled: root.loading;
                                 edited(text) => { root.clear-error(); }
@@ -583,7 +583,7 @@ export component RegisterPage inherits Rectangle {
                             // baked URL. A dev targeting localhost edits the field.
 
                             if AnonMode.enabled: Text {
-                                text: "Shield is on: registration goes over Tor to the configured onion service.";
+                                text: @tr("Shield is on: registration goes over Tor to the configured onion service.");
                                 color: Colors.text-muted;
                                 font-size: Typography.xxs;
                                 wrap: word-wrap;
@@ -599,7 +599,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Button {
-                                text: loading ? "" : "Create account";
+                                text: loading ? "" : @tr("Create account");
                                 variant: "primary";
                                 loading: root.loading;
                                 disabled: root.loading || server-url == "";
@@ -614,14 +614,14 @@ export component RegisterPage inherits Rectangle {
                         if current-step == 1: HorizontalLayout {
                             alignment: center;
                             spacing: Spacing.xs;
-                            Text { text: "Already have an account?"; color: Colors.text-secondary; font-size: Typography.sm; }
+                            Text { text: @tr("Already have an account?"); color: Colors.text-secondary; font-size: Typography.sm; }
                             Text {
-                                text: "Sign in";
+                                text: @tr("Sign in");
                                 color: Colors.primary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
                                 accessible-role: button;
-                                accessible-label: "Sign in";
+                                accessible-label: @tr("Sign in");
                                 accessible-action-default => { root.go-to-login(); }
                                 KeyFocus { activate => { root.go-to-login(); } }
                                 TouchArea { clicked => { root.go-to-login(); } }

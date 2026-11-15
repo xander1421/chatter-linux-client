@@ -122,8 +122,8 @@ export component IncomingCallModal inherits Rectangle {
                     // A channel call rings with its channel: answering joins
                     // a call already under way rather than starting one.
                     text: call-data.channel-name != ""
-                        ? (call-data.is-video-call ? "Join group video call" : "Join group voice call")
-                        : (call-data.is-video-call ? "Incoming video call..." : "Incoming voice call...");
+                        ? (call-data.is-video-call ? @tr("Join group video call") : @tr("Join group voice call"))
+                        : (call-data.is-video-call ? @tr("Incoming video call...") : @tr("Incoming voice call..."));
                     font-size: Typography.sm;
                     color: Colors.text-secondary;
                     horizontal-alignment: center;
@@ -143,7 +143,7 @@ export component IncomingCallModal inherits Rectangle {
                     VerticalLayout {
                         padding: Spacing.sm;
                         Text {
-                            text: "Accepting will end your current call";
+                            text: @tr("Accepting will end your current call");
                             font-size: Typography.xs;
                             color: Colors.error;
                             font-weight: Typography.semibold;
@@ -191,7 +191,7 @@ export component IncomingCallModal inherits Rectangle {
                     animate transform-scale-y { duration: decline-hover.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
-                    accessible-label: "Decline call";
+                    accessible-label: @tr("Decline call");
                     accessible-action-default => { if root.show { root.decline-call(); } }
                     KeyFocus { border-radius: parent.border-radius; activate => { if root.show { root.decline-call(); } } }
 
@@ -230,7 +230,7 @@ export component IncomingCallModal inherits Rectangle {
                     animate transform-scale-y { duration: accept-hover.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
-                    accessible-label: "Accept call";
+                    accessible-label: @tr("Accept call");
                     accessible-action-default => { if root.show { root.accept-call(); } }
                     KeyFocus { border-radius: parent.border-radius; activate => { if root.show { root.accept-call(); } } }
 

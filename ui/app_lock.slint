@@ -56,7 +56,7 @@ export component LockScreen inherits Rectangle {
 
         Text {
             horizontal-alignment: center;
-            text: "Chatter is locked";
+            text: @tr("Chatter is locked");
             color: Colors.text-primary;
             font-size: Typography.xl;
             font-weight: Typography.semibold;
@@ -66,7 +66,7 @@ export component LockScreen inherits Rectangle {
         // under the on-screen keyboard and the wrong PIN showed no text.
         Text {
             horizontal-alignment: center;
-            text: AppLockPane.error != "" ? AppLockPane.error : "Enter your app lock PIN";
+            text: AppLockPane.error != "" ? AppLockPane.error : @tr("Enter your app lock PIN");
             color: AppLockPane.error != "" ? Colors.error : Colors.text-muted;
             font-size: Typography.sm;
             wrap: word-wrap;
@@ -79,7 +79,7 @@ export component LockScreen inherits Rectangle {
                 spacing: Spacing.md;
 
                 pin-field := Input {
-                    placeholder: "PIN";
+                    placeholder: @tr("PIN");
                     password: true;
                     text <=> AppLockPane.pin;
                     disabled: AppLockPane.verifying;
@@ -93,7 +93,7 @@ export component LockScreen inherits Rectangle {
                 }
 
                 Button {
-                    text: AppLockPane.verifying ? "" : "Unlock";
+                    text: AppLockPane.verifying ? "" : @tr("Unlock");
                     variant: "primary";
                     loading: AppLockPane.verifying;
                     disabled: AppLockPane.verifying || AppLockPane.pin == "";
@@ -127,7 +127,7 @@ export component AppLockSettings inherits Card {
         spacing: Spacing.sm;
 
         Text {
-            text: "App lock";
+            text: @tr("App lock");
             color: Colors.text-primary;
             font-size: Typography.sm;
             font-weight: Typography.medium;
@@ -135,26 +135,26 @@ export component AppLockSettings inherits Card {
 
         Caption {
             text: AppLockPane.enabled
-                ? "On. Chatter asks for your PIN when it opens and after it has been in the background. Notifications show no sender or text while locked."
-                : "Ask for a PIN whenever Chatter opens. This PIN stays on this device and is separate from your account PIN.";
+                ? @tr("On. Chatter asks for your PIN when it opens and after it has been in the background. Notifications show no sender or text while locked.")
+                : @tr("Ask for a PIN whenever Chatter opens. This PIN stays on this device and is separate from your account PIN.");
         }
 
         if !AppLockPane.enabled: VerticalLayout {
             spacing: Spacing.sm;
             Input {
-                placeholder: "New PIN (6 or more characters)";
+                placeholder: @tr("New PIN (6 or more characters)");
                 password: true;
                 text <=> AppLockPane.new-pin;
                 disabled: AppLockPane.busy;
             }
             Input {
-                placeholder: "Confirm PIN";
+                placeholder: @tr("Confirm PIN");
                 password: true;
                 text <=> AppLockPane.confirm-pin;
                 disabled: AppLockPane.busy;
             }
             Button {
-                text: AppLockPane.busy ? "" : "Turn on app lock";
+                text: AppLockPane.busy ? "" : @tr("Turn on app lock");
                 variant: "primary";
                 loading: AppLockPane.busy;
                 disabled: AppLockPane.busy || AppLockPane.new-pin == "";
@@ -166,16 +166,16 @@ export component AppLockSettings inherits Card {
             spacing: Spacing.sm;
 
             Text {
-                text: "Lock after leaving Chatter";
+                text: @tr("Lock after leaving Chatter");
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
             }
 
             for opt in [
-                { key: "immediate", label: "Immediately" },
-                { key: "one_minute", label: "After 1 minute" },
-                { key: "five_minutes", label: "After 5 minutes" },
-                { key: "thirty_minutes", label: "After 30 minutes" },
+                { key: "immediate", label: @tr("Immediately") },
+                { key: "one_minute", label: @tr("After 1 minute") },
+                { key: "five_minutes", label: @tr("After 5 minutes") },
+                { key: "thirty_minutes", label: @tr("After 30 minutes") },
             ]: Rectangle {
                 property <bool> selected: AppLockPane.timeout == opt.key;
                 height: Spacing.touch-target-min;
@@ -223,7 +223,7 @@ export component AppLockSettings inherits Card {
             }
 
             Text {
-                text: "Duress PIN";
+                text: @tr("Duress PIN");
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.medium;
@@ -231,25 +231,25 @@ export component AppLockSettings inherits Card {
 
             Caption {
                 text: AppLockPane.duress-enabled
-                    ? "Set. Entering it on the lock screen permanently erases everything Chatter keeps on this device — keys, messages, attachments, mesh data — and Chatter starts as if newly installed. Your account stays on the server."
-                    : "Optional. A second PIN that, entered on the lock screen, permanently erases everything Chatter keeps on this device and starts it as if newly installed. Your account stays on the server. It must differ from your lock PIN and your account PIN.";
+                    ? @tr("Set. Entering it on the lock screen permanently erases everything Chatter keeps on this device — keys, messages, attachments, mesh data — and Chatter starts as if newly installed. Your account stays on the server.")
+                    : @tr("Optional. A second PIN that, entered on the lock screen, permanently erases everything Chatter keeps on this device and starts it as if newly installed. Your account stays on the server. It must differ from your lock PIN and your account PIN.");
             }
 
             if !AppLockPane.duress-enabled: Input {
-                placeholder: "Duress PIN";
+                placeholder: @tr("Duress PIN");
                 password: true;
                 text <=> AppLockPane.duress-pin;
                 disabled: AppLockPane.busy;
             }
             if !AppLockPane.duress-enabled: Input {
-                placeholder: "Confirm duress PIN";
+                placeholder: @tr("Confirm duress PIN");
                 password: true;
                 text <=> AppLockPane.duress-confirm;
                 disabled: AppLockPane.busy;
             }
 
             Input {
-                placeholder: "Current app lock PIN";
+                placeholder: @tr("Current app lock PIN");
                 password: true;
                 text <=> AppLockPane.current-pin;
                 disabled: AppLockPane.busy;
@@ -258,7 +258,7 @@ export component AppLockSettings inherits Card {
             HorizontalLayout {
                 spacing: Spacing.sm;
                 if !AppLockPane.duress-enabled: Button {
-                    text: "Set duress PIN";
+                    text: @tr("Set duress PIN");
                     variant: "secondary";
                     loading: AppLockPane.busy;
                     disabled: AppLockPane.busy || AppLockPane.current-pin == "" || AppLockPane.duress-pin == "";
@@ -267,14 +267,14 @@ export component AppLockSettings inherits Card {
                     }
                 }
                 if AppLockPane.duress-enabled: Button {
-                    text: "Remove duress PIN";
+                    text: @tr("Remove duress PIN");
                     variant: "secondary";
                     loading: AppLockPane.busy;
                     disabled: AppLockPane.busy || AppLockPane.current-pin == "";
                     clicked => { AppLockPane.clear-duress(AppLockPane.current-pin); }
                 }
                 Button {
-                    text: "Turn off app lock";
+                    text: @tr("Turn off app lock");
                     variant: "danger";
                     disabled: AppLockPane.busy || AppLockPane.current-pin == "";
                     clicked => { AppLockPane.disable(AppLockPane.current-pin); }

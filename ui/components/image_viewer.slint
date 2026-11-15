@@ -38,12 +38,12 @@ export component MediaActions inherits HorizontalLayout {
     callback next();
     alignment: center;
     spacing: Spacing.xxs;
-    IconAction { size: root.action-size; icon: Icons.download; label: "Download"; clicked => { root.download(); } }
-    if root.can-copy: IconAction { size: root.action-size; icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
-    IconAction { size: root.action-size; icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
-    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
+    IconAction { size: root.action-size; icon: Icons.download; label: @tr("Download"); clicked => { root.download(); } }
+    if root.can-copy: IconAction { size: root.action-size; icon: Icons.copy; label: @tr("Copy image"); clicked => { root.copy-image(); } }
+    IconAction { size: root.action-size; icon: Icons.folder; label: @tr("Open downloads"); clicked => { root.open-downloads(); } }
+    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-left; label: @tr("Previous media"); enabled: root.has-previous; clicked => { root.previous(); } }
     if root.has-previous || root.has-next: Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
-    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
+    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-right; label: @tr("Next media"); enabled: root.has-next; clicked => { root.next(); } }
 }
 
 export component ImageViewer inherits Rectangle {

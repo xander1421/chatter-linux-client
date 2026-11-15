@@ -88,8 +88,10 @@ impl SystemTray {
 
         // Create menu
         let menu = Menu::new();
-        let open_item = MenuItem::new(&format!("Open {}", APP_DISPLAY_NAME), true, None);
-        let quit_item = MenuItem::new("Quit", true, None);
+        let open_label = chatter_i18n::trf("Open {}", &[APP_DISPLAY_NAME]);
+        let quit_label = chatter_i18n::tr("Quit");
+        let open_item = MenuItem::new(&open_label, true, None);
+        let quit_item = MenuItem::new(&quit_label, true, None);
         if let Err(e) = menu.append(&open_item) {
             tracing::warn!("Failed to add Open menu item: {}", e);
         }

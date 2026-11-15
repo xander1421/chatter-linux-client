@@ -46,7 +46,7 @@ export component InviteMemberModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Invite members";
+        title: @tr("Invite members");
         modal-width: 480px;
         max-modal-height: 640px;
         fill-height: true;
@@ -66,7 +66,7 @@ export component InviteMemberModal inherits Rectangle {
                 spacing: Spacing.xs;
                 alignment: start;
                 Text {
-                    text: "Invite to";
+                    text: @tr("Invite to");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     vertical-alignment: center;
@@ -78,7 +78,7 @@ export component InviteMemberModal inherits Rectangle {
                         width: 16px;
                         height: 16px;
                         colorize: Colors.text-secondary;
-                        accessible-label: root.private-channel ? "Private channel" : "Public channel";
+                        accessible-label: root.private-channel ? @tr("Private channel") : @tr("Public channel");
                     }
                 }
                 Text {
@@ -93,7 +93,7 @@ export component InviteMemberModal inherits Rectangle {
             // Search input
             Input {
                 vertical-stretch: 0;
-                placeholder: "Search by name or username...";
+                placeholder: @tr("Search by name or username...");
                 text <=> root.search-text;
                 edited(q) => { root.search-changed(q); }
             }
@@ -183,7 +183,7 @@ export component InviteMemberModal inherits Rectangle {
 
                                     member-text := Text {
                                         x: Spacing.sm;
-                                        text: user.banned ? "Banned" : "Member";
+                                        text: user.banned ? @tr("Banned") : @tr("Member");
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         vertical-alignment: center;
@@ -241,7 +241,7 @@ export component InviteMemberModal inherits Rectangle {
 
                 // Cancel button
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
 
                     clicked => {
@@ -252,9 +252,8 @@ export component InviteMemberModal inherits Rectangle {
                 // Invite button
                 Button {
                     text: root.loading ? "" :
-                        (root.selected-count == 0 ? "Invite" :
-                         root.selected-count == 1 ? "Invite 1 user" :
-                         "Invite " + root.selected-count + " users");
+                        (root.selected-count == 0 ? @tr("Invite") :
+                         @tr("Invite {n} user" | "Invite {n} users" % root.selected-count));
                     variant: "primary";
                     disabled: root.selected-count == 0 || root.loading;
                     loading: root.loading;

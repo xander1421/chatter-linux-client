@@ -56,7 +56,7 @@ export component MeshPeerSheet inherits Rectangle {
 
     ModalContainer {
         show: root.show-modal;
-        accessible-title: "Mesh peer";
+        accessible-title: @tr("Mesh peer");
         modal-width: 500px;
         max-modal-height: 760px;
         fill-height: true;
@@ -67,9 +67,9 @@ export component MeshPeerSheet inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 height: Spacing.touch-target-min;
-                                Text { text: "Contact"; color: Colors.text-primary; font-size: Typography.lg;
+                                Text { text: @tr("Contact"); color: Colors.text-primary; font-size: Typography.lg;
                     font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
-                Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
+                Button { text: @tr("Done"); variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
             }
             Flickable {
                 width: 100%; vertical-stretch: 1;
@@ -99,21 +99,21 @@ export component MeshPeerSheet inherits Rectangle {
                                 Image { source: Icons.shield; width: Spacing.button-icon;
                                     height: Spacing.button-icon; colorize: Colors.success; }
                             }
-                            Text { text: root.peer-verified ? "Verified" : MeshGlobal.sheet-binding-label;
+                            Text { text: root.peer-verified ? @tr("Verified") : MeshGlobal.sheet-binding-label;
                                 color: root.peer-verified ? Colors.success : Colors.text-secondary;
                                 font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
                         }
                     }
                     HorizontalLayout {
                         alignment: center; spacing: Spacing.sm;
-                        PeerAction { icon: Icons.message-circle; caption: "Message";
+                        PeerAction { icon: Icons.message-circle; caption: @tr("Message");
                             disabled: MeshGlobal.sheet-peer-id == "";
                             clicked => { MeshGlobal.open-peer-dm(MeshGlobal.sheet-peer-id); } }
                         PeerAction { icon: MeshGlobal.sheet-peer-muted ? Icons.bell : Icons.bell-off;
-                            caption: MeshGlobal.sheet-peer-muted ? "Unmute" : "Mute";
+                            caption: MeshGlobal.sheet-peer-muted ? @tr("Unmute") : @tr("Mute");
                             disabled: MeshGlobal.sheet-peer-id == "";
                             clicked => { MeshGlobal.toggle-peer-mute(MeshGlobal.sheet-peer-id); } }
-                        PeerAction { icon: Icons.shield; caption: "Verify";
+                        PeerAction { icon: Icons.shield; caption: @tr("Verify");
                             disabled: MeshGlobal.sheet-peer-id == "";
                             clicked => { root.verify-open = !root.verify-open; } }
                     }
@@ -131,7 +131,7 @@ export component MeshPeerSheet inherits Rectangle {
                                     horizontal-alignment: center; wrap: word-wrap; letter-spacing: 1px; }
                                 Text {
                                     width: parent.width;
-                                    text: "Compare these numbers in person with " + MeshGlobal.sheet-peer-name + ".";
+                                    text: @tr("Compare these numbers in person with {}.", MeshGlobal.sheet-peer-name);
                                     color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
                                     horizontal-alignment: center; }
                             }
@@ -139,27 +139,27 @@ export component MeshPeerSheet inherits Rectangle {
                         Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
-                                SettingsRow { icon: Icons.image; title: "Show my QR code"; touch: root.touch;
+                                SettingsRow { icon: Icons.image; title: @tr("Show my QR code"); touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.show-binding-qr(MeshGlobal.sheet-peer-id); } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.search; title: "Scan their code"; touch: root.touch;
+                                SettingsRow { icon: Icons.search; title: @tr("Scan their code"); touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.open-binding-scanner(MeshGlobal.sheet-peer-id); } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.shield; title: "Verify known contact"; touch: root.touch;
+                                SettingsRow { icon: Icons.shield; title: @tr("Verify known contact"); touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.verify-known-contact(MeshGlobal.sheet-peer-id); } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.send; title: "Share my Chatter identity"; touch: root.touch;
+                                SettingsRow { icon: Icons.send; title: @tr("Share my Chatter identity"); touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.share-identity(MeshGlobal.sheet-peer-id); } }
                                 if root.active-dm: Rectangle { height: 1px; background: Colors.divider; }
                                 if root.active-dm: ToggleRow {
                                     checked <=> MeshGlobal.active-signal-enabled;
-                                    accessible-text: "Use Signal encryption";
+                                    accessible-text: @tr("Use Signal encryption");
                                     row-padding: Spacing.md;
-                                    Text { text: "Use Signal encryption"; color: Colors.text-primary;
+                                    Text { text: @tr("Use Signal encryption"); color: Colors.text-primary;
                                         font-size: Typography.base; }
                                     toggled(value) => { MeshGlobal.toggle-signal-mesh(MeshGlobal.active-scope); }
                                 }
@@ -180,24 +180,24 @@ export component MeshPeerSheet inherits Rectangle {
                         Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
-                                Input { placeholder: "Paste their QR code"; text <=> root.qr-text;
+                                Input { placeholder: @tr("Paste their QR code"); text <=> root.qr-text;
                                     control-height: Spacing.touch-target-min; horizontal-stretch: 1;
                                     accepted(value) => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, value); root.qr-text = ""; } }
-                                Button { text: "Verify"; variant: "ghost"; touch: root.touch;
+                                Button { text: @tr("Verify"); variant: "ghost"; touch: root.touch;
                                     disabled: root.qr-text == "" || MeshGlobal.sheet-peer-id == "";
                                     clicked => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, root.qr-text); root.qr-text = ""; } }
                             }
                         }
-                        Text { text: MeshGlobal.sheet-fingerprint == "" ? "Waiting for encrypted link" : "Their fingerprint: " + MeshGlobal.sheet-fingerprint;
+                        Text { text: MeshGlobal.sheet-fingerprint == "" ? @tr("Waiting for encrypted link") : @tr("Their fingerprint: {}", MeshGlobal.sheet-fingerprint);
                             color: Colors.text-muted; font-size: Typography.xs; font-family: Typography.font-family-mono;
                             wrap: char-wrap; }
-                        Text { text: "Your fingerprint: " + MeshGlobal.sheet-own-fingerprint;
+                        Text { text: @tr("Your fingerprint: {}", MeshGlobal.sheet-own-fingerprint);
                             color: Colors.text-muted; font-size: Typography.xs; font-family: Typography.font-family-mono;
                             wrap: char-wrap; }
                     }
                     if MeshGlobal.private-invitable-channels.length > 0: VerticalLayout {
                         spacing: Spacing.sm;
-                        Text { text: "ADD TO GROUP"; color: Colors.text-muted; font-size: Typography.xs;
+                        Text { text: @tr("ADD TO GROUP"); color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
@@ -226,7 +226,7 @@ export component MeshPeerSheet inherits Rectangle {
                                                     horizontal-alignment: center; vertical-alignment: center; }
                                                 qr-touch := TouchArea {
                                                     mouse-cursor: pointer; accessible-role: button;
-                                                    accessible-label: "Invite to " + channel.name + " with QR";
+                                                    accessible-label: @tr("Invite to {} with QR", channel.name);
                                                     clicked => { MeshGlobal.invite-private-channel(channel.id, MeshGlobal.sheet-peer-id); }
                                                 }
                                             }
@@ -236,11 +236,11 @@ export component MeshPeerSheet inherits Rectangle {
                                             Rectangle {
                                                 width: 72px; height: 30px; border-radius: Spacing.radius-full;
                                                 background: Colors.action-fill;
-                                                Text { text: "Invite"; color: Colors.on-action; font-size: Typography.sm; font-weight: 600;
+                                                Text { text: @tr("Invite"); color: Colors.on-action; font-size: Typography.sm; font-weight: 600;
                                                     horizontal-alignment: center; vertical-alignment: center; }
                                                 TouchArea {
                                                     mouse-cursor: pointer; accessible-role: button;
-                                                    accessible-label: "Invite to " + channel.name;
+                                                    accessible-label: @tr("Invite to {}", channel.name);
                                                     clicked => { MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); }
                                                 }
                                             }
@@ -265,12 +265,12 @@ export component MeshPeerSheet inherits Rectangle {
                             && member.peer-id == MeshGlobal.sheet-peer-id;
                         height: self.visible ? Spacing.touch-target-min : 0px;
                         background: Colors.surface-section; border-radius: Spacing.radius-lg;
-                        SettingsRow { icon: Icons.trash; title: "Remove from " + MeshGlobal.active-title;
+                        SettingsRow { icon: Icons.trash; title: @tr("Remove from {}", MeshGlobal.active-title);
                             destructive: true; show-chevron: false; touch: root.touch;
                             clicked => { MeshGlobal.private-remove-pending = MeshGlobal.sheet-peer-id; } }
                     }
                     Rectangle { height: block-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
-                        block-row := SettingsRow { icon: Icons.slash; title: MeshGlobal.sheet-peer-blocked ? "Unblock" : "Block";
+                        block-row := SettingsRow { icon: Icons.slash; title: MeshGlobal.sheet-peer-blocked ? @tr("Unblock") : @tr("Block");
                             destructive: !MeshGlobal.sheet-peer-blocked; show-chevron: false; touch: root.touch;
                             clickable: MeshGlobal.sheet-peer-id != "";
                             clicked => { MeshGlobal.toggle-peer-block(MeshGlobal.sheet-peer-id); } }
@@ -295,9 +295,9 @@ export component MeshPeerSheet inherits Rectangle {
                 remove-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
                     Text {
                         width: parent.width;
-                        text: "Remove " + MeshGlobal.sheet-peer-name + " from " + MeshGlobal.active-title + "? The group key will rotate.";
+                        text: @tr("Remove {0} from {1}? The group key will rotate.", MeshGlobal.sheet-peer-name, MeshGlobal.active-title);
                         color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
-                    Button { text: "Remove and rotate key"; variant: "destructive"; touch: root.touch;
+                    Button { text: @tr("Remove and rotate key"); variant: "destructive"; touch: root.touch;
                         clicked => { MeshGlobal.private-remove-pending = "";
                             MeshGlobal.remove-private-member(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); } }
                 }
@@ -305,7 +305,7 @@ export component MeshPeerSheet inherits Rectangle {
             Rectangle { height: remove-cancel.preferred-height;
                 background: Colors.surface-section; border-radius: Spacing.radius-lg;
                 remove-cancel := VerticalLayout { padding: Spacing.sm;
-                    Button { text: "Cancel"; variant: "ghost"; touch: root.touch;
+                    Button { text: @tr("Cancel"); variant: "ghost"; touch: root.touch;
                         clicked => { MeshGlobal.private-remove-pending = ""; } }
                 }
             }

@@ -112,7 +112,7 @@ export component MembershipBar inherits Rectangle {
                     animate transform-scale-y { duration: resume-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
                     resume-label := Text {
-                        text: "Resume sending";
+                        text: @tr("Resume sending");
                         color: Colors.text-primary;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
@@ -124,7 +124,7 @@ export component MembershipBar inherits Rectangle {
                     resume-touch := TouchArea {
                         mouse-cursor: pointer;
                         accessible-role: button;
-                        accessible-label: "Resume sending in this channel";
+                        accessible-label: @tr("Resume sending in this channel");
                         accessible-action-default => { MembershipGlobal.acknowledge-fork(root.channel-id); }
                         KeyFocus { activate => { MembershipGlobal.acknowledge-fork(root.channel-id); } }
                         clicked => { MembershipGlobal.acknowledge-fork(root.channel-id); }
@@ -147,7 +147,7 @@ export component MembershipBar inherits Rectangle {
                 animate transform-scale-y { duration: details-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
                 details-label := Text {
-                    text: root.expanded ? "Hide" : "Details";
+                    text: root.expanded ? @tr("Hide") : @tr("Details");
                     color: Colors.text-primary;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -159,7 +159,7 @@ export component MembershipBar inherits Rectangle {
                 details-touch := TouchArea {
                     mouse-cursor: pointer;
                     accessible-role: button;
-                    accessible-label: root.expanded ? "Hide membership details" : "Show membership details";
+                    accessible-label: root.expanded ? @tr("Hide membership details") : @tr("Show membership details");
                     accessible-action-default => { root.expanded = !root.expanded; }
                     KeyFocus { activate => { root.expanded = !root.expanded; } }
                     clicked => { root.expanded = !root.expanded; }

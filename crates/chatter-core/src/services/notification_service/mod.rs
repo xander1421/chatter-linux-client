@@ -195,22 +195,23 @@ impl NotificationService {
     ) -> (String, String) {
         let level = self.effective_detail_level();
 
+        let new_message = chatter_i18n::tr("New message");
+        let someone = || chatter_i18n::tr("Someone");
         match (level, private) {
-            // Sealed sender / secret chat: nothing but "New message", ever
-            (_, true) => ("Chatter".to_string(), "New message".to_string()),
+            // Sealed sender / secret chat: nothing but "New message", ever.
+            // "Chatter" is the product name.
+            (_, true) => ("Chatter".to_string(), new_message),
             // None: maximum privacy
-            (NotificationDetailLevel::None, false) => {
-                ("Chatter".to_string(), "New message".to_string())
-            }
+            (NotificationDetailLevel::None, false) => ("Chatter".to_string(), new_message),
             // Name only: show sender, hide content
             (NotificationDetailLevel::NameOnly, false) => (
-                sender_name.unwrap_or("Someone").to_string(),
-                "New message".to_string(),
+                sender_name.map(str::to_owned).unwrap_or_else(someone),
+                new_message,
             ),
-            // Name and message: show both
+            // Name and message: show both. The preview is message content.
             (NotificationDetailLevel::NameAndMessage, false) => (
-                sender_name.unwrap_or("Someone").to_string(),
-                message_preview.unwrap_or("New message").to_string(),
+                sender_name.map(str::to_owned).unwrap_or_else(someone),
+                message_preview.map(str::to_owned).unwrap_or(new_message),
             ),
         }
     }
@@ -322,7 +323,8 @@ impl NotificationService {
     ) -> Result<(), SystemError> {
         match self.effective_detail_level() {
             NotificationDetailLevel::None => {
-                self.deliver(|sink| sink.show_incoming_call(call_id, "Chatter", "Incoming call"))
+                let body = chatter_i18n::tr("Incoming call");
+                self.deliver(|sink| sink.show_incoming_call(call_id, "Chatter", &body))
             }
             _ => self.deliver(|sink| sink.show_incoming_call(call_id, title, body)),
         }

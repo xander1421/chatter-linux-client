@@ -67,7 +67,7 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool,
                     } else {
                         global.set_state("idle".into());
                         if manual {
-                            global.set_notice("You're up to date".into());
+                            global.set_notice(chatter_i18n::tr("You're up to date").into());
                         }
                     }
                 }
@@ -100,12 +100,12 @@ pub extern "system" fn Java_com_chatter_client_UpdateInstallReceiver_nativeOnIns
         let reason: String = reason.try_to_string(&env)?.into();
         let weak = INSTALL_WINDOW.lock().ok().and_then(|guard| guard.clone());
         if let Some(weak) = weak {
-            let reason = if reason.is_empty() {
-                "Update install failed".to_string()
+            let message = if reason.is_empty() {
+                chatter_i18n::tr("Update not installed: Update install failed")
             } else {
-                reason
+                chatter_i18n::trf("Update not installed: {}", &[&reason])
             };
-            show_error(weak, format!("Update not installed: {reason}"));
+            show_error(weak, message);
         }
         Ok(())
     })
@@ -181,7 +181,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 let path = staged.lock().ok().and_then(|guard| guard.clone());
                 if let Some(path) = path {
                     global.set_state("downloading".into());
-                    global.set_progress("Starting verified update…".into());
+                    global.set_progress(chatter_i18n::tr("Starting verified update…").into());
                     crate::rt_handle().spawn(async move {
                         match tokio::task::spawn_blocking(move ||
                             update::restart_into_linux_update(&path)).await
@@ -193,7 +193,10 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                 });
                             }
                             Ok(Err(error)) => show_error(weak, error),
-                            Err(_) => show_error(weak, "Could not restart into the verified update".into()),
+                            Err(_) => show_error(
+                                weak,
+                                chatter_i18n::tr("Could not restart into the verified update"),
+                            ),
                         }
                     });
                 }
@@ -215,7 +218,10 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 Ok(true) => {
                     global.set_state("confirm-cellular".into());
                     global.set_notice(
-                        "Large download on cellular. Tap Download now to continue.".into(),
+                        chatter_i18n::tr(
+                            "Large download on cellular. Tap Download now to continue.",
+                        )
+                        .into(),
                     );
                     return;
                 }
@@ -231,7 +237,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         tracing::info!(version = %manifest_before_download.version_name, size = manifest_before_download.size, retry, "update download requested");
         global.set_error("".into());
         global.set_notice("".into());
-        global.set_progress("Downloading and verifying…".into());
+        global.set_progress(chatter_i18n::tr("Downloading and verifying…").into());
         let size = manifest_before_download.size;
         let download_manifest = manifest_before_download;
         crate::rt_handle().spawn(async move {
@@ -239,7 +245,8 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             let progress_window = weak.clone();
             let progress_task = tokio::spawn(async move {
                 while let Some(bytes) = receiver.recv().await {
-                    let label = format!("Downloading {}%", bytes.saturating_mul(100) / size);
+                    let percent = bytes.saturating_mul(100) / size;
+                    let label = chatter_i18n::trf("Downloading {}%", &[&percent]);
                     let weak = progress_window.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
@@ -296,7 +303,9 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                 });
                             }
                             Ok(Err(error)) => { tracing::warn!(kind = %error, "Linux update staging failed"); show_error(weak, error) },
-                            Err(_) => show_error(weak, "Could not stage Linux update".into()),
+                            Err(_) => {
+                                show_error(weak, chatter_i18n::tr("Could not stage Linux update"))
+                            }
                         }
                     }
                 }

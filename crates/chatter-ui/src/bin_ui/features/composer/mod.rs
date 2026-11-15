@@ -94,8 +94,10 @@ fn wire_persistence_retry(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) -> s
 
 fn show_persistence_failure(w: &MainWindow) {
     w.set_toast_message(
-        "Couldn't save drafts on this device. New changes are kept only while the app is open."
-            .into(),
+        chatter_i18n::tr(
+            "Couldn't save drafts on this device. New changes are kept only while the app is open.",
+        )
+        .into(),
     );
     w.set_toast_variant("error".into());
     w.set_toast_visible(true);

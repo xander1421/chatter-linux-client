@@ -80,7 +80,7 @@ export component MessageListEmpty inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.sm;
                         Text {
-                            text: root.saved-messages ? "Your saved messages" : "No messages yet";
+                            text: root.saved-messages ? @tr("Your saved messages") : @tr("No messages yet");
                             color: Colors.text-primary;
                             font-size: Typography.lg;
                             font-weight: Typography.medium;
@@ -89,8 +89,8 @@ export component MessageListEmpty inherits Rectangle {
                             min-width: 0px;
                         }
                         Text {
-                            text: root.saved-messages ? "Forward messages here or write notes to yourself"
-                                : "Write a message to start the conversation";
+                            text: root.saved-messages ? @tr("Forward messages here or write notes to yourself")
+                                : @tr("Write a message to start the conversation");
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             horizontal-alignment: center;

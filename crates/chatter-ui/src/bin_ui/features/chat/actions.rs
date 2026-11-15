@@ -331,7 +331,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Android before 13 shows nothing when the clipboard changes, and
             // desktop never does: say so, as Telegram and Signal do.
             run_ui!(weak, |w| {
-                w.set_toast_message("Copied".into());
+                w.set_toast_message(chatter_i18n::tr("Copied").into());
                 w.set_toast_variant("success".into());
                 w.set_toast_visible(true);
             });
@@ -424,18 +424,18 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     ui_ctx.runtime_handle().spawn(async move {
                         let result = async {
                             if client.auth_snapshot().session_revision != revision {
-                                return Err("Session changed".to_string());
+                                return Err(chatter_i18n::tr("Session changed"));
                             }
                             if attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded {
                                 client.download_attachment_to_filesystem(&att_id).await
-                                    .map_err(|_| "Unable to download attachment".to_string())?;
+                                    .map_err(|_| chatter_i18n::tr("Unable to download attachment"))?;
                             }
                             crate::platform::android::media_export::save_attachment(&client, &att_id, revision)
                         }.await;
                         let _ = weak.upgrade_in_event_loop(move |w| {
                             if client.auth_snapshot().session_revision != revision { return; }
                             let (message, variant) = match result {
-                                Ok(()) => ("Saved to Chatter downloads".to_string(), "success"),
+                                Ok(()) => (chatter_i18n::tr("Saved to Chatter downloads"), "success"),
                                 Err(error) => (error, "error"),
                             };
                             w.set_toast_message(message.into());
@@ -453,14 +453,14 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     ui_ctx.runtime_handle().spawn(async move {
                         let result = async {
                             if client.auth_snapshot().session_revision != revision {
-                                return Err("Session changed".to_string());
+                                return Err(chatter_i18n::tr("Session changed"));
                             }
                             if attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded {
                                 client.download_attachment_to_filesystem(&att_id).await
-                                    .map_err(|_| "Unable to download attachment".to_string())?;
+                                    .map_err(|_| chatter_i18n::tr("Unable to download attachment"))?;
                             }
                             if client.auth_snapshot().session_revision != revision {
-                                return Err("Session changed".to_string());
+                                return Err(chatter_i18n::tr("Session changed"));
                             }
                             crate::bin_ui::features::chat_actions::media_viewer::export(&client, &att_id, false)
                         }.await;

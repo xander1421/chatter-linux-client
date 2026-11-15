@@ -46,7 +46,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Link a new device";
+        title: @tr("Link a new device");
         modal-width: 520px;
         max-modal-height: 640px;
         fill-height: true;
@@ -69,22 +69,22 @@ export component LinkDeviceApproveModal inherits Rectangle {
                     Text {
                         width: parent.width;
                         text: root.can-scan
-                            ? "Scan the QR code on your new device, or paste its link. You'll be asked to confirm with your password or PIN to authorize."
-                            : "Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.";
+                            ? @tr("Scan the QR code on your new device, or paste its link. You'll be asked to confirm with your password or PIN to authorize.")
+                            : @tr("Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         wrap: word-wrap;
                     }
 
                     if root.can-scan: Button {
-                        text: "Scan QR code";
+                        text: @tr("Scan QR code");
                         variant: "secondary";
                         disabled: root.approving;
                         clicked => { root.scan(); }
                     }
 
                     Input {
-                        placeholder: "chatter://link?uuid=…";
+                        placeholder: @tr("chatter://link?uuid=…");
                         text <=> root.link-url;
                         disabled: root.approving;
                         edited(t) => { root.paste-changed(t); }
@@ -101,19 +101,19 @@ export component LinkDeviceApproveModal inherits Rectangle {
                             padding: Spacing.sm;
                             spacing: Spacing.xs;
                             Text {
-                                text: "About to link:";
+                                text: @tr("About to link:");
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                             }
                             Text {
-                                text: root.preview-device-name != "" ? root.preview-device-name : "Unnamed device";
+                                text: root.preview-device-name != "" ? root.preview-device-name : @tr("Unnamed device");
                                 color: Colors.text-primary;
                                 font-size: Typography.base;
                                 font-weight: Typography.medium;
                             }
                             if root.preview-server-url != "": Text {
                                 width: max(0px, parent.width - parent.padding * 2);
-                                text: "Server: " + root.preview-server-url;
+                                text: @tr("Server: {}", root.preview-server-url);
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 wrap: word-wrap;
@@ -129,7 +129,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                             }
                             Text {
                                 width: max(0px, parent.width - parent.padding * 2);
-                                text: "Verify this code matches the new device:";
+                                text: @tr("Verify this code matches the new device:");
                                 color: Colors.text-secondary;
                                 font-size: Typography.xs;
                                 wrap: word-wrap;
@@ -144,7 +144,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                     }
 
                     Input {
-                        placeholder: "Password or PIN";
+                        placeholder: @tr("Password or PIN");
                         password: true;
                         text <=> root.password;
                         disabled: root.approving || !root.preview-ready;
@@ -177,13 +177,13 @@ export component LinkDeviceApproveModal inherits Rectangle {
             HorizontalLayout {
                 spacing: Spacing.sm;
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     disabled: root.approving;
                     clicked => { root.close(); }
                 }
                 Button {
-                    text: root.approving ? "" : "Authorize";
+                    text: root.approving ? "" : @tr("Authorize");
                     variant: "primary";
                     loading: root.approving;
                     disabled: root.approving || !root.preview-ready || root.password == "";

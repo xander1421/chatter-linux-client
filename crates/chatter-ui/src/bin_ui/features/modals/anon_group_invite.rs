@@ -156,7 +156,10 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                                     w.global::<crate::ModalHostState>()
                                         .set_group_invite_error_id(group_id_str);
                                     w.global::<crate::ModalHostState>()
-                                        .set_group_invite_error("Could not join the group. Try again.".into());
+                                        .set_group_invite_error(
+                                            chatter_i18n::tr("Could not join the group. Try again.")
+                                                .into(),
+                                        );
                                 }
                             });
                         }
@@ -204,7 +207,12 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                                 w.global::<crate::ModalHostState>()
                                     .set_group_invite_error_id(group_id_str);
                                 w.global::<crate::ModalHostState>()
-                                    .set_group_invite_error("Could not decline the invitation. Try again.".into());
+                                    .set_group_invite_error(
+                                        chatter_i18n::tr(
+                                            "Could not decline the invitation. Try again.",
+                                        )
+                                        .into(),
+                                    );
                             }
                         }
                     });

@@ -45,8 +45,23 @@ impl FriendCodeConnectionError {
     pub fn user_message(&self) -> String {
         match self {
             Self::FriendRequest(error) => error.user_message(),
-            Self::SecretChat(_) => "Couldn't start the secret chat. Try again.".into(),
-            _ => self.to_string(),
+            Self::InvalidCode => chatter_i18n::tr("This code isn't valid."),
+            Self::UsernameInsteadOfCode => chatter_i18n::tr(
+                "That's a username — ask for a friend code or username link.",
+            ),
+            Self::ServerCodeInShield => chatter_i18n::tr(
+                "Server-managed friend codes can't be used in Shield mode. Ask for a private code.",
+            ),
+            Self::SecretChatUnavailable => {
+                chatter_i18n::tr("Secret chats aren't available on this device.")
+            }
+            Self::NoteTooLong => {
+                chatter_i18n::tr("That note is too long. Shorten it and try again.")
+            }
+            Self::ExistingSecretChat(_) => {
+                chatter_i18n::tr("You already have a secret chat with them.")
+            }
+            Self::SecretChat(_) => chatter_i18n::tr("Couldn't start the secret chat. Try again."),
         }
     }
 }

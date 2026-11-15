@@ -67,7 +67,7 @@ export component CreateSectionModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: root.rename-mode ? "Rename section" : "New section";
+        title: root.rename-mode ? @tr("Rename section") : @tr("New section");
         modal-width: 400px;
 
         close => {
@@ -95,7 +95,7 @@ export component CreateSectionModal inherits Rectangle {
                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                     accessible-role: button;
-                    accessible-label: "Section icon " + root.selected-emoji;
+                    accessible-label: @tr("Section icon {}", root.selected-emoji);
                     accessible-action-default => { root.picker-open = !root.picker-open; }
                     KeyFocus { border-radius: parent.border-radius; activate => { root.picker-open = !root.picker-open; } }
 
@@ -119,7 +119,7 @@ export component CreateSectionModal inherits Rectangle {
                 // Name input
                 name-input := Input {
                     horizontal-stretch: 1;
-                    placeholder: "Section name";
+                    placeholder: @tr("Section name");
                     text <=> root.section-name;
                     // Created on open: the name is the only thing to type. A
                     // rename starts selected, so typing replaces the old name.
@@ -166,7 +166,7 @@ export component CreateSectionModal inherits Rectangle {
                                 : (icon-touch.pressed ? Materials.pressed : icon-touch.has-hover ? Materials.hover : transparent);
                             transform-scale-x: icon-touch.pressed ? 0.82 : 1;
                             accessible-role: button;
-                            accessible-label: "Choose icon " + icon;
+                            accessible-label: @tr("Choose icon {}", icon);
                             accessible-checkable: true;
                             accessible-checked: icon == root.selected-emoji;
                             accessible-action-default => {
@@ -218,14 +218,14 @@ export component CreateSectionModal inherits Rectangle {
                 }
 
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.close(); }
                 }
 
                 Button {
                     text: root.loading ? "" :
-                        (root.rename-mode ? "Save" : "Create");
+                        (root.rename-mode ? @tr("Save") : @tr("Create"));
                     variant: "primary";
                     disabled: name-input.composed-text == "" || root.loading;
                     loading: root.loading;

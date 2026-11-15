@@ -7,7 +7,7 @@ export global AuthFlow {
     callback continue-without-account();
 
     // ========== Loading page properties ==========
-    in property <string> loading-message: "Loading...";
+    in property <string> loading-message: @tr("Loading...");
     in property <string> loading-secondary-message: "";
 
     // ========== Auth page properties ==========
@@ -55,7 +55,7 @@ export global AuthFlow {
     // ========== Link Device page properties (new device side) ==========
     in property <image> link-device-qr;
     in property <string> link-device-url: "";
-    in property <string> link-device-status: "Generate a QR to begin.";
+    in property <string> link-device-status: @tr("Generate a QR to begin.");
     in property <string> link-device-error: "";
     in property <bool> link-device-active: false;
     in property <bool> link-device-has-local-identity: false;

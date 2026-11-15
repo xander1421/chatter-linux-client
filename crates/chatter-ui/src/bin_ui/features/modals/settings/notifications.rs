@@ -82,13 +82,18 @@ fn update_notification_delivery(
                 }
                 Err(_error) => {
                     delivery.set_push_enabled(delivery.get_saved_push_enabled());
-                    delivery.set_error(if enabled.is_some() {
-                        "Could not save notification preferences. Check your connection and retry."
-                            .into()
-                    } else {
-                        "Could not load notification preferences. Check your connection and retry."
-                            .into()
-                    });
+                    delivery.set_error(
+                        if enabled.is_some() {
+                            chatter_i18n::tr(
+                                "Could not save notification preferences. Check your connection and retry.",
+                            )
+                        } else {
+                            chatter_i18n::tr(
+                                "Could not load notification preferences. Check your connection and retry.",
+                            )
+                        }
+                        .into(),
+                    );
                 }
             }
         });

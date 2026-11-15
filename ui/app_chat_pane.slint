@@ -55,7 +55,7 @@ export global ChatPane {
     // The unsent draft, held while the composer is borrowed to edit a message.
     in-out property <string> composer-stash: "";
     in-out property <bool> composer-stash-held: false;
-    in property <string> composer-placeholder: "Type a message...";
+    in property <string> composer-placeholder: @tr("Type a message...");
     in property <string> composer-notice: "";
     in property <bool> is-blocked: false;
     callback unblock-clicked();

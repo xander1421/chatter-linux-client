@@ -51,8 +51,10 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 return;
                             };
                             w.set_toast_message(
-                                "Delivery is taking longer. The original retry is still running."
-                                    .into(),
+                                chatter_i18n::tr(
+                                    "Delivery is taking longer. The original retry is still running.",
+                                )
+                                .into(),
                             );
                             w.set_toast_variant("info".into());
                             w.set_toast_visible(true);

@@ -62,9 +62,9 @@ static ACTIVE: Mutex<(Option<MeshConversation>, u64)> = Mutex::new((None, 0));
 static LOCAL_USER: OnceLock<String> = OnceLock::new();
 static SUCCESS_NOTICE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-fn show_success_notice(window: &MainWindow, notice: &'static str) {
+fn show_success_notice(window: &MainWindow, notice: String) {
     let generation = SUCCESS_NOTICE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
-    window.global::<MeshGlobal>().set_notice(notice.into());
+    window.global::<MeshGlobal>().set_notice(notice.clone().into());
     let weak = window.as_weak();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -72,12 +72,43 @@ fn show_success_notice(window: &MainWindow, notice: &'static str) {
             if let Some(window) = weak.upgrade() {
                 let global = window.global::<MeshGlobal>();
                 if SUCCESS_NOTICE_GENERATION.load(Ordering::Relaxed) == generation
-                    && global.get_notice().as_str() == notice {
+                    && global.get_notice().as_str() == notice
+                {
                     global.set_notice("".into());
                 }
             }
         });
     });
+}
+
+/// Binding text shown as a notice or as a nearby-peer's detail line.
+fn binding_status_text(label: &str) -> String {
+    match label {
+        "Verified Chatter contact" => chatter_i18n::tr("Verified Chatter contact"),
+        "Mesh peer · self-asserted name" => chatter_i18n::tr("Mesh peer · self-asserted name"),
+        "Binding pending" => chatter_i18n::tr("Binding pending"),
+        "Identity changed · verify again" => chatter_i18n::tr("Identity changed · verify again"),
+        other => other.to_string(),
+    }
+}
+
+/// `sheet-binding-label` is compared with "Verified Chatter contact" in Slint,
+/// which then shows its own translation. Every other label is displayed raw.
+fn sheet_binding_label(label: &str) -> String {
+    if label == "Verified Chatter contact" {
+        label.to_string()
+    } else {
+        binding_status_text(label)
+    }
+}
+
+fn member_status_text(label: &str) -> String {
+    match label {
+        "Invite not answered" => chatter_i18n::tr("Invite not answered"),
+        "Waiting for the new key" => chatter_i18n::tr("Waiting for the new key"),
+        "Has the current key" => chatter_i18n::tr("Has the current key"),
+        other => other.to_string(),
+    }
 }
 
 /// The mesh conversation currently open.
@@ -132,7 +163,7 @@ pub fn clear_active(window: &MainWindow) {
     // in radio range".
     window
         .global::<crate::ChatPane>()
-        .set_composer_placeholder("Type a message...".into());
+        .set_composer_placeholder(chatter_i18n::tr("Type a message...").into());
     deselect_rows(window);
 }
 
@@ -196,9 +227,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     refresh_rows(&w, &ui_ctx);
                     conversation::open(&w, &ui_ctx, &id);
                 }
-                Err(error) => w
-                    .global::<MeshGlobal>()
-                    .set_notice(format!("Could not open mesh DM: {error}").into()),
+                Err(error) => w.global::<MeshGlobal>().set_notice(
+                    chatter_i18n::trf("Could not open mesh DM: {}", &[&error]).into(),
+                ),
             }
         });
     }
@@ -210,9 +241,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let muted = !ui_ctx.mesh_peer_muted(peer.as_str());
             match ui_ctx.mesh_set_peer_muted(peer.as_str(), muted) {
                 Ok(()) => w.global::<MeshGlobal>().set_sheet_peer_muted(muted),
-                Err(error) => w
-                    .global::<MeshGlobal>()
-                    .set_notice(format!("Could not update mesh mute: {error}").into()),
+                Err(error) => w.global::<MeshGlobal>().set_notice(
+                    chatter_i18n::trf("Could not update mesh mute: {}", &[&error]).into(),
+                ),
             }
         });
     }
@@ -249,13 +280,14 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return false };
             match ui_ctx.mesh_join_channel(name.as_str()) {
                 Ok(_) => {
-                    show_success_notice(&w, "Public channel joined.");
+                    show_success_notice(&w, chatter_i18n::tr("Public channel joined."));
                     refresh_rows(&w, &ui_ctx);
                     true
                 }
                 Err(error) => {
-                    w.global::<MeshGlobal>()
-                        .set_notice(format!("Could not join channel: {error}").into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::trf("Could not join channel: {}", &[&error]).into(),
+                    );
                     false
                 }
             }
@@ -280,8 +312,11 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         crate::bin_ui::features::back::push(&w, "mesh-info");
                     } else {
                         w.global::<MeshGlobal>().set_notice(
-                            "Group created, but it could not be opened. Find it in the Mesh list."
-                                .into(),
+                            chatter_i18n::tr(
+                                "Group created, but it could not be opened. \
+                                 Find it in the Mesh list.",
+                            )
+                            .into(),
                         );
                     }
                     true
@@ -317,7 +352,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return false };
             match ui_ctx.mesh_join_private_channel(qr.as_str()) {
                 Ok(()) => {
-                    w.global::<MeshGlobal>().set_notice("Admission requested over Noise. Waiting for the creator to send the channel key.".into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::tr(
+                            "Admission requested over Noise. \
+                             Waiting for the creator to send the channel key.",
+                        )
+                        .into(),
+                    );
                     true
                 }
                 Err(error) => {
@@ -363,8 +404,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             match ui_ctx.mesh_invite_private_channel_direct(id.as_str(), peer.as_str()) {
                 Ok(()) => {
-                    w.global::<MeshGlobal>()
-                        .set_notice("Invitation queued — will deliver when connected.".into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::tr("Invitation queued — will deliver when connected.").into(),
+                    );
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w
@@ -399,9 +441,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         conversation::open(&w, &ui_ctx, &row.id);
                     } else {
                         if join {
-                            show_success_notice(&w, "Private group joined.");
+                            show_success_notice(&w, chatter_i18n::tr("Private group joined."));
                         } else {
-                            mesh.set_notice("Invitation declined.".into());
+                            mesh.set_notice(chatter_i18n::tr("Invitation declined.").into());
                         }
                     }
                 }
@@ -423,8 +465,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             match ui_ctx.mesh_remove_private_channel_member(id.as_str(), peer.as_str()) {
                 Ok(()) => {
-                    w.global::<MeshGlobal>()
-                        .set_notice("Member removed; the group key was rotated.".into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::tr("Member removed; the group key was rotated.").into(),
+                    );
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w
@@ -450,7 +493,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                             crate::platform::android::qr_scanner::ScanOutcome::CameraDenied => {
                                 w.global::<MeshGlobal>().set_notice(
-                                    "Camera access is required to scan the invite QR.".into(),
+                                    chatter_i18n::tr(
+                                        "Camera access is required to scan the invite QR.",
+                                    )
+                                    .into(),
                                 )
                             }
                             crate::platform::android::qr_scanner::ScanOutcome::Cancelled => {}
@@ -468,7 +514,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         global.on_leave_channel(move |name| {
             let Some(w) = weak.upgrade() else { return };
             if let Err(error) = ui_ctx.mesh_leave_channel(name.as_str()) {
-                w.global::<MeshGlobal>().set_notice(format!("Could not leave channel: {error}").into());
+                w.global::<MeshGlobal>().set_notice(
+                    chatter_i18n::trf("Could not leave channel: {}", &[&error]).into(),
+                );
             } else {
                 if matches!(active(), Some(MeshConversation::Channel(ref open)) if open == name.as_str()) { close_mesh_conversation(&w, &ui_ctx); }
                 refresh_rows(&w, &ui_ctx);
@@ -488,7 +536,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w.global::<MeshGlobal>().set_notice(
-                    format!("Could not leave private channel: {error}").into(),
+                    chatter_i18n::trf("Could not leave private channel: {}", &[&error]).into(),
                 ),
             }
         });
@@ -502,12 +550,15 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(()) => {
                     w.global::<MeshGlobal>()
                         .set_nickname(ui_ctx.mesh_nickname().into());
-                    w.global::<MeshGlobal>()
-                        .set_notice("Mesh name updated. Everyone nearby can see it.".into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::tr("Mesh name updated. Everyone nearby can see it.").into(),
+                    );
                 }
                 Err(error) => w
                     .global::<MeshGlobal>()
-                    .set_notice(format!("Could not set mesh name: {error}").into()),
+                    .set_notice(
+                        chatter_i18n::trf("Could not set mesh name: {}", &[&error]).into(),
+                    ),
             }
         });
     }
@@ -519,7 +570,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             match core_api::share_identity(&ui_ctx, peer.as_str()) {
                 Ok(()) => {
-                    w.global::<MeshGlobal>().set_notice("Account proof sent over this peer's encrypted Noise link. They still need to verify it.".into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::tr(
+                            "Account proof sent over this peer's encrypted Noise link. \
+                             They still need to verify it.",
+                        )
+                        .into(),
+                    );
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w.global::<MeshGlobal>().set_notice(error.to_string().into()),
@@ -546,7 +603,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     Err(error) => w
                         .global::<MeshGlobal>()
-                        .set_notice(format!("Could not show QR: {error}").into()),
+                        .set_notice(chatter_i18n::trf("Could not show QR: {}", &[&error]).into()),
                 },
                 Err(error) => w
                     .global::<MeshGlobal>()
@@ -568,7 +625,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     mesh.set_binding_scan_visible(false);
                     String::new()
                 }
-                Ok(state) => state.label().to_string(),
+                Ok(state) => binding_status_text(state.label()),
                 Err(error) => error.to_string(),
             };
             w.global::<MeshGlobal>().set_notice(status.into());
@@ -589,7 +646,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     mesh.set_binding_scan_visible(false);
                     String::new()
                 }
-                Ok(state) => state.label().to_string(),
+                Ok(state) => binding_status_text(state.label()),
                 Err(error) => error.to_string(),
             };
             w.global::<MeshGlobal>().set_notice(status.into());
@@ -612,11 +669,19 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             match core_api::set_signal_opt_in(&ui_ctx, peer.as_str(), enabled) {
                 Ok(()) => {
-                    w.global::<MeshGlobal>().set_notice(if enabled {
-                        "Signal mesh enabled. Both people must enable it and exchange live keys before sending."
-                    } else {
-                        "Noise (bitchat) selected for this mesh conversation."
-                    }.into());
+                    w.global::<MeshGlobal>().set_notice(
+                        if enabled {
+                            chatter_i18n::tr(
+                                "Signal mesh enabled. Both people must enable it \
+                                 and exchange live keys before sending.",
+                            )
+                        } else {
+                            chatter_i18n::tr(
+                                "Noise (bitchat) selected for this mesh conversation.",
+                            )
+                        }
+                        .into(),
+                    );
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w
@@ -642,7 +707,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .invoke_scan_binding_qr(peer, qr.trim().into()),
                             crate::platform::android::qr_scanner::ScanOutcome::CameraDenied => {
                                 w.global::<MeshGlobal>().set_notice(
-                                    "Camera access is required to scan this peer's QR.".into(),
+                                    chatter_i18n::tr(
+                                        "Camera access is required to scan this peer's QR.",
+                                    )
+                                    .into(),
                                 )
                             }
                             crate::platform::android::qr_scanner::ScanOutcome::Cancelled => {}
@@ -684,8 +752,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 Err(error) => {
                     tracing::warn!(%error, cell = %cell, "mesh: could not join cell");
-                    w.global::<MeshGlobal>()
-                        .set_notice(format!("Could not join {cell}: {error}").into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::trf("Could not join {}: {}", &[&cell, &error]).into(),
+                    );
                     false
                 }
             }
@@ -705,8 +774,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             if let Err(error) = core_api::leave(&ui_ctx, &cell) {
                 tracing::warn!(%error, cell = %cell, "mesh: could not leave cell");
-                w.global::<MeshGlobal>()
-                    .set_notice(format!("Could not leave {cell}: {error}").into());
+                w.global::<MeshGlobal>().set_notice(
+                    chatter_i18n::trf("Could not leave {}: {}", &[&cell, &error]).into(),
+                );
                 return;
             }
             // The cell we were reading just went away.
@@ -738,11 +808,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .set_nickname(ui_ctx.mesh_nickname().into());
                     if let Err(error) = &wiped {
                         tracing::warn!(%error, "mesh: panic wipe incomplete");
-                        w.global::<MeshGlobal>()
-                            .set_notice(format!("Mesh wipe incomplete: {error}").into());
+                        w.global::<MeshGlobal>().set_notice(
+                            chatter_i18n::trf("Mesh wipe incomplete: {}", &[&error]).into(),
+                        );
                     } else {
-                        w.global::<MeshGlobal>()
-                            .set_notice("Mesh data wiped from this device.".into());
+                        w.global::<MeshGlobal>().set_notice(
+                            chatter_i18n::tr("Mesh data wiped from this device.").into(),
+                        );
                     }
                     w.global::<MeshGlobal>().invoke_set_mesh_on(false);
                 });
@@ -769,7 +841,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if !crate::platform::android::permissions::ensure_mesh().await {
                         run_ui!(weak, |w| {
                             w.global::<MeshGlobal>().set_mesh_on(false);
-                            w.global::<MeshGlobal>().set_notice("Bluetooth permissions are required for mesh.".into());
+                            w.global::<MeshGlobal>().set_notice(
+                                chatter_i18n::tr("Bluetooth permissions are required for mesh.")
+                                    .into(),
+                            );
                         });
                         return;
                     }
@@ -779,7 +854,12 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     if !crate::platform::android::permissions::mesh_location_enabled() {
                         run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
-                            "Turn on Location in Android settings to discover nearby Bluetooth peers.".into()));
+                            chatter_i18n::tr(
+                                "Turn on Location in Android settings \
+                                 to discover nearby Bluetooth peers.",
+                            )
+                            .into(),
+                        ));
                     }
                 }
                 let outcome = ui_ctx.set_mesh_enabled(wanted).await;
@@ -804,8 +884,12 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let global = w.global::<MeshGlobal>();
                             global.set_mesh_on(!wanted);
                             global.set_notice(
-                                format!("Could not turn mesh {}: {error}",
-                                    if wanted { "on" } else { "off" }).into(),
+                                if wanted {
+                                    chatter_i18n::trf("Could not turn mesh on: {}", &[&error])
+                                } else {
+                                    chatter_i18n::trf("Could not turn mesh off: {}", &[&error])
+                                }
+                                .into(),
                             );
                         }
                     }
@@ -853,11 +937,13 @@ fn refresh_rows_with_rows(
             name: peer.nickname.into(),
             reachable: peer.reachable || peer.connected,
             member,
-            binding_label: ui_ctx
-                .mesh_binding_state(peer.peer.as_str())
-                .map(|state| state.label())
-                .unwrap_or("Mesh peer · self-asserted name")
-                .into(),
+            binding_label: binding_status_text(
+                ui_ctx
+                    .mesh_binding_state(peer.peer.as_str())
+                    .map(|state| state.label())
+                    .unwrap_or("Mesh peer · self-asserted name"),
+            )
+            .into(),
         })
         .collect();
     let global = window.global::<MeshGlobal>();
@@ -881,11 +967,13 @@ fn refresh_rows_with_rows(
     if !sheet_peer.is_empty() {
         refresh_invitable_channels(window, ui_ctx, sheet_peer.as_str());
         global.set_sheet_binding_label(
-            ui_ctx
-                .mesh_binding_state(sheet_peer.as_str())
-                .map(|state| state.label())
-                .unwrap_or("Mesh peer · self-asserted name")
-                .into(),
+            sheet_binding_label(
+                ui_ctx
+                    .mesh_binding_state(sheet_peer.as_str())
+                    .map(|state| state.label())
+                    .unwrap_or("Mesh peer · self-asserted name"),
+            )
+            .into(),
         );
         global.set_sheet_comparison_code(
             ui_ctx
@@ -938,7 +1026,7 @@ fn refresh_rows_with_rows(
                     .map(|member| crate::PrivateChannelMemberData {
                         peer_id: member.peer_id.into(),
                         display_name: member.display_name.into(),
-                        status_label: member.status_label.into(),
+                        status_label: member_status_text(member.status_label).into(),
                     })
                     .collect();
                 global.set_private_removable_members(ModelRc::new(VecModel::from(members)));
@@ -1040,10 +1128,12 @@ pub fn open_sender_sheet(
         global.set_sheet_peer_name(
             ui_ctx
                 .mesh_sender_display_name(sender)
-                .unwrap_or_else(|| "Mesh peer".into())
+                .unwrap_or_else(|| chatter_i18n::tr("Mesh peer"))
                 .into(),
         );
-        global.set_sheet_binding_label("Self-asserted · peer no longer nearby".into());
+        global.set_sheet_binding_label(
+            chatter_i18n::tr("Self-asserted · peer no longer nearby").into(),
+        );
         global.set_sheet_fingerprint("".into());
         global.set_sheet_own_fingerprint(ui_ctx.mesh_fingerprint().into());
         global.set_sheet_comparison_code("".into());
@@ -1064,11 +1154,13 @@ fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &s
     refresh_invitable_channels(window, ui_ctx, peer_id);
     global.set_sheet_peer_name(peer.nickname.into());
     global.set_sheet_binding_label(
-        ui_ctx
-            .mesh_binding_state(peer_id)
-            .map(|state| state.label())
-            .unwrap_or("Mesh peer · self-asserted name")
-            .into(),
+        sheet_binding_label(
+            ui_ctx
+                .mesh_binding_state(peer_id)
+                .map(|state| state.label())
+                .unwrap_or("Mesh peer · self-asserted name"),
+        )
+        .into(),
     );
     global.set_sheet_fingerprint(peer.fingerprint.unwrap_or_default().into());
     global.set_sheet_own_fingerprint(ui_ctx.mesh_fingerprint().into());
@@ -1243,8 +1335,9 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                 if matches!(active(), Some(MeshConversation::PrivateChannel(ref open)) if *open == id)
                 {
                     close_mesh_conversation(&w, &ui_ctx);
-                    w.global::<MeshGlobal>()
-                        .set_notice("The creator removed this device from the group.".into());
+                    w.global::<MeshGlobal>().set_notice(
+                        chatter_i18n::tr("The creator removed this device from the group.").into(),
+                    );
                 }
                 refresh_rows_with_rows(&w, &ui_ctx, rows);
             });
@@ -1289,10 +1382,11 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         }
         MeshEvent::IdentityKeyChanged { peer } => {
             run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
-                format!(
-                    "Identity key change refused for {peer}. A new identity appears as a new peer."
+                chatter_i18n::trf(
+                    "Identity key change refused for {}. A new identity appears as a new peer.",
+                    &[&peer],
                 )
-                .into()
+                .into(),
             ));
         }
         MeshEvent::Degraded(reason) => {
@@ -1302,7 +1396,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                 // Core's own reason. A generic "check Bluetooth" sent the user to
                 // a switch that was already on while the mesh had refused to
                 // start over its own stored state.
-                .set_notice(format!("Mesh: {reason}").into()));
+                .set_notice(chatter_i18n::trf("Mesh: {}", &[&reason]).into()));
         }
     }
 }

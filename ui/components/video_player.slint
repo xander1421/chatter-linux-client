@@ -150,7 +150,7 @@ export component VideoPlayer inherits Rectangle {
                 padding-right: Spacing.sm;
                 IconAction {
                     size: root.action-size;
-                    label: root.is-playing ? "Pause video" : "Play video";
+                    label: root.is-playing ? @tr("Pause video") : @tr("Play video");
                     icon: root.is-playing ? Icons.pause : Icons.play;
                     clicked => { root.toggle-play-pause(); }
                 }
@@ -164,7 +164,7 @@ export component VideoPlayer inherits Rectangle {
                         background: Colors.surface-hover;
                         border-radius: 3px;
                         accessible-role: slider;
-                        accessible-label: "Video position";
+                        accessible-label: @tr("Video position");
                         accessible-value: Math.round(root.progress * 100) + " percent";
                         seek-keys := FocusScope {
                             width: 0px;
@@ -223,7 +223,7 @@ export component VideoPlayer inherits Rectangle {
                 Text { text: root.duration; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
                 IconAction {
                     size: root.action-size;
-                    label: root.volume > 0 ? "Mute video" : "Unmute video";
+                    label: root.volume > 0 ? @tr("Mute video") : @tr("Unmute video");
                     icon: root.volume > 0 ? Icons.volume-2 : Icons.volume-x;
                     clicked => { root.set-volume(root.volume > 0 ? 0.0 : 1.0); }
                 }

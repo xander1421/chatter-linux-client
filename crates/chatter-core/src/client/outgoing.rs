@@ -88,12 +88,13 @@ impl ChatterClient {
             .dismiss_opening_unread(conversation);
         let (preview, at) = match message {
             Some(message) => (self.message_sidebar_preview(message), message.created_at),
-            None => (
-                messaging::plain_sidebar_preview(&crate::domain::message::format_preview_body(
-                    "You: ", text, Some(50),
-                )),
-                chrono::Utc::now(),
-            ),
+            None => {
+                let isolated = crate::domain::message::format_preview_body("", text, Some(50));
+                (
+                    messaging::plain_sidebar_preview(&chatter_i18n::trf("You: {}", &[&isolated])),
+                    chrono::Utc::now(),
+                )
+            }
         };
         self.services.event_bus.emit_domain(DomainEvent::MessageSent {
             conversation,

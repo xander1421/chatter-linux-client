@@ -51,7 +51,9 @@ fn wire_secret_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     refresh_header(&w, &ctx);
                     if let Err(e) = result {
                         tracing::warn!(error = %e, "secret-chat timer change failed");
-                        w.set_toast_message("Could not announce timer change".into());
+                        w.set_toast_message(
+                            chatter_i18n::tr("Could not announce timer change").into(),
+                        );
                         w.set_toast_variant("error".into());
                         w.set_toast_visible(true);
                     }
@@ -275,7 +277,9 @@ fn wire_set_dm_window(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Ok(seconds) = u32::try_from(seconds) else { return };
         let Some(activation_seconds) = (if seconds == 0 { Some(0) } else { disappearing::activation_minutes(&minutes) }) else {
             if let Some(w) = weak.upgrade() {
-                w.set_toast_message("Enter a whole number of minutes from 1 to 525600.".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("Enter a whole number of minutes from 1 to 525600.").into(),
+                );
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
             }
@@ -289,7 +293,12 @@ fn wire_set_dm_window(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 refresh_all(&w, &ctx);
                 if let Err(e) = result {
                     tracing::warn!(%peer_id, error = %e, "disappearing: activation change not announced");
-                    w.set_toast_message("Timer changed here. Your friend receives it with your next message.".into());
+                    w.set_toast_message(
+                        chatter_i18n::tr(
+                            "Timer changed here. Your friend receives it with your next message.",
+                        )
+                        .into(),
+                    );
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
                 }

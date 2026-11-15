@@ -821,8 +821,7 @@ impl SectionSendData {
     }
 }
 
-fn section_error(weak: &slint::Weak<MainWindow>, action: &str, error: impl std::fmt::Display) {
-    let message = format!("Couldn't {action}: {error}");
+fn section_error(weak: &slint::Weak<MainWindow>, message: String) {
     run_ui!(weak, |w| {
         w.set_toast_message(message.into());
         w.set_toast_variant("error".into());
@@ -890,7 +889,10 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create section");
                     run_ui!(weak_clone, |w| w.global::<crate::ModalHostState>().set_create_section_loading(false));
-                    section_error(&weak_clone, "create folder", e);
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::trf("Couldn't create folder: {}", &[&e]),
+                    );
                 }
             }
         });
@@ -910,7 +912,10 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             let Ok(id) = section_id_str.parse::<SectionId>() else {
                 tracing::error!(section_id = %section_id_str, "Invalid section ID");
-                section_error(&weak_clone, "delete folder", "invalid folder ID");
+                section_error(
+                    &weak_clone,
+                    chatter_i18n::tr("Couldn't delete folder: invalid folder ID"),
+                );
                 return;
             };
 
@@ -923,7 +928,10 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 Err(e) => {
                     tracing::error!(error = %e, section_id = %section_id_str, "Failed to delete section");
-                    section_error(&weak_clone, "delete folder", e);
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::trf("Couldn't delete folder: {}", &[&e]),
+                    );
                 }
             }
         });
@@ -965,19 +973,28 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             tokio::spawn(async move {
                 let Ok(id) = section_id_str.parse::<SectionId>() else {
-                    section_error(&weak_clone, "rename folder", "invalid folder ID");
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::tr("Couldn't rename folder: invalid folder ID"),
+                    );
                     return;
                 };
 
                 if let Err(e) = ui_ctx.rename_section(&id, &name_str) {
                     tracing::error!(error = %e, "Failed to rename section");
-                    section_error(&weak_clone, "rename folder", e);
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::trf("Couldn't rename folder: {}", &[&e]),
+                    );
                     return;
                 }
 
                 if let Err(e) = ui_ctx.change_section_icon(&id, &emoji_str) {
                     tracing::error!(error = %e, "Failed to change icon");
-                    section_error(&weak_clone, "change folder icon", e);
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::trf("Couldn't change folder icon: {}", &[&e]),
+                    );
                     return;
                 }
 
@@ -1007,7 +1024,10 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             tokio::spawn(async move {
                 let Ok(id) = section_id_str.parse::<SectionId>() else {
-                    section_error(&weak_clone, "expand folder", "invalid folder ID");
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::tr("Couldn't expand folder: invalid folder ID"),
+                    );
                     return;
                 };
 
@@ -1015,13 +1035,22 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Some(section) = sections.iter().find(|s| s.id == id) {
                         match ui_ctx.toggle_section_expanded(&id, !section.is_expanded) {
                             Ok(()) => refresh_sections_ui(&weak_clone, &ui_ctx),
-                            Err(e) => section_error(&weak_clone, "expand folder", e),
+                            Err(e) => section_error(
+                                &weak_clone,
+                                chatter_i18n::trf("Couldn't expand folder: {}", &[&e]),
+                            ),
                         }
                     } else {
-                        section_error(&weak_clone, "expand folder", "folder not found");
+                        section_error(
+                            &weak_clone,
+                            chatter_i18n::tr("Couldn't expand folder: folder not found"),
+                        );
                     }
                 } else {
-                    section_error(&weak_clone, "expand folder", "folder list unavailable");
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::tr("Couldn't expand folder: folder list unavailable"),
+                    );
                 }
             });
         });
@@ -1047,14 +1076,20 @@ fn wire_move_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             let Ok(id) = section_id_str.parse::<SectionId>() else {
                 tracing::error!(section_id = %section_id_str, "move section: unparseable section id");
-                section_error(&weak_clone, "move folder", "invalid folder ID");
+                section_error(
+                    &weak_clone,
+                    chatter_i18n::tr("Couldn't move folder: invalid folder ID"),
+                );
                 return;
             };
             match ui_ctx.move_section(&id, delta) {
                 Ok(()) => refresh_sections_ui(&weak_clone, &ui_ctx),
                 Err(e) => {
                     tracing::error!(error = %e, section_id = %section_id_str, delta, "Failed to move section");
-                    section_error(&weak_clone, "move folder", e);
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::trf("Couldn't move folder: {}", &[&e]),
+                    );
                 }
             }
         });
@@ -1075,14 +1110,20 @@ fn wire_set_sort_mode(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if let Some(w) = weak_clone.upgrade() { invalidate_structure(&w, &ui_ctx); }
         tokio::spawn(async move {
             let Ok(id) = section_id_str.parse::<SectionId>() else {
-                section_error(&weak_clone, "sort folder", "invalid folder ID");
+                section_error(
+                    &weak_clone,
+                    chatter_i18n::tr("Couldn't sort folder: invalid folder ID"),
+                );
                 return;
             };
             match ui_ctx.set_section_sort_mode(&id, mode) {
                 Ok(()) => refresh_sections_ui(&weak_clone, &ui_ctx),
                 Err(e) => {
                     tracing::error!(error = %e, section_id = %section_id_str, "Failed to set section sort mode");
-                    section_error(&weak_clone, "sort folder", e);
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::trf("Couldn't sort folder: {}", &[&e]),
+                    );
                 }
             }
         });
@@ -1102,7 +1143,10 @@ fn wire_set_conversation_pinned(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         if let Some(w) = weak_clone.upgrade() { invalidate_structure(&w, &ui_ctx); }
         tokio::spawn(async move {
             if !ui_ctx.set_conversation_pinned(&conv_id_str, pinned) {
-                section_error(&weak_clone, "pin chat", "storage unavailable");
+                section_error(
+                    &weak_clone,
+                    chatter_i18n::tr("Couldn't pin chat: storage unavailable"),
+                );
                 return;
             }
             tracing::info!(conversation_id = %conv_id_str, pinned, "conversation pin toggled (local only)");
@@ -1128,7 +1172,10 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             let Ok(sid) = section_id_str.parse::<SectionId>() else {
                 tracing::error!(section_id = %section_id_str, "move to folder: unparseable section id");
-                section_error(&weak_clone, "move chat to folder", "invalid folder ID");
+                section_error(
+                    &weak_clone,
+                    chatter_i18n::tr("Couldn't move chat to folder: invalid folder ID"),
+                );
                 return;
             };
             match ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
@@ -1141,7 +1188,10 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         error = %e, conversation_id = %conv_id_str, section_id = %section_id_str,
                         "Failed to move conversation into folder"
                     );
-                    section_error(&weak_clone, "move chat to folder", e);
+                    section_error(
+                        &weak_clone,
+                        chatter_i18n::trf("Couldn't move chat to folder: {}", &[&e]),
+                    );
                 }
             }
         });
@@ -1171,7 +1221,10 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Err(e) => {
                         tracing::error!(error = %e, conversation_id = %conv_id_str,
                             "Failed to remove conversation from folder");
-                        section_error(&weak_clone, "remove chat from folder", e);
+                        section_error(
+                            &weak_clone,
+                            chatter_i18n::trf("Couldn't remove chat from folder: {}", &[&e]),
+                        );
                     }
                 }
             });

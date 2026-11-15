@@ -466,7 +466,7 @@ fn set_send_notice(
         .blocked_dm_peer(ui_ctx.active_conversation())
         .is_some();
     let notice = if blocked {
-        "You blocked this person.".to_string()
+        chatter_i18n::tr("You blocked this person.")
     } else {
         notice
     };
@@ -769,7 +769,7 @@ pub fn recover_failed_send(w: &MainWindow, ui_ctx: &ChatterClient, send: Compose
         restore_composer(w, ui_ctx, send);
     }
     if has_attachments {
-        w.set_toast_message("Attachment not sent. Try again.".into());
+        w.set_toast_message(chatter_i18n::tr("Attachment not sent. Try again.").into());
         w.set_toast_variant("error".into());
         w.set_toast_visible(true);
         w.global::<crate::Haptics>().invoke_error();
@@ -838,7 +838,7 @@ pub(crate) fn clear_reply(w: &MainWindow) {
     w.global::<crate::ChatPane>()
         .set_composer_reply_thumbnail(slint::Image::default());
     w.global::<crate::ChatPane>()
-        .set_composer_placeholder("Type a message...".into());
+        .set_composer_placeholder(chatter_i18n::tr("Type a message...").into());
     w.global::<crate::ChatPane>()
         .invoke_composer_draft_changed();
 }
@@ -862,7 +862,7 @@ pub fn take_composer_send(
     ui_ctx: &Arc<ChatterClient>,
 ) -> Result<ComposerSend, String> {
     if w.global::<crate::ChatPane>().get_composer_is_editing() {
-        return Err("Finish editing first.".into());
+        return Err(chatter_i18n::tr("Finish editing first."));
     }
     w.invoke_settle_composer();
     let send = ui_ctx.begin_composer_send(
@@ -917,7 +917,7 @@ pub(crate) fn show_reply_image(
     w.global::<crate::ChatPane>()
         .set_composer_reply_thumbnail(thumbnail.unwrap_or_default());
     w.global::<crate::ChatPane>()
-        .set_composer_placeholder("Type your reply...".into());
+        .set_composer_placeholder(chatter_i18n::tr("Type your reply...").into());
     w.global::<crate::ChatPane>().set_composer_is_replying(true);
     w.global::<crate::ChatPane>()
         .invoke_composer_draft_changed();
@@ -966,7 +966,7 @@ pub async fn deliver(
                 .current_user_id
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
-            &auth.display_name.unwrap_or_else(|| "Me".into()),
+            &auth.display_name.unwrap_or_else(|| chatter_i18n::tr("Me")),
         );
     }
     if !ui_ctx.await_composer_turn(&send).await {
@@ -1062,7 +1062,7 @@ async fn deliver_inner(
         .current_user_id
         .map(|id| id.to_string())
         .unwrap_or_default();
-    let current_user_name = auth.display_name.unwrap_or_else(|| "Me".to_string());
+    let current_user_name = auth.display_name.unwrap_or_else(|| chatter_i18n::tr("Me"));
     let pending_id = pending_message_id(&send_for_delivery);
     show_pending_bubble(
         &weak,
@@ -1147,7 +1147,10 @@ async fn deliver_inner(
                             restore_composer(&w, &ui_ctx, send);
                         }
                         w.set_toast_message(
-                            "Earlier delivery is unconfirmed. Your new draft is kept.".into(),
+                            chatter_i18n::tr(
+                                "Earlier delivery is unconfirmed. Your new draft is kept.",
+                            )
+                            .into(),
                         );
                         w.set_toast_visible(true);
                     }
@@ -1478,7 +1481,7 @@ async fn handle_jarvis_slash_command(
         .await;
     let response_text = match &result {
         Ok(response) => response.clone(),
-        Err(e) => format!("Error: {}", e),
+        Err(e) => chatter_i18n::trf("Error: {}", &[&e]),
     };
 
     let jarvis_state = ui_ctx.jarvis_state().clone();

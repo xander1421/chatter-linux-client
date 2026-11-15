@@ -363,7 +363,7 @@ fn wire_context_menu_mute(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             Err(error) => {
                 tracing::error!(%error, "Could not update conversation mute");
-                w.set_toast_message("Couldn't update mute setting".into());
+                w.set_toast_message(chatter_i18n::tr("Couldn't update mute setting").into());
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
             }
@@ -397,7 +397,7 @@ fn wire_context_menu_mute_for(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             }
             Err(error) => {
                 tracing::error!(%error, "Could not update conversation mute");
-                w.set_toast_message("Couldn't update mute setting".into());
+                w.set_toast_message(chatter_i18n::tr("Couldn't update mute setting").into());
                 w.set_toast_variant("error".into());
                 w.set_toast_visible(true);
             }
@@ -870,7 +870,7 @@ fn wire_archive(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             if let Err(error) = ui_ctx.set_conversation_archived(id.as_str(), archived) {
                 tracing::error!(%error, "Failed to change chat archive state");
-                let message = format!("Couldn't change archive: {error}");
+                let message = chatter_i18n::trf("Couldn't change archive: {}", &[&error]);
                 run_ui!(weak, |w| {
                     w.set_toast_message(message.into());
                     w.set_toast_variant("error".into());

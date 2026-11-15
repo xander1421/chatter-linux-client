@@ -50,7 +50,11 @@ pub(super) fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         Err(error) => {
                             tracing::warn!(%error, "Channel archive change failed");
                             w.global::<crate::ModalHostState>().set_channel_settings_error(
-                                format!("Couldn't change archive status: {}", error.user_message()).into(),
+                                chatter_i18n::trf(
+                                    "Couldn't change archive status: {}",
+                                    &[&error.user_message()],
+                                )
+                                .into(),
                             );
                         }
                     }
@@ -160,7 +164,8 @@ pub(super) fn finish_channel_delete(
             }
             Err(e) => {
                 tracing::warn!(%channel_id, error = %e, "Channel deletion failed");
-                let message = format!("Couldn't delete channel: {}", e.user_message());
+                let message =
+                    chatter_i18n::trf("Couldn't delete channel: {}", &[&e.user_message()]);
                 if w.global::<crate::ModalHostState>()
                     .get_channel_settings_id()
                     == channel_id.to_string().as_str()
@@ -208,7 +213,10 @@ fn leave_conversation(
                 Err(e) => {
                     tracing::warn!(%id, error = %e, "Leave failed");
                     // A toast, not the modal's error line: the row menu has no modal.
-                    w.set_toast_message("Couldn't leave the conversation. Please try again.".into());
+                    w.set_toast_message(
+                        chatter_i18n::tr("Couldn't leave the conversation. Please try again.")
+                            .into(),
+                    );
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
                 }

@@ -29,18 +29,19 @@ impl LinkDeviceError {
     /// Text for the link dialog; the Display form is for logs.
     pub fn user_message(&self) -> String {
         match self {
-            Self::NotLoggedIn => "You're signed out.",
-            Self::ReauthFailed => "Wrong password or PIN.",
-            Self::InvalidLinkUrl(_) => {
-                "That isn't a device link. Copy the whole link from the new device."
+            Self::NotLoggedIn => chatter_i18n::tr("You're signed out."),
+            Self::ReauthFailed => chatter_i18n::tr("Wrong password or PIN."),
+            Self::InvalidLinkUrl(_) => chatter_i18n::tr(
+                "That isn't a device link. Copy the whole link from the new device.",
+            ),
+            Self::SessionEnded(_) => {
+                chatter_i18n::tr("This link expired. Generate a new QR on the new device.")
             }
-            Self::SessionEnded(_) => "This link expired. Generate a new QR on the new device.",
-            Self::Network(_) => "Couldn't reach the server. Try again.",
+            Self::Network(_) => chatter_i18n::tr("Couldn't reach the server. Try again."),
             Self::Crypto(_) | Self::Storage(_) | Self::Invalid(_) => {
-                "Couldn't link the device. Try again."
+                chatter_i18n::tr("Couldn't link the device. Try again.")
             }
         }
-        .to_string()
     }
 }
 
@@ -65,21 +66,25 @@ pub enum PinVerificationError {
 }
 
 impl PinVerification {
-    pub fn message(self) -> &'static str {
+    pub fn message(self) -> String {
         match self {
-            Self::Match => "",
-            Self::Mismatch => "Incorrect PIN. Online checks have limited attempts.",
-            Self::NotSetUpOnThisDevice => "Shield isn't set up on this device yet",
+            Self::Match => String::new(),
+            Self::Mismatch => {
+                chatter_i18n::tr("Incorrect PIN. Online checks have limited attempts.")
+            }
+            Self::NotSetUpOnThisDevice => {
+                chatter_i18n::tr("Shield isn't set up on this device yet")
+            }
             Self::Error(PinVerificationError::InvalidInput) => {
-                "Enter a PIN with 8–64 printable ASCII characters"
+                chatter_i18n::tr("Enter a PIN with 8–64 printable ASCII characters")
             }
             Self::Error(PinVerificationError::RateLimited) => {
-                "Too many PIN attempts. Wait before trying again"
+                chatter_i18n::tr("Too many PIN attempts. Wait before trying again")
             }
-            Self::Error(PinVerificationError::BackupDestroyed) => {
-                "Your key backup was deleted after too many PIN attempts. Set up your PIN again"
-            }
-            Self::Error(_) => "Couldn't check your PIN, try again",
+            Self::Error(PinVerificationError::BackupDestroyed) => chatter_i18n::tr(
+                "Your key backup was deleted after too many PIN attempts. Set up your PIN again",
+            ),
+            Self::Error(_) => chatter_i18n::tr("Couldn't check your PIN, try again"),
         }
     }
 }

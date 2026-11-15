@@ -64,7 +64,9 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                         tracing::error!("Failed to accept friend request: {}", e);
                         report_failure(
                             &weak,
-                            "The request was not accepted — it is still pending.",
+                            &chatter_i18n::tr(
+                                "The request was not accepted — it is still pending.",
+                            ),
                         );
                     }
                 }
@@ -103,7 +105,9 @@ pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         tracing::error!("Failed to decline friend request: {}", e);
                         report_failure(
                             &weak,
-                            "The request was not declined — it is still pending.",
+                            &chatter_i18n::tr(
+                                "The request was not declined — it is still pending.",
+                            ),
                         );
                     }
                 }
@@ -142,7 +146,9 @@ pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                         tracing::error!("Failed to cancel friend request: {}", e);
                         report_failure(
                             &weak,
-                            "The request was not cancelled — it is still pending.",
+                            &chatter_i18n::tr(
+                                "The request was not cancelled — it is still pending.",
+                            ),
                         );
                     }
                 }

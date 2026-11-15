@@ -91,18 +91,23 @@ impl AuthError {
     #[must_use]
     pub fn user_message(&self) -> String {
         match self {
-            Self::InvalidCredentials => "Incorrect username or password.".to_string(),
-            Self::LoginGuessLimit => "Too many password attempts on this account, so password sign-in \
-                is paused for now. Sign in with a recovery code, or link this device from one that is \
-                already signed in."
-                .to_string(),
+            Self::InvalidCredentials => chatter_i18n::tr("Incorrect username or password."),
+            Self::LoginGuessLimit => chatter_i18n::tr(
+                "Too many password attempts on this account, so password sign-in is paused for \
+                 now. Sign in with a recovery code, or link this device from one that is already \
+                 signed in.",
+            ),
             Self::LoginFailed(m) | Self::RegistrationFailed(m) | Self::InvalidInput(m) => {
                 let mut c = m.chars();
                 c.next()
                     .map(|f| f.to_uppercase().chain(c).collect())
                     .unwrap_or_default()
             }
-            other => other.to_string(),
+            Self::NotLoggedIn => chatter_i18n::tr("not logged in"),
+            Self::AlreadyLoggedIn => chatter_i18n::tr("already logged in"),
+            Self::Network(e) => chatter_i18n::trf("network error: {}", &[e]),
+            Self::Crypto(e) => chatter_i18n::trf("crypto error: {}", &[e]),
+            Self::Storage(e) => chatter_i18n::trf("storage error: {}", &[e]),
         }
     }
 }

@@ -141,7 +141,7 @@ export component ReactionPicker inherits Rectangle {
                             border-width: keys.has-focus ? Spacing.stroke : 0px;
                             border-color: Colors.primary;
                             accessible-role: button;
-                            accessible-label: "React with " + QuickReactions.names[index];
+                            accessible-label: @tr("React with {}", QuickReactions.names[index]);
                             accessible-action-default => {
                                 if !root.show { return; }
                                 root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);

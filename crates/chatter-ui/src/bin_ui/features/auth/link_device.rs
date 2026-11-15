@@ -35,7 +35,8 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             w.global::<crate::AuthFlow>().set_link_device_active(true);
             w.global::<crate::AuthFlow>().set_link_device_error("".into());
-            w.global::<crate::AuthFlow>().set_link_device_status("Generating QR code…".into());
+            w.global::<crate::AuthFlow>()
+                .set_link_device_status(chatter_i18n::tr("Generating QR code…").into());
             w.global::<crate::AuthFlow>().set_link_device_url("".into());
             w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
         }
@@ -71,12 +72,17 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         });
                     }
                     LinkProgress::WaitingForApproval => {
-                        set_status(&weak, &format!(
-                            "Verification code: {verification_code}\nCheck your other device shows the same code, then approve there."
-                        ));
+                        set_status(
+                            &weak,
+                            &chatter_i18n::trf(
+                                "Verification code: {}\n\
+                                 Check your other device shows the same code, then approve there.",
+                                &[&verification_code],
+                            ),
+                        );
                     }
                     LinkProgress::Approved => {
-                        set_status(&weak, "Approved! Setting up this device…");
+                        set_status(&weak, &chatter_i18n::tr("Approved! Setting up this device…"));
                     }
                     LinkProgress::Linked(_completed) => {
                         finish_linked(&weak, &ui_ctx).await;
@@ -87,7 +93,12 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                     LinkProgress::Cancelled => {
-                        set_status(&weak, "This QR code expired or was cancelled. Generate a new one.");
+                        set_status(
+                            &weak,
+                            &chatter_i18n::tr(
+                                "This QR code expired or was cancelled. Generate a new one.",
+                            ),
+                        );
                         let weak_for_view = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_for_view.upgrade() {
@@ -134,7 +145,7 @@ fn wire_copy(window: &MainWindow) {
 
         #[cfg(any(target_os = "android", target_os = "ios", feature = "ui-test-debug"))]
         {
-            let copied = crate::platform::clipboard::set_text("Device link", &url, false).is_ok();
+            let copied = crate::platform::clipboard::set_text(&chatter_i18n::tr("Device link"), &url, false).is_ok();
             show_copy_result(&w, &url, copied);
         }
         #[cfg(all(not(any(target_os = "android", target_os = "ios")), not(feature = "ui-test-debug")))]
@@ -165,8 +176,10 @@ fn show_copy_result(w: &MainWindow, url: &str, copied: bool) {
         || w.global::<crate::AuthFlow>().get_link_device_url().as_str() != url {
         return;
     }
-    w.set_toast_message(if copied { "Link copied to clipboard." } else {
-        "Unable to copy link. Please try again."
+    w.set_toast_message(if copied {
+        chatter_i18n::tr("Link copied to clipboard.")
+    } else {
+        chatter_i18n::tr("Unable to copy link. Please try again.")
     }.into());
     w.set_toast_variant(if copied { "success" } else { "error" }.into());
     w.set_toast_visible(true);
@@ -212,7 +225,7 @@ fn decode_png_to_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 /// loads initial data and presence.
 async fn finish_linked(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     if let Err(e) = ui_ctx.start().await {
-        set_error(weak, format!("post-link bring-up failed: {e}"));
+        set_error(weak, chatter_i18n::trf("post-link bring-up failed: {}", &[&e]));
         return;
     }
 

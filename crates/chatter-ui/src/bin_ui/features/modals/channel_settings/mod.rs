@@ -119,7 +119,7 @@ fn finish_icon_request(
                         .set_channel_settings_error(
                             {
                     tracing::warn!(%error, "channel icon could not be opened");
-                    "Couldn't open that image. Try another one.".into()
+                    chatter_i18n::tr("Couldn't open that image. Try another one.").into()
                 },
                         ),
                 }
@@ -127,7 +127,9 @@ fn finish_icon_request(
             Ok(None) => {
                 // The native adapter reports both cancellation and launch failure
                 // as no selection. Give truthful feedback without inventing a cause.
-                w.set_toast_message("No icon selected. Your draft is kept.".into());
+                w.set_toast_message(
+                    chatter_i18n::tr("No icon selected. Your draft is kept.").into(),
+                );
                 w.set_toast_variant("info".into());
                 w.set_toast_visible(true);
             }
@@ -135,7 +137,7 @@ fn finish_icon_request(
                 .global::<crate::ModalHostState>()
                 .set_channel_settings_error({
                     tracing::warn!(%error, "channel icon could not be opened");
-                    "Couldn't open that image. Try another one.".into()
+                    chatter_i18n::tr("Couldn't open that image. Try another one.").into()
                 }),
         }
     });
@@ -446,7 +448,7 @@ pub fn open_channel_settings(
                     w.global::<crate::ModalHostState>()
                         .set_channel_settings_loading(false);
                     w.global::<crate::ModalHostState>()
-                        .set_channel_settings_error("Channel not found".into());
+                        .set_channel_settings_error(chatter_i18n::tr("Channel not found").into());
                     w.global::<crate::ModalHostState>()
                         .set_channel_settings_can_edit(false);
                     w.global::<crate::ModalHostState>()
@@ -541,17 +543,19 @@ pub fn open_channel_settings(
         let complete = lists.complete;
         let member_error = lists.failure_stage.map(|stage| match stage {
             chatter_core::client::channels::ChannelMemberFailure::Members(error) => {
-                format!("Couldn't load members: {error}")
+                chatter_i18n::trf("Couldn't load members: {}", &[&error])
             }
-            chatter_core::client::channels::ChannelMemberFailure::MembersPartial(error) => format!(
-                "Couldn't load all members ({} shown): {error}",
-                members.len()
-            ),
+            chatter_core::client::channels::ChannelMemberFailure::MembersPartial(error) => {
+                chatter_i18n::trf(
+                    "Couldn't load all members ({} shown): {}",
+                    &[&members.len(), &error],
+                )
+            }
             chatter_core::client::channels::ChannelMemberFailure::MembersLimit => {
-                "Only the first 10000 members are shown.".to_string()
+                chatter_i18n::tr("Only the first 10000 members are shown.")
             }
             chatter_core::client::channels::ChannelMemberFailure::Bans(error) => {
-                format!("Couldn't load banned members: {error}")
+                chatter_i18n::trf("Couldn't load banned members: {}", &[&error])
             }
         });
         paint_if_current(weak_window, ui_ctx, opened, channel_id_str, move |w| {
@@ -647,17 +651,19 @@ fn refresh_member_lists(
         let complete = lists.complete;
         let error = lists.failure_stage.map(|stage| match stage {
             chatter_core::client::channels::ChannelMemberFailure::Members(error) => {
-                format!("Couldn't load members: {error}")
+                chatter_i18n::trf("Couldn't load members: {}", &[&error])
             }
-            chatter_core::client::channels::ChannelMemberFailure::MembersPartial(error) => format!(
-                "Couldn't load all members ({} shown): {error}",
-                members.len()
-            ),
+            chatter_core::client::channels::ChannelMemberFailure::MembersPartial(error) => {
+                chatter_i18n::trf(
+                    "Couldn't load all members ({} shown): {}",
+                    &[&members.len(), &error],
+                )
+            }
             chatter_core::client::channels::ChannelMemberFailure::MembersLimit => {
-                "Only the first 10000 members are shown.".to_string()
+                chatter_i18n::tr("Only the first 10000 members are shown.")
             }
             chatter_core::client::channels::ChannelMemberFailure::Bans(error) => {
-                format!("Couldn't load banned members: {error}")
+                chatter_i18n::trf("Couldn't load banned members: {}", &[&error])
             }
         });
         paint_if_current(
@@ -943,7 +949,10 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         .set_channel_settings_error(
                                             {
                                                 tracing::warn!(error = %e, "channel icon unreadable");
-                                                "Couldn't open that image. Try another one.".into()
+                                                chatter_i18n::tr(
+                                                    "Couldn't open that image. Try another one.",
+                                                )
+                                                .into()
                                             },
                                         );
                                 }
@@ -1020,7 +1029,7 @@ fn wire_pick_icon(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let picked = {
                     let config = chatter_core::media::FilePickerConfig::new()
-                        .with_title("Select channel icon")
+                        .with_title(chatter_i18n::tr("Select channel icon"))
                         .with_filter(chatter_core::media::FileFilter::images());
                     chatter_core::media::FilePicker::pick_file(config).await
                 };
@@ -1075,7 +1084,9 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                         Err(error) => {
                             tracing::warn!(%error, "Could not save conversation notification preference");
                             w.global::<crate::ModalHostState>()
-                                .set_channel_settings_error("Couldn't save notification preference".into());
+                                .set_channel_settings_error(
+                                    chatter_i18n::tr("Couldn't save notification preference").into(),
+                                );
                         }
                     }
                 });
@@ -1111,7 +1122,9 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     if let Err(error) = result {
                         tracing::warn!(%error, "Could not save conversation AI setting");
                         w.global::<crate::ModalHostState>()
-                            .set_channel_settings_error("Couldn't save AI setting".into());
+                            .set_channel_settings_error(
+                                chatter_i18n::tr("Couldn't save AI setting").into(),
+                            );
                     }
                 });
             });
@@ -1156,7 +1169,9 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                                 && settings_on_stack(&w) {
                                 w.global::<crate::ModalHostState>().set_channel_settings_muted(!muted);
                                 w.global::<crate::ModalHostState>()
-                                    .set_channel_settings_error("Couldn't save mute setting".into());
+                                    .set_channel_settings_error(
+                                        chatter_i18n::tr("Couldn't save mute setting").into(),
+                                    );
                             }
                         }
                     });
@@ -1232,7 +1247,10 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             tracing::warn!(error = %e, "Failed to change member role");
                             w.global::<crate::ModalHostState>()
                                 .set_channel_settings_error(
-                                    "Couldn't change this member's role. Please try again.".into(),
+                                    chatter_i18n::tr(
+                                        "Couldn't change this member's role. Please try again.",
+                                    )
+                                    .into(),
                                 );
                         }
                     }
@@ -1283,7 +1301,10 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 w.global::<crate::ModalHostState>().get_channel_settings_id() == id.to_string().as_str()
                             }) && settings_on_stack(&w) {
                                 w.global::<crate::ModalHostState>().set_channel_settings_error(
-                                    "Couldn't remove this member. Please try again.".into(),
+                                    chatter_i18n::tr(
+                                        "Couldn't remove this member. Please try again.",
+                                    )
+                                    .into(),
                                 );
                             }
                         }

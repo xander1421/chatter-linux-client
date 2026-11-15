@@ -15,6 +15,7 @@ name = "chatter_core"
 path = "src/lib.rs"
 
 [dependencies]
+chatter-i18n = { path = "../chatter-i18n" }
 # Attachment AES-CBC + HMAC; its own crate so it builds optimized in dev.
 chatter-attachment-crypto = { path = "../chatter-attachment-crypto" }
 unicode-segmentation = "1"

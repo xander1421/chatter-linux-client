@@ -51,7 +51,7 @@ export component MeshOnlyBar inherits Rectangle {
         Text {
             // Both halves matter and neither is a warning: mesh conversations
             // genuinely work here, and channels and DMs genuinely do not.
-            text: "Not signed in — mesh conversations only. Channels and DMs need an account.";
+            text: @tr("Not signed in — mesh conversations only. Channels and DMs need an account.");
             color: Colors.text-muted;
             font-size: Typography.xs;
             vertical-alignment: center;
@@ -73,7 +73,7 @@ export component MeshOnlyBar inherits Rectangle {
                 animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                 sign-in-label := Text {
-                    text: "Sign in";
+                    text: @tr("Sign in");
                     color: sign-in-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -88,7 +88,7 @@ export component MeshOnlyBar inherits Rectangle {
                 }
 
                 accessible-role: button;
-                accessible-label: "Sign in";
+                accessible-label: @tr("Sign in");
                 accessible-action-default => { root.sign-in(); }
                 KeyFocus { border-radius: parent.border-radius; activate => { root.sign-in(); } }
             }

@@ -16,7 +16,7 @@ fn refresh_status(window: &MainWindow, client: &ChatterClient) {
     global.set_push_status(status.push.into());
     global.set_last_connected(status.last_connected
         .map(chatter_core::util::time::format_detail_time)
-        .unwrap_or_else(|| "Never".into()).into());
+        .unwrap_or_else(|| chatter_i18n::tr("Never")).into());
     global.set_server_host(status.server_host.into());
     global.set_tor_bootstrap(status.tor_bootstrap_percent
         .map(|percent| format!("{percent}%"))

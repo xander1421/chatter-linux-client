@@ -70,7 +70,7 @@ pub(crate) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             run(&w, &ui_ctx, async move {
                 ctx.enable_app_lock(None, pin, confirm, LockTimeout::OneMinute)
                     .await
-                    .map(|()| "App lock is on.")
+                    .map(|()| chatter_i18n::tr("App lock is on."))
             });
         });
     }
@@ -81,7 +81,9 @@ pub(crate) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             let (ctx, current) = (ui_ctx.clone(), current.to_string());
             run(&w, &ui_ctx, async move {
-                ctx.disable_app_lock(current).await.map(|()| "App lock is off.")
+                ctx.disable_app_lock(current)
+                    .await
+                    .map(|()| chatter_i18n::tr("App lock is off."))
             });
         });
     }
@@ -96,7 +98,7 @@ pub(crate) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             run(&w, &ui_ctx, async move {
                 ctx.set_duress_pin(current, duress, confirm)
                     .await
-                    .map(|()| "Duress PIN set.")
+                    .map(|()| chatter_i18n::tr("Duress PIN set."))
             });
         });
     }
@@ -107,7 +109,9 @@ pub(crate) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             let (ctx, current) = (ui_ctx.clone(), current.to_string());
             run(&w, &ui_ctx, async move {
-                ctx.clear_duress_pin(current).await.map(|()| "Duress PIN removed.")
+                ctx.clear_duress_pin(current)
+                    .await
+                    .map(|()| chatter_i18n::tr("Duress PIN removed."))
             });
         });
     }
@@ -131,7 +135,7 @@ pub(crate) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn run(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
-    action: impl std::future::Future<Output = Result<&'static str, AppLockError>> + Send + 'static,
+    action: impl std::future::Future<Output = Result<String, AppLockError>> + Send + 'static,
 ) {
     let pane = window.global::<AppLockPane>();
     if pane.get_busy() {
@@ -190,17 +194,21 @@ pub(crate) fn refresh(window: &MainWindow, ui_ctx: &ChatterClient) {
 
 fn wrong_message(retry_after_secs: u64) -> String {
     if retry_after_secs == 0 {
-        "Wrong PIN".to_owned()
+        chatter_i18n::tr("Wrong PIN")
+    } else if retry_after_secs >= 120 {
+        let minutes = retry_after_secs.div_ceil(60);
+        chatter_i18n::trf("Wrong PIN. Try again in {} minutes.", &[&minutes])
     } else {
-        format!("Wrong PIN. {}", wait_message(retry_after_secs))
+        chatter_i18n::trf("Wrong PIN. Try again in {} seconds.", &[&retry_after_secs])
     }
 }
 
 fn wait_message(secs: u64) -> String {
     if secs >= 120 {
-        format!("Try again in {} minutes.", secs.div_ceil(60))
+        let minutes = secs.div_ceil(60);
+        chatter_i18n::trf("Try again in {} minutes.", &[&minutes])
     } else {
-        format!("Try again in {secs} seconds.")
+        chatter_i18n::trf("Try again in {} seconds.", &[&secs])
     }
 }
 

@@ -25,7 +25,7 @@ export component AISettings inherits VerticalLayout {
 
 
     spacing: Spacing.lg;
-    Text { text: "Remote AI"; color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
+    Text { text: @tr("Remote AI"); color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
     // ── Cloud AI ───────────────────────────────────
     Rectangle {
         background: Colors.surface-section;
@@ -43,7 +43,7 @@ export component AISettings inherits VerticalLayout {
             cloud-ai-row := ToggleRow {
                 row-spacing: Spacing.md;
                 label-spacing: Spacing.sm;
-                accessible-text: "Use cloud AI";
+                accessible-text: @tr("Use cloud AI");
                 checked <=> root.ai-prefer-cloud;
                 toggled(value) => {
                     root.ai-prefer-cloud = value;
@@ -51,14 +51,14 @@ export component AISettings inherits VerticalLayout {
                 }
 
                 Text {
-                    text: "Use cloud AI";
+                    text: @tr("Use cloud AI");
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                 }
                 Text {
                     width: cloud-ai-row.label-width;
-                    text: "Send prompts and permitted remote conversation history to the selected provider. Existing local AI history stays on this device. Direct and secret messages are never sent to a cloud provider.";
+                    text: @tr("Send prompts and permitted remote conversation history to the selected provider. Existing local AI history stays on this device. Direct and secret messages are never sent to a cloud provider.");
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -79,7 +79,7 @@ export component AISettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "My API key";
+                        text: @tr("My API key");
                         variant: root.cloud-ai-mode == "direct-anthropic" ? "primary" : "secondary";
                         clicked => {
                             root.cloud-ai-mode = "direct-anthropic";
@@ -89,7 +89,7 @@ export component AISettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Buy tokens";
+                        text: @tr("Buy tokens");
                         variant: root.cloud-ai-mode == "server-broker" ? "primary" : "secondary";
                         clicked => {
                             root.cloud-ai-mode = "server-broker";
@@ -102,14 +102,14 @@ export component AISettings inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: Spacing.sm;
                     Input {
-                        placeholder: "Model (blank for the default)";
+                        placeholder: @tr("Model (blank for the default)");
                         text <=> root.cloud-ai-model;
                         horizontal-stretch: 1;
                         accepted(value) => { root.cloud-ai-model-changed(value); }
                     }
                     Button {
                         touch: root.mobile-platform;
-                        text: "Save model";
+                        text: @tr("Save model");
                         variant: "secondary";
                         clicked => { root.cloud-ai-model-changed(root.cloud-ai-model); }
                     }
@@ -122,14 +122,14 @@ export component AISettings inherits VerticalLayout {
 
                     Text {
                         width: parent.width;
-                        text: "Your key is stored on this device only. Prompts go straight to the provider — our servers never see them.";
+                        text: @tr("Your key is stored on this device only. Prompts go straight to the provider — our servers never see them.");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         wrap: word-wrap;
                     }
 
                     Input {
-                        placeholder: root.cloud-ai-configured ? "API key saved — enter a new one to replace it" : "Anthropic API key";
+                        placeholder: root.cloud-ai-configured ? @tr("API key saved — enter a new one to replace it") : @tr("Anthropic API key");
                         password: true;
                         text <=> root.cloud-ai-api-key;
                     }
@@ -138,7 +138,7 @@ export component AISettings inherits VerticalLayout {
                         alignment: start;
                         Button {
                             touch: root.mobile-platform;
-                            text: "Save key";
+                            text: @tr("Save key");
                             variant: "secondary";
                             clicked => {
                                 root.cloud-ai-api-key-changed(root.cloud-ai-api-key);
@@ -154,7 +154,7 @@ export component AISettings inherits VerticalLayout {
 
                     Text {
                         width: parent.width;
-                        text: "No API key needed. Prompts are sent through our servers, which see them in order to meter usage.";
+                        text: @tr("No API key needed. Prompts are sent through our servers, which see them in order to meter usage.");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         wrap: word-wrap;
@@ -170,7 +170,7 @@ export component AISettings inherits VerticalLayout {
                         alignment: start;
                         Button {
                             touch: root.mobile-platform;
-                            text: "Refresh balance";
+                            text: @tr("Refresh balance");
                             variant: "secondary";
                             clicked => { root.cloud-ai-refresh-quota(); }
                         }
@@ -190,7 +190,7 @@ export component AISettings inherits VerticalLayout {
 
     if JarvisGlobal.enabled: Button {
         touch: root.mobile-platform;
-        text: "Assistant memory";
+        text: @tr("Assistant memory");
         variant: "secondary";
         clicked => { root.open-memory(); }
     }

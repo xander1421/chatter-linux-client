@@ -73,13 +73,20 @@ pub(super) fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     Ok(()) => String::new(),
                     Err(e) => {
                         tracing::warn!(error = %e, "Channel moderation action failed");
-                        let verb = match action {
-                            ModAction::Ban => "ban",
-                            ModAction::Unban => "unban",
-                            ModAction::Mute(_) => "mute",
-                            ModAction::Unmute => "unmute",
-                        };
-                        format!("Couldn't {verb} this member. Please try again.")
+                        match action {
+                            ModAction::Ban => {
+                                chatter_i18n::tr("Couldn't ban this member. Please try again.")
+                            }
+                            ModAction::Unban => {
+                                chatter_i18n::tr("Couldn't unban this member. Please try again.")
+                            }
+                            ModAction::Mute(_) => {
+                                chatter_i18n::tr("Couldn't mute this member. Please try again.")
+                            }
+                            ModAction::Unmute => {
+                                chatter_i18n::tr("Couldn't unmute this member. Please try again.")
+                            }
+                        }
                     }
                 };
                 let weak_err = weak.clone();
@@ -176,7 +183,12 @@ pub(super) fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterC
                             if w.global::<crate::ModalHostState>().get_channel_settings_id()
                                 == channel_id.as_str() && settings_on_stack(&w) {
                                 w.global::<crate::ModalHostState>()
-                                    .set_channel_settings_error("Couldn't transfer ownership. Please try again.".into());
+                                    .set_channel_settings_error(
+                                        chatter_i18n::tr(
+                                            "Couldn't transfer ownership. Please try again.",
+                                        )
+                                        .into(),
+                                    );
                             }
                         }
                     }
@@ -239,7 +251,10 @@ fn change_group_block(
                     if w.global::<crate::ModalHostState>().get_channel_settings_id()
                         == group_id.to_string().as_str() && settings_on_stack(&w) {
                         w.global::<crate::ModalHostState>()
-                            .set_channel_settings_error("Couldn't change the block. Please try again.".into());
+                            .set_channel_settings_error(
+                                chatter_i18n::tr("Couldn't change the block. Please try again.")
+                                    .into(),
+                            );
                     }
                 }
             });

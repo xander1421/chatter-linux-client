@@ -74,6 +74,23 @@ impl ChatterClient {
             .set(keys::COMPOSER_KEYBOARD_GEOMETRY, &(height, width))
     }
 
+    /// The UI language choice: `"system"` (the default) or a language code.
+    /// Which codes exist is the UI's business (`chatter-i18n`); core only
+    /// keeps the choice on this device.
+    pub fn app_language(&self) -> String {
+        SettingsRepository::new(self.services.database.clone())
+            .get_string(keys::LANGUAGE)
+            .ok()
+            .flatten()
+            .filter(|code| !code.is_empty())
+            .unwrap_or_else(|| "system".to_owned())
+    }
+
+    /// Persist the UI language choice.
+    pub fn set_app_language(&self, code: &str) -> Result<(), crate::error::StorageError> {
+        SettingsRepository::new(self.services.database.clone()).set_string(keys::LANGUAGE, code)
+    }
+
     /// The user's theme choice (defaults to [`ThemeMode::System`]).
     pub fn theme_mode(&self) -> ThemeMode {
         let raw = SettingsRepository::new(self.services.database.clone())

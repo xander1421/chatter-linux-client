@@ -93,7 +93,7 @@ export component FindTab inherits VerticalLayout {
                 }
 
                 Text {
-                    text: root.effective-private-mode ? "Scan to start a secret chat with me" : "Scan to add me";
+                    text: root.effective-private-mode ? @tr("Scan to start a secret chat with me") : @tr("Scan to add me");
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -107,7 +107,7 @@ export component FindTab inherits VerticalLayout {
         Button {
             touch: root.mobile-mode;
             horizontal-stretch: 1;
-            text: "Share my code";
+            text: @tr("Share my code");
             variant: "primary";
             clicked => { root.share-code(); }
         }
@@ -115,7 +115,7 @@ export component FindTab inherits VerticalLayout {
         Button {
             touch: root.mobile-mode;
             horizontal-stretch: 1;
-            text: "Copy my code";
+            text: @tr("Copy my code");
             variant: "secondary";
             clicked => { root.copy-code(); }
         }
@@ -123,7 +123,7 @@ export component FindTab inherits VerticalLayout {
         if root.can-scan: Button {
             touch: root.mobile-mode;
             horizontal-stretch: 1;
-            text: "Scan a code";
+            text: @tr("Scan a code");
             variant: "secondary";
             clicked => { root.scan-code(); }
         }
@@ -131,7 +131,7 @@ export component FindTab inherits VerticalLayout {
         // Add someone by their code — input on its own line, actions beneath it.
         Input {
             horizontal-stretch: 1;
-            placeholder: "Paste a code or link";
+            placeholder: @tr("Paste a code or link");
             text <=> root.code-input;
             caret-end-seq: root.code-caret-end-seq;
             edited => { root.code-edited(); }
@@ -142,14 +142,14 @@ export component FindTab inherits VerticalLayout {
             Button {
                 touch: root.mobile-mode;
                 horizontal-stretch: 1;
-                text: "Paste";
+                text: @tr("Paste");
                 variant: "secondary";
                 clicked => { root.paste-code(); }
             }
             Button {
                 touch: root.mobile-mode;
                 horizontal-stretch: 1;
-                text: "Add";
+                text: @tr("Add");
                 variant: "primary";
                 loading: root.loading;
                 clicked => { root.connect-via-code(root.code-input); }

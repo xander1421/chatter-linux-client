@@ -14,7 +14,7 @@ export component DeleteConfirm inherits Rectangle {
     // Confirm the chosen remote or local scope for one or several messages.
     in property <bool> for-everyone: false;
     in property <bool> is-dm: false;
-    property <string> remote-label: root.is-dm ? "Delete for both" : "Delete for everyone";
+    property <string> remote-label: root.is-dm ? @tr("Delete for both") : @tr("Delete for everyone");
 
     in property <bool> choosing-in: false;
     in property <bool> can-delete-everyone: false;
@@ -29,8 +29,10 @@ export component DeleteConfirm inherits Rectangle {
 
     Modal {
         show: root.count > 0;
-        title: root.choosing ? root.count > 1 ? "Delete " + root.count + " messages" : "Delete message" : root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label + "?"
-            : root.count > 1 ? "Delete " + root.count + " messages?" : "Delete message?";
+        title: root.choosing ? @tr("Delete message" | "Delete {n} messages" % root.count)
+            : root.for-everyone || (root.choosing-in && !root.can-delete-me)
+                ? (root.is-dm ? @tr("Delete for both?") : @tr("Delete for everyone?"))
+                : @tr("Delete message?" | "Delete {n} messages?" % root.count);
         modal-width: 400px;
         show-close: false;
 
@@ -40,11 +42,11 @@ export component DeleteConfirm inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: root.choosing ? root.count > 1 ? "Choose who to delete these messages for." : "Choose who to delete this message for." : root.for-everyone || (root.choosing-in && !root.can-delete-me)
-                    ? root.count > 1 ? "These messages will be deleted for everyone in the chat." : "This message will be deleted for everyone in the chat."
+                text: root.choosing ? root.count > 1 ? @tr("Choose who to delete these messages for.") : @tr("Choose who to delete this message for.") : root.for-everyone || (root.choosing-in && !root.can-delete-me)
+                    ? root.count > 1 ? @tr("These messages will be deleted for everyone in the chat.") : @tr("This message will be deleted for everyone in the chat.")
                     : root.count > 1
-                    ? "These messages will be deleted from your history."
-                    : "This message will be deleted from your history.";
+                    ? @tr("These messages will be deleted from your history.")
+                    : @tr("This message will be deleted from your history.");
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -53,7 +55,7 @@ export component DeleteConfirm inherits Rectangle {
             if root.choosing: VerticalLayout {
                 spacing: Spacing.sm;
                 if root.can-delete-me: Button {
-                    text: "Delete for me";
+                    text: @tr("Delete for me");
                     variant: "secondary";
                     clicked => { root.scope-chosen(false); root.confirmed(); }
                 }
@@ -69,13 +71,13 @@ export component DeleteConfirm inherits Rectangle {
                 alignment: end;
 
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.cancelled(); }
                 }
 
                 if !root.choosing: Button {
-                    text: root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label : root.choosing-in ? "Delete" : "Delete for me";
+                    text: root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label : root.choosing-in ? @tr("Delete") : @tr("Delete for me");
                     variant: "destructive";
                     clicked => {
                         if root.choosing-in { root.scope-chosen(!root.can-delete-me); }

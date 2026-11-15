@@ -77,7 +77,7 @@ export component OfflineMeshNotice inherits Rectangle {
                 spacing: Spacing.xs;
 
                 Text {
-                    text: "Can't reach the server";
+                    text: @tr("Can't reach the server");
                     color: Colors.warning;
                     font-size: Typography.sm;
                     font-weight: 600;
@@ -87,7 +87,7 @@ export component OfflineMeshNotice inherits Rectangle {
                 // Why the screen behind this notice cannot do its job. Said
                 // once, in the place the user is already stuck.
                 Text {
-                    text: "Creating an account and signing in both need it, so neither will work until it comes back.";
+                    text: @tr("Creating an account and signing in both need it, so neither will work until it comes back.");
                     color: Colors.text-secondary;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -98,10 +98,10 @@ export component OfflineMeshNotice inherits Rectangle {
                 // a real offer, or it is down and there is no offer to make.
                 Text {
                     text: root.account-free-surfaces
-                        ? "The mesh does not. It carries messages between nearby devices over Bluetooth with no server, no internet and no account — and it is running now."
+                        ? @tr("The mesh does not. It carries messages between nearby devices over Bluetooth with no server, no internet and no account — and it is running now.")
                         : (MeshGlobal.enabled
-                            ? "The mesh is not running on this device either, so there is nothing to fall back to right now."
-                            : "This build has no mesh, so there is nothing to fall back to.");
+                            ? @tr("The mesh is not running on this device either, so there is nothing to fall back to right now.")
+                            : @tr("This build has no mesh, so there is nothing to fall back to."));
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -141,7 +141,7 @@ export component OfflineMeshNotice inherits Rectangle {
                 }
 
                 Text {
-                    text: "Use the mesh without an account";
+                    text: @tr("Use the mesh without an account");
                     color: Colors.warning;
                     font-size: Typography.xs;
                     font-weight: 600;
@@ -156,7 +156,7 @@ export component OfflineMeshNotice inherits Rectangle {
             }
 
             accessible-role: button;
-            accessible-label: "Use the mesh without an account";
+            accessible-label: @tr("Use the mesh without an account");
             accessible-action-default => { root.continue-without-account(); }
             KeyFocus { border-radius: parent.border-radius; activate => { root.continue-without-account(); } }
         }
@@ -166,7 +166,7 @@ export component OfflineMeshNotice inherits Rectangle {
         // permanent — the server may well be back in a minute.
         if root.account-free-surfaces: Text {
             width: max(0px, parent.width - parent.padding * 2);
-            text: "Your channels and DMs stay where they are. Sign in whenever the server is back.";
+            text: @tr("Your channels and DMs stay where they are. Sign in whenever the server is back.");
             color: Colors.text-muted;
             font-size: Typography.xxs;
             horizontal-alignment: center;

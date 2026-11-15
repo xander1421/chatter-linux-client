@@ -16,8 +16,9 @@ use crate::{AnonMode, MainWindow};
 
 /// Status line while a Shield sign-in / registration waits on its first Tor
 /// connection.
-pub(super) const CONNECTING_OVER_TOR: &str =
-    "Connecting over Tor… the first connection can take up to a minute.";
+pub(super) fn connecting_over_tor() -> String {
+    chatter_i18n::tr("Connecting over Tor… the first connection can take up to a minute.")
+}
 
 pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
@@ -62,10 +63,12 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
 /// nothing went direct — the pool has no direct path while Shield is on.
 pub(super) fn connect_error(shield: bool, error: &impl std::fmt::Display) -> String {
     if shield {
-        format!(
-            "Couldn't reach the server over Tor: {error}. Shield is still on; nothing was sent outside Tor."
+        chatter_i18n::trf(
+            "Couldn't reach the server over Tor: {}. \
+             Shield is still on; nothing was sent outside Tor.",
+            &[error],
         )
     } else {
-        format!("Failed to connect to server: {error}")
+        chatter_i18n::trf("Failed to connect to server: {}", &[error])
     }
 }

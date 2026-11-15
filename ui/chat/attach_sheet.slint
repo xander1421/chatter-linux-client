@@ -89,28 +89,28 @@ export component AttachSheet inherits Rectangle {
             AttachTile {
                 touch: root.touch;
                 icon: Icons.image;
-                label: "Gallery";
+                label: @tr("Gallery");
                 tint: Colors.primary;
                 clicked => { root.source(0); }
             }
             AttachTile {
                 touch: root.touch;
                 icon: Icons.camera;
-                label: "Camera";
+                label: @tr("Camera");
                 tint: #34c759;
                 clicked => { root.source(2); }
             }
             AttachTile {
                 touch: root.touch;
                 icon: Icons.video;
-                label: "Video";
+                label: @tr("Video");
                 tint: #ff9500;
                 clicked => { root.source(3); }
             }
             AttachTile {
                 touch: root.touch;
                 icon: Icons.file;
-                label: "File";
+                label: @tr("File");
                 tint: #5ac8fa;
                 clicked => { root.source(1); }
             }

@@ -14,7 +14,7 @@ export component CallConfirm inherits Rectangle {
 
     Modal {
         show: true;
-        title: root.video ? "Start a video call?" : "Start a call?";
+        title: root.video ? @tr("Start a video call?") : @tr("Start a call?");
         modal-width: 400px;
         show-close: false;
         close => { root.cancelled(); }
@@ -23,7 +23,7 @@ export component CallConfirm inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Everyone in " + root.channel-name + " will be notified.";
+                text: @tr("Everyone in {} will be notified.", root.channel-name);
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -33,12 +33,12 @@ export component CallConfirm inherits Rectangle {
                 spacing: Spacing.sm;
                 alignment: end;
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.cancelled(); }
                 }
                 Button {
-                    text: "Start call";
+                    text: @tr("Start call");
                     clicked => { root.confirmed(); }
                 }
             }

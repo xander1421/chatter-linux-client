@@ -143,7 +143,7 @@ fn publish_friends(
         }
         let slint_list: Vec<FriendData> = friends_data.into_iter().map(|f| {
             let label = if f.is_anon {
-                "online".to_string()
+                chatter_i18n::tr("online")
             } else {
                 f.user_id.parse::<chatter_core::domain::ids::UserId>().ok()
                     .and_then(|id| ui_ctx.peer_last_seen(&id))
@@ -318,7 +318,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 // Get intro message if any
                 let last_message = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
                     Some(msg) => msg.as_text().unwrap_or_default().to_string(),
-                    None => "Message request".to_string(),
+                    None => chatter_i18n::tr("Message request"),
                 };
 
                 // DM-sidebar row for this request is produced by list_dm_sidebar

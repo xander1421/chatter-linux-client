@@ -130,7 +130,9 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
 /// never synced here) says so instead of doing nothing. Local
 /// history only: there is no server fetch behind a jump. UI thread.
 fn report_jump_unavailable(w: &MainWindow) {
-    w.set_toast_message("That message isn't available on this device.".into());
+    w.set_toast_message(
+        chatter_i18n::tr("That message isn't available on this device.").into(),
+    );
     w.set_toast_variant("error".into());
     w.set_toast_visible(true);
 }

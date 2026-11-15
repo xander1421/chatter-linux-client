@@ -44,7 +44,7 @@ export component ServerRecordsScreen inherits Rectangle {
     }
     Modal {
         show: root.show;
-        title: ServerRecordsGlobal.kind == "notifications" ? "Notification inbox" : ServerRecordsGlobal.kind == "integrations" ? "Channel integrations" : "Channel call history";
+        title: ServerRecordsGlobal.kind == "notifications" ? @tr("Notification inbox") : ServerRecordsGlobal.kind == "integrations" ? @tr("Channel integrations") : @tr("Channel call history");
         modal-width: 600px;
         max-modal-height: 800px;
         fill-height: true;
@@ -54,21 +54,21 @@ export component ServerRecordsScreen inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 spacing: Spacing.sm;
-                if ServerRecordsGlobal.kind != "notifications": Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
+                if ServerRecordsGlobal.kind != "notifications": Button { text: @tr("Refresh"); variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
                 Rectangle { horizontal-stretch: 1; }
                 if ServerRecordsGlobal.kind == "notifications": Button {
-                    text: "Mark all read"; variant: "ghost"; size: "small"; disabled: ServerRecordsGlobal.loading || ServerRecordsGlobal.notifications.length == 0;
+                    text: @tr("Mark all read"); variant: "ghost"; size: "small"; disabled: ServerRecordsGlobal.loading || ServerRecordsGlobal.notifications.length == 0;
                     clicked => { ServerRecordsGlobal.act("", "Mark all read"); }
                 }
             }
             if ServerRecordsGlobal.kind == "integrations": Text {
                 width: parent.width;
-                text: "Install your configured integrations in this channel, or remove an installed integration.";
+                text: @tr("Install your configured integrations in this channel, or remove an installed integration.");
                 wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
             }
             if ServerRecordsGlobal.kind == "calls": Text {
                 width: parent.width;
-                text: "Call records from this channel’s server. Private call history stays in Calls.";
+                text: @tr("Call records from this channel’s server. Private call history stays in Calls.");
                 wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
             }
             if ServerRecordsGlobal.error != "": Text {
@@ -84,16 +84,16 @@ export component ServerRecordsScreen inherits Rectangle {
                     spacing: Spacing.sm;
                     HorizontalLayout {
                         Text { text: ServerRecordsGlobal.detail-title; color: Colors.text-primary; font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
-                        Button { text: "Close"; variant: "ghost"; clicked => { ServerRecordsGlobal.detail-title = ""; ServerRecordsGlobal.detail-body = ""; ServerRecordsGlobal.detail-id = ""; } }
+                        Button { text: @tr("Close"); variant: "ghost"; clicked => { ServerRecordsGlobal.detail-title = ""; ServerRecordsGlobal.detail-body = ""; ServerRecordsGlobal.detail-id = ""; } }
                     }
                     Text {
                         width: max(0px, parent.width - parent.padding * 2);
                         text: ServerRecordsGlobal.detail-body; wrap: word-wrap; color: Colors.text-secondary; }
                 }
             }
-            if ServerRecordsGlobal.loading: Text { text: "Loading…"; color: Colors.text-secondary; }
+            if ServerRecordsGlobal.loading: Text { text: @tr("Loading…"); color: Colors.text-secondary; }
             if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && (ServerRecordsGlobal.kind == "notifications" ? ServerRecordsGlobal.notifications.length == 0 : ServerRecordsGlobal.rows.length == 0): Text {
-                text: ServerRecordsGlobal.kind == "notifications" ? "You're all caught up" : ServerRecordsGlobal.kind == "integrations" ? "No integrations yet" : "No calls yet"; color: Colors.text-secondary;
+                text: ServerRecordsGlobal.kind == "notifications" ? @tr("You're all caught up") : ServerRecordsGlobal.kind == "integrations" ? @tr("No integrations yet") : @tr("No calls yet"); color: Colors.text-secondary;
             }
             if ServerRecordsGlobal.kind == "notifications": inbox := ScrollView {
                 mouse-drag-pan-enabled: true;
@@ -215,7 +215,7 @@ export component ServerRecordsScreen inherits Rectangle {
                 }
             }
             if ServerRecordsGlobal.next != "": Button {
-                text: "Load more"; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                text: @tr("Load more"); variant: "secondary"; disabled: ServerRecordsGlobal.loading;
                 clicked => { ServerRecordsGlobal.load(true); }
             }
         }
@@ -237,9 +237,9 @@ export component ServerRecordsScreen inherits Rectangle {
             menu-rows := VerticalLayout {
                 padding-top: Spacing.xs;
                 padding-bottom: Spacing.xs;
-                MenuRow { icon: Icons.info; label: "Details"; clicked => { ServerRecordsGlobal.details(root.menu-id); if !root.menu-read { ServerRecordsGlobal.act(root.menu-id, "Mark read"); } root.menu-id = ""; } }
-                if !root.menu-read: MenuRow { icon: Icons.check; label: "Mark read"; clicked => { ServerRecordsGlobal.act(root.menu-id, "Mark read"); root.menu-id = ""; } }
-                MenuRow { icon: Icons.trash; label: "Delete"; destructive: true; clicked => { ServerRecordsGlobal.act(root.menu-id, "Delete"); root.menu-id = ""; } }
+                MenuRow { icon: Icons.info; label: @tr("Details"); clicked => { ServerRecordsGlobal.details(root.menu-id); if !root.menu-read { ServerRecordsGlobal.act(root.menu-id, "Mark read"); } root.menu-id = ""; } }
+                if !root.menu-read: MenuRow { icon: Icons.check; label: @tr("Mark read"); clicked => { ServerRecordsGlobal.act(root.menu-id, "Mark read"); root.menu-id = ""; } }
+                MenuRow { icon: Icons.trash; label: @tr("Delete"); destructive: true; clicked => { ServerRecordsGlobal.act(root.menu-id, "Delete"); root.menu-id = ""; } }
             }
         }
     }

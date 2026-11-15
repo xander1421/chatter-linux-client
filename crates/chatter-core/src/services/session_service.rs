@@ -81,11 +81,17 @@ impl SessionError {
     /// Text for the devices dialog; the Display form is for logs.
     pub fn user_message(&self) -> String {
         match self {
-            Self::NotLoggedIn => "You're signed out.".to_string(),
-            Self::SessionChanged => "The device list changed. Reopen it and try again.".to_string(),
-            Self::PartialRevocation { .. } => self.to_string(),
-            Self::Network(_) => "Couldn't reach the server. Try again.".to_string(),
-            Self::Storage(_) | Self::Device(_) => "Something went wrong. Try again.".to_string(),
+            Self::NotLoggedIn => chatter_i18n::tr("You're signed out."),
+            Self::SessionChanged => {
+                chatter_i18n::tr("The device list changed. Reopen it and try again.")
+            }
+            Self::PartialRevocation { revoked, failed } => {
+                revocation_user_message(*revoked, failed.len())
+            }
+            Self::Network(_) => chatter_i18n::tr("Couldn't reach the server. Try again."),
+            Self::Storage(_) | Self::Device(_) => {
+                chatter_i18n::tr("Something went wrong. Try again.")
+            }
         }
     }
 }
@@ -131,16 +137,62 @@ pub struct RevokeAllOutcome {
 impl RevokeAllOutcome {
     /// One line for the Active sessions screen.
     pub fn summary(&self) -> String {
-        let head = if self.revoked == 0 {
-            "No other devices to sign out.".to_string()
-        } else {
-            format!("Signed out {}.", devices(self.revoked))
-        };
+        let revoked = self.revoked as u64;
         if self.primary_kept {
-            format!("{head} The primary device can't be signed out from another device.")
+            if self.revoked == 0 {
+                chatter_i18n::tr(
+                    "No other devices to sign out. The primary device can't be signed out from another device.",
+                )
+            } else {
+                chatter_i18n::trn(
+                    "Signed out {n} device. The primary device can't be signed out from another device.",
+                    "Signed out {n} devices. The primary device can't be signed out from another device.",
+                    revoked,
+                    &[],
+                )
+            }
+        } else if self.revoked == 0 {
+            chatter_i18n::tr("No other devices to sign out.")
         } else {
-            head
+            chatter_i18n::trn(
+                "Signed out {n} device.",
+                "Signed out {n} devices.",
+                revoked,
+                &[],
+            )
         }
+    }
+}
+
+/// The dialog copy for a partial sign-out. The error `Display` stays the
+/// English `partial_revocation_message` for logs.
+fn revocation_user_message(revoked: usize, failed: usize) -> String {
+    let revoked_n = revoked as u64;
+    let failed_n = failed as u64;
+    if revoked == 0 {
+        return chatter_i18n::trn(
+            "Could not sign out {n} device. Check your connection and try again.",
+            "Could not sign out {n} devices. Check your connection and try again.",
+            failed_n,
+            &[],
+        );
+    }
+    match (revoked == 1, failed == 1) {
+        (true, true) => chatter_i18n::tr(
+            "Signed out 1 device. Could not sign out 1 device. Check your connection and try again.",
+        ),
+        (true, false) => chatter_i18n::trf(
+            "Signed out 1 device. Could not sign out {} devices. Check your connection and try again.",
+            &[&failed_n],
+        ),
+        (false, true) => chatter_i18n::trf(
+            "Signed out {} devices. Could not sign out 1 device. Check your connection and try again.",
+            &[&revoked_n],
+        ),
+        (false, false) => chatter_i18n::trf(
+            "Signed out {} devices. Could not sign out {} devices. Check your connection and try again.",
+            &[&revoked_n, &failed_n],
+        ),
     }
 }
 

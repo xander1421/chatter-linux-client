@@ -63,19 +63,19 @@ export component Sidebar inherits Rectangle {
             return row.chat.display-name;
         }
         if row.kind == "section-header" { return row.section.name; }
-        if row.kind == "saved" { return "Saved messages"; }
-        if row.kind == "friends" { return AnonMode.enabled ? "Add contact" : "Friends"; }
-        if row.kind == "calls" { return "Calls"; }
-        if row.kind == "requests" { return "Requests"; }
-        if row.kind == "search" { return "Search"; }
-        if row.kind == "archive-entry" { return "Archived chats"; }
-        if row.kind == "archive-back" { return "Back to chats"; }
+        if row.kind == "saved" { return @tr("Saved messages"); }
+        if row.kind == "friends" { return AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); }
+        if row.kind == "calls" { return @tr("Calls"); }
+        if row.kind == "requests" { return @tr("Requests"); }
+        if row.kind == "search" { return @tr("Search"); }
+        if row.kind == "archive-entry" { return @tr("Archived chats"); }
+        if row.kind == "archive-back" { return @tr("Back to chats"); }
         return row.kind;
     }
     in-out property <int> focus-index: 0;
 
     // ── Properties: User profile ──
-    in property <string> user-display-name: "User";
+    in property <string> user-display-name: @tr("User");
     in property <image> user-avatar-source;
     in property <string> user-initials: "";
     in property <string> user-presence-status: "online";
@@ -405,7 +405,7 @@ export component Sidebar inherits Rectangle {
                 if entry.kind == "archive-entry" || entry.kind == "archive-back": Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
-                    accessible-label: entry.kind == "archive-back" ? "Back to chats" : "Archived chats";
+                    accessible-label: entry.kind == "archive-back" ? @tr("Back to chats") : @tr("Archived chats");
                     accessible-action-default => { root.archive-view-changed(entry.kind == "archive-entry"); }
                     border-width: archive-keys.has-focus || parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
@@ -436,7 +436,7 @@ export component Sidebar inherits Rectangle {
                         Text {
                             // Inside, the row titles the list it heads, as Telegram's
                             // "Archived Chats" bar; its chevron is the way back.
-                            text: entry.kind == "archive-back" ? "Archived chats" : "Archived";
+                            text: entry.kind == "archive-back" ? @tr("Archived chats") : @tr("Archived");
                             font-weight: entry.kind == "archive-back" ? Typography.semibold : Typography.normal;
                             color: Colors.text-primary;
                             font-size: root.quick-link-text-size;
@@ -456,7 +456,7 @@ export component Sidebar inherits Rectangle {
                     }
                 }
                 if entry.kind == "archive-empty": Text {
-                    text: "No archived chats";
+                    text: @tr("No archived chats");
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -467,11 +467,11 @@ export component Sidebar inherits Rectangle {
                     opacity: root.search-overlay-open ? 0 : 1;
                     animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
                     accessible-role: button;
-                    accessible-label: "Search";
+                    accessible-label: @tr("Search");
                     accessible-action-default => { root.search-clicked(); }
                     TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Search"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: @tr("Search"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
@@ -496,7 +496,7 @@ export component Sidebar inherits Rectangle {
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     }
                     accessible-role: list-item;
-                    accessible-label: "Saved messages";
+                    accessible-label: @tr("Saved messages");
                     accessible-action-default => { root.saved-messages-clicked(); }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
@@ -515,11 +515,11 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: "Saved messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: @tr("Saved messages"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Saved messages"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: @tr("Saved messages"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.saved-open ? Colors.row-selected : root.rail-slot-bg; Image { source: Icons.bookmark; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: root.saved-open ? Colors.text-primary : Colors.text-secondary; } } } }
                     }
                     // Open in the rail: the same accent pill and filled slot a
@@ -571,7 +571,7 @@ export component Sidebar inherits Rectangle {
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     }
                     accessible-role: list-item;
-                    accessible-label: AnonMode.enabled ? "Add contact" : "Friends";
+                    accessible-label: AnonMode.enabled ? @tr("Add contact") : @tr("Friends");
                     accessible-action-default => { root.friends-clicked(); }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
@@ -580,11 +580,11 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: AnonMode.enabled ? "Add contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: AnonMode.enabled ? "Add contact" : "Friends"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
@@ -607,7 +607,7 @@ export component Sidebar inherits Rectangle {
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     }
                     accessible-role: list-item;
-                    accessible-label: root.missed-call-count > 0 ? "Calls, " + root.missed-call-count + " missed" : "Calls";
+                    accessible-label: root.missed-call-count > 0 ? @tr("Calls, {} missed", root.missed-call-count) : @tr("Calls");
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
                     accessible-action-default => { root.calls-clicked(); }
@@ -616,7 +616,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: Icons.phone; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: "Calls"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: @tr("Calls"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
                         if root.missed-call-count > 0: VerticalLayout { alignment: center; horizontal-stretch: 0;
                             Rectangle {
                                 width: self.height + (root.missed-call-count > 9 ? 4px : 0px);
@@ -638,7 +638,7 @@ export component Sidebar inherits Rectangle {
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Calls"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: @tr("Calls"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                             Image { source: Icons.phone; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
@@ -689,7 +689,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: Icons.user-plus; width: 14px; height: 14px; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: "Requests"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: @tr("Requests"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
                         // Centred on the label's line; a fixed-height child of a
                         // HorizontalLayout otherwise sits at the row's top.
                         VerticalLayout {
@@ -715,7 +715,7 @@ export component Sidebar inherits Rectangle {
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Requests"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: @tr("Requests"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                             Image { source: Icons.user-plus; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
@@ -760,12 +760,12 @@ export component Sidebar inherits Rectangle {
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: "New channel"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: @tr("New channel"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-new-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
                             accessible-role: button;
-                            accessible-label: "New channel";
+                            accessible-label: @tr("New channel");
                             accessible-action-default => { root.create-channel-clicked(); }
                             Image { source: Icons.plus; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 16px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-new-touch.has-hover ? Colors.text-primary : DesktopChrome.macos ? Colors.text-secondary : Colors.text-muted; }
@@ -783,17 +783,17 @@ export component Sidebar inherits Rectangle {
                     spacing: Spacing.xs;
                     EmptyState {
                         icon: Icons.message-circle;
-                        message: "No conversations";
-                        cta-text: "Add a friend";
+                        message: @tr("No conversations");
+                        cta-text: @tr("Add a friend");
                         cta-clicked => { root.add-friend-clicked(); }
                     }
                     if !AnonMode.enabled: HorizontalLayout {
                         height: Spacing.touch-target-min;
                         alignment: center;
                         Text {
-                            text: "Browse channels";
+                            text: @tr("Browse channels");
                             accessible-role: button;
-                            accessible-label: "Browse channels";
+                            accessible-label: @tr("Browse channels");
                             accessible-action-default => { root.join-channel-clicked(); }
                             color: browse-touch.has-hover ? Colors.primary-hover : Colors.primary;
                             font-size: Typography.sm;
@@ -945,7 +945,7 @@ export component Sidebar inherits Rectangle {
             accessible-role: list;
             accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0
                 ? root.row-label(root.flat-rows[root.focus-index])
-                : "Conversations";
+                : @tr("Conversations");
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) { root.focus-step(-1); return accept; }
                 if (event.text == Key.DownArrow) { root.focus-step(1); return accept; }
@@ -993,7 +993,7 @@ export component Sidebar inherits Rectangle {
                         colorize: Colors.primary;
                     }
                     compose-touch := TouchArea {
-                        mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh conversation";
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("New mesh conversation");
                         clicked => { MeshGlobal.open-sheet("mesh-compose"); }
                     }
                 }
@@ -1008,7 +1008,7 @@ export component Sidebar inherits Rectangle {
                         colorize: Colors.text-secondary;
                     }
                     setup-touch := TouchArea {
-                        mouse-cursor: pointer; accessible-role: button; accessible-label: "Mesh settings";
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Mesh settings");
                         clicked => { MeshGlobal.open-setup(); }
                     }
                 }

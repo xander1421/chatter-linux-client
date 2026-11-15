@@ -127,7 +127,7 @@ export component IdentityChangeBar inherits Rectangle {
                 accept-label := Text {
                     // Deliberately not "OK" or "Continue": the user is pinning
                     // a new key, and the label should say so.
-                    text: "Accept new safety number";
+                    text: @tr("Accept new safety number");
                     color: Colors.text-primary;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -139,7 +139,7 @@ export component IdentityChangeBar inherits Rectangle {
                 accept-touch := TouchArea {
                     mouse-cursor: pointer;
                     accessible-role: button;
-                    accessible-label: "Accept new safety number";
+                    accessible-label: @tr("Accept new safety number");
                     accessible-action-default => { root.accept-clicked(); }
                     KeyFocus { activate => { root.accept-clicked(); } }
                     clicked => {

@@ -247,7 +247,7 @@ impl ChannelMetadata {
         Self {
             id: channel.id.to_string(),
             name: if is_saved {
-                "Saved messages".into()
+                chatter_i18n::tr("Saved messages")
             } else {
                 channel.name.clone()
             },

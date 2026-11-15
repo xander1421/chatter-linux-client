@@ -305,13 +305,21 @@ fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     match result {
                         Ok(deleted) => {
                             if deleted < wanted {
-                                toast(&w, "A call in progress was kept.", "info");
+                                toast(
+                                    &w,
+                                    &chatter_i18n::tr("A call in progress was kept."),
+                                    "info",
+                                );
                             }
                             refresh_in_place(&w, &client);
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to delete call history rows");
-                            toast(&w, "Could not delete those calls. Try again.", "error");
+                            toast(
+                                &w,
+                                &chatter_i18n::tr("Could not delete those calls. Try again."),
+                                "error",
+                            );
                         }
                     }
                 });
@@ -366,7 +374,9 @@ fn complete_clear(
             window
                 .global::<crate::CallView>()
                 .set_call_history_loading(false);
-            window.set_toast_message("Could not clear call history. Try again.".into());
+            window.set_toast_message(
+                chatter_i18n::tr("Could not clear call history. Try again.").into(),
+            );
             window.set_toast_variant("error".into());
             window.set_toast_visible(true);
         }
@@ -393,7 +403,9 @@ fn open_conversation(
             conversation_id,
             "Call history row no longer names a reachable conversation"
         );
-        window.set_toast_message("That conversation is no longer available.".into());
+        window.set_toast_message(
+            chatter_i18n::tr("That conversation is no longer available.").into(),
+        );
         window.set_toast_variant("error".into());
         window.set_toast_visible(true);
     }
@@ -606,7 +618,9 @@ fn apply_page(
                 .set_call_history_loading(false);
             window
                 .global::<crate::CallView>()
-                .set_call_history_error("Load failed; showing previous calls.".into());
+                .set_call_history_error(
+                    chatter_i18n::tr("Load failed; showing previous calls.").into(),
+                );
             false
         }
     }
@@ -660,9 +674,9 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
         .zip(prepared.avatars)
         .map(|(r, avatar)| {
             let name = if r.name.is_empty() {
-                "Unknown"
+                chatter_i18n::tr("Unknown")
             } else {
-                &r.name
+                r.name.clone()
             };
             CallHistoryRow {
                 avatar_source: avatar.map(slint::Image::from_rgba8).unwrap_or_default(),
@@ -670,15 +684,15 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
                 conversation_id: r.conversation_id.into(),
                 conversation_type: r.conversation_type.into(),
                 private_channel: r.private_channel,
-                name: name.into(),
-                initials: chatter_core::ui::message_row::initials_from_name(name).into(),
+                name: name.as_str().into(),
+                initials: chatter_core::ui::message_row::initials_from_name(&name).into(),
                 timestamp: r
                     .started_at
                     .map(chatter_core::ui::format::sidebar_time)
                     .unwrap_or_default()
                     .into(),
                 detail: (if r.in_progress {
-                    "In progress".to_string()
+                    chatter_i18n::tr("In progress")
                 } else {
                     chatter_core::ui::format::call_detail(r.result, r.is_incoming, r.duration_secs)
                 })

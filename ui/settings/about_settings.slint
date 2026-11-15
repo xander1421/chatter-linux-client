@@ -13,7 +13,7 @@ export component AboutSettings inherits VerticalLayout {
 
 
     spacing: Spacing.md;
-    Text { text: "About Chatter"; color: Colors.text-primary;
+    Text { text: @tr("About Chatter"); color: Colors.text-primary;
         font-size: Typography.xl; font-weight: Typography.semibold; }
     Rectangle {
         background: Colors.surface-section;
@@ -29,19 +29,19 @@ export component AboutSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.info;
-                title: "Version";
+                title: @tr("Version");
                 detail: UpdateGlobal.installed-version + " · Build " + UpdateGlobal.build-code + " · Commit " + UpdateGlobal.build-commit;
                 clickable: false;
                 show-chevron: false;
             }
             Button {
                 touch: root.mobile-platform;
-                text: UpdateGlobal.state == "checking" ? "Checking…" : "Check for updates";
+                text: UpdateGlobal.state == "checking" ? @tr("Checking…") : @tr("Check for updates");
                 disabled: UpdateGlobal.state == "checking";
                 clicked => { UpdateGlobal.check(); }
             }
             if UpdateGlobal.state == "available": Text {
-                text: "Update available — " + UpdateGlobal.version;
+                text: @tr("Update available — {}", UpdateGlobal.version);
                 color: Colors.text-primary; font-size: Typography.sm;
             }
             if UpdateGlobal.error != "": Text {
@@ -65,8 +65,8 @@ export component AboutSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.info;
-                title: "Open-source licenses";
-                detail: "View third-party licenses and notices in Chatter.";
+                title: @tr("Open-source licenses");
+                detail: @tr("View third-party licenses and notices in Chatter.");
                 clicked => { root.open-licenses(); }
             }
         }
@@ -76,7 +76,7 @@ export component AboutSettings inherits VerticalLayout {
         padding-left: Spacing.md;
         padding-right: Spacing.md;
         Text {
-            text: "Privacy: Your settings control read receipts, notification previews, and whether AI requests leave this device.";
+            text: @tr("Privacy: Your settings control read receipts, notification previews, and whether AI requests leave this device.");
             color: Colors.text-muted;
             font-size: Typography.xs;
             wrap: word-wrap;
