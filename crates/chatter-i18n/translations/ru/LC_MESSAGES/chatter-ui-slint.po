@@ -3542,7 +3542,7 @@ msgstr "Загрузка сведений о группе…"
 
 #: ui/modals/channel_settings.slint:397
 msgid "Add a description so members know what this is for"
-msgstr "Добавьте описание, чтобы участники понимали назначение группы"
+msgstr "Добавьте описание, чтобы участники понимали, для чего это"
 
 #: ui/modals/channel_settings.slint:402
 msgid "Unsaved changes to group info"

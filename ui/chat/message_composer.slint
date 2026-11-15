@@ -621,7 +621,10 @@ export component MessageComposer inherits GlassSurface {
                     text: root.placeholder;
                     color: Colors.text-muted;
                     font-size: Typography.base;
-                    wrap: word-wrap;
+                    // One line, cut with an ellipsis: a wrapped hint in a narrow
+                    // input ("Введите / сообщение…") overflowed the one-line row.
+                    wrap: no-wrap;
+                    overflow: elide;
                     opacity: text-input.has-focus ? 0.5 : 1.0;
                     animate opacity { duration: Materials.feedback-duration; }
                 }
