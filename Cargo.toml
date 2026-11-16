@@ -330,6 +330,8 @@ h3-quinn = { path = "vendor/h3-quinn" }
 livekit = { path = "vendor/livekit" }
 # Explicit private-PKI signaling connector; see vendor/livekit-api/PATCHES.md.
 livekit-api = { path = "vendor/livekit-api" }
+# Stop an AAudio stream before closing it (Android 10 abort); see vendor/cpal/PATCHES.md.
+cpal = { path = "vendor/cpal" }
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
 # AccessKit focus change during an accessibility action; see vendor/i-slint-backend-winit/PATCHES.md.
 i-slint-backend-winit = { path = "vendor/i-slint-backend-winit" }
