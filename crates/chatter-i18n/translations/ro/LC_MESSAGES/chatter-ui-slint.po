@@ -5986,3 +5986,7 @@ msgstr "STARE"
 #: ui/activity/activity_sheet.slint
 msgid "ACTIVITY"
 msgstr "ACTIVITATE"
+
+#: ui/components/mini_player.slint
+msgid "Go to message"
+msgstr "Mergi la mesaj"

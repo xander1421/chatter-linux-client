@@ -15,6 +15,7 @@
 //! * `jarvis` — Jarvis AI assistant façade
 
 mod anon_group;
+pub mod audio_queue;
 mod appearance;
 mod auth;
 mod avatars;
@@ -271,6 +272,7 @@ impl ClientBuilder {
             sent_receipts: Mutex::new(Vec::new()),
             dm_delivery_receipts: Default::default(),
             upload_cancels: Mutex::new(std::collections::HashMap::new()),
+            now_playing: Mutex::new(None),
             started: AtomicBool::new(false),
             channel_delivery_shutdown: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
@@ -561,6 +563,8 @@ pub struct ChatterClient {
             tokio_util::sync::CancellationToken,
         >,
     >,
+    /// The audio attachment the player has loaded ([`audio_queue`]).
+    pub(crate) now_playing: Mutex<Option<audio_queue::AudioTrack>>,
     started: AtomicBool,
     channel_delivery_shutdown: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
