@@ -119,6 +119,18 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             if generation.load(Ordering::SeqCst) != ticket {
                 return;
             }
+            #[cfg(target_os = "android")]
+            let mut microphone_lease = match crate::platform::android::voice_recording::VoiceRecordingLease::start().await {
+                Ok(lease) => Some(lease),
+                Err(error) => {
+                    finish_ui(weak, generation, ticket, Err(error));
+                    return;
+                }
+            };
+            // Cancellation can race the platform service's startup.
+            if generation.load(Ordering::SeqCst) != ticket {
+                return;
+            }
             let (recording, mut events) = client.start_voice_recording(conversation);
             {
                 let mut slot = session.lock().unwrap();
@@ -130,6 +142,10 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             while let Some(event) = events.recv().await {
                 if generation.load(Ordering::SeqCst) != ticket {
                     return;
+                }
+                #[cfg(target_os = "android")]
+                if matches!(&event, RecordingEvent::Ready | RecordingEvent::Finished(_) | RecordingEvent::Cancelled) {
+                    microphone_lease.take();
                 }
                 match event {
                     RecordingEvent::Finished(note) => {

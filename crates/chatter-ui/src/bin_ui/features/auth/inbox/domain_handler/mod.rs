@@ -38,6 +38,8 @@ pub async fn handle_domain_event(
     ui_ctx: &Arc<ChatterClient>,
 ) {
     match event {
+        // Update discovery has its own subscriber and does not alter chat state.
+        DomainEvent::UpdateCheckRequested => {}
         // =========================================================================
         // DM Bootstrap Completed
         // =========================================================================

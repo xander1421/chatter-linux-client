@@ -3,7 +3,7 @@ use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
 use slint::{ComponentHandle, LogicalSize};
 
 slint::slint! {
-    import { Sidebar } from "../../ui/sidebar/sidebar.slint";
+    import { MainChatShell } from "../../ui/main_chat_shell.slint";
     import { SettingsScreen } from "../../ui/settings/settings_screen.slint";
     import { MobileBottomNav } from "../../ui/components/mobile_bottom_nav.slint";
     import { UpdateGlobal } from "../../ui/update/update_global.slint";
@@ -23,11 +23,13 @@ slint::slint! {
             UpdateGlobal.error = "Update failed: invalid artifact signature";
             UpdateGlobal.installed-version = "0.1.0-rc122";
         }
-        if !root.about: Sidebar {
-            width: root.phone ? parent.width : 300px;
+        if !root.about: MainChatShell {
+            width: parent.width;
             height: parent.height;
-            mobile-mode: root.phone;
-            bottom-inset: root.phone ? 64px : 0px;
+            compact-layout: root.phone;
+            is-small-screen: root.phone;
+            is-mobile-platform: root.phone;
+            safe-area-bottom: root.phone ? 64px : 0px;
         }
         if root.about: SettingsScreen {
             width: parent.width;

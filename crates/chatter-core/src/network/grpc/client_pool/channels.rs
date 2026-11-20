@@ -57,14 +57,18 @@ impl GrpcClientPool {
     pub fn channel(&self) -> GrpcTransport {
         // Fast path: already connected.
         if let Some(ch) = self.channel.read().clone() {
-            return ch;
+            if !self.quic_promotion_ready(&ch) {
+                return ch;
+            }
         }
 
         // Slow path: create a lazy channel so callers never panic.
         let mut guard = self.channel.write();
         // Double-check after acquiring write lock.
         if let Some(ch) = guard.clone() {
-            return ch;
+            if !self.quic_promotion_ready(&ch) {
+                return ch;
+            }
         }
         let endpoint = self.endpoint.read().clone();
 
@@ -74,6 +78,19 @@ impl GrpcClientPool {
         // path must never do: callers rely on channel() never blocking.
         #[cfg(feature = "quic")]
         {
+            if *self.transport_mode.read() == TransportMode::Direct {
+                let uri = self.direct_url.read().parse::<http::Uri>().ok();
+                if let Some(uri) = uri.filter(|uri| uri.scheme_str() == Some("https")) {
+                    let mut state = self.quic_probe.write();
+                    if *state == QuicProbeState::Untried {
+                        *state = QuicProbeState::Probing;
+                        let generation = self.quic_probe_generation.load(
+                            std::sync::atomic::Ordering::Acquire,
+                        );
+                        self.spawn_quic_probe(uri, generation);
+                    }
+                }
+            }
             let quic_ready = *self.transport_mode.read() == TransportMode::Direct
                 && *self.quic_probe.read() == QuicProbeState::Working;
             if quic_ready {
@@ -81,9 +98,7 @@ impl GrpcClientPool {
                 if let Ok(uri) = server_url.parse::<http::Uri>() {
                     match super::super::transport::build_quic(uri) {
                         Ok(channel) => {
-                            tracing::warn!(
-                                "GrpcClientPool: no active connection — created lazy QUIC channel (RPCs will attempt on-demand connect)"
-                            );
+                            tracing::info!("transport: HTTP/3 (QUIC), promoting direct RPC channel");
                             *guard = Some(channel.clone());
                             return channel;
                         }
@@ -114,6 +129,22 @@ impl GrpcClientPool {
         );
         *guard = Some(channel.clone());
         channel
+    }
+
+    /// A late successful probe upgrades future calls, rather than remaining
+    /// HTTP/2 until a disconnect. Existing streams keep their own channel.
+    fn quic_promotion_ready(&self, channel: &GrpcTransport) -> bool {
+        #[cfg(feature = "quic")]
+        {
+            !channel.is_http3()
+                && *self.transport_mode.read() == TransportMode::Direct
+                && *self.quic_probe.read() == QuicProbeState::Working
+        }
+        #[cfg(not(feature = "quic"))]
+        {
+            let _ = channel;
+            false
+        }
     }
 
     /// Try to get the channel, returning None if not connected.

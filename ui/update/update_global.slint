@@ -9,6 +9,7 @@ export global UpdateGlobal {
     in-out property <string> notice: "";
     in-out property <string> progress: "";
     in-out property <bool> play-distribution: false;
+    out property <bool> offer-visible: state == "available" || state == "confirm-cellular" || state == "downloading" || state == "ready" || state == "installing" || state == "error";
     callback check();
     callback update();
 }

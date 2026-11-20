@@ -617,6 +617,7 @@ fn init_tracing() {
         // go through the unchanged release redactor.
         .add_directive("call_setup=info".parse().unwrap())
         .add_directive("gif_playback=info".parse().unwrap())
+        .add_directive("network_transport=info".parse().unwrap())
         .add_directive("glycin=warn".parse().unwrap())
         .add_directive("glycin_utils=warn".parse().unwrap())
         .add_directive("zbus=warn".parse().unwrap());

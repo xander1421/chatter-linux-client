@@ -1,6 +1,47 @@
 use super::*;
 
 impl GrpcClientPool {
+    #[cfg(feature = "quic")]
+    pub(super) fn spawn_quic_probe(
+        &self,
+        uri: http::Uri,
+        probe_generation: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        let state = self.quic_probe.clone();
+        let generation = self.quic_probe_generation.clone();
+        let task = tokio::spawn(async move {
+            let outcome = tokio::time::timeout(
+                QUIC_PROBE_TIMEOUT,
+                super::super::transport::probe_quic(&uri),
+            )
+            .await;
+            let verdict = match outcome {
+                Ok(Ok(())) => QuicProbeState::Working,
+                Ok(Err(e)) => {
+                    tracing::info!(error = %e, "QUIC unreachable — staying on TCP");
+                    QuicProbeState::Failed
+                }
+                Err(_) => {
+                    tracing::info!("QUIC probe timed out — staying on TCP");
+                    QuicProbeState::Failed
+                }
+            };
+            let mut current = state.write();
+            if *current == QuicProbeState::Probing
+                && generation.load(std::sync::atomic::Ordering::Acquire) == probe_generation
+            {
+                *current = verdict;
+            }
+        });
+        let mut active = self.quic_probe_task.lock();
+        if self.quic_probe_generation.load(std::sync::atomic::Ordering::Acquire) != probe_generation {
+            task.abort();
+        } else if let Some(previous) = active.replace(task.abort_handle()) {
+            previous.abort();
+        }
+        task
+    }
+
     /// Connect to the server.
     ///
     /// Establishes the underlying connection when dialing performs I/O. Cached
@@ -111,11 +152,11 @@ impl GrpcClientPool {
     ///
     /// Only `TransportMode::Direct` over `https://` ever attempts QUIC — onion
     /// carries TCP (Tor has no UDP relay support) and plain `http://` has no
-    /// TLS 1.3 to negotiate ALPN over. Reachability is probed once per pool
-    /// (cached in `quic_probe`): a hit reuses the QUIC transport on every
+    /// TLS 1.3 to negotiate ALPN over. Reachability is probed once per route
+    /// generation (cached in `quic_probe`): a hit reuses the QUIC transport on every
     /// subsequent dial, a miss (or a timeout — some networks silently drop
     /// UDP) falls back to the existing TCP/HTTP2 path for the rest of the
-    /// pool's life, matching today's behavior exactly when QUIC is off or
+    /// route's life, matching the existing behavior when QUIC is off or
     /// unreachable.
     pub(super) async fn dial(
         &self,
@@ -124,7 +165,7 @@ impl GrpcClientPool {
     ) -> Result<(GrpcTransport, bool), tonic::transport::Error> {
         // QUIC target for this dial, when its probe is still in flight.
         #[cfg(feature = "quic")]
-        let mut racing_quic: Option<(http::Uri, u64)> = None;
+        let mut racing_quic: Option<(http::Uri, u64, tokio::task::JoinHandle<()>)> = None;
 
         #[cfg(feature = "quic")]
         {
@@ -161,35 +202,8 @@ impl GrpcClientPool {
                     // TCP tunnel) cost QUIC_PROBE_TIMEOUT — 3s of black screen
                     // — on every cold start before anything rendered.
                     QuicProbeState::Untried => {
-                        let state = self.quic_probe.clone();
-                        let generation = self.quic_probe_generation.clone();
-                        let probe_uri = uri.clone();
-                        tokio::spawn(async move {
-                            let outcome = tokio::time::timeout(
-                                QUIC_PROBE_TIMEOUT,
-                                super::super::transport::probe_quic(&probe_uri),
-                            )
-                            .await;
-                            let verdict = match outcome {
-                                Ok(Ok(())) => QuicProbeState::Working,
-                                Ok(Err(e)) => {
-                                    tracing::info!(error = %e, "QUIC unreachable — staying on TCP");
-                                    QuicProbeState::Failed
-                                }
-                                Err(_) => {
-                                    tracing::info!("QUIC probe timed out — staying on TCP");
-                                    QuicProbeState::Failed
-                                }
-                            };
-                            let mut current = state.write();
-                            if *current == QuicProbeState::Probing
-                                && generation.load(std::sync::atomic::Ordering::Acquire)
-                                    == probe_generation
-                            {
-                                *current = verdict;
-                            }
-                        });
-                        racing_quic = Some((uri, probe_generation));
+                        let task = self.spawn_quic_probe(uri.clone(), probe_generation);
+                        racing_quic = Some((uri, probe_generation, task));
                     }
                     QuicProbeState::Probing | QuicProbeState::Failed => {}
                 }
@@ -202,23 +216,29 @@ impl GrpcClientPool {
         let channel = if mode == TransportMode::Onion {
             endpoint
                 .connect_with_connector(self.onion_connector())
-                .await?
+                .await
         } else {
             endpoint
                 .connect_with_connector(crate::network::pq_tls::grpc_connector(&endpoint))
-                .await?
+                .await
         };
         #[cfg(not(feature = "onion"))]
         let channel = {
             let _ = mode;
             endpoint
                 .connect_with_connector(crate::network::pq_tls::grpc_connector(&endpoint))
-                .await?
+                .await
         };
 
         // The probe won the race: prefer QUIC now rather than at the next dial.
         #[cfg(feature = "quic")]
-        if let Some((uri, probe_generation)) = racing_quic {
+        if let Some((uri, probe_generation, mut task)) = racing_quic {
+            let grace = if channel.is_ok() {
+                QUIC_PREFERENCE_GRACE
+            } else {
+                QUIC_PROBE_TIMEOUT
+            };
+            let _ = tokio::time::timeout(grace, &mut task).await;
             let probe = self.quic_probe.read();
             if *probe == QuicProbeState::Working
                 && self
@@ -233,7 +253,7 @@ impl GrpcClientPool {
             }
         }
 
-        Ok((channel.into(), true))
+        Ok((channel?.into(), true))
     }
 
     /// Dial the server and throw the connection away: a reachability probe.

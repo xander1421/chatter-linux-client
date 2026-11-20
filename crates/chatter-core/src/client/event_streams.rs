@@ -11,6 +11,28 @@ impl ChatterClient {
         self.services.event_bus.subscribe_domain()
     }
 
+    /// Coalesced hints from the existing user-event connection. The receiver
+    /// owns the fan-out task; no new server subscription is opened.
+    pub fn subscribe_update_checks(&self) -> tokio::sync::watch::Receiver<u64> {
+        let (tx, rx) = tokio::sync::watch::channel(0u64);
+        let mut events = self.services.event_bus.subscribe_domain();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tx.closed() => break,
+                    event = events.recv() => match event {
+                        Ok(DomainEvent::UpdateCheckRequested) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            tx.send_modify(|revision| *revision = revision.wrapping_add(1));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        _ => {}
+                    }
+                }
+            }
+        });
+        rx
+    }
+
     // ── Typed event streams (UI-facing, narrow) ─────────────────────────
     //
     // UI crates must not call `subscribe_domain()` directly. These helpers
@@ -262,5 +284,4 @@ impl ChatterClient {
         self.outgoing_typing
             .clear(move |conversation| Some(client.conversation(conversation.clone())));
     }
-
 }

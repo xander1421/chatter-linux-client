@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Chatter</string>
+    <string name="voice_recording_channel">Voice recording</string>
+    <string name="voice_recording_title">Recording voice message</string>
 </resources>

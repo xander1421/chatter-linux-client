@@ -73,6 +73,8 @@ impl GrpcClientPool {
             quic_probe: Arc::new(RwLock::new(QuicProbeState::Untried)),
             #[cfg(feature = "quic")]
             quic_probe_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "quic")]
+            quic_probe_task: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(feature = "onion")]
             onion_tor: Arc::new(tokio::sync::OnceCell::new()),
             #[cfg(feature = "onion")]
@@ -230,6 +232,15 @@ impl GrpcClientPool {
     /// (direct) that then outlived the switch to onion.
     pub(super) fn swap_endpoint(&self, endpoint: Endpoint, mode: TransportMode) {
         let mut channel = self.channel.write();
+        #[cfg(feature = "quic")]
+        {
+            // Stop direct UDP work before changing origin or entering Tor.
+            self.quic_probe_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            if let Some(task) = self.quic_probe_task.lock().take() {
+                task.abort();
+            }
+            *self.quic_probe.write() = QuicProbeState::Untried;
+        }
         *self.endpoint.write() = endpoint;
         *self.transport_mode.write() = mode;
         self.transport_gen

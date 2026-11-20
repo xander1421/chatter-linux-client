@@ -86,6 +86,9 @@ pub async fn spawn_user_events_stream(
                 Ok(mut stream) => {
                     connected_at = Some(Instant::now());
                     tracing::info!("Subscribed to user events stream");
+                    if let Some(tx) = domain_tx.as_ref() {
+                        let _ = tx.send(DomainEvent::UpdateCheckRequested);
+                    }
 
                     // Friend requests and profile edits arrive only as pushes
                     // on this stream; refetch what a down stream missed. After
@@ -226,6 +229,11 @@ async fn handle_user_event(
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     match event.event {
+        Some(user_event::Event::UpdateAvailable(_)) => {
+            if let Some(tx) = domain_tx {
+                let _ = tx.send(DomainEvent::UpdateCheckRequested);
+            }
+        }
         // The server's keepalive (also its first item once subscribed): not data.
         Some(user_event::Event::Heartbeat(_)) => {
             tracing::trace!("User events stream heartbeat");
@@ -561,5 +569,36 @@ mod heartbeat_tests {
             domain_rx.try_recv().is_err(),
             "a heartbeat produced a domain event"
         );
+    }
+    #[tokio::test]
+    async fn a_release_hint_requests_verification_without_touching_chat_state() {
+        let db = crate::services::channel::membership_log::test_support::test_db();
+        let settings =
+            crate::storage::repositories::settings_repo::SettingsRepository::new(db.clone());
+        let users = Arc::new(UserRepository::new(db));
+        let pool = Arc::new(GrpcClientPool::new("https://127.0.0.1:1").unwrap());
+        let (inbox, mut inbox_rx) = broadcast::channel(4);
+        let (domain, mut domain_rx) = broadcast::channel(4);
+        handle_user_event(
+            UserEvent {
+                timestamp: 1,
+                event: Some(user_event::Event::UpdateAvailable(
+                    crate::proto::chat_v1::ReleaseUpdateHint {},
+                )),
+            },
+            &pool,
+            &inbox,
+            &users,
+            &settings,
+            None,
+            Some(&domain),
+        )
+        .await;
+        assert!(matches!(
+            domain_rx.try_recv(),
+            Ok(DomainEvent::UpdateCheckRequested)
+        ));
+        assert!(domain_rx.try_recv().is_err());
+        assert!(inbox_rx.try_recv().is_err());
     }
 }

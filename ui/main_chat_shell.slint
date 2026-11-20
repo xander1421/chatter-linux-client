@@ -1,3 +1,5 @@
+import { UpdateBanner } from "sidebar/update_banner.slint";
+import { UpdateGlobal } from "update/update_global.slint";
 import { DesktopChrome } from "theme/desktop_chrome.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
@@ -86,7 +88,22 @@ export component MainChatShell inherits Rectangle {
         && ChatPane.channel-name != "" && !ChatPane.loading-messages
         && !CallView.active-call-visible && !CallView.active-call-fullscreen
         && !ChatPane.selection-mode && !ChatPane.thread-panel-visible;
+    private property <length> update-notice-height: UpdateGlobal.offer-visible && !CallView.active-call-fullscreen
+        ? Spacing.button-height + Spacing.md + Spacing.sm * 2 : 0px;
     background: transparent;
+
+    // Reserve space above the page, below any existing top inset.
+    if UpdateGlobal.offer-visible && !CallView.active-call-fullscreen: Rectangle {
+        y: root.top-inset;
+        width: parent.width;
+        height: root.update-notice-height;
+        UpdateBanner {
+            width: min(parent.width - Spacing.sm * 2, 640px);
+            x: (parent.width - self.width) / 2;
+            y: Spacing.sm;
+            height: parent.height - Spacing.sm * 2;
+        }
+    }
 
     // Leaving or ending our call drops the channel's "Call in progress"
     // banner at once: it was polled during the call and showed the call we
@@ -101,7 +118,7 @@ export component MainChatShell inherits Rectangle {
     }
 
         Rectangle {
-            y: root.top-inset;
+            y: root.top-inset + root.update-notice-height;
             width: 100%;
             height: max(0px, parent.height - self.y);
             clip: true;
@@ -564,8 +581,9 @@ export component MainChatShell inherits Rectangle {
 
         MainStatusNotices {
             z: 1;
+            y: root.top-inset + root.update-notice-height;
             width: parent.width;
-            height: parent.height;
+            height: max(0px, parent.height - self.y);
             is-signed-in: AuthFlow.is-signed-in;
             chat-covers-screen: root.compact-layout && SidebarPane.mobile-show-chat;
             mesh-view: (!root.compact-layout || SidebarPane.mobile-show-chat)

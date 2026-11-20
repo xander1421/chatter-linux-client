@@ -204,6 +204,7 @@ impl EventHandlers {
     /// store update method. It is synchronous to allow easy testing.
     pub fn handle_domain_event(&self, event: DomainEvent) {
         match event {
+            DomainEvent::UpdateCheckRequested => {}, // Consumed by the updater, not chat state.
             event @ DomainEvent::MessageReceived { .. } => self.handle_messages_event(event),
             event @ DomainEvent::MessageEdited { .. } => self.handle_messages_event(event),
             event @ DomainEvent::MessageDeleted { .. } => self.handle_messages_event(event),

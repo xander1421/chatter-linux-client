@@ -8,7 +8,9 @@ import { Button } from "../components/button.slint";
 
 export component UpdateBanner inherits GlassSurface {
     material-level: 2;
-    // The update notice grows from its reserved sidebar slot. A one-frame
+    accessible-role: groupbox;
+    accessible-label: @tr("App update");
+    // The update notice grows inside its reserved top slot. A one-frame
     // start lets the card keep its layout size while the surface springs in.
     property <float> arrival: 0;
     init => { reveal.start(); }

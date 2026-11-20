@@ -12,6 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod automatic;
 pub mod rekor;
 
 const DOMAIN: &[u8] = b"chatter-release-update-v1\0";

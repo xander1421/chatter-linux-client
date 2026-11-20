@@ -33,3 +33,5 @@ pub mod media_export;
 pub mod pdf_renderer;
 
 pub mod video_thumbnail;
+
+pub mod voice_recording;

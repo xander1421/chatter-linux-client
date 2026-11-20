@@ -34,6 +34,20 @@ pub struct RecordingTransport<S, R = fn(ServerStatus)> {
 
 pub type GrpcTransport = RecordingTransport<RawTransport>;
 
+impl GrpcTransport {
+    /// The transport selected for this channel, not a reachability verdict.
+    pub fn is_http3(&self) -> bool {
+        #[cfg(feature = "quic")]
+        {
+            matches!(self.inner, RawTransport::Quic(_))
+        }
+        #[cfg(not(feature = "quic"))]
+        {
+            false
+        }
+    }
+}
+
 impl From<tonic::transport::Channel> for GrpcTransport {
     fn from(channel: tonic::transport::Channel) -> Self {
         Self {
@@ -76,6 +90,29 @@ where
         Box::pin(async move {
             match future.await {
                 Ok(response) => {
+                    // One confirmation per protocol/process, from a real reply.
+                    // Never log headers, credentials, paths or message bodies.
+                    static SEEN_PROTOCOLS: std::sync::atomic::AtomicU8 =
+                        std::sync::atomic::AtomicU8::new(0);
+                    let (bit, protocol) = match response.version() {
+                        http::Version::HTTP_3 => (1, "h3"),
+                        http::Version::HTTP_2 => (2, "h2"),
+                        _ => (0, "other"),
+                    };
+                    if bit != 0
+                        && SEEN_PROTOCOLS.fetch_or(bit, std::sync::atomic::Ordering::Relaxed) & bit
+                            == 0
+                    {
+                        match protocol {
+                            "h3" => {
+                                tracing::info!(target: "network_transport::h3_response", "RPC transport confirmed by server response")
+                            }
+                            "h2" => {
+                                tracing::info!(target: "network_transport::h2_response", "RPC transport confirmed by server response")
+                            }
+                            _ => {}
+                        }
+                    }
                     // An HTTP response, including grpc-status in headers or
                     // trailers, proves contact. Unavailable/DeadlineExceeded
                     // sent by the server are application replies, not outages.
@@ -266,10 +303,35 @@ mod quic_enabled {
         Ok(config)
     }
 
-    /// Resolve `uri`'s host:port to a socket address. IP-literal authorities
-    /// parse directly; DNS names go through the resolver.
+    /// tonic-h3's connector also resolves the literal authority, so normalize
+    /// the URI for both the probe and actual RPCs. A normal HTTPS URL omits
+    /// :443; lookup_host("chat.offai.app") otherwise fails before sending UDP.
+    fn quic_uri(uri: http::Uri) -> Result<http::Uri, BoxError> {
+        if uri.scheme_str() != Some("https") || uri.host().is_none() {
+            return Err("QUIC requires an HTTPS origin".into());
+        }
+        if uri.port_u16().is_some() {
+            return Ok(uri);
+        }
+        let authority = format!("{}:443", uri.authority().ok_or("missing authority")?);
+        let mut parts = uri.into_parts();
+        parts.authority = Some(authority.parse()?);
+        Ok(http::Uri::from_parts(parts)?)
+    }
+
+    // URI authorities retain IPv6 brackets, but TLS server names must not.
+    fn quic_server_name(uri: &http::Uri) -> Result<&str, BoxError> {
+        let host = uri.host().ok_or("QUIC endpoint URI has no host")?;
+        Ok(host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(host))
+    }
+
+    /// Resolve the normalized host:port, preserving an explicit port.
     async fn resolve(uri: &http::Uri) -> Result<std::net::SocketAddr, BoxError> {
-        let authority = uri
+        let normalized = quic_uri(uri.clone())?;
+        let authority = normalized
             .authority()
             .ok_or("QUIC endpoint URI has no host")?
             .as_str();
@@ -280,6 +342,56 @@ mod quic_enabled {
             .await?
             .next()
             .ok_or_else(|| BoxError::from(format!("no addresses resolved for {authority}")))
+    }
+
+    #[cfg(test)]
+    mod endpoint_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn https_without_explicit_port_uses_443() {
+            let address = resolve(&"https://127.0.0.1".parse().unwrap())
+                .await
+                .expect("a normal HTTPS origin must be probeable over QUIC");
+            assert_eq!(address, "127.0.0.1:443".parse().unwrap());
+        }
+
+        #[tokio::test]
+        async fn explicit_https_port_is_preserved() {
+            let address = resolve(&"https://127.0.0.1:9443".parse().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(address, "127.0.0.1:9443".parse().unwrap());
+        }
+
+        #[tokio::test]
+        async fn ipv6_https_without_port_uses_443() {
+            let address = resolve(&"https://[::1]".parse().unwrap()).await.unwrap();
+            assert_eq!(address, "[::1]:443".parse().unwrap());
+        }
+
+        #[tokio::test]
+        async fn hostname_https_defaults_to_443() {
+            let address = resolve(&"https://localhost".parse().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(address.port(), 443);
+            assert!(address.ip().is_loopback());
+        }
+
+        #[test]
+        fn ipv6_tls_name_does_not_include_uri_brackets() {
+            let uri = quic_uri("https://[::1]".parse().unwrap()).unwrap();
+            assert_eq!(quic_server_name(&uri).unwrap(), "::1");
+        }
+
+        #[test]
+        fn rpc_connector_gets_the_same_explicit_port_as_the_probe() {
+            let uri = quic_uri("https://chat.offai.app/rpc?x=1".parse().unwrap()).unwrap();
+            assert_eq!(uri.authority().unwrap().as_str(), "chat.offai.app:443");
+            assert_eq!(uri.path_and_query().unwrap().as_str(), "/rpc?x=1");
+            assert!(quic_uri("http://chat.offai.app".parse().unwrap()).is_err());
+        }
     }
 
     /// Bind a local QUIC client endpoint trusting only the pinned chatter CA.
@@ -298,10 +410,8 @@ mod quic_enabled {
     /// each resolved address). Always succeeds even when nothing answers on
     /// the other end; use [`probe_quic`] first to find that out.
     pub fn build_quic(uri: http::Uri) -> Result<super::GrpcTransport, BoxError> {
-        let host = uri
-            .host()
-            .ok_or("QUIC endpoint URI has no host")?
-            .to_string();
+        let uri = quic_uri(uri)?;
+        let host = quic_server_name(&uri)?.to_string();
         let endpoint = client_endpoint()?;
         let connector = tonic_h3::quinn::H3QuinnConnector::new(uri.clone(), host, endpoint);
         Ok(super::RecordingTransport {
@@ -317,10 +427,7 @@ mod quic_enabled {
     /// their own timeout: QUIC/UDP is blocked on some networks (hotel wifi,
     /// corporate firewalls) and a hung handshake must not block forever.
     pub async fn probe_quic(uri: &http::Uri) -> Result<(), BoxError> {
-        let host = uri
-            .host()
-            .ok_or("QUIC endpoint URI has no host")?
-            .to_string();
+        let host = quic_server_name(&uri)?.to_string();
         let addr = resolve(uri).await?;
         let endpoint = client_endpoint()?;
         endpoint.connect(addr, &host)?.await?;
