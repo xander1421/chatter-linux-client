@@ -5824,6 +5824,7 @@ msgstr "Sair deste canal? Você não vai receber mensagens novas."
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
 #: ui/sidebar/sidebar.slint:587
+#: ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr "Adicionar contato"
 
@@ -5953,3 +5954,7 @@ msgstr "ATIVIDADE"
 #: ui/components/mini_player.slint
 msgid "Go to message"
 msgstr "Ir para a mensagem"
+
+#: ui/server_records/screen.slint:110
+msgid "Unread: {}"
+msgstr "Não lida: {}"

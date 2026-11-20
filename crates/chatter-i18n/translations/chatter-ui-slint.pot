@@ -5823,6 +5823,7 @@ msgstr ""
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574 ui/sidebar/sidebar.slint:587
+#: ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr ""
 
@@ -5953,4 +5954,8 @@ msgstr ""
 
 #: ui/components/mini_player.slint
 msgid "Go to message"
+msgstr ""
+
+#: ui/server_records/screen.slint:110
+msgid "Unread: {}"
 msgstr ""

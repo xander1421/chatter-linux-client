@@ -53,7 +53,7 @@ export component ConnectionBanner inherits Rectangle {
     // Narrow screen. Same idiom as `ui/chat/chat_header.slint` (`tight` /
     // `mesh-tight`): a width test, not a platform test.
     //
-    // This banner is drawn on every screen for as long as the server is gone, so
+    // This banner can persist on server-backed screens during an outage, so
     // on a phone it is the one piece of chrome that must cost a single line. Two
     // sentences at 411dp is nine percent of the display permanently spent on a
     // fact that fits in three words, and it pushes the whole app down to say it.
@@ -89,13 +89,6 @@ export component ConnectionBanner inherits Rectangle {
     // — the mesh header and its context strip both say it — not stapled above
     // the conversation list.
     //
-    // And not while the user is *in* a mesh conversation, where it is said twice.
-    // There the header carries the peer count on its own line and the strip below
-    // it explains what a send means when nobody is in range — so this sentence
-    // repeated "Nobody is in range yet; what you send waits to be carried" a few
-    // pixels above a strip saying the same thing, wrapping to two lines to do it.
-    // What the banner still says there is the part the mesh surfaces cannot: that
-    // the *server* is unreachable, which is why it is open at all.
     property <bool> show-mesh-line:
         !root.tight && MeshGlobal.enabled && root.server-unreachable && MeshGlobal.active-id == "";
 

@@ -107,7 +107,7 @@ export component ServerRecordsScreen inherits Rectangle {
                         height: max(44px + 2 * Spacing.md, inbox-row-content.preferred-height);
                         background: row.read || row.quiet ? Colors.surface : Colors.surface-section;
                         accessible-role: button;
-                        accessible-label: row.title;
+                        accessible-label: !row.read && !row.quiet ? @tr("Unread: {}", row.title) : row.title;
                         accessible-action-default => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); }
                         row-keys := FocusScope {
                             width: 0px; height: 0px;

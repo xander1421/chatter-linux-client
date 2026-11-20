@@ -8,6 +8,7 @@ import { Materials } from "theme/materials.slint";
 export component MainStatusNotices inherits Rectangle {
     in property <bool> is-signed-in;
     in property <bool> chat-covers-screen;
+    in property <bool> mesh-view;
     in property <string> connection-status;
     in property <bool> server-unreachable;
     in property <int> reconnect-attempt;
@@ -27,7 +28,7 @@ export component MainStatusNotices inherits Rectangle {
         connection-state: root.connection-status;
         server-unreachable: root.server-unreachable;
         reconnect-attempt: root.reconnect-attempt;
-        suppressed: root.connection-dismissed;
+        suppressed: root.connection-dismissed || root.mesh-view;
         dismissed => { root.connection-dismissed = true; }
         animate y { duration: Materials.motion-standard; easing: Materials.spring; }
     }
