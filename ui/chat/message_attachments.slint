@@ -22,7 +22,6 @@ export component MessageAttachments inherits VerticalLayout {
     in property <bool> is-media-playing;
     in property <length> message-width;
     in property <bool> mobile;
-    in property <bool> swipe-active;
     in property <length> text-max-width;
     in property <bool> edge-to-edge: false;
     in property <length> media-width: 0px;
@@ -39,9 +38,6 @@ export component MessageAttachments inherits VerticalLayout {
     in property <bool> disappearing;
     in property <bool> is-pinned;
     in property <bool> mesh-delivery;
-    callback begin-swipe(length, length);
-    callback move-swipe(length, length);
-    callback end-swipe(bool);
     callback open-image(string, length, length, length, length);
     callback open-other-attachment(string);
     callback request-menu(length, length, length, length, length, length);
@@ -137,9 +133,6 @@ export component MessageAttachments inherits VerticalLayout {
             HoldArea {
                 enabled-for-touch: root.mobile;
                 mouse-cursor: pointer;
-                gesture-down(x, y) => { root.begin-swipe(x, y); }
-                gesture-moved(x, y) => { root.move-swipe(x, y); }
-                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 // Without these TalkBack had no way to open a photo.
                 accessible-role: button;
                 accessible-label: @tr("Open photo {}", attachment.filename);
@@ -149,7 +142,7 @@ export component MessageAttachments inherits VerticalLayout {
                         self.width, self.height);
                 }
                 clicked => {
-                    if (self.hold-fired || root.swipe-active) { return; }
+                    if (self.hold-fired) { return; }
                     root.open-image(attachment.id,
                         self.absolute-position.x, self.absolute-position.y,
                         self.width, self.height);
@@ -333,9 +326,6 @@ export component MessageAttachments inherits VerticalLayout {
             img-touch := HoldArea {
                 enabled-for-touch: root.mobile;
                 mouse-cursor: pointer;
-                gesture-down(x, y) => { root.begin-swipe(x, y); }
-                gesture-moved(x, y) => { root.move-swipe(x, y); }
-                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 // Without these TalkBack had no way to open a photo.
                 accessible-role: button;
                 accessible-label: @tr("Open photo {}", attachment.filename);
@@ -345,7 +335,7 @@ export component MessageAttachments inherits VerticalLayout {
                         self.width, self.height);
                 }
                 clicked => {
-                    if (self.hold-fired || root.swipe-active) { return; }
+                    if (self.hold-fired) { return; }
                     root.open-image(attachment.id,
                         self.absolute-position.x, self.absolute-position.y,
                         self.width, self.height);
@@ -545,14 +535,11 @@ export component MessageAttachments inherits VerticalLayout {
             video-touch := HoldArea {
                 enabled-for-touch: root.mobile;
                 mouse-cursor: pointer;
-                gesture-down(x, y) => { root.begin-swipe(x, y); }
-                gesture-moved(x, y) => { root.move-swipe(x, y); }
-                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 accessible-role: button;
                 accessible-label: @tr("Play video {}", attachment.filename);
                 accessible-action-default => { root.open-other-attachment(attachment.id); }
                 clicked => {
-                    if (self.hold-fired || root.swipe-active) { return; }
+                    if (self.hold-fired) { return; }
                     root.open-other-attachment(attachment.id);
                 }
                 held => {
@@ -648,14 +635,11 @@ export component MessageAttachments inherits VerticalLayout {
             file-touch := HoldArea {
                 enabled-for-touch: root.mobile;
                 mouse-cursor: pointer;
-                gesture-down(x, y) => { root.begin-swipe(x, y); }
-                gesture-moved(x, y) => { root.move-swipe(x, y); }
-                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                 accessible-role: button;
                 accessible-label: @tr("Open file {}", attachment.filename);
                 accessible-action-default => { root.open-other-attachment(attachment.id); }
                 clicked => {
-                    if (self.hold-fired || root.swipe-active) { return; }
+                    if (self.hold-fired) { return; }
                     root.open-other-attachment(attachment.id);
                 }
                 held => {

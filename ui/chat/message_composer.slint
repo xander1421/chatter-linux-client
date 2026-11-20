@@ -249,10 +249,12 @@ export component MessageComposer inherits GlassSurface {
         * (action-shell-height + Spacing.xs
             + (has-attachments ? attachment-band-height + Spacing.xs : 0px)
             + (is-replying ? reply-row-height + Spacing.xs : 0px));
-    // The host already pads by the measured composer height, including the
-    // attachment and reply rows. Add only the action row as it lifts.
-    out property <length> list-clearance-extra: (root.collapsed && !root.keep-height) || root.recording-here
-        ? 0px : lift-layout * (Spacing.touch-target-min + Spacing.xs);
+    // The part of the composer's height that is only the lifted action row.
+    // The row rises into the clearance the message list already keeps below
+    // its last row, so the host takes it back out of the list's geometry:
+    // typing the first character must not move the messages.
+    out property <length> action-lift-height: (root.collapsed && !root.keep-height) || root.recording-here
+        ? 0px : lift-layout * (action-shell-height + Spacing.xs);
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     // Reserve the inline terminal only when a mic actually occupies it. In
     // rooms without voice recording, Send claims its width as lift advances.

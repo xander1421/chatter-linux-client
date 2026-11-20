@@ -11,18 +11,18 @@ fn stream(input: &[u8], jpeg: bool) -> Result<Option<Vec<u8>>, AttachmentError> 
     // Exercise partial reads as well as the usual file reader.
     let mut reader = GuardedReader::new(Cursor::new(input), 7);
     let dropped = if jpeg {
-        stream_jpeg_metadata(&mut reader, &mut output, input.len() as u64)?
+        stream_jpeg_metadata(&mut reader, &mut output, input.len() as u64, &mut None)?
     } else {
-        stream_png_metadata(&mut reader, &mut output, input.len() as u64)?
+        stream_png_metadata(&mut reader, &mut output, input.len() as u64, &mut None)?
     };
     Ok(dropped.then_some(output))
 }
 
 fn assert_parity(input: &[u8], jpeg: bool) {
     let bytes = if jpeg {
-        strip_jpeg_metadata(input)
+        strip_jpeg_metadata(input, &mut None)
     } else {
-        strip_png_metadata(input)
+        strip_png_metadata(input, &mut None)
     };
     match (bytes, stream(input, jpeg)) {
         (Ok(expected), Ok(actual)) => assert_eq!(actual, expected),
@@ -64,9 +64,9 @@ fn file_images_match_bytes_remove_metadata_and_preserve_pixels() {
         let source = dir.path().join(name);
         std::fs::write(&source, input).unwrap();
         let expected = if jpeg {
-            strip_jpeg_metadata(input)
+            strip_jpeg_metadata(input, &mut None)
         } else {
-            strip_png_metadata(input)
+            strip_png_metadata(input, &mut None)
         }
         .unwrap()
         .expect("GPS fixture must be rewritten");
@@ -93,6 +93,65 @@ fn file_images_match_bytes_remove_metadata_and_preserve_pixels() {
 }
 
 #[test]
+fn exif_orientation_is_baked_into_full_image_and_preview() {
+    fn encode_tagged(mut encoder: impl ImageEncoder) {
+        // Big-endian TIFF with one IFD0 SHORT entry: Orientation = 6 (90° CW).
+        let exif = b"MM\0*\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0";
+        encoder.set_exif_metadata(exif.to_vec()).unwrap();
+        // Stored pixels are landscape, dark on the left and light on the right.
+        let pixels =
+            image::GrayImage::from_fn(16, 8, |x, _| image::Luma([if x < 8 { 16 } else { 240 }]));
+        encoder
+            .write_image(pixels.as_raw(), 16, 8, image::ExtendedColorType::L8)
+            .unwrap();
+    }
+
+    for format in [ImageFormat::Jpeg, ImageFormat::Png, ImageFormat::WebP] {
+        let mut tagged = Vec::new();
+        match format {
+            ImageFormat::Jpeg => encode_tagged(image::codecs::jpeg::JpegEncoder::new(&mut tagged)),
+            ImageFormat::Png => encode_tagged(image::codecs::png::PngEncoder::new(&mut tagged)),
+            ImageFormat::WebP => {
+                encode_tagged(image::codecs::webp::WebPEncoder::new_lossless(&mut tagged))
+            }
+            _ => unreachable!(),
+        }
+
+        let preview = crate::media::ImageProcessor::inline_pixels_from_memory(&tagged).unwrap();
+        assert_eq!(preview.dimensions(), (8, 16), "{format:?} pending preview");
+        assert!(preview.get_pixel(4, 2)[0] < 40);
+        assert!(preview.get_pixel(4, 13)[0] > 210);
+
+        let SanitizeOutcome::Rewritten(bytes) = sanitize_media(&tagged).unwrap() else {
+            panic!("oriented {format:?} must be rewritten");
+        };
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), &tagged).unwrap();
+        let file = sanitize_media_file(source.path()).unwrap().unwrap();
+        assert_eq!(std::fs::read(file.path()).unwrap(), bytes);
+
+        let mut decoder = ImageReader::with_format(Cursor::new(&bytes), format)
+            .into_decoder()
+            .unwrap();
+        assert!(decoder.exif_metadata().unwrap().is_none());
+        let full = image::DynamicImage::from_decoder(decoder)
+            .unwrap()
+            .into_luma8();
+        assert_eq!(full.dimensions(), (8, 16));
+        assert!(full.get_pixel(4, 2)[0] < 40);
+        assert!(full.get_pixel(4, 13)[0] > 210);
+
+        let (sidecar, width, height) =
+            crate::media::ImageProcessor::generate_thumbnail_bytes(file.path()).unwrap();
+        assert_eq!((width, height), (384, 768));
+        let sidecar = image::load_from_memory(&sidecar).unwrap().into_luma8();
+        assert_eq!(sidecar.dimensions(), (width, height));
+        assert!(sidecar.get_pixel(width / 2, height / 4)[0] < 40);
+        assert!(sidecar.get_pixel(width / 2, 3 * height / 4)[0] > 210);
+    }
+}
+
+#[test]
 fn jpeg_marker_policy_and_every_truncated_prefix_match_bytes() {
     let mut input = vec![0xFF, 0xD8];
     for marker in [0xE0, 0xE1, 0xE2, 0xFE] {
@@ -107,7 +166,10 @@ fn jpeg_marker_policy_and_every_truncated_prefix_match_bytes() {
     }
     let output = stream(&input, true).unwrap().unwrap();
     // Check exact baseline result, including APP2/ICC and the opaque tail.
-    assert_eq!(output, strip_jpeg_metadata(&input).unwrap().unwrap());
+    assert_eq!(
+        output,
+        strip_jpeg_metadata(&input, &mut None).unwrap().unwrap()
+    );
     assert!(output.windows(16).any(|w| w == b"opaque scan tail"));
     for marker in [0xDA, 0xD9] {
         assert_parity(&[0xFF, 0xD8, 0xFF, marker, 0, 0], true);
@@ -246,7 +308,7 @@ fn large_kept_dropped_chunks_and_jpeg_tail_use_bounded_reads() {
         let input = Cursor::new(head).chain(io::repeat(0).take(LARGE + 4));
         let mut input = GuardedReader::new(input, usize::MAX);
         let mut output = CountingWriter::default();
-        let dropped = stream_png_metadata(&mut input, &mut output, LARGE + 20).unwrap();
+        let dropped = stream_png_metadata(&mut input, &mut output, LARGE + 20, &mut None).unwrap();
         assert_eq!(dropped, kind == b"tEXt");
         assert_eq!(input.read, LARGE + 20);
         assert_eq!(input.max_requested, IMAGE_COPY_BUFFER_SIZE);
@@ -260,7 +322,7 @@ fn large_kept_dropped_chunks_and_jpeg_tail_use_bounded_reads() {
         let len = u64::from(u16::MAX) + 8;
         let mut input = GuardedReader::new(input, usize::MAX);
         let mut output = CountingWriter::default();
-        let dropped = stream_jpeg_metadata(&mut input, &mut output, len).unwrap();
+        let dropped = stream_jpeg_metadata(&mut input, &mut output, len, &mut None).unwrap();
         assert_eq!(dropped, marker == 0xE1);
         assert_eq!(input.read, len);
         assert_eq!(input.max_requested, IMAGE_COPY_BUFFER_SIZE);
@@ -270,7 +332,7 @@ fn large_kept_dropped_chunks_and_jpeg_tail_use_bounded_reads() {
     let input = Cursor::new(head).chain(io::repeat(0).take(LARGE));
     let mut input = GuardedReader::new(input, usize::MAX);
     let mut output = CountingWriter::default();
-    assert!(!stream_jpeg_metadata(&mut input, &mut output, LARGE + 4).unwrap());
+    assert!(!stream_jpeg_metadata(&mut input, &mut output, LARGE + 4, &mut None).unwrap());
     assert_eq!(input.read, LARGE + 4);
     assert_eq!(input.max_requested, IMAGE_COPY_BUFFER_SIZE);
     assert_eq!(output.0, LARGE + 4);
@@ -332,12 +394,14 @@ fn partial_temps_are_unlinked_on_errors_and_unchanged_images() {
                 &mut Cursor::new(input),
                 &mut FailingWriter,
                 input.len() as u64,
+                &mut None,
             )
         } else {
             stream_png_metadata(
                 &mut Cursor::new(input),
                 &mut FailingWriter,
                 input.len() as u64,
+                &mut None,
             )
         };
         assert!(matches!(result, Err(AttachmentError::FileError(_))));

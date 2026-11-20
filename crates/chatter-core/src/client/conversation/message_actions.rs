@@ -560,6 +560,9 @@ impl ConversationHandle {
             };
         }
 
+        let keep_attempting = self.storage_scope().is_ok_and(|scope| {
+            scope.kind == ConversationType::SavedMessages
+        });
         let mut result = SelectedDeleteResult::default();
         for (index, ((author, timestamp), id)) in targets.iter().zip(ids).enumerate() {
             let deletion = if self.require_deletion_session(&account, revision).is_err() {
@@ -570,10 +573,15 @@ impl ConversationHandle {
                     .map_err(SelectedDeleteFailureReason::Operation)
             };
             if let Err(reason) = deletion {
+                let stop = !keep_attempting
+                    || matches!(reason, SelectedDeleteFailureReason::SessionChanged);
                 result.failed_ids.push(SelectedDeleteFailure {
                     id: id.clone(),
                     reason,
                 });
+                if !stop {
+                    continue;
+                }
                 result
                     .failed_ids
                     .extend(
@@ -585,12 +593,12 @@ impl ConversationHandle {
                                 reason: SelectedDeleteFailureReason::NotAttempted,
                             }),
                     );
-                result.partial = !result.deleted_ids.is_empty();
                 break;
             }
             result.deleted_ids.push(id.clone());
             let _ = completed.send(vec![(*author, *timestamp)]);
         }
+        result.partial = !result.deleted_ids.is_empty() && !result.failed_ids.is_empty();
         result
     }
 

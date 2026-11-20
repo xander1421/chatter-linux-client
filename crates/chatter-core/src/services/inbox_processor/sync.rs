@@ -77,40 +77,33 @@ impl InboxEventProcessor {
                 }
             }
 
+            InboxEvent::SavedDeletionApplied { owner, message_id } => {
+                if self.message_service.current_user_id().ok().as_ref() == Some(owner) {
+                    self.event_bus.emit_domain(DomainEvent::DeleteForMeSync {
+                        conversation_id: (*owner).into(),
+                        target_author_id: *owner,
+                        target_message_id: *message_id,
+                        timestamp: TimestampNanos::now().as_u64(),
+                        saved_deletion_persisted: true,
+                    });
+                }
+            }
+
             InboxEvent::ChannelDeleteForMe {
                 sender_id,
                 conversation_id,
                 target_author_aci,
                 target_sent_timestamp,
-                saved_message_id,
-                saved_messages_scope,
             } => {
-                let result = if *saved_messages_scope || !saved_message_id.is_empty() {
-                    persist_saved_delete_for_me_sync(
-                        &self.message_service.message_repo,
-                        self.message_service.current_user_id().ok(),
-                        *sender_id,
-                        conversation_id,
-                        target_author_aci,
-                        *target_sent_timestamp,
-                        saved_message_id,
-                        *saved_messages_scope,
-                    )
-                    .map(|event| {
-                        self.event_bus.emit_domain(event);
-                    })
-                } else {
-                    admit_delete_for_me_sync(
-                        &self.message_service.message_repo,
-                        &self.event_bus,
-                        self.message_service.current_user_id().ok(),
-                        *sender_id,
-                        conversation_id,
-                        target_author_aci,
-                        *target_sent_timestamp,
-                    )
-                };
-                if let Err(error) = result {
+                if let Err(error) = admit_delete_for_me_sync(
+                    &self.message_service.message_repo,
+                    &self.event_bus,
+                    self.message_service.current_user_id().ok(),
+                    *sender_id,
+                    conversation_id,
+                    target_author_aci,
+                    *target_sent_timestamp,
+                ) {
                     tracing::warn!(%error, "DeleteForMeSync rejected");
                 }
             }
@@ -230,7 +223,7 @@ pub(crate) fn persist_saved_delete_for_me_sync(
     sent_at: u64,
     message_id: &str,
     saved_scope: bool,
-) -> Result<DomainEvent, crate::error::StorageError> {
+) -> Result<crate::domain::ids::MessageId, crate::error::StorageError> {
     use crate::domain::ids::{ChannelId, MessageId};
     use crate::error::StorageError;
     let invalid = || StorageError::InvalidData("Invalid exact own Saved deletion".into());
@@ -249,13 +242,7 @@ pub(crate) fn persist_saved_delete_for_me_sync(
     // Transaction rechecks current persisted account and any existing row's
     // identity before recording a scoped tombstone, even when no row exists.
     repo.delete_own_saved_exact(&own, &id, sent_at)?;
-    Ok(DomainEvent::DeleteForMeSync {
-        conversation_id: conversation,
-        target_author_id: own,
-        target_message_id: id,
-        timestamp: TimestampNanos::now().as_u64(),
-        saved_deletion_persisted: true,
-    })
+    Ok(id)
 }
 
 /// A delete-for-me sync carries no storage-kind field (the sender,

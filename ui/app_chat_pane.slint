@@ -94,9 +94,10 @@ export global ChatPane {
     in-out property <bool> is-media-playing: false;  // True when audio is actively playing (not paused)
     in-out property <float> audio-progress: 0.0;  // Playback progress 0.0-1.0
     in-out property <string> audio-elapsed: "0:00";  // Elapsed time display
-    // Mini player: shown while the loaded track's conversation is not the
-    // one on screen (chatter-core decides). Playing/progress/elapsed above.
-    in property <bool> mini-player-visible: false;
+    // Mini player: core tracks the loaded audio and its source conversation.
+    // The app also accounts for which page is visible on a phone.
+    in property <bool> mini-player-loaded: false;
+    in property <bool> mini-player-elsewhere: false;
     in property <string> mini-player-title: "";
     in property <string> mini-player-sender: "";
     callback mini-player-toggle();
@@ -185,6 +186,7 @@ export global ChatPane {
     // ========== Composer GIF picker state ==========
     in-out property <bool> composer-gif-picker-visible: false;
     in-out property <bool> composer-attach-sheet-visible: false;
+    in property <bool> composer-attach-gallery-only: false;
     // Set with the conversation kind from core (`gif_picker_available`).
     in property <bool> composer-gifs-available: true;
     in property <bool> composer-gif-picker-loading: false;
@@ -251,6 +253,7 @@ export global ChatPane {
     in-out property <string> delete-confirm-timestamp;
     in-out property <bool> delete-confirm-everyone: false;
     in-out property <bool> delete-choosing: false;
+    in-out property <bool> plain-delete-confirmation: false;
     in-out property <bool> delete-choice-everyone: false;
     in-out property <bool> delete-choice-me: true;
     callback delete-everyone-message(string, string); // (delete for everyone)

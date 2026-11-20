@@ -20,7 +20,6 @@ import { ChatLayout, MessageItemData } from "chat/chat_layout.slint";
 import { SelectionBar, SelectionChrome } from "chat/selection_bar.slint";
 import { EmojiData } from "components/emoji_picker.slint";
 import { EmojiData } from "components/mod.slint";
-import { MiniPlayer } from "components/mini_player.slint";
 
 // Main conversation shell: sidebar, call dock, chat pane and status notices.
 export component MainChatShell inherits Rectangle {
@@ -30,6 +29,7 @@ export component MainChatShell inherits Rectangle {
     in property <length> chat-traffic-lights-lead;
     in-out property <float> chat-push-progress;
     in property <bool> compact-layout;
+    in property <length> top-inset;
     in-out property <string> composer-composed-text;
     in-out property <bool> composer-composing;
     in property <string> connection-status;
@@ -38,12 +38,8 @@ export component MainChatShell inherits Rectangle {
     in-out property <length> context-menu-anchor-left;
     in-out property <length> context-menu-anchor-right;
     in-out property <length> context-menu-anchor-top;
-    in-out property <bool> context-menu-preview-from-thread;
-    in-out property <MessageItemData> context-menu-preview-message;
-    in-out property <bool> context-menu-preview-mobile;
-    in-out property <length> context-menu-preview-row-width;
-    in-out property <length> context-menu-preview-row-x;
-    in-out property <length> context-menu-preview-row-y;
+    in-out property <bool> context-menu-from-thread;
+    in-out property <bool> context-menu-mobile;
     in property <length> drawer-keyboard-height;
     in property <int> insert-serial;
     in property <string> inserted-emoji;
@@ -103,27 +99,10 @@ export component MainChatShell inherits Rectangle {
         }
     }
 
-        VerticalLayout {
-            width: 100%;
-            height: parent.height;
-
-        // Above the list and the chat alike, so it covers neither the
-        // composer nor the bottom tab bar.
-        if ChatPane.mini-player-visible && !CallView.active-call-fullscreen: MiniPlayer {
-            title: ChatPane.mini-player-title;
-            sender: ChatPane.mini-player-sender;
-            playing: ChatPane.is-media-playing;
-            progress: ChatPane.audio-progress;
-            elapsed: ChatPane.audio-elapsed;
-            touch: root.is-mobile-platform;
-            toggle => { ChatPane.mini-player-toggle(); }
-            close => { ChatPane.mini-player-close(); }
-            open => { ChatPane.mini-player-open(); }
-        }
-
         Rectangle {
-            vertical-stretch: 1;
+            y: root.top-inset;
             width: 100%;
+            height: max(0px, parent.height - self.y);
             clip: true;
 
         // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
@@ -340,12 +319,8 @@ export component MainChatShell inherits Rectangle {
                     context-menu-anchor-right <=> root.context-menu-anchor-right;
                     context-menu-anchor-top <=> root.context-menu-anchor-top;
                     context-menu-content-top <=> ChatPane.context-menu-content-top;
-                    context-menu-preview-from-thread <=> root.context-menu-preview-from-thread;
-                    context-menu-preview-message <=> root.context-menu-preview-message;
-                    context-menu-preview-mobile <=> root.context-menu-preview-mobile;
-                    context-menu-preview-row-width <=> root.context-menu-preview-row-width;
-                    context-menu-preview-row-x <=> root.context-menu-preview-row-x;
-                    context-menu-preview-row-y <=> root.context-menu-preview-row-y;
+                    context-menu-from-thread <=> root.context-menu-from-thread;
+                    context-menu-mobile <=> root.context-menu-mobile;
                     context-menu-visible <=> ChatPane.context-menu-visible;
                     conversation-kind: ChatPane.conversation-kind;
                     conversation-read-only: ChatPane.conversation-read-only;
@@ -507,12 +482,8 @@ export component MainChatShell inherits Rectangle {
                 context-menu-anchor-left <=> root.context-menu-anchor-left;
                 context-menu-anchor-right <=> root.context-menu-anchor-right;
                 context-menu-anchor-top <=> root.context-menu-anchor-top;
-                context-menu-preview-from-thread <=> root.context-menu-preview-from-thread;
-                context-menu-preview-message <=> root.context-menu-preview-message;
-                context-menu-preview-mobile <=> root.context-menu-preview-mobile;
-                context-menu-preview-row-width <=> root.context-menu-preview-row-width;
-                context-menu-preview-row-x <=> root.context-menu-preview-row-x;
-                context-menu-preview-row-y <=> root.context-menu-preview-row-y;
+                context-menu-from-thread <=> root.context-menu-from-thread;
+                context-menu-mobile <=> root.context-menu-mobile;
                 is-small-screen: chat-panel-area.thread-covers-chat;
                 keyboard-open: root.keyboard-inset > 0px;
                 reply-focus-serial <=> root.reply-focus-serial;
@@ -589,8 +560,6 @@ export component MainChatShell inherits Rectangle {
             window-width: root.width;
         }
     } // end inner page stack (sidebar + chat)
-
-        } // end VerticalLayout (chat area)
 
         MainStatusNotices {
             z: 1;

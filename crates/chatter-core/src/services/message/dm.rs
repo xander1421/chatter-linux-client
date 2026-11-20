@@ -183,10 +183,11 @@ impl MessageService {
     /// on it would tie them to us. Signal sends sync transcripts identified
     /// for the same reason — the sender is no secret to ourselves.
     ///
-    /// Shield: no prekey-bundle fetch, only own devices we already hold a
+    /// In Shield, ordinary sync sends only to own devices we already hold a
     /// session with (`session_devices`, local), so a linked device we have
     /// never messaged is skipped until a normal-mode send makes a session.
-    /// Normal mode fetches our own bundles (identified, naming only us), which
+    /// Saved deletes in either mode and all syncs in normal mode fetch our own
+    /// bundles as needed (identified, naming only us), which
     /// is how a newly linked device gets its first session, and names its
     /// device set so the server reports one linked since
     /// (`deposit_sealed_to_all_devices`).
@@ -231,7 +232,8 @@ impl MessageService {
             return (0, false);
         };
         let me = me_id.to_string();
-        if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+        let shield = self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
+        if use_all_devices_for_own_sync(shield, &sync) {
             Self::pad_content_to_bucket(&mut sync);
             let outcome = self
                 .deposit_sealed_to_all_devices(
@@ -950,6 +952,29 @@ pub(crate) fn null_message_content() -> chatter_proto::content_v1::Content {
     };
     MessageService::pad_content_to_bucket(&mut null);
     null
+}
+
+/// Saved deletion is account-wide even in Shield. Discovering our own
+/// devices on the authenticated connection exposes no peer or mailbox.
+fn use_all_devices_for_own_sync(shield: bool, sync: &chatter_proto::content_v1::Content) -> bool {
+    use chatter_proto::content_v1::content::Content::DeleteForMeSync;
+    !shield || matches!(&sync.content, Some(DeleteForMeSync(delete)) if delete.saved_messages_scope)
+}
+
+#[test]
+fn saved_delete_fanout_uses_all_devices_even_in_shield() {
+    let owner = UserId::new();
+    let ordinary = crate::services::build_delete_for_me_content(
+        &UserId::new().to_string(),
+        &owner.to_string(),
+        1,
+    );
+    assert!(use_all_devices_for_own_sync(false, &ordinary));
+    assert!(!use_all_devices_for_own_sync(true, &ordinary));
+
+    let saved = super::saved::saved_delete_content(owner, crate::domain::ids::MessageId::new(), 1);
+    assert!(use_all_devices_for_own_sync(false, &saved));
+    assert!(use_all_devices_for_own_sync(true, &saved));
 }
 
 /// What our own other devices get for `content` sent to `peer_id` over

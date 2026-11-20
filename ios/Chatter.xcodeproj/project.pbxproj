@@ -236,6 +236,8 @@
 					"-framework",
 					MetalKit,
 					"-framework",
+					PhotosUI,
+					"-framework",
 					Network,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.chatter.client;
@@ -443,6 +445,8 @@
 					VideoToolbox,
 					"-framework",
 					MetalKit,
+					"-framework",
+					PhotosUI,
 					"-framework",
 					Network,
 				);

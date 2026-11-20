@@ -98,6 +98,7 @@ impl UnifiedMessageRepository {
 
 mod writes;
 mod deletion;
+pub(super) use deletion::delete_exact_saved_row;
 mod pins_read;
 mod reactions;
 mod queries_edits;

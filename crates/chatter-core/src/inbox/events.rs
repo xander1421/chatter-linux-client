@@ -4,7 +4,7 @@
 //! and coordinating UI updates.
 
 use crate::domain::UserId;
-use crate::domain::ids::ChannelId;
+use crate::domain::ids::{ChannelId, MessageId};
 use chatter_proto::content_v1::AttachmentPointer;
 use chatter_proto::mailbox_v1::EnvelopeType;
 
@@ -341,8 +341,11 @@ pub enum InboxEvent {
         target_author_aci: String,
         /// Target message timestamp.
         target_sent_timestamp: u64,
-        saved_message_id: String,
-        saved_messages_scope: bool,
+    },
+    /// An exact Saved delete has already committed before inbox ACK.
+    SavedDeletionApplied {
+        owner: UserId,
+        message_id: MessageId,
     },
     /// Read/delivery receipt received from channel member.
     ChannelReceipt {

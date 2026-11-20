@@ -144,10 +144,6 @@ export component ThreadPanel inherits Rectangle {
     out property <length> menu-anchor-bottom: 0px;
     out property <length> menu-anchor-left: 0px;
     out property <length> menu-anchor-right: 0px;
-    out property <MessageItemData> menu-preview-message;
-    out property <length> menu-preview-row-x: 0px;
-    out property <length> menu-preview-row-y: 0px;
-    out property <length> menu-preview-row-width: 0px;
     callback quote-clicked(string);  // parent message id
     callback sender-profile-requested(string);
     // Media, exactly as the main list forwards it (message_list.slint).
@@ -530,6 +526,10 @@ export component ThreadPanel inherits Rectangle {
                 y: root.replies.length < root.reply-count ? Spacing.button-height : 0px;
                 width: 100%;
                 height: parent.height - self.y;
+                immediate-child-press: root.mobile;
+                drag-axis-lock: root.mobile;
+                property <bool> bubble-swiping: false;
+                interactive: !self.bubble-swiping;
                 property <bool> following-tail: true;
                 // A jump to a reply holds the list on it: the open sequence's
                 // visible/thread-id handlers may run after the focus request
@@ -687,12 +687,9 @@ export component ThreadPanel inherits Rectangle {
                         attachment-clicked(id) => { root.view-attachment(id); }
                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         cancel-upload(id) => { root.cancel-upload(id); }
+                        swipe-engaged(on) => { replies-view.bubble-swiping = on; }
                         reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
-                            root.menu-preview-message = item;
-                            root.menu-preview-row-x = self.absolute-position.x;
-                            root.menu-preview-row-y = self.absolute-position.y;
-                            root.menu-preview-row-width = self.width;
                             root.menu-anchor-top = self.menu-anchor-top;
                             root.menu-anchor-bottom = self.menu-anchor-bottom;
                             root.menu-anchor-left = self.menu-anchor-left;

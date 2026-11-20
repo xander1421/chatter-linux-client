@@ -58,6 +58,7 @@ component AttachTile inherits Rectangle {
 // is just the card and its tiles.
 export component AttachSheet inherits Rectangle {
     in property <bool> touch;
+    in property <bool> gallery-only: false;
     // Fires the Android source index (see AttachTile).
     callback source(int);
 
@@ -93,21 +94,21 @@ export component AttachSheet inherits Rectangle {
                 tint: Colors.primary;
                 clicked => { root.source(0); }
             }
-            AttachTile {
+            if !root.gallery-only: AttachTile {
                 touch: root.touch;
                 icon: Icons.camera;
                 label: @tr("Camera");
                 tint: #34c759;
                 clicked => { root.source(2); }
             }
-            AttachTile {
+            if !root.gallery-only: AttachTile {
                 touch: root.touch;
                 icon: Icons.video;
                 label: @tr("Video");
                 tint: #ff9500;
                 clicked => { root.source(3); }
             }
-            AttachTile {
+            if !root.gallery-only: AttachTile {
                 touch: root.touch;
                 icon: Icons.file;
                 label: @tr("File");

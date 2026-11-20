@@ -438,3 +438,15 @@ time `native_window` still reports the OLD geometry (see trace), so dispatching
 Resized there would carry the stale size. `WindowResized` carries the real new
 size and drives `resize()`; that is the correct trigger. The native-pacing loop,
 vsync gate and swap-interval handling are untouched.
+
+## Selection menu after a handle drag (2026-11-20)
+
+`java/SlintAndroidJavaHelper.java`: dragging a selection handle hid the floating
+Cut/Copy/Paste menu, the changed selection text then finished it in
+`updateSelectionMenu`, and nothing showed it again when the finger lifted
+(`ACTION_UP` was empty). Reported on a Samsung S25: after widening a selection
+in the composer the menu never returned. `InputHandle` now remembers that the
+gesture moved and, on release of a left or right selection handle, asks
+`SlintInputView.showActionMenuAfterHandleDrag()`, which re-shows the menu 150 ms
+later if a selection still exists (the last selection update of the drag can
+arrive after the release). The single-cursor handle is unchanged.

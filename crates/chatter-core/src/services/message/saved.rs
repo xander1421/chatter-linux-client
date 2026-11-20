@@ -52,6 +52,29 @@ pub enum SavedSyncOutcome {
     Unchanged,
 }
 
+pub(super) fn saved_delete_content(
+    owner: UserId,
+    id: MessageId,
+    sent_at: u64,
+) -> chatter_proto::content_v1::Content {
+    use chatter_proto::content_v1::{Content, DeleteForMeSync, content};
+
+    let timestamp = TimestampNanos::now().as_u64();
+    let owner = owner.to_string();
+    Content {
+        timestamp,
+        content: Some(content::Content::DeleteForMeSync(DeleteForMeSync {
+            conversation_id: owner.clone(),
+            target_author_aci: owner,
+            target_sent_timestamp: sent_at,
+            timestamp,
+            saved_message_id: id.to_string(),
+            saved_messages_scope: true,
+        })),
+        ..Default::default()
+    }
+}
+
 fn nanos(at: Option<chrono::DateTime<chrono::Utc>>) -> u64 {
     at.and_then(|t| t.timestamp_nanos_opt())
         .map(|n| n.max(0) as u64)
@@ -439,17 +462,7 @@ impl MessageService {
                 "Saved deletion clock changed".into(),
             ));
         }
-        let mut content = crate::services::build_delete_for_me_content(
-            &owner.to_string(),
-            &owner.to_string(),
-            sent_at,
-        );
-        if let Some(chatter_proto::content_v1::content::Content::DeleteForMeSync(sync)) =
-            content.content.as_mut()
-        {
-            sync.saved_message_id = id.to_string();
-            sync.saved_messages_scope = true;
-        }
+        let content = saved_delete_content(owner, id, sent_at);
         let acknowledged = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             self.sync_to_own_devices_acknowledged(&mut self.auth_client(), content),
@@ -983,6 +996,165 @@ mod tests {
             AttachmentId::from_cdn_key(&p.cdn_key),
             AttachmentId::from_cdn_key("cdn-key")
         );
+    }
+
+    #[test]
+    fn saved_delete_fanout_ack_cleans_up_the_initiating_devices_attachment() {
+        use crate::storage::AttachmentRepository;
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("saved.db"), "test-password").unwrap());
+        db.run_migrations().unwrap();
+        let owner = UserId::new();
+        SettingsRepository::new(db.clone())
+            .set(keys::CURRENT_USER_ID, &owner.to_string())
+            .unwrap();
+        let repo = MessageRepository::new(db.clone());
+        let journal = SavedSyncRepository::new(db.clone());
+        let attachments = AttachmentRepository::new(db);
+        let attachment = Attachment::new(
+            AttachmentId::new(),
+            FileMetadata::new("photo.jpg".into(), "image/jpeg".into(), 4),
+        );
+        let path = dir.path().join("photo.enc");
+        std::fs::write(&path, b"file").unwrap();
+        attachments.insert_with_file_path(&attachment, &path).unwrap();
+
+        let mut note = Message::new_text(
+            ChannelId::from(owner),
+            ConversationType::SavedMessages,
+            Some(owner),
+            "photo".into(),
+            123,
+        );
+        note.attachments.push(attachment.id);
+        repo.insert(&note).unwrap();
+        repo.prepare_own_saved_delete(&owner, &note.id, note.sent_at)
+            .unwrap();
+        let (generation, clock) = journal.pending_delete(&owner, &note.id).unwrap().unwrap();
+
+        assert!(
+            !journal
+                .finish_delete(&owner, &note.id, generation, clock, false)
+                .unwrap()
+        );
+        assert!(path.exists());
+        assert_eq!(
+            journal.pending_delete(&owner, &note.id).unwrap(),
+            Some((generation, clock))
+        );
+        assert!(
+            journal
+                .finish_delete(&owner, &note.id, generation, clock, true)
+                .unwrap()
+        );
+        assert!(journal.pending_delete(&owner, &note.id).unwrap().is_none());
+        assert!(repo.get(&note.id).unwrap().is_none());
+        assert!(attachments.get(&attachment.id).unwrap().is_none());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn saved_delete_fanout_tombstone_blocks_a_late_snapshot() {
+        use crate::storage::AttachmentRepository;
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use chatter_proto::content_v1::content::Content::DeleteForMeSync;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("saved.db"), "test-password").unwrap());
+        db.run_migrations().unwrap();
+        let store = SavedSnapshotStore {
+            message_repo: Arc::new(MessageRepository::new(db.clone())),
+            attachment_repo: Arc::new(AttachmentRepository::new(db.clone())),
+            settings_repo: Arc::new(SettingsRepository::new(db)),
+        };
+        let owner = UserId::new();
+        store.settings_repo.set(keys::CURRENT_USER_ID, &owner.to_string()).unwrap();
+        let snapshot = snapshot();
+        let id = snapshot.message_id.parse().unwrap();
+        let Some(DeleteForMeSync(delete)) = saved_delete_content(owner, id, snapshot.sent_at).content
+        else {
+            panic!("expected a Saved delete sync");
+        };
+        crate::services::inbox_processor::sync::persist_saved_delete_for_me_sync(
+            &store.message_repo,
+            Some(owner),
+            owner,
+            &delete.conversation_id,
+            &delete.target_author_aci,
+            delete.target_sent_timestamp,
+            &delete.saved_message_id,
+            delete.saved_messages_scope,
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.apply_saved_message_sync(&snapshot).unwrap(),
+            SavedSyncOutcome::Unchanged
+        );
+        assert!(store.message_repo.get(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn saved_delete_recovery_matches_a_sibling_attachment_snapshot() {
+        use crate::storage::AttachmentRepository;
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use chatter_proto::content_v1::content::Content::DeleteForMeSync;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("saved.db"), "test-password").unwrap());
+        db.run_migrations().unwrap();
+        let store = SavedSnapshotStore {
+            message_repo: Arc::new(MessageRepository::new(db.clone())),
+            attachment_repo: Arc::new(AttachmentRepository::new(db.clone())),
+            settings_repo: Arc::new(SettingsRepository::new(db)),
+        };
+        let owner = UserId::new();
+        store
+            .settings_repo
+            .set(keys::CURRENT_USER_ID, &owner.to_string())
+            .unwrap();
+        for (index, mime) in ["image/jpeg", "audio/ogg"].into_iter().enumerate() {
+            let mut snapshot = snapshot();
+            let cdn_key = format!("saved-test-{index}");
+            snapshot.text.clear();
+            snapshot.attachments = vec![AttachmentPointer {
+                cdn_key: cdn_key.clone(),
+                content_type: mime.into(),
+                encryption_key: vec![1; 64],
+                digest: vec![2; 32],
+                ..Default::default()
+            }];
+            let SavedSyncOutcome::Created(row) = store.apply_saved_message_sync(&snapshot).unwrap()
+            else {
+                panic!("expected new Saved message");
+            };
+            assert_eq!(row.id.to_string(), snapshot.message_id);
+            assert_eq!(row.sent_at, snapshot.sent_at);
+            let attachment = AttachmentId::from_cdn_key(&cdn_key);
+            assert_eq!(row.attachments, vec![attachment]);
+
+            let Some(DeleteForMeSync(delete)) =
+                saved_delete_content(owner, row.id, row.sent_at).content
+            else {
+                panic!("expected a Saved delete sync");
+            };
+            let deleted = crate::services::inbox_processor::sync::persist_saved_delete_for_me_sync(
+                &store.message_repo,
+                Some(owner),
+                owner,
+                &delete.conversation_id,
+                &delete.target_author_aci,
+                delete.target_sent_timestamp,
+                &delete.saved_message_id,
+                delete.saved_messages_scope,
+            )
+            .unwrap();
+            assert_eq!(deleted, row.id);
+            assert!(store.message_repo.get(&row.id).unwrap().is_none());
+            assert!(store.attachment_repo.get(&attachment).unwrap().is_none());
+        }
     }
 
     #[test]

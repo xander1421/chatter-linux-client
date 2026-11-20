@@ -18,8 +18,6 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { QuickReactions } from "types.slint";
-import { MessageItemData } from "types.slint";
-import { MessageItem } from "message_item.slint";
 
 // Action flags for this hold. Core fills them before the menu is shown;
 // this file only renders them.
@@ -216,23 +214,8 @@ export component MessageContextMenu inherits Rectangle {
     in property <length> anchor-bottom: 0px;
     in property <length> anchor-left: 0px;
     in property <length> anchor-right: 0px;
-    // Snapshot the row with the anchor. The virtual list can recycle it while
-    // the menu is open, so the lifted copy must use the captured data/geometry.
-    in property <MessageItemData> preview-message;
-    in property <length> preview-row-x: 0px;
-    in property <length> preview-row-y: 0px;
-    in property <length> preview-row-width: 0px;
-    // Match the source row's layout mode. Touch reaction chips change both
-    // the bubble's width and its height, shifting an outgoing copy inward.
-    in property <bool> preview-mobile: false;
-    in property <bool> preview-from-thread: false;
-    in property <bool> preview-is-dm: false;
-    in property <bool> preview-is-anonymous: false;
-    in property <bool> preview-is-mesh: false;
-    in property <string> preview-playing-attachment-id: "";
-    in property <bool> preview-media-playing: false;
-    in property <float> preview-audio-progress: 0.0;
-    in property <string> preview-audio-elapsed: "0:00";
+    in property <bool> mobile: false;
+    in property <bool> from-thread: false;
     private property <bool> has-bubble-anchor: root.anchor-bottom > root.anchor-top
         && root.anchor-right > root.anchor-left;
     private property <length> visible-bubble-top: max(root.content-top, min(root.height, root.anchor-top));
@@ -263,7 +246,7 @@ export component MessageContextMenu inherits Rectangle {
     private property <int> actions-start: MessageMenuActions.react ? root.react-count + 1 : 0;
     private property <bool> can-thread-reply: MessageMenuActions.reply && root.can-thread;
     // Multi-select works on the main list only; the thread panel has none.
-    private property <bool> can-select: MessageMenuActions.select && !root.preview-from-thread;
+    private property <bool> can-select: MessageMenuActions.select && !root.from-thread;
     private property <bool> has-delete: MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone;
     private property <int> resend-index: root.actions-start;
     private property <int> reply-index: root.resend-index + (MessageMenuActions.resend ? 1 : 0);
@@ -307,11 +290,7 @@ export component MessageContextMenu inherits Rectangle {
     callback copy-clicked(string, string);
     callback download-clicked(string, string);         // Download attachments
 
-    // Only render when visible. The fade matters for the hold gesture: tier 2
-    // dismisses this menu at the same moment the message becomes selected, and
-    // an instant disappearance there reads as a glitch rather than as an
-    // escalation.
-    // Keep every descendant of chat chrome below this modal scrim.
+    // Keep the menu visible through its fade and above the chat chrome.
     z: 10;
     visible: root.show || self.opacity > 0;
     accessible-role: groupbox;
@@ -325,88 +304,14 @@ export component MessageContextMenu inherits Rectangle {
     height: 100%;
     background: transparent;
 
-    // One uninterrupted wash also covers messages that scroll under the
-    // floating header. On touch, repaint the pressed row at its original size.
     Rectangle {
         width: 100%;
         height: 100%;
         background: Materials.scrim;
     }
 
-    if root.preview-mobile && root.bubble-in-view && root.preview-message.message-id != "": Rectangle {
-        y: root.content-top;
-        width: 100%;
-        height: max(0px, root.height - self.y);
-        clip: true;
-
-        MessageItem {
-            x: root.preview-row-x;
-            y: root.preview-row-y - parent.y;
-            width: root.preview-row-width;
-            message-id: root.preview-message.message-id;
-            sender-id: root.preview-message.sender-id;
-            timestamp-ns: root.preview-message.timestamp-ns;
-            sender-name: root.preview-message.sender-name;
-            sender-initials: root.preview-message.sender-initials;
-            sender-avatar-source: root.preview-message.sender-avatar-source;
-            has-avatar: root.preview-message.has-avatar;
-            content: root.preview-message.content;
-            rich-content: root.preview-message.rich-content;
-            timestamp: root.preview-message.timestamp;
-            is-own: root.preview-message.is-own;
-            is-edited: root.preview-message.is-edited;
-            is-pinned: root.preview-message.is-pinned;
-            is-deleted: root.preview-message.is-deleted;
-            is-system: root.preview-message.is-system;
-            is-ai: root.preview-message.is-ai;
-            is-dm: !root.preview-from-thread && root.preview-is-dm;
-            is-anonymous: !root.preview-from-thread && root.preview-is-anonymous;
-            can-thread: !root.preview-from-thread && root.can-thread;
-            is-mesh: !root.preview-from-thread && root.preview-is-mesh;
-            is-call: root.preview-message.is-call;
-            call-type: root.preview-message.call-type;
-            call-duration: root.preview-message.call-duration;
-            call-is-video: root.preview-message.call-is-video;
-            has-attachments: root.preview-message.has-attachments;
-            attachment-count: root.preview-message.attachment-count;
-            attachments: root.preview-message.attachments;
-            standalone-attachment-indices: root.preview-message.standalone-attachment-indices;
-            current-playing-attachment-id: root.preview-playing-attachment-id;
-            is-media-playing: root.preview-media-playing;
-            audio-progress: root.preview-audio-progress;
-            audio-elapsed: root.preview-audio-elapsed;
-            has-reactions: root.preview-message.has-reactions;
-            reaction-summary: root.preview-message.reaction-summary;
-            reactions: root.preview-message.reactions;
-            reply-count: root.preview-from-thread ? 0 : root.preview-message.reply-count;
-            reply-count-text: root.preview-message.reply-count-text;
-            is-thread-reply: !root.preview-from-thread && root.preview-message.is-thread-reply;
-            is-continuation: root.preview-message.is-continuation;
-            is-reply: root.preview-message.is-reply;
-            reply-to-not-found: root.preview-message.reply-to-not-found;
-            reply-to-message-id: root.preview-message.reply-to-message-id;
-            reply-to-sender-name: root.preview-message.reply-to-sender-name;
-            reply-to-preview: root.preview-message.reply-to-preview;
-            reply-to-category: root.preview-message.reply-to-category;
-            reply-to-attachment-id: root.preview-message.reply-to-attachment-id;
-            reply-to-duration: root.preview-message.reply-to-duration;
-            reply-to-filename: root.preview-message.reply-to-filename;
-            reply-to-waveform: root.preview-message.reply-to-waveform;
-            reply-to-has-thumbnail: root.preview-message.reply-to-has-thumbnail;
-            reply-to-thumbnail: root.preview-message.reply-to-thumbnail;
-            reply-to-thumbnail-width: root.preview-message.reply-to-thumbnail-width;
-            reply-to-thumbnail-height: root.preview-message.reply-to-thumbnail-height;
-            show-sender: root.preview-message.show-sender;
-            delivery-status: root.preview-message.delivery-status;
-            failure-reason: root.preview-message.failure-reason;
-            can-retry: root.preview-message.can-retry;
-            mobile: root.preview-mobile;
-            menu-open: true;
-        }
-    }
-
     // Backdrop touch area to close menu. A wheel closes it too instead of
-    // scrolling the messages under the lifted bubble.
+    // scrolling the messages under the menu.
     TouchArea {
         width: 100%;
         height: 100%;
@@ -430,7 +335,7 @@ export component MessageContextMenu inherits Rectangle {
 
     // Menu container - positioned at the anchor (press point / click point).
     //
-    // Touch keeps the card clear of the raised bubble. Desktop places the
+    // Touch keeps the card clear of the pressed bubble. Desktop places the
     // full card by the pointer, flipping above it near the window bottom.
     // Both paths clamp to the usable vertical band and scroll if needed.
     menu-container := GlassSurface {
@@ -460,14 +365,14 @@ export component MessageContextMenu inherits Rectangle {
         // bubble's lower fragment; the existing Flickable scrolls its body.
         property <bool> cramped-bubble: self.has-bubble-anchor
             && max(self.room-above, self.room-below) < 2 * Spacing.touch-target-min;
-        property <bool> flip-up: !root.preview-mobile
+        property <bool> flip-up: !root.mobile
             ? root.position-y + Spacing.sm + self.desktop-height > self.bottom-limit
             : self.has-bubble-anchor
                 ? (self.cramped-bubble || (self.room-below < self.menu-h && self.room-above > self.room-below))
                 : root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
 
         x: max(Spacing.sm, min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md));
-        y: !root.preview-mobile
+        y: !root.mobile
             ? max(self.top-limit, min(
                 (self.flip-up ? root.position-y - Spacing.sm - self.height
                     : root.position-y + Spacing.sm) + self.entrance-offset,
@@ -483,7 +388,7 @@ export component MessageContextMenu inherits Rectangle {
         // (6 x 48 + gaps + 48 + padding = 376) on a standard phone; narrower
         // windows still scroll the emoji row.
         width: min(380px, parent.width - 2 * Spacing.md);
-        height: !root.preview-mobile ? self.desktop-height
+        height: !root.mobile ? self.desktop-height
             : max(0px, min(self.menu-h, self.cramped-bubble
                 ? self.bottom-limit - self.top-limit - Spacing.touch-target-min
                 : self.has-bubble-anchor
@@ -533,8 +438,8 @@ export component MessageContextMenu inherits Rectangle {
                             for emoji[index] in QuickReactions.emojis: QuickReaction {
                                 nav-index: index;
                                 focused-index: root.focus-index;
-                                keyboard-active: root.show && !root.preview-mobile;
-                                initial-focus: root.show && !root.preview-mobile && index == 0;
+                                keyboard-active: root.show && !root.mobile;
+                                initial-focus: root.show && !root.mobile && index == 0;
                                 focused(item-index, top, item-height) => { root.focus-index = item-index; }
                                 navigate(from, direction) => { root.move-focus(from, direction); }
                                 emoji: emoji;
@@ -559,7 +464,7 @@ export component MessageContextMenu inherits Rectangle {
                         height: picker-action.height;
                         focus-on-click: false;
                         focus-on-tab-navigation: false;
-                        property <bool> keyboard-active: root.show && !root.preview-mobile;
+                        property <bool> keyboard-active: root.show && !root.mobile;
                         property <int> focused-index: root.focus-index;
                         changed focused-index => {
                             if self.keyboard-active && self.focused-index == root.picker-index { picker-action.focus(); }
@@ -591,8 +496,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.resend: MenuItem {
                     nav-index: root.resend-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.resend-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.resend-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.rotate-ccw;
@@ -606,8 +511,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.reply: MenuItem {
                     nav-index: root.reply-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.reply-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.reply-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.reply;
@@ -621,8 +526,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.edit: MenuItem {
                     nav-index: root.edit-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.edit-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.edit-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.edit;
@@ -636,8 +541,8 @@ export component MessageContextMenu inherits Rectangle {
                 if root.can-thread-reply: MenuItem {
                     nav-index: root.thread-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.thread-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.thread-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.message-circle;
@@ -651,8 +556,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.copy: MenuItem {
                     nav-index: root.copy-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.copy-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.copy-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.copy;
@@ -666,8 +571,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.forward: MenuItem {
                     nav-index: root.forward-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.forward-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.forward-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.send;
@@ -683,8 +588,8 @@ export component MessageContextMenu inherits Rectangle {
                 if root.can-select: MenuItem {
                     nav-index: root.select-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.select-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.select-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.check;
@@ -698,8 +603,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.pin: MenuItem {
                     nav-index: root.pin-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.pin-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.pin-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.pin;
@@ -713,8 +618,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.download: MenuItem {
                     nav-index: root.download-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.download-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.download-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.download;
@@ -728,8 +633,8 @@ export component MessageContextMenu inherits Rectangle {
                 if MessageMenuActions.info: MenuItem {
                     nav-index: root.info-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.info-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.info-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.clock;
@@ -743,8 +648,8 @@ export component MessageContextMenu inherits Rectangle {
                 if root.has-delete: MenuItem {
                     nav-index: root.delete-index;
                     focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.delete-index == 0;
+                    keyboard-active: root.show && !root.mobile;
+                    initial-focus: root.show && !root.mobile && root.delete-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.trash;

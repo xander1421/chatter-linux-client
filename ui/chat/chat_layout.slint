@@ -66,10 +66,6 @@ export component ChatLayout inherits Rectangle {
     out property <length> menu-anchor-bottom: message-list.menu-anchor-bottom;
     out property <length> menu-anchor-left: message-list.menu-anchor-left;
     out property <length> menu-anchor-right: message-list.menu-anchor-right;
-    out property <MessageItemData> menu-preview-message: message-list.menu-preview-message;
-    out property <length> menu-preview-row-x: message-list.menu-preview-row-x;
-    out property <length> menu-preview-row-y: message-list.menu-preview-row-y;
-    out property <length> menu-preview-row-width: message-list.menu-preview-row-width;
 
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
@@ -106,6 +102,7 @@ export component ChatLayout inherits Rectangle {
     in-out property <bool> gif-picker-visible: false;
     // The attachment-source bottom sheet (Gallery / Camera / Video / File).
     in-out property <bool> attach-sheet-visible: false;
+    in property <bool> attach-gallery-only: false;
 
     in property <[EmojiData]> emoji-list;
     in-out property <int> emoji-category;
@@ -343,17 +340,19 @@ export component ChatLayout inherits Rectangle {
         clip: true;
         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
         width: 100%;
-        height: root.keyboard-open ? max(0px, bottom-chrome.y)
+        height: root.keyboard-open ? max(0px, bottom-chrome.y + composer.action-lift-height)
             : max(0px, root.height - root.drawer-occupied-height
                 - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px));
         top-inset: top-chrome.height;
         // The last virtual row owns scroll clearance; reducing the viewport
         // while the keyboard is closed would expose a hard cut above the glass.
-        // The open-keyboard viewport already ends at the composer's top.
-        tail-clearance: root.keyboard-open ? Spacing.sm : Spacing.md + Spacing.touch-target-min;
-        // bottom-chrome already includes the lifted circle row.
+        // The clearance is the same with the keyboard open or closed, typing
+        // or not: it is where the composer's action row lifts to, so the lift
+        // changes neither the viewport nor the rows.
+        tail-clearance: Spacing.md + Spacing.touch-target-min;
+        // bottom-chrome includes the lifted action row; the list does not.
         bottom-inset: root.keyboard-open ? 0px
-            : bottom-chrome.height + composer.list-clearance-extra
+            : bottom-chrome.height - composer.action-lift-height
                 - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px);
         messages: root.messages;
         covered: root.covered;
@@ -1027,6 +1026,7 @@ export component ChatLayout inherits Rectangle {
         TouchArea { clicked => { root.attach-sheet-visible = false; root.composer-attach-source(-1); } }
         AttachSheet {
             touch: root.mobile;
+            gallery-only: root.attach-gallery-only;
             x: root.mobile ? 0px : (parent.width - self.width) / 2;
             width: root.mobile ? parent.width : min(parent.width, 460px);
             y: parent.height - self.height - (root.mobile ? 0px : Spacing.lg);
