@@ -342,6 +342,10 @@ rusqlite = { version = "=0.37.0", features = ["bundled-sqlcipher", "unlock_notif
 name = "attachment_decrypt"
 harness = false
 
+[[example]]
+name = "h3_soak"
+required-features = ["quic", "testing"]
+
 [features]
 default = ["desktop-system", "desktop-media", "quic"]
 # Select the DEVELOPMENT sealed-sender trust root (config.rs) instead of the

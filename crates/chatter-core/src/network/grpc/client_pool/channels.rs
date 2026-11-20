@@ -43,6 +43,13 @@ impl GrpcClientPool {
     #[cfg(not(feature = "quic"))]
     pub(super) fn note_transport_error(&self) {}
 
+    /// Keep a newly created pool on TCP for transport comparisons.
+    #[cfg(all(feature = "quic", feature = "testing"))]
+    #[doc(hidden)]
+    pub fn disable_quic_for_testing(&self) {
+        *self.quic_probe.write() = QuicProbeState::Failed;
+    }
+
     /// Check if currently connected.
     pub fn is_connected(&self) -> bool {
         self.channel.read().is_some()
