@@ -427,7 +427,13 @@ impl ChatterClient {
         revision: u64,
         attachment: PendingAttachment,
     ) {
-        self.services.chat_state.add_thread_attachment_for(root, revision, attachment);
+        if let Some(rejected) = self
+            .services
+            .chat_state
+            .add_thread_attachment_for(root, revision, attachment)
+        {
+            self.release_staged_files(&[rejected]);
+        }
     }
 
     pub fn remove_thread_pending_attachment(&self, root: MessageId, id: AttachmentId) {

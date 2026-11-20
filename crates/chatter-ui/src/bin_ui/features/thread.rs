@@ -182,7 +182,7 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(target_os = "android")]
                 let selected = crate::platform::android::file_picker::pick_files(&["*/*"]).await;
                 #[cfg(target_os = "ios")]
-                let selected: Vec<std::path::PathBuf> = Vec::new();
+                let selected = crate::platform::ios::pick_image().await;
                 for path in selected {
                     #[cfg(target_os = "android")]
                     let path = {
@@ -190,9 +190,17 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if staged == path { continue; }
                         staged
                     };
+                    #[cfg(target_os = "ios")]
+                    let path = match client.stage_owned_file_async(path.clone()).await {
+                        Ok(staged) if staged != path => staged,
+                        _ => {
+                            let _ = tokio::fs::remove_file(path).await;
+                            continue;
+                        }
+                    };
                     if let Err(error) = add_thread_file(&client, thread.root_message_id, revision, path.clone()).await {
                         tracing::warn!(%error, "thread attachment preparation failed");
-                        #[cfg(target_os = "android")]
+                        #[cfg(any(target_os = "android", target_os = "ios"))]
                         client.release_staged_files(&[chatter_core::state::PendingAttachment::new(
                             chatter_core::domain::ids::AttachmentId::new(),
                             String::new(), path, 0, String::new(),

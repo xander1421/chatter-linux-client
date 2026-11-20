@@ -69,17 +69,24 @@ impl ChatState {
         self.store.with(|s| s.thread_attachment_trays.get(root).cloned().unwrap_or_default())
     }
 
+    /// Return ownership to the caller if the attachment revision has changed.
     pub fn add_thread_attachment_for(
         &self,
         root: MessageId,
         revision: u64,
         attachment: PendingAttachment,
-    ) {
+    ) -> Option<PendingAttachment> {
+        let mut pending = Some(attachment);
         self.store.update(|state| {
             if state.attachment_revision == revision {
-                state.thread_attachment_trays.entry(root).or_default().push(attachment);
+                state
+                    .thread_attachment_trays
+                    .entry(root)
+                    .or_default()
+                    .extend(pending.take());
             }
         });
+        pending
     }
 
     pub fn take_thread_attachments_for(

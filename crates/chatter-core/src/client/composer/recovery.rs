@@ -693,7 +693,8 @@ impl ChatterClient {
                 .filter(|attachment| self.restorable_staged_file(&attachment.path))
                 .map(StagedAttachment::into_pending)
             {
-                chat.add_thread_attachment_for(root, revision, attachment);
+                // A rejected restore still belongs to the durable recovery row.
+                let _ = chat.add_thread_attachment_for(root, revision, attachment);
             }
         }
         let mut parked = self.parked_sends.lock();

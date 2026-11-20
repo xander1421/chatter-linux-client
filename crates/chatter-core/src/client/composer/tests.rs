@@ -870,6 +870,33 @@ async fn batch_file_preparation_preserves_order_owner_and_cleans_rejected_stagin
 }
 
 #[tokio::test]
+async fn stale_thread_picker_releases_staged_photo() {
+    let (client, dir) = client();
+    open(&client, ChannelId::new());
+    let root = crate::domain::ids::MessageId::new();
+    let revision = client.chat_snapshot().attachment_revision;
+    let original = picked(&dir, "thread-photo.png");
+    let staged = client.stage_owned_file_async(original.clone()).await.unwrap();
+    assert_ne!(staged, original);
+    assert!(staged.exists());
+
+    client.chat_state().clear_attachment_trays();
+    client.add_thread_pending_attachment_for(
+        root,
+        revision,
+        PendingAttachment::new(
+            AttachmentId::new(),
+            "thread-photo.png".into(),
+            staged.clone(),
+            5,
+            "image/png".into(),
+        ),
+    );
+    assert!(client.thread_pending_attachments(&root).is_empty());
+    assert!(!staged.exists());
+}
+
+#[tokio::test]
 async fn staged_tray_pixels_are_small_and_require_authenticated_ciphertext() {
     let (client, dir) = client();
     open(&client, ChannelId::new());
