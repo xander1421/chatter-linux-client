@@ -82,7 +82,9 @@ async fn check(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(window) = loading.upgrade() {
                 let global = window.global::<UpdateGlobal>();
-                global.set_state("checking".into());
+                if global.get_state() != "available" {
+                    global.set_state("checking".into());
+                }
                 global.set_error("".into());
                 global.set_notice("".into());
             }
@@ -258,9 +260,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         if global.get_state() == "downloading" {
             return;
         }
-        let Ok(operation) = operations.clone().try_lock_owned() else { return };
         let Some(manifest_before_download) = client.available_update() else {
-            drop(operation);
             crate::rt_handle().spawn(check(client, weak, true, play, operations.clone()));
             return;
         };
@@ -295,8 +295,9 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         global.set_progress(chatter_i18n::tr("Downloading and verifying…").into());
         let size = manifest_before_download.size;
         let download_manifest = manifest_before_download;
+        let download_operations = operations.clone();
         crate::rt_handle().spawn(async move {
-            let _operation = operation;
+            let _operation = download_operations.lock_owned().await;
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<u64>();
             let progress_window = weak.clone();
             let progress_task = tokio::spawn(async move {

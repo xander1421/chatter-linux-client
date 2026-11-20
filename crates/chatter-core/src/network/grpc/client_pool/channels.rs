@@ -82,7 +82,9 @@ impl GrpcClientPool {
                 let uri = self.direct_url.read().parse::<http::Uri>().ok();
                 if let Some(uri) = uri.filter(|uri| uri.scheme_str() == Some("https")) {
                     let mut state = self.quic_probe.write();
-                    if *state == QuicProbeState::Untried {
+                    if *state == QuicProbeState::Untried
+                        && tokio::runtime::Handle::try_current().is_ok()
+                    {
                         *state = QuicProbeState::Probing;
                         let generation = self
                             .quic_probe_generation
@@ -106,6 +108,10 @@ impl GrpcClientPool {
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "lazy QUIC channel build failed — falling back to TCP");
+                            *self.quic_probe.write() = QuicProbeState::Failed;
+                            if let Some(channel) = guard.clone() {
+                                return channel;
+                            }
                         }
                     }
                 }

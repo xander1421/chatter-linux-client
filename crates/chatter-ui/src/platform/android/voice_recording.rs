@@ -24,6 +24,11 @@ impl VoiceRecordingLease {
                 .and_then(|value| value.j())
                 .map_err(|e| e.to_string())
         })?;
+        if token == 0 {
+            return Err(chatter_i18n::tr(
+                "Couldn't start voice recording. Return to the chat and try again.",
+            ));
+        }
         Ok(Self { activity, token })
     }
 
@@ -46,11 +51,14 @@ impl VoiceRecordingLease {
 
     pub async fn start() -> Result<Self, String> {
         let lease = Self::request()?;
-        for _ in 0..100 {
+        for attempt in 0..=100 {
             match lease.status()? {
                 1 => return Ok(lease),
                 -1 => break,
-                _ => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+                _ if attempt < 100 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await
+                }
+                _ => break,
             }
         }
         Err(chatter_i18n::tr(

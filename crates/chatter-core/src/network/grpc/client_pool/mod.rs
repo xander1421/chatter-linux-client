@@ -537,7 +537,7 @@ mod tests {
     #[tokio::test]
     async fn successful_late_probe_promotes_cached_tcp_without_dropping_old_handles() {
         let pool = GrpcClientPool::new("https://localhost:443").unwrap();
-        // A TCP dial won while the probe was still in flight.
+        // A cached lazy TCP channel exists while the probe is still in flight.
         *pool.quic_probe.write() = QuicProbeState::Probing;
         let old = pool.channel();
         assert!(!old.is_http3());

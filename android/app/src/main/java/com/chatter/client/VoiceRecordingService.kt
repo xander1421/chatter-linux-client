@@ -77,6 +77,7 @@ class VoiceRecordingService : Service() {
         private var ready = 0L
 
         @Synchronized fun start(context: Context): Long {
+            if (requested != 0L) return 0L
             val token = ++next
             requested = token
             ready = 0L
@@ -94,7 +95,7 @@ class VoiceRecordingService : Service() {
 
         @Synchronized fun stop(context: Context, token: Long) {
             // A cancelled permission/startup task must never stop a newer recording.
-            if (requested != token) return
+            if (token == 0L || requested != token) return
             requested = 0L
             ready = 0L
             context.stopService(Intent(context, VoiceRecordingService::class.java))

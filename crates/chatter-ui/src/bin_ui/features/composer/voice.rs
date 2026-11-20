@@ -117,6 +117,10 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             if generation.load(Ordering::SeqCst) != ticket {
                 return;
             }
+            if !client.is_app_visible() {
+                finish_ui(weak, generation, ticket, Err(chatter_i18n::tr("Return to the chat to start recording")));
+                return;
+            }
             #[cfg(target_os = "android")]
             let mut microphone_lease = match crate::platform::android::voice_recording::VoiceRecordingLease::start().await {
                 Ok(lease) => Some(lease),

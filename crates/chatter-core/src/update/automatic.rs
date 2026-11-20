@@ -42,6 +42,7 @@ impl AutomaticChecks {
                 result = self.hints.changed() => {
                     if result.is_err() { return false; }
                     self.hints.borrow_and_update();
+                    if !self.pending { self.due = self.due.max(Instant::now() + Duration::from_secs(5)); }
                     self.pending = true;
                 }
                 result = self.visible.changed() => {
@@ -68,6 +69,11 @@ mod tests {
                 .is_err()
         );
         hints.send_replace(1);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(4), checks.next())
+                .await
+                .is_err()
+        );
         assert!(checks.next().await);
         hints.send_replace(2);
         hints.send_replace(3);

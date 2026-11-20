@@ -14,23 +14,7 @@ impl ChatterClient {
     /// Coalesced hints from the existing user-event connection. The receiver
     /// owns the fan-out task; no new server subscription is opened.
     pub fn subscribe_update_checks(&self) -> tokio::sync::watch::Receiver<u64> {
-        let (tx, rx) = tokio::sync::watch::channel(0u64);
-        let mut events = self.services.event_bus.subscribe_domain();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = tx.closed() => break,
-                    event = events.recv() => match event {
-                        Ok(DomainEvent::UpdateCheckRequested) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            tx.send_modify(|revision| *revision = revision.wrapping_add(1));
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                        _ => {}
-                    }
-                }
-            }
-        });
-        rx
+        update_check_stream(self.services.event_bus.subscribe_domain())
     }
 
     // ── Typed event streams (UI-facing, narrow) ─────────────────────────
@@ -283,5 +267,65 @@ impl ChatterClient {
         let client = Arc::clone(self);
         self.outgoing_typing
             .clear(move |conversation| Some(client.conversation(conversation.clone())));
+    }
+}
+
+fn update_check_stream(
+    mut events: tokio::sync::broadcast::Receiver<DomainEvent>,
+) -> tokio::sync::watch::Receiver<u64> {
+    let (tx, rx) = tokio::sync::watch::channel(0u64);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = tx.closed() => break,
+                event = events.recv() => match event {
+                    Ok(DomainEvent::UpdateCheckRequested) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tx.send_modify(|revision| *revision = revision.wrapping_add(1));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    _ => {}
+                }
+            }
+        }
+    });
+    rx
+}
+
+#[cfg(test)]
+mod update_check_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test(start_paused = true)]
+    async fn hints_and_lag_request_checks_and_drop_stops_fanout() {
+        let (bus, events) = tokio::sync::broadcast::channel(1);
+        // Overflow before the task starts: lag itself must request a check.
+        bus.send(DomainEvent::UpdateCheckRequested).unwrap();
+        bus.send(DomainEvent::UpdateCheckRequested).unwrap();
+        let mut checks = update_check_stream(events);
+        tokio::task::yield_now().await;
+        assert_eq!(*checks.borrow_and_update(), 2);
+        bus.send(DomainEvent::UpdateCheckRequested).unwrap();
+        checks.changed().await.unwrap();
+        assert_eq!(*checks.borrow_and_update(), 3);
+        bus.send(DomainEvent::AttachmentUploadProgress {
+            attachment_id: crate::domain::AttachmentId::new(),
+            state: crate::inbox::handlers::AttachmentUploadState::Queued,
+        })
+        .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), checks.changed())
+                .await
+                .is_err()
+        );
+        assert_eq!(*checks.borrow(), 3);
+        drop(checks);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while bus.receiver_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("fanout retained its source after receiver dropped");
     }
 }

@@ -9,6 +9,7 @@ impl GrpcClientPool {
     ) -> tokio::task::JoinHandle<()> {
         let state = self.quic_probe.clone();
         let generation = self.quic_probe_generation.clone();
+        let revision = crate::network::connection::server_evidence_revision();
         let task = tokio::spawn(async move {
             let outcome = tokio::time::timeout(
                 QUIC_PROBE_TIMEOUT,
@@ -31,6 +32,12 @@ impl GrpcClientPool {
                 && generation.load(std::sync::atomic::Ordering::Acquire) == probe_generation
             {
                 *current = verdict;
+                if verdict == QuicProbeState::Working {
+                    crate::network::connection::set_server_status_if_current(
+                        crate::network::connection::ServerStatus::Reachable,
+                        revision,
+                    );
+                }
             }
         });
         let mut active = self.quic_probe_task.lock();
