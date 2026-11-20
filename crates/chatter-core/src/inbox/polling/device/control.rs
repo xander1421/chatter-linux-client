@@ -1,16 +1,24 @@
 use super::*;
+use crate::inbox::ack_policy::AckDecision;
 
 /// Exact Saved controls must commit before the encrypted inbox envelope is
 /// acknowledged. Storage failures retain it for retry; malformed/foreign
 /// controls are permanently rejected without touching any message.
-pub(super) fn persist_exact_saved_delete_before_ack(
+pub(super) fn apply_exact_saved_delete(
     inner: &content::Content,
     sender: UserId,
     gateway: &MessageGateway,
-) -> Result<(), ServiceError> {
-    if let content::Content::DeleteForMeSync(sync) = inner
-        && (sync.saved_messages_scope || !sync.saved_message_id.is_empty())
-    {
+    event_tx: &broadcast::Sender<InboxEvent>,
+    stats: &RwLock<InboxStats>,
+) -> Option<AckDecision> {
+    let content::Content::DeleteForMeSync(sync) = inner else {
+        return None;
+    };
+    if !sync.saved_messages_scope && sync.saved_message_id.is_empty() {
+        return None;
+    }
+
+    let result = (|| -> Result<_, ServiceError> {
         let own = gateway.settings_repo.current_user_id()?;
         crate::services::inbox_processor::sync::persist_saved_delete_for_me_sync(
             &gateway.message_repo,
@@ -22,9 +30,25 @@ pub(super) fn persist_exact_saved_delete_before_ack(
             &sync.saved_message_id,
             sync.saved_messages_scope,
         )
-        .map_err(ServiceError::Storage)?;
-    }
-    Ok(())
+        .map_err(ServiceError::Storage)
+    })();
+    Some(match result {
+        Ok(message_id) => {
+            let _ = event_tx.send(InboxEvent::SavedDeletionApplied {
+                owner: sender,
+                message_id,
+            });
+            stats.write().messages_processed += 1;
+            AckDecision::Ack
+        }
+        Err(error) => {
+            tracing::warn!(%error, "Exact Saved deletion not admitted before acknowledgement");
+            match error {
+                ServiceError::Storage(crate::error::StorageError::InvalidData(_)) => AckDecision::Ack,
+                _ => AckDecision::Retain,
+            }
+        }
+    })
 }
 
 /// Dispatch channel control content based on type.
@@ -375,7 +399,9 @@ pub fn dispatch_control_content(
             });
             stats.write().messages_processed += 1;
         }
-        content::Content::DeleteForMeSync(sync) => {
+        content::Content::DeleteForMeSync(sync)
+            if !sync.saved_messages_scope && sync.saved_message_id.is_empty() =>
+        {
             tracing::debug!(
                 conversation_id = %sync.conversation_id,
                 target_author = %sync.target_author_aci,
@@ -387,8 +413,6 @@ pub fn dispatch_control_content(
                 conversation_id: sync.conversation_id,
                 target_author_aci: sync.target_author_aci,
                 target_sent_timestamp: sync.target_sent_timestamp,
-                saved_message_id: sync.saved_message_id,
-                saved_messages_scope: sync.saved_messages_scope,
             });
             stats.write().messages_processed += 1;
         }

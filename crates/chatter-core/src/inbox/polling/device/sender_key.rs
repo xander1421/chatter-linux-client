@@ -127,18 +127,10 @@ pub(super) async fn process_sender_key_message(
                                 retry_budget,
                             );
                         }
-                        if let Err(error) = persist_exact_saved_delete_before_ack(
-                            &inner,
-                            *sender_id,
-                            message_gateway,
+                        if let Some(decision) = apply_exact_saved_delete(
+                            &inner, *sender_id, message_gateway, event_tx, stats,
                         ) {
-                            tracing::warn!(%error, "Exact Saved deletion not admitted before acknowledgement");
-                            return match error {
-                                ServiceError::Storage(crate::error::StorageError::InvalidData(
-                                    _,
-                                )) => AckDecision::Ack,
-                                _ => AckDecision::Retain,
-                            };
+                            return decision;
                         }
                         if let content::Content::SavedMessageSync(sync) = &inner {
                             match crate::services::message::persist_saved_device_snapshot(

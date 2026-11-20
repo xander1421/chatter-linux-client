@@ -999,6 +999,7 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
                 "Starting in offline mode — gRPC calls will retry when server becomes available"
             );
         }
+        let domain_rx = ui_ctx.subscribe_events();
         #[cfg(not(target_os = "android"))]
         if let Err(e) = client.start().await {
             tracing::warn!(
@@ -1013,7 +1014,7 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
         bin_ui::features::modals::load_channel_invites(weak_window.clone(), &ui_ctx);
 
         {
-            let mut domain_rx = ui_ctx.subscribe_events();
+            let mut domain_rx = domain_rx;
             let weak_for_domain = weak_window.clone();
             let ui_ctx_for_domain = ui_ctx.clone();
             tokio::spawn(async move {

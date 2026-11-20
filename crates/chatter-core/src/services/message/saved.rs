@@ -1097,6 +1097,67 @@ mod tests {
     }
 
     #[test]
+    fn saved_delete_recovery_matches_a_sibling_attachment_snapshot() {
+        use crate::storage::AttachmentRepository;
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use chatter_proto::content_v1::content::Content::DeleteForMeSync;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("saved.db"), "test-password").unwrap());
+        db.run_migrations().unwrap();
+        let store = SavedSnapshotStore {
+            message_repo: Arc::new(MessageRepository::new(db.clone())),
+            attachment_repo: Arc::new(AttachmentRepository::new(db.clone())),
+            settings_repo: Arc::new(SettingsRepository::new(db)),
+        };
+        let owner = UserId::new();
+        store
+            .settings_repo
+            .set(keys::CURRENT_USER_ID, &owner.to_string())
+            .unwrap();
+        for (index, mime) in ["image/jpeg", "audio/ogg"].into_iter().enumerate() {
+            let mut snapshot = snapshot();
+            let cdn_key = format!("saved-test-{index}");
+            snapshot.text.clear();
+            snapshot.attachments = vec![AttachmentPointer {
+                cdn_key: cdn_key.clone(),
+                content_type: mime.into(),
+                encryption_key: vec![1; 64],
+                digest: vec![2; 32],
+                ..Default::default()
+            }];
+            let SavedSyncOutcome::Created(row) = store.apply_saved_message_sync(&snapshot).unwrap()
+            else {
+                panic!("expected new Saved message");
+            };
+            assert_eq!(row.id.to_string(), snapshot.message_id);
+            assert_eq!(row.sent_at, snapshot.sent_at);
+            let attachment = AttachmentId::from_cdn_key(&cdn_key);
+            assert_eq!(row.attachments, vec![attachment]);
+
+            let Some(DeleteForMeSync(delete)) =
+                saved_delete_content(owner, row.id, row.sent_at).content
+            else {
+                panic!("expected a Saved delete sync");
+            };
+            let deleted = crate::services::inbox_processor::sync::persist_saved_delete_for_me_sync(
+                &store.message_repo,
+                Some(owner),
+                owner,
+                &delete.conversation_id,
+                &delete.target_author_aci,
+                delete.target_sent_timestamp,
+                &delete.saved_message_id,
+                delete.saved_messages_scope,
+            )
+            .unwrap();
+            assert_eq!(deleted, row.id);
+            assert!(store.message_repo.get(&row.id).unwrap().is_none());
+            assert!(store.attachment_repo.get(&attachment).unwrap().is_none());
+        }
+    }
+
+    #[test]
     fn pin_watermark_orders_reordered_pins_and_moves_with_the_row() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(Database::open(&dir.path().join("saved.db"), "test-password").unwrap());

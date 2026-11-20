@@ -150,6 +150,7 @@ impl InboxEventProcessor {
             | InboxEvent::ChannelPin { .. } => self.process_messages(event).await,
             InboxEvent::SavedMessageSync { .. }
             | InboxEvent::SavedSnapshotApplied { .. }
+            | InboxEvent::SavedDeletionApplied { .. }
             | InboxEvent::ReadSync { .. }
             | InboxEvent::ProfileKeySync { .. }
             | InboxEvent::ConfigurationSync { .. }
