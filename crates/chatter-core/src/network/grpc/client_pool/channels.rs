@@ -5,6 +5,7 @@ impl GrpcClientPool {
     ///
     /// Drops every cached channel. Safe to call multiple times.
     pub fn disconnect(&self) {
+        tracing::event!(target: "network_transport::channels_disconnected", tracing::Level::INFO, {});
         *self.channel.write() = None;
         *self.unidentified_channel.write() = None;
         *self.secret_channel.write() = None;
@@ -38,6 +39,7 @@ impl GrpcClientPool {
                 "QUIC channel failed in use — falling back to TCP for the rest of this session"
             );
             *probe = QuicProbeState::Failed;
+            tracing::event!(target: "network_transport::quic_demoted", tracing::Level::INFO, {});
         }
     }
     #[cfg(not(feature = "quic"))]
@@ -107,9 +109,7 @@ impl GrpcClientPool {
                 if let Ok(uri) = server_url.parse::<http::Uri>() {
                     match super::super::transport::build_quic(uri) {
                         Ok(channel) => {
-                            tracing::info!(
-                                "transport: HTTP/3 (QUIC), promoting direct RPC channel"
-                            );
+                            tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
                             *guard = Some(channel.clone());
                             return channel;
                         }
@@ -129,9 +129,7 @@ impl GrpcClientPool {
 
         #[cfg(feature = "onion")]
         let channel: GrpcTransport = if *self.transport_mode.read() == TransportMode::Onion {
-            endpoint
-                .connect_with_connector_lazy(self.onion_connector())
-                .into()
+            GrpcTransport::from_onion(endpoint.connect_with_connector_lazy(self.onion_connector()))
         } else {
             endpoint
                 .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
@@ -141,6 +139,9 @@ impl GrpcClientPool {
         let channel: GrpcTransport = endpoint
             .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
             .into();
+        if self.transport_mode() == TransportMode::Direct {
+            tracing::event!(target: "network_transport::tcp_channel_created", tracing::Level::INFO, {});
+        }
         tracing::warn!(
             "GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)"
         );

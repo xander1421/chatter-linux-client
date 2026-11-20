@@ -9,6 +9,12 @@
 //! the probe/fallback policy; this module only knows how to build one QUIC
 //! connection and how to present both transports as one `tower::Service`.
 
+mod diagnostics;
+#[cfg(feature = "quic")]
+mod quic_lifecycle;
+
+use diagnostics::{Family, Phase, Route};
+
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 #[cfg(feature = "quic")]
@@ -30,11 +36,20 @@ use tonic::body::Body;
 pub struct RecordingTransport<S, R = fn(ServerStatus)> {
     inner: S,
     record: R,
+    route: Route,
 }
 
 pub type GrpcTransport = RecordingTransport<RawTransport>;
 
 impl GrpcTransport {
+    #[cfg(feature = "onion")]
+    pub(crate) fn from_onion(channel: tonic::transport::Channel) -> Self {
+        Self {
+            route: Route::Tor,
+            ..channel.into()
+        }
+    }
+
     /// The transport selected for this channel, not a reachability verdict.
     pub fn is_http3(&self) -> bool {
         #[cfg(feature = "quic")]
@@ -53,6 +68,7 @@ impl From<tonic::transport::Channel> for GrpcTransport {
         Self {
             inner: channel.into(),
             record: set_server_status,
+            route: Route::H2,
         }
     }
 }
@@ -71,8 +87,11 @@ where
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
         self.inner.poll_ready(cx).map_err(|error| {
+            let error = error.into();
             (self.record)(ServerStatus::Unreachable);
-            error.into()
+            // Tower readiness runs before a request exists.
+            diagnostics::failure(self.route, Phase::Ready, Family::Other, error.as_ref());
+            error
         })
     }
 
@@ -85,6 +104,8 @@ where
         } else {
             None
         };
+        let family = Family::from_path(request.uri().path());
+        let route = self.route;
         let future = self.inner.call(request);
         let record = self.record.clone();
         Box::pin(async move {
@@ -125,12 +146,16 @@ where
                             inner,
                             record,
                             device_auth,
+                            family,
+                            route,
                         })
                     }))
                 }
                 Err(error) => {
+                    let error = error.into();
                     record(ServerStatus::Unreachable);
-                    Err(error.into())
+                    diagnostics::failure(route, Phase::Call, family, error.as_ref());
+                    Err(error)
                 }
             }
         })
@@ -173,6 +198,8 @@ struct RecordingBody<R> {
     inner: Body,
     record: R,
     device_auth: Option<super::interceptors::DeviceAuthRequest>,
+    family: Family,
+    route: Route,
 }
 
 impl<R: Fn(ServerStatus) + Unpin> http_body::Body for RecordingBody<R> {
@@ -193,8 +220,9 @@ impl<R: Fn(ServerStatus) + Unpin> http_body::Body for RecordingBody<R> {
         // A failed response stream is local transport evidence. A gRPC error
         // trailer is a successful frame and retains Reachable, regardless of
         // its status code or message. Never inspect/log auth or payload data.
-        if matches!(&frame, Poll::Ready(Some(Err(_)))) {
+        if let Poll::Ready(Some(Err(error))) = &frame {
             (this.record)(ServerStatus::Unreachable);
+            diagnostics::failure(this.route, Phase::Body, this.family, error);
         } else if matches!(&frame, Poll::Ready(Some(Ok(_)))) {
             (this.record)(ServerStatus::Reachable);
         }
@@ -221,7 +249,9 @@ mod quic_enabled {
 
     use super::BoxError;
 
-    pub type QuicChannel = tonic_h3::H3Channel<tonic_h3::quinn::H3QuinnConnector>;
+    use super::quic_lifecycle::TrackedConnector;
+
+    pub type QuicChannel = tonic_h3::H3Channel<TrackedConnector>;
 
     /// Unified gRPC transport: plain TCP/HTTP2 or QUIC/HTTP3.
     #[derive(Clone)]
@@ -413,10 +443,15 @@ mod quic_enabled {
         let uri = quic_uri(uri)?;
         let host = quic_server_name(&uri)?.to_string();
         let endpoint = client_endpoint()?;
-        let connector = tonic_h3::quinn::H3QuinnConnector::new(uri.clone(), host, endpoint);
+        let connector = TrackedConnector(tonic_h3::quinn::H3QuinnConnector::new(
+            uri.clone(),
+            host,
+            endpoint,
+        ));
         Ok(super::RecordingTransport {
             inner: RawTransport::Quic(tonic_h3::H3Channel::new(connector, uri, None)),
             record: crate::network::connection::set_server_status as fn(super::ServerStatus),
+            route: super::Route::H3,
         })
     }
 
@@ -514,6 +549,7 @@ pub(crate) mod outcome_tests {
         let captured = evidence.clone();
         let transport = RecordingTransport {
             inner: reply,
+            route: Route::H2,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let mut client = MessageServiceClient::with_interceptor(transport, AuthInterceptor::new());
@@ -539,6 +575,7 @@ pub(crate) mod outcome_tests {
                 transport_failure,
                 body_failure: false,
             },
+            route: Route::H2,
             record: set_server_status as fn(ServerStatus),
         };
         let mut client = MessageServiceClient::with_interceptor(transport, AuthInterceptor::new());
@@ -634,6 +671,7 @@ pub(crate) mod outcome_tests {
                 transport_failure: false,
                 body_failure: false,
             },
+            route: Route::H2,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let mut client =
@@ -670,6 +708,7 @@ pub(crate) mod outcome_tests {
         let captured = evidence.clone();
         let mut transport = RecordingTransport {
             inner: NotReady,
+            route: Route::H2,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let result =

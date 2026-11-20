@@ -41,9 +41,9 @@ impl GrpcClientPool {
                     return ch;
                 }
                 let endpoint = self.endpoint.read().clone();
-                let ch: GrpcTransport = endpoint
-                    .connect_with_connector_lazy(self.unidentified_onion_connector())
-                    .into();
+                let ch = GrpcTransport::from_onion(
+                    endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
+                );
                 *guard = Some(ch.clone());
                 return ch;
             }
@@ -58,13 +58,13 @@ impl GrpcClientPool {
             return Ok(());
         }
         let (endpoint, _, generation) = self.snapshot();
-        let channel: GrpcTransport = endpoint
+        let channel = endpoint
             .connect_with_connector(self.unidentified_onion_connector())
             .await
             .map_err(|e| {
                 NetworkError::ConnectionFailed(format!("anonymous onion preconnect: {e}"))
-            })?
-            .into();
+            })?;
+        let channel = GrpcTransport::from_onion(channel);
         let mut probe = super::super::AnonymousMailboxClient::new(channel.clone());
         tokio::time::timeout(
             Duration::from_secs(15),

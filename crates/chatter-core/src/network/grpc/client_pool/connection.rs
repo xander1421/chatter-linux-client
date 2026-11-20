@@ -108,6 +108,11 @@ impl GrpcClientPool {
         {
             Self::note_onion_dial(mode, true);
         }
+        if channel.is_http3() {
+            tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
+        } else if mode == TransportMode::Direct {
+            tracing::event!(target: "network_transport::tcp_channel_created", tracing::Level::INFO, {});
+        }
         *guard = Some(channel);
         Ok(crate::network::connection::server_status()
             == crate::network::connection::ServerStatus::Reachable)
@@ -264,7 +269,12 @@ impl GrpcClientPool {
             }
         }
 
-        Ok((channel?.into(), true))
+        let channel = channel?;
+        #[cfg(feature = "onion")]
+        if mode == TransportMode::Onion {
+            return Ok((GrpcTransport::from_onion(channel), true));
+        }
+        Ok((channel.into(), true))
     }
 
     /// Dial the server and throw the connection away: a reachability probe.
