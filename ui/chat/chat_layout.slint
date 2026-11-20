@@ -106,6 +106,7 @@ export component ChatLayout inherits Rectangle {
     in-out property <bool> gif-picker-visible: false;
     // The attachment-source bottom sheet (Gallery / Camera / Video / File).
     in-out property <bool> attach-sheet-visible: false;
+    in property <bool> attach-gallery-only: false;
 
     in property <[EmojiData]> emoji-list;
     in-out property <int> emoji-category;
@@ -1027,6 +1028,7 @@ export component ChatLayout inherits Rectangle {
         TouchArea { clicked => { root.attach-sheet-visible = false; root.composer-attach-source(-1); } }
         AttachSheet {
             touch: root.mobile;
+            gallery-only: root.attach-gallery-only;
             x: root.mobile ? 0px : (parent.width - self.width) / 2;
             width: root.mobile ? parent.width : min(parent.width, 460px);
             y: parent.height - self.height - (root.mobile ? 0px : Spacing.lg);

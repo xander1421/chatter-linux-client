@@ -398,12 +398,17 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
                     .into_iter()
                     .next();
                 #[cfg(target_os = "ios")]
-                let picked: Option<std::path::PathBuf> = None;
+                let picked = crate::platform::ios::pick_image().await;
                 let result = match picked {
-                    Some(path) => tokio::task::spawn_blocking(move || read_avatar(&path))
-                        .await
-                        .map_err(|_| chatter_i18n::tr("Unable to process selected avatar."))
-                        .and_then(|r| r.map(Some)),
+                    Some(path) => tokio::task::spawn_blocking(move || {
+                        let result = read_avatar(&path);
+                        #[cfg(target_os = "ios")]
+                        let _ = std::fs::remove_file(path);
+                        result
+                    })
+                    .await
+                    .map_err(|_| chatter_i18n::tr("Unable to process selected avatar."))
+                    .and_then(|r| r.map(Some)),
                     None => Ok(None),
                 };
                 let _ = weak.upgrade_in_event_loop(move |w| {
