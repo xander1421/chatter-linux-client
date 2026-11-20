@@ -583,7 +583,7 @@ mod heartbeat_tests {
             UserEvent {
                 timestamp: 1,
                 event: Some(user_event::Event::UpdateAvailable(
-                    crate::proto::chat_v1::ReleaseUpdateHint {},
+                    chatter_proto::chat_v1::ReleaseUpdateHint {},
                 )),
             },
             &pool,

@@ -560,7 +560,7 @@ mod tests {
         let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let pool =
             GrpcClientPool::new(&format!("https://{}", silent.local_addr().unwrap())).unwrap();
-        let start = Instant::now();
+        let start = std::time::Instant::now();
         let initial = pool.channel();
         assert!(start.elapsed() < Duration::from_millis(250));
         assert!(!initial.is_http3());
