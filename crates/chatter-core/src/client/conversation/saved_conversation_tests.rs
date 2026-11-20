@@ -33,6 +33,7 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     let scope =
         message_storage_scope(&ActiveConversation::Channel(id), Some(own), Some(&channel)).unwrap();
     assert_eq!(scope, ReactionScope::of(&records[0]));
+    assert!(scope.kind.uses_plain_delete_confirmation());
     let saved = scoped_stored_message(&repo, &scope, &own, now).unwrap();
     assert_eq!(saved.id, records[0].id);
     assert_eq!(saved.as_text(), Some("saved")); // copy reads this exact record
@@ -88,6 +89,7 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
         let normal = scoped_stored_message(&repo, &normal_scope, &own, now).unwrap();
         assert_eq!(normal.id, expected.id);
         assert!(require_remote_message_kind(&normal.conversation_type).is_ok());
+        assert!(!normal_scope.kind.uses_plain_delete_confirmation());
         assert!(
             stored_message_menu(&normal, true, now)
                 .actions
@@ -336,4 +338,116 @@ async fn saved_reaction_handle_resolves_saved_scope_and_toggles_without_transpor
     assert!(handle.reaction_snapshot(&own, now).unwrap().unwrap().own_emojis.is_empty());
     let foreign = ReactionScope::new(id, ConversationType::Channel);
     assert!(handle.toggle_reaction_for_scope(&foreign, "👍", &own, now).await.is_err());
+}
+
+#[tokio::test]
+async fn saved_delete_recovery_queues_every_selected_note_after_failed_fanout() {
+    use crate::storage::repositories::{SavedSyncRepository, settings_repo::keys};
+
+    let (client, _dir) = super::tests::test_client();
+    let owner = UserId::new();
+    let channel_id = ChannelId::from(owner);
+    client
+        .auth_state()
+        .set_logged_in(owner, 1, "fixture".into());
+    let messages = client.messages();
+    messages
+        .settings_repo
+        .set(keys::CURRENT_USER_ID, &owner.to_string())
+        .unwrap();
+    messages
+        .settings_repo
+        .set(keys::CURRENT_DEVICE_ID, &1u32)
+        .unwrap();
+    client
+        .channels()
+        .channel_repo
+        .insert(&Channel::new(
+            channel_id,
+            "Saved Messages".into(),
+            ChannelType::SavedMessages,
+            owner,
+        ))
+        .unwrap();
+    let notes: Vec<_> = [1, 2]
+        .into_iter()
+        .map(|sent_at| {
+            let note = Message::new_text(
+                channel_id,
+                ConversationType::SavedMessages,
+                Some(owner),
+                "note".into(),
+                sent_at,
+            );
+            messages.message_repo.insert(&note).unwrap();
+            note
+        })
+        .collect();
+
+    let (completed, _) = tokio::sync::mpsc::unbounded_channel();
+    let result = client
+        .conversation(ActiveConversation::Channel(channel_id))
+        .delete_selected(
+            &notes
+                .iter()
+                .map(|note| note.id.to_string())
+                .collect::<Vec<_>>(),
+            SelectedDeleteScope::ForMe,
+            owner,
+            client.auth_state().get().session_revision,
+            completed,
+        )
+        .await;
+
+    assert!(result.deleted_ids.is_empty());
+    assert_eq!(result.failed_ids.len(), notes.len());
+    let journal = SavedSyncRepository::new(messages.database.clone());
+    for note in notes {
+        assert_eq!(
+            journal.pending_delete(&owner, &note.id).unwrap().unwrap().1,
+            note.sent_at
+        );
+    }
+}
+
+#[tokio::test]
+async fn saved_delete_recovery_publishes_the_persisted_id_to_the_ui() {
+    use crate::inbox::events::InboxEvent;
+    use crate::inbox::handlers::DomainEvent;
+    use crate::storage::repositories::settings_repo::keys;
+
+    let (client, _dir) = super::tests::test_client();
+    let owner = UserId::new();
+    let id = crate::domain::ids::MessageId::new();
+    let messages = client.messages();
+    messages
+        .settings_repo
+        .set(keys::CURRENT_USER_ID, &owner.to_string())
+        .unwrap();
+    let conversation = owner.to_string();
+    let target = crate::services::inbox_processor::sync::persist_saved_delete_for_me_sync(
+        &messages.message_repo,
+        Some(owner),
+        owner,
+        &conversation,
+        &conversation,
+        1,
+        &id.to_string(),
+        true,
+    )
+    .unwrap();
+    let mut ui_events = client.subscribe_events();
+    client
+        .inbox_event_processor()
+        .process(&InboxEvent::SavedDeletionApplied {
+            owner,
+            message_id: target,
+        })
+        .await;
+    assert!(matches!(
+        ui_events.try_recv().unwrap(),
+        DomainEvent::DeleteForMeSync {
+            conversation_id, target_message_id, saved_deletion_persisted: true, ..
+        } if conversation_id == ChannelId::from(owner) && target_message_id == id
+    ));
 }

@@ -26,10 +26,33 @@ use crate::util::time::TimestampNanos;
 
 /// How long a sent `Content` is resent on request: Signal-Desktop's
 /// `retryRespondMaxAge` default (`handleRetry.preload.ts:172`, 14 days). Our
-/// server queues a message for 30 days, so a device offline longer than this
+/// server currently queues a message for 46 days, so a device offline longer than this
 /// gets a `NullMessage` instead — its session still heals, the message is
 /// not repeated.
 pub(crate) const RESEND_MAX_AGE_NS: u64 = 14 * 24 * 60 * 60 * 1_000_000_000;
+
+/// A Saved delete may need repair throughout the server's device-inbox window.
+const SAVED_DELETE_RESEND_MAX_AGE_NS: u64 = 46 * 24 * 60 * 60 * 1_000_000_000;
+
+fn exact_saved_delete(
+    content: &Content,
+    owner: UserId,
+) -> Option<(crate::domain::ids::MessageId, u64)> {
+    let Some(content::Content::DeleteForMeSync(delete)) = content.content.as_ref() else {
+        return None;
+    };
+    if !delete.saved_messages_scope
+        || delete.conversation_id.parse().ok() != Some(owner)
+        || delete.target_author_aci.parse().ok() != Some(owner)
+        || !(1..=i64::MAX as u64).contains(&delete.target_sent_timestamp)
+    {
+        return None;
+    }
+    Some((
+        delete.saved_message_id.parse().ok()?,
+        delete.target_sent_timestamp,
+    ))
+}
 
 /// What a retry request is answered with.
 #[derive(Debug, PartialEq, Eq)]
@@ -39,6 +62,7 @@ pub(super) enum Resend {
     Original(Vec<u8>, Option<Vec<u8>>),
     /// Nothing we may send again: a `NullMessage`, to heal the session.
     NullMessage(Vec<u8>),
+    SavedDeleteQueued,
 }
 
 /// Whether `content` goes in the send log, and the `sent_at` of our own
@@ -69,6 +93,9 @@ fn loggable(content: &Content) -> Option<Option<u64>> {
 /// When a logged `content` stops being resendable: the resend window, or
 /// sooner for a disappearing message — its plaintext must not outlive it here.
 fn expires_at(content: &Content, now: u64) -> u64 {
+    if matches!(&content.content, Some(content::Content::DeleteForMeSync(delete)) if delete.saved_messages_scope) {
+        return now.saturating_add(SAVED_DELETE_RESEND_MAX_AGE_NS);
+    }
     let dm = match content.content.as_ref() {
         Some(content::Content::DataMessage(dm)) => Some(dm),
         Some(content::Content::SyncSent(sync)) => sync.message.as_ref(),
@@ -148,6 +175,7 @@ impl MessageService {
                 tracing::info!(%peer_id, peer_device_id, timestamp_ms,
                 "DM retry request matched nothing we may resend; sent a NullMessage")
             }
+            Ok(Some(Resend::SavedDeleteQueued)) => tracing::info!(%peer_id, peer_device_id, "Saved deletion requeued after decryption error"),
             Ok(None) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
                 "DM retry request not answered in Shield mode"),
             Err(e) => tracing::warn!(%peer_id, peer_device_id, timestamp_ms, error = %e,
@@ -161,16 +189,18 @@ impl MessageService {
         peer_device_id: u32,
         timestamp_ms: u64,
     ) -> Result<Option<Resend>, MessageError> {
-        // This transport names the recipient to the server, which Shield mode
-        // must never do (`send_sealed_dm_content`). Checked before the log
-        // entry is consumed.
-        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+        // Identified delivery to our own account is also allowed in Shield.
+        // A retry to a peer must never name that peer from Shield.
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+            && self.current_user_id().ok().as_ref() != Some(peer_id)
+        {
             return Ok(None);
         }
         let resend = self.dm_resend_plaintext(peer_id, peer_device_id, timestamp_ms)?;
         let (plaintext, group_id) = match &resend {
             Resend::Original(bytes, group_id) => (bytes, group_id.as_deref()),
             Resend::NullMessage(bytes) => (bytes, None),
+            Resend::SavedDeleteQueued => return Ok(Some(resend)),
         };
         let sealed_body = self
             .signal_service
@@ -238,6 +268,15 @@ impl MessageService {
                 return Ok(null());
             }
         }
+        if self.current_user_id().ok().as_ref() == Some(requester)
+            && let Ok(content) = Content::decode(payload.content.as_slice())
+            && let Some((id, sent_at)) = exact_saved_delete(&content, *requester)
+        {
+            // The session was already healed by the report handler. Journal
+            // the exact delete before attempting to deliver it again.
+            self.message_repo.prepare_own_saved_delete(requester, &id, sent_at)?;
+            return Ok(Resend::SavedDeleteQueued);
+        }
         Ok(Resend::Original(payload.content, payload.group_id))
     }
 }
@@ -286,6 +325,35 @@ mod tests {
             Content::decode(bytes.as_slice()).unwrap().content,
             Some(content::Content::NullMessage(_))
         )
+    }
+
+    #[tokio::test]
+    async fn saved_delete_recovery_requeues_after_the_row_was_removed() {
+        let (_dir, alice, owner) = client();
+        let service = alice.messages();
+        let id = crate::domain::ids::MessageId::new();
+        let sent_at = TimestampNanos::now().as_u64();
+        let delete = super::super::saved::saved_delete_content(owner, id, sent_at);
+        let journal =
+            crate::storage::repositories::SavedSyncRepository::new(service.database.clone());
+
+        service.record_dm_send(owner, &delete, &[(2, sent_at)]);
+        assert!(is_null_message(
+            &service
+                .dm_resend_plaintext(&UserId::new(), 2, sent_at / 1_000_000)
+                .unwrap()
+        ));
+        assert_eq!(
+            service
+                .dm_resend_plaintext(&owner, 2, sent_at / 1_000_000)
+                .unwrap(),
+            Resend::SavedDeleteQueued,
+        );
+        assert_eq!(
+            journal.pending_delete(&owner, &id).unwrap().unwrap().1,
+            sent_at
+        );
+        assert_eq!(expires_at(&delete, 0), SAVED_DELETE_RESEND_MAX_AGE_NS);
     }
 
     /// Bob could not decrypt Alice's DM; Alice has edited it since. The

@@ -50,7 +50,7 @@ pub(crate) use failure::{
     sender_key_nonmember_decision,
 };
 
-use control::{dispatch_secret_chat_bootstrap, persist_exact_saved_delete_before_ack};
+use control::{apply_exact_saved_delete, dispatch_secret_chat_bootstrap};
 use ecies::process_ecies_init_message;
 use identified::process_identified_sender_message;
 use sealed::process_sealed_sender_message;
