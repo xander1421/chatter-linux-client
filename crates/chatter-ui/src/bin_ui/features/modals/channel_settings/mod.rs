@@ -1035,7 +1035,7 @@ fn wire_pick_icon(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .into_iter()
                     .next();
                 #[cfg(target_os = "ios")]
-                let picked: Option<std::path::PathBuf> = None;
+                let picked = crate::platform::ios::pick_image().await;
                 let result = match picked {
                     Some(path) => std::fs::read(&path)
                         .map(|data| Some((path, data)))

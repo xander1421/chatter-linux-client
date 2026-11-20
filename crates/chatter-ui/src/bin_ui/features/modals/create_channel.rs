@@ -127,10 +127,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .into_iter()
                     .next();
                 #[cfg(target_os = "ios")]
-                let picked: Option<std::path::PathBuf> = {
-                    tracing::warn!("File picker not supported on iOS");
-                    None
-                };
+                let picked = crate::platform::ios::pick_image().await;
 
                 match picked {
                     Some(path) => {

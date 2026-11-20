@@ -7,6 +7,9 @@
 #[cfg(target_os = "android")]
 pub mod android;
 
+#[cfg(target_os = "ios")]
+pub(crate) mod ios;
+
 #[cfg(target_os = "linux")]
 pub mod linux;
 
