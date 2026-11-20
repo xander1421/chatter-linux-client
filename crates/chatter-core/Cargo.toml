@@ -343,7 +343,7 @@ name = "attachment_decrypt"
 harness = false
 
 [features]
-default = ["desktop-system", "desktop-media"]
+default = ["desktop-system", "desktop-media", "quic"]
 # Select the DEVELOPMENT sealed-sender trust root (config.rs) instead of the
 # production one. Its private key is committed in plaintext at
 # deploy/vault/init-and-unseal.sh, so a build with this feature trusts sender
@@ -362,8 +362,8 @@ onion = [
 desktop-system = ["dep:zbus-secret-service-keyring-store", "dep:windows-native-keyring-store", "dep:apple-native-keyring-store"]
 # Native UI capabilities are opt-in; credential stores keep their own contract.
 desktop-native = ["dep:notify-rust", "dep:rfd", "dep:open", "dep:ksni", "dep:tray-icon", "dep:muda"]
-# HTTP/3 (QUIC) gRPC transport. Off by default — pulls quinn/h3 via tonic-h3.
-# Without it, GrpcClientPool is TCP/HTTP2-only (today's behavior, unchanged).
+# HTTP/3 (QUIC) is the default direct transport. Minimal builds may omit it;
+# normal clients prefer HTTP/3 while retaining bounded TCP fallback.
 quic = ["dep:tonic-h3", "dep:quinn"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls

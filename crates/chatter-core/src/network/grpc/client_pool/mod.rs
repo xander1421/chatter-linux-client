@@ -24,15 +24,20 @@ use super::transport::GrpcTransport;
 #[cfg(feature = "quic")]
 const QUIC_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Cached result of the QUIC reachability probe, process-lifetime (no
-/// persistence — re-probing on every process start is cheap and self-heals if
-/// a network's QUIC/UDP filtering changes; a TTL-based re-probe within one
-/// run is unneeded until flaky-UDP users show up in the wild).
+/// Prefer a successful QUIC probe even when TCP finishes slightly earlier,
+/// without paying the full UDP timeout on networks which block it.
+#[cfg(feature = "quic")]
+const QUIC_PREFERENCE_GRACE: Duration = Duration::from_millis(250);
+
+/// Cached reachability for the current origin and route generation. An explicit
+/// origin/route change cancels the old probe and resets this verdict; ordinary
+/// RPCs and reconnects do not repeatedly probe a UDP-blocking network.
 #[cfg(feature = "quic")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuicProbeState {
     Untried,
-    /// Probe running in the background; dials use TCP until it settles.
+    /// Probe running in the background; provisional TCP calls are upgraded
+    /// after it succeeds.
     Probing,
     Working,
     Failed,
@@ -126,9 +131,11 @@ pub struct GrpcClientPool {
     /// QUIC needs TLS 1.3 to negotiate ALPN.
     #[cfg(feature = "quic")]
     quic_probe: Arc<RwLock<QuicProbeState>>,
-    /// Incremented whenever the direct URL changes; fences background probes.
+    /// Incremented on origin/route changes; fences background probes.
     #[cfg(feature = "quic")]
     quic_probe_generation: Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(feature = "quic")]
+    quic_probe_task: Arc<parking_lot::Mutex<Option<tokio::task::AbortHandle>>>,
     /// Lazily-bootstrapped, pool-wide Tor client for the onion transport.
     /// Bootstrap is deferred to the first onion dial and cached thereafter.
     #[cfg(feature = "onion")]
@@ -524,6 +531,78 @@ mod tests {
             "cached lazy QUIC construction must not claim wire contact"
         );
         assert_eq!(*pool.quic_probe.read(), QuicProbeState::Working);
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn successful_late_probe_promotes_cached_tcp_without_dropping_old_handles() {
+        let pool = GrpcClientPool::new("https://localhost:443").unwrap();
+        // A cached lazy TCP channel exists while the probe is still in flight.
+        *pool.quic_probe.write() = QuicProbeState::Probing;
+        let old = pool.channel();
+        assert!(!old.is_http3());
+        *pool.quic_probe.write() = QuicProbeState::Working;
+        let promoted = pool.channel();
+        assert!(
+            promoted.is_http3(),
+            "late probe success must affect actual RPCs"
+        );
+        assert!(
+            !old.is_http3(),
+            "in-flight streams keep their existing connection"
+        );
+        assert!(pool.channel().is_http3());
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn lazy_first_rpc_starts_a_probe_without_blocking() {
+        let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let pool =
+            GrpcClientPool::new(&format!("https://{}", silent.local_addr().unwrap())).unwrap();
+        let start = std::time::Instant::now();
+        let initial = pool.channel();
+        assert!(start.elapsed() < Duration::from_millis(250));
+        assert!(!initial.is_http3());
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Probing);
+        let old_probe = pool.quic_probe_task.lock().as_ref().unwrap().clone();
+        // A URL change fences the still-running probe out of the new origin.
+        pool.set_url("https://localhost:9443").unwrap();
+        assert_eq!(*pool.quic_probe.read(), QuicProbeState::Untried);
+        assert!(pool.quic_probe_task.lock().is_none());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !old_probe.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("changing the route must cancel the old direct probe");
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn switching_to_onion_cancels_direct_probe_and_prevents_promotion() {
+        let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let pool =
+            GrpcClientPool::new(&format!("https://{}", silent.local_addr().unwrap())).unwrap();
+        let _direct = pool.channel();
+        let old_probe = pool.quic_probe_task.lock().as_ref().unwrap().clone();
+        pool.swap_endpoint(
+            Endpoint::from_static("http://example.onion:443"),
+            TransportMode::Onion,
+        );
+        assert!(pool.quic_probe_task.lock().is_none());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !old_probe.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // Even a late stale verdict must never put a direct channel under Tor.
+        *pool.quic_probe.write() = QuicProbeState::Working;
+        assert!(!pool.channel().is_http3());
+        assert_eq!(pool.transport_mode(), TransportMode::Onion);
     }
 
     #[cfg(feature = "quic")]

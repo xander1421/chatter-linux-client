@@ -36,8 +36,8 @@ export component AboutSettings inherits VerticalLayout {
             }
             Button {
                 touch: root.mobile-platform;
-                text: UpdateGlobal.state == "checking" ? @tr("Checking…") : @tr("Check for updates");
-                disabled: UpdateGlobal.state == "checking";
+                text: UpdateGlobal.checking || UpdateGlobal.state == "checking" ? @tr("Checking…") : @tr("Check for updates");
+                disabled: UpdateGlobal.checking || UpdateGlobal.state == "checking";
                 clicked => { UpdateGlobal.check(); }
             }
             if UpdateGlobal.state == "available": Text {

@@ -48,6 +48,8 @@ pub enum AttachmentUploadState {
 /// Dispatchers emit events; consumers subscribe and react.
 #[derive(Debug, Clone)]
 pub enum DomainEvent {
+    /// Reconnected event stream or server publication hint; verify the signed manifest.
+    UpdateCheckRequested,
     /// Per-file progress of an outgoing attachment upload, keyed by the tray
     /// (pending) attachment id the in-flight bubble renders. Emitted by
     /// `client::upload_attachments` as each file of a send is processed.
@@ -689,6 +691,7 @@ impl DomainEvent {
     /// Get the channel ID associated with this event, if any.
     pub fn channel_id(&self) -> Option<ChannelId> {
         match self {
+            DomainEvent::UpdateCheckRequested => None,
             DomainEvent::MessageReceived { message } => Some(message.conversation_id),
             DomainEvent::MessageEdited { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageDeleted { channel_id, .. } => *channel_id,

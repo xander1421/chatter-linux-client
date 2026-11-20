@@ -174,7 +174,7 @@ webrtc-sys-build = "=0.3.18"
 [features]
 # `onion` is default: secret chats (anonymous DMs/groups) ride Tor only, and a
 # build without it would have none (owner decision 2026-10-10).
-default = ["desktop", "onion"]
+default = ["desktop", "onion", "quic"]
 # Emit Slint element metadata for the headless UI query suites.
 ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a
@@ -295,3 +295,7 @@ window_soft_input_mode = "adjustResize"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "update_offer_preview"
+required-features = ["ui-test-debug"]

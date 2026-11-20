@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+type UpdateOperation = Arc<tokio::sync::Mutex<()>>;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::update;
@@ -20,7 +20,25 @@ fn show_error(weak: Weak<MainWindow>, error: String) {
     });
 }
 
-async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool, play: bool) {
+fn check_may_replace_state(state: &str) -> bool {
+    !matches!(
+        state,
+        "confirm-cellular" | "downloading" | "installing" | "ready"
+    )
+}
+
+async fn check(
+    client: Arc<ChatterClient>,
+    weak: Weak<MainWindow>,
+    manual: bool,
+    play: bool,
+    operations: UpdateOperation,
+) {
+    // A publication received during another check must wait, not disappear.
+    let _operation = operations.lock_owned().await;
+    if !manual && !client.is_app_visible() {
+        return;
+    }
     if play {
         #[cfg(target_os = "android")]
         if manual {
@@ -37,10 +55,28 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool,
                     let global = window.global::<UpdateGlobal>();
                     global.set_state("idle".into());
                     global.set_error("".into());
-                    global.set_notice("In-app updates are not available for this platform yet".into());
+                    global.set_notice(
+                        "In-app updates are not available for this platform yet".into(),
+                    );
                 }
             });
         }
+        return;
+    }
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let allowed_window = weak.clone();
+    if slint::invoke_from_event_loop(move || {
+        let allowed = allowed_window.upgrade().is_some_and(|window| {
+            let global = window.global::<UpdateGlobal>();
+            let allowed = check_may_replace_state(global.get_state().as_str());
+            global.set_checking(allowed);
+            allowed
+        });
+        let _ = send.send(allowed);
+    })
+    .is_err()
+        || receive.await != Ok(true)
+    {
         return;
     }
     tracing::info!(manual, "update check started");
@@ -49,18 +85,32 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool,
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(window) = loading.upgrade() {
                 let global = window.global::<UpdateGlobal>();
-                global.set_state("checking".into());
+                if global.get_state() != "available" {
+                    global.set_state("checking".into());
+                }
                 global.set_error("".into());
                 global.set_notice("".into());
             }
         });
     }
-    match client.check_available_update().await {
+    let result = client.check_available_update().await;
+    let checking_window = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(window) = checking_window.upgrade() {
+            window.global::<UpdateGlobal>().set_checking(false);
+        }
+    });
+    match result {
         Ok(found) => {
             tracing::info!(available = found.is_some(), "update check completed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
                     let global = window.global::<UpdateGlobal>();
+                    if !check_may_replace_state(global.get_state().as_str()) {
+                        return;
+                    }
+                    global.set_error("".into());
+                    global.set_notice("".into());
                     if let Some(manifest) = found {
                         global.set_version(manifest.version_name.into());
                         global.set_state("available".into());
@@ -76,7 +126,15 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool,
         Err(error) => {
             tracing::warn!(kind = %error, "update check failed");
             if manual {
-                show_error(weak, error);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        let global = window.global::<UpdateGlobal>();
+                        if check_may_replace_state(global.get_state().as_str()) {
+                            global.set_state("error".into());
+                            global.set_error(error.into());
+                        }
+                    }
+                });
             }
         }
     }
@@ -128,32 +186,50 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let play = false;
     global.set_play_distribution(play);
 
+    let operations: UpdateOperation = Arc::new(tokio::sync::Mutex::new(()));
+    let manual_operations = operations.clone();
     let manual_client = client.clone();
     let manual_window = window.as_weak();
     global.on_check(move || {
+        if let Some(window) = manual_window.upgrade() {
+            let global = window.global::<UpdateGlobal>();
+            if global.get_checking() {
+                return;
+            }
+            if !play
+                && matches!(update::platform(), "android" | "linux")
+                && check_may_replace_state(global.get_state().as_str())
+            {
+                global.set_checking(true);
+            }
+        }
         crate::rt_handle().spawn(check(
             manual_client.clone(),
             manual_window.clone(),
             true,
             play,
+            manual_operations.clone(),
         ));
     });
 
-    let periodic_client = Arc::downgrade(client);
-    let periodic_window = window.as_weak();
+    let automatic_client = Arc::downgrade(client);
+    let automatic_window = window.as_weak();
+    let automatic_operations = operations.clone();
+    let mut automatic =
+        update::automatic::AutomaticChecks::for_client(client.subscribe_update_checks());
     crate::rt_handle().spawn(async move {
-        // Give the launch UI time to restore its selected Shield transport.
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        loop {
-            let Some(client) = periodic_client.upgrade() else {
+        while automatic.next().await {
+            let Some(client) = automatic_client.upgrade() else {
                 break;
             };
-            check(client, periodic_window.clone(), false, play).await;
-            let jitter = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|time| time.subsec_nanos() as u64 % 1800)
-                .unwrap_or(0);
-            tokio::time::sleep(Duration::from_secs(4 * 3600 + jitter)).await;
+            check(
+                client,
+                automatic_window.clone(),
+                false,
+                play,
+                automatic_operations.clone(),
+            )
+            .await;
         }
     });
 
@@ -207,7 +283,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             return;
         }
         let Some(manifest_before_download) = client.available_update() else {
-            crate::rt_handle().spawn(check(client, weak, true, play));
+            crate::rt_handle().spawn(check(client, weak, true, play, operations.clone()));
             return;
         };
         #[cfg(target_os = "android")]
@@ -233,6 +309,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             }
         }
         let retry = global.get_state() == "error";
+        global.set_version(manifest_before_download.version_name.clone().into());
         global.set_state("downloading".into());
         tracing::info!(version = %manifest_before_download.version_name, size = manifest_before_download.size, retry, "update download requested");
         global.set_error("".into());
@@ -240,7 +317,23 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         global.set_progress(chatter_i18n::tr("Downloading and verifying…").into());
         let size = manifest_before_download.size;
         let download_manifest = manifest_before_download;
+        let download_operations = operations.clone();
         crate::rt_handle().spawn(async move {
+            let _operation = download_operations.lock_owned().await;
+            if client.available_update().as_ref() != Some(&download_manifest) {
+                let latest = client.available_update();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        let global = window.global::<UpdateGlobal>();
+                        if let Some(manifest) = latest {
+                            global.set_version(manifest.version_name.into());
+                            global.set_state("available".into());
+                            global.set_notice(chatter_i18n::tr("Update information changed. Tap Update to continue.").into());
+                        } else { global.set_state("idle".into()); }
+                    }
+                });
+                return;
+            }
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<u64>();
             let progress_window = weak.clone();
             let progress_task = tokio::spawn(async move {

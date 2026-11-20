@@ -517,9 +517,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // wrapper must be in place before `app_init` builds the client.
     crate::platform::android::keystore::init();
     if let Some(label) = crate::platform::android::activity::device_label() {
-        chatter_core::client::ChatterClient::set_platform_device_label(
-            label,
-        );
+        chatter_core::client::ChatterClient::set_platform_device_label(label);
     }
     crate::platform::android::video_thumbnail::init();
 
@@ -617,6 +615,7 @@ fn init_tracing() {
         // go through the unchanged release redactor.
         .add_directive("call_setup=info".parse().unwrap())
         .add_directive("gif_playback=info".parse().unwrap())
+        .add_directive("network_transport=info".parse().unwrap())
         .add_directive("glycin=warn".parse().unwrap())
         .add_directive("glycin_utils=warn".parse().unwrap())
         .add_directive("zbus=warn".parse().unwrap());
@@ -813,18 +812,24 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
     #[cfg(target_os = "ios")]
     {
         use i_slint_backend_winit::WinitWindowAccessor;
-        window.global::<crate::InputPolicy>().set_dismiss_after_send(true);
-        window.global::<crate::InputPolicy>().set_keyboard_includes_safe_area(true);
+        window
+            .global::<crate::InputPolicy>()
+            .set_dismiss_after_send(true);
+        window
+            .global::<crate::InputPolicy>()
+            .set_keyboard_includes_safe_area(true);
         let weak = window.as_weak();
-        window.global::<crate::InputPolicy>().on_dismiss_native_keyboard(move || {
-            if let Some(w) = weak.upgrade() {
-                // A destroyed Slint TextInput cannot deliver FocusOut. Resign
-                // UIKit's responder explicitly when its route has gone away.
-                w.window().with_winit_window(|native| native.set_ime_allowed(false));
-            }
-        });
+        window
+            .global::<crate::InputPolicy>()
+            .on_dismiss_native_keyboard(move || {
+                if let Some(w) = weak.upgrade() {
+                    // A destroyed Slint TextInput cannot deliver FocusOut. Resign
+                    // UIKit's responder explicitly when its route has gone away.
+                    w.window()
+                        .with_winit_window(|native| native.set_ime_allowed(false));
+                }
+            });
     }
-
 
     // Let the notification "Accept" activity-intent drive the in-app accept flow.
     #[cfg(target_os = "android")]
@@ -1272,7 +1277,10 @@ fn dev_auto_register(
 /// Slint owns the thread. Tokio worker threads handle async I/O.
 fn app_run(state: AppState) {
     #[cfg(target_vendor = "apple")]
-    state.window.global::<Typography>().set_font_family_emoji("Apple Color Emoji".into());
+    state
+        .window
+        .global::<Typography>()
+        .set_font_family_emoji("Apple Color Emoji".into());
     // macOS: the native NSWindow only exists once the platform window has
     // actually been created, which needs at least one event-loop iteration
     // after the window is shown (see platform::macos's docs) — in practice a

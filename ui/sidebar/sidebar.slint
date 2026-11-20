@@ -27,8 +27,6 @@ import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshList } from "../mesh/mesh_list.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
-import { UpdateGlobal } from "../update/update_global.slint";
-import { UpdateBanner } from "update_banner.slint";
 import { SidebarFooter } from "sidebar_footer.slint";
 import { SidebarHeader } from "sidebar_header.slint";
 import { ActivityBell } from "../activity/activity_bell.slint";
@@ -348,8 +346,6 @@ export component Sidebar inherits Rectangle {
     animate width { duration: root.mobile-mode ? 0ms : Materials.menu-duration; easing: ease-out; }
 
     in property <length> bottom-inset: 0px;
-    property <bool> update-banner-visible: UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular" || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "ready" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "error";
-    property <length> update-banner-height: Spacing.button-height + Spacing.md;
 
     Rectangle {
         // Clip the list and glass chrome together. Child/backdrop painting must
@@ -398,9 +394,8 @@ export component Sidebar inherits Rectangle {
                 padding-bottom: entry.kind == "bottom"
                     ? (root.mobile-mode
                         ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
-                            + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none)
                         : (root.collapsed ? root.rail-footer-height : Spacing.button-height)
-                            + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md)
+                            + Spacing.md)
                     : Spacing.none;
                 if entry.kind == "archive-entry" || entry.kind == "archive-back": Rectangle {
                     height: root.quick-link-height;
@@ -1056,22 +1051,6 @@ export component Sidebar inherits Rectangle {
 
     // Right edge — the seam against the chat column. Desktop only: on a phone
     // this panel is the whole screen and has no column beside it.
-
-    if !root.mobile-mode && !root.collapsed && root.update-banner-visible: UpdateBanner {
-        x: Spacing.sm;
-        y: root.height - self.height - Spacing.button-height - Spacing.md;
-        width: root.width - Spacing.sm * 2;
-        height: root.update-banner-height;
-    }
-
-    // Keep an update notice above the phone's floating action area. Adding it
-    // to the scroll layout moved every conversation when update state arrived.
-    if root.mobile-mode && root.update-banner-visible: UpdateBanner {
-        x: Spacing.sm;
-        y: root.height - root.bottom-inset - Spacing.fab-size - Spacing.md * 2 - self.height;
-        width: root.width - Spacing.sm * 2;
-        height: root.update-banner-height;
-    }
 
 
 }

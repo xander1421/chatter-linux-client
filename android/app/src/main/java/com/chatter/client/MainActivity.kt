@@ -598,6 +598,10 @@ class MainActivity : GameActivity() {
         }
     }
 
+    fun startVoiceRecordingService(): Long = VoiceRecordingService.start(this)
+    fun voiceRecordingServiceStatus(token: Long): Int = VoiceRecordingService.status(token)
+    fun stopVoiceRecordingService(token: Long) = VoiceRecordingService.stop(this, token)
+
     override fun onPause() {
         // Start while the Activity still has foreground-start eligibility.
         activityResumed = false
