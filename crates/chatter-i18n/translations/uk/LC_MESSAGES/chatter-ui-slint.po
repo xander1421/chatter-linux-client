@@ -5860,6 +5860,7 @@ msgstr "Вийти з цього каналу? Нові повідомлення
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
 #: ui/sidebar/sidebar.slint:587
+#: ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr "Додати контакт"
 

@@ -5824,6 +5824,7 @@ msgstr "Sair deste canal? Você não vai receber mensagens novas."
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
 #: ui/sidebar/sidebar.slint:587
+#: ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr "Adicionar contato"
 

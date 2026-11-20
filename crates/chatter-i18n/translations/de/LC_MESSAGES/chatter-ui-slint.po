@@ -5860,6 +5860,7 @@ msgstr "Diesen Kanal verlassen? Du bekommst keine neuen Nachrichten."
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
 #: ui/sidebar/sidebar.slint:587
+#: ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr "Kontakt hinzufügen"
 

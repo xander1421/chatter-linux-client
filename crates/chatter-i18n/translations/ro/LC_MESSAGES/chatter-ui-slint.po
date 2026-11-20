@@ -5859,6 +5859,7 @@ msgstr "Părăsești acest canal? Nu vei mai primi mesaje noi."
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
 #: ui/sidebar/sidebar.slint:587
+#: ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr "Adaugă contact"
 
