@@ -79,9 +79,9 @@ impl GrpcClientPool {
         #[cfg(feature = "quic")]
         {
             if *self.transport_mode.read() == TransportMode::Direct {
+                let mut state = self.quic_probe.write();
                 let uri = self.direct_url.read().parse::<http::Uri>().ok();
                 if let Some(uri) = uri.filter(|uri| uri.scheme_str() == Some("https")) {
-                    let mut state = self.quic_probe.write();
                     if *state == QuicProbeState::Untried
                         && tokio::runtime::Handle::try_current().is_ok()
                     {
@@ -108,6 +108,8 @@ impl GrpcClientPool {
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "lazy QUIC channel build failed — falling back to TCP");
+                            // Retry local construction only after the route is reset,
+                            // rather than rebuilding on every RPC after a bind failure.
                             *self.quic_probe.write() = QuicProbeState::Failed;
                             if let Some(channel) = guard.clone() {
                                 return channel;

@@ -67,7 +67,10 @@ async fn check(
     let allowed_window = weak.clone();
     if slint::invoke_from_event_loop(move || {
         let allowed = allowed_window.upgrade().is_some_and(|window| {
-            check_may_replace_state(window.global::<UpdateGlobal>().get_state().as_str())
+            let global = window.global::<UpdateGlobal>();
+            let allowed = check_may_replace_state(global.get_state().as_str());
+            global.set_checking(allowed);
+            allowed
         });
         let _ = send.send(allowed);
     })
@@ -90,7 +93,14 @@ async fn check(
             }
         });
     }
-    match client.check_available_update().await {
+    let result = client.check_available_update().await;
+    let checking_window = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(window) = checking_window.upgrade() {
+            window.global::<UpdateGlobal>().set_checking(false);
+        }
+    });
+    match result {
         Ok(found) => {
             tracing::info!(available = found.is_some(), "update check completed");
             let _ = slint::invoke_from_event_loop(move || {
@@ -181,6 +191,18 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let manual_client = client.clone();
     let manual_window = window.as_weak();
     global.on_check(move || {
+        if let Some(window) = manual_window.upgrade() {
+            let global = window.global::<UpdateGlobal>();
+            if global.get_checking() {
+                return;
+            }
+            if !play
+                && matches!(update::platform(), "android" | "linux")
+                && check_may_replace_state(global.get_state().as_str())
+            {
+                global.set_checking(true);
+            }
+        }
         crate::rt_handle().spawn(check(
             manual_client.clone(),
             manual_window.clone(),
@@ -298,6 +320,20 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         let download_operations = operations.clone();
         crate::rt_handle().spawn(async move {
             let _operation = download_operations.lock_owned().await;
+            if client.available_update().as_ref() != Some(&download_manifest) {
+                let latest = client.available_update();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        let global = window.global::<UpdateGlobal>();
+                        if let Some(manifest) = latest {
+                            global.set_version(manifest.version_name.into());
+                            global.set_state("available".into());
+                            global.set_notice(chatter_i18n::tr("Update information changed. Tap Update to continue.").into());
+                        } else { global.set_state("idle".into()); }
+                    }
+                });
+                return;
+            }
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<u64>();
             let progress_window = weak.clone();
             let progress_task = tokio::spawn(async move {

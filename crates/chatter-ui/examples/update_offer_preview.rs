@@ -2,7 +2,7 @@
 //! CHATTER_NULL_AUDIO=1 cargo run -p chatter-ui --no-default-features \
 //!   --features desktop,dev-trust-root,quic,ui-test-debug,chatter-core/insecure-test-anchors \
 //!   --example update_offer_preview
-use chatter_ui::{AuthFlow, ChatPane, MainWindow, SidebarPane, UpdateGlobal};
+use chatter_ui::{Appearance, AuthFlow, ChatPane, MainWindow, SidebarPane, UpdateGlobal};
 use i_slint_backend_testing::{ElementHandle, TestingBackend, TestingBackendOptions};
 use slint::{ComponentHandle, LogicalSize};
 
@@ -33,6 +33,7 @@ fn main() {
     for (name, size, chat, signed_in) in [
         ("phone-list", LogicalSize::new(360., 740.), false, true),
         ("phone-chat", LogicalSize::new(360., 740.), true, true),
+        ("phone-large-text", LogicalSize::new(360., 740.), true, true),
         ("desktop", LogicalSize::new(1100., 800.), false, true),
         (
             "phone-signed-out",
@@ -41,6 +42,9 @@ fn main() {
             false,
         ),
     ] {
+        window
+            .global::<Appearance>()
+            .set_text_scale(if name == "phone-large-text" { 1.3 } else { 1.0 });
         window.global::<AuthFlow>().set_is_signed_in(signed_in);
         window.set_is_mobile_platform(name.starts_with("phone"));
         window.window().set_size(size);
