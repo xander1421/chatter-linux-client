@@ -5963,3 +5963,7 @@ msgstr "ATTIVITÀ"
 #: ui/components/mini_player.slint
 msgid "Go to message"
 msgstr "Vai al messaggio"
+
+#: ui/server_records/screen.slint:110
+msgid "Unread: {}"
+msgstr "Non letto: {}"

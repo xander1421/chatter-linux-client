@@ -5992,3 +5992,7 @@ msgstr "ПОДІЇ"
 #: ui/components/mini_player.slint
 msgid "Go to message"
 msgstr "Перейти до повідомлення"
+
+#: ui/server_records/screen.slint:110
+msgid "Unread: {}"
+msgstr "Непрочитане: {}"
