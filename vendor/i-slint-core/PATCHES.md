@@ -130,3 +130,25 @@ consulted before the system ones, and parley's VS16 path
 emoji on every platform instead of each OS's own set (call-verification emoji
 looked different between devices). Test:
 `cargo test --manifest-path vendor/i-slint-core/Cargo.toml --features shared-parley,std --lib chatter_tests`.
+
+## Pointer filter and drag axis lock (2026-11-20)
+
+`items/input_items.rs`: `TouchArea` gains the callback
+`filter-pointer-event(PointerEvent) -> EventResult`. An area that sets a handler
+observes the left-button press, move and release stream in
+`input_event_filter_before_children`, before its children. Returning `accept`
+for a move takes the pointer grab and cancels the pressed child (the child gets
+a `cancel` pointer event). Areas without a handler behave as before:
+`filter_tracking` is only set when `has_handler()` is true.
+Used by `ui/chat/message_item.slint` so swipe-to-reply starts anywhere on a
+bubble, including on the quoted block, a voice player or an image, while a tap
+still reaches those children.
+
+`items/flickable.rs`: opt-in `drag-axis-lock: false`. When set, the Flickable
+captures a drag only if its dominant axis is one the content can scroll, so a
+mostly horizontal drag is left for the bubble (`ui/chat/message_list.slint`,
+`ui/chat/thread_panel.slint`).
+
+The matching declarations are in `vendor/i-slint-compiler/builtin_elements.rs`.
+Seen working on a device: see `docs/OPEN-ITEMS.md` in the server repository for
+the date and what was tried; no automated test covers the gesture.

@@ -56,3 +56,6 @@ The compiler declaration port must ship with the matching core item/vtable and
 Skia renderer changes. Runtime glass pixels/fallback, pointer ownership,
 misleading-link safety, Flickable cancellation and reactive caret behavior
 remain integration checks; compiler tests establish registration and typing.
+- `TouchArea`: callback `filter-pointer-event(PointerEvent) -> EventResult` and
+  `Flickable`: opt-in `drag-axis-lock: false` (2026-11-20); behaviour is
+  described in `vendor/i-slint-core/PATCHES.md`.
