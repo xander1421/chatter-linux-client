@@ -63,27 +63,13 @@ impl AnonymousMailboxClient {
     pub async fn get_blind_signature_public_key(
         &mut self,
     ) -> Result<GetBlindSignaturePublicKeyResponse, NetworkError> {
-        self.blind_signature_public_key_rpc()
-            .await
-            .map_err(|status| NetworkError::from_status(&status))
-    }
+        let request = GetBlindSignaturePublicKeyRequest {};
 
-    // Keep tonic's original source chain for the transport soak.
-    #[cfg(feature = "testing")]
-    #[doc(hidden)]
-    pub async fn get_blind_signature_public_key_status(
-        &mut self,
-    ) -> Result<GetBlindSignaturePublicKeyResponse, tonic::Status> {
-        self.blind_signature_public_key_rpc().await
-    }
-
-    async fn blind_signature_public_key_rpc(
-        &mut self,
-    ) -> Result<GetBlindSignaturePublicKeyResponse, tonic::Status> {
         self.inner
-            .get_blind_signature_public_key(GetBlindSignaturePublicKeyRequest {})
+            .get_blind_signature_public_key(request)
             .await
-            .map(tonic::Response::into_inner)
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
     }
 
     /// Get a challenge for mailbox authentication.
