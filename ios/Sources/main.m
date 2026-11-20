@@ -180,9 +180,29 @@ static ChatterPhotoPicker *activePhotoPicker;
     [provider loadObjectOfClass:UIImage.class
              completionHandler:^(id<NSItemProviderReading> object, NSError *error) {
       UIImage *image = (UIImage *)object;
-      NSData *data = image ? UIImagePNGRepresentation(image) : nil;
+      // Redraw before encoding: UIImagePNGRepresentation and the raw CGImage
+      // ignore imageOrientation, so an upright camera photo would come out
+      // rotated. Photos without alpha go out as JPEG; a 12 MP PNG is tens of MB.
+      NSData *data = nil;
+      BOOL opaque = YES;
+      if (image) {
+        CGImageAlphaInfo alpha = CGImageGetAlphaInfo(image.CGImage);
+        opaque = alpha == kCGImageAlphaNone || alpha == kCGImageAlphaNoneSkipFirst ||
+                 alpha == kCGImageAlphaNoneSkipLast;
+        UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+        format.scale = image.scale;
+        format.opaque = opaque;
+        UIGraphicsImageRenderer *renderer =
+            [[UIGraphicsImageRenderer alloc] initWithSize:image.size format:format];
+        void (^draw)(UIGraphicsImageRendererContext *) = ^(UIGraphicsImageRendererContext *ctx) {
+          [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
+        };
+        data = opaque ? [renderer JPEGDataWithCompressionQuality:0.92 actions:draw]
+                      : [renderer PNGDataWithActions:draw];
+      }
       // Keep a sandbox copy because the create dialog reads it again on save.
-      NSString *filename = [NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"png"];
+      NSString *filename =
+          [NSUUID.UUID.UUIDString stringByAppendingPathExtension:opaque ? @"jpg" : @"png"];
       NSString *directory = NSSearchPathForDirectoriesInDomains(NSCachesDirectory,
                                                                 NSUserDomainMask, YES).firstObject;
       NSString *path = [directory stringByAppendingPathComponent:filename];
