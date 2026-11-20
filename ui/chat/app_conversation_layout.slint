@@ -65,12 +65,8 @@ export component AppConversationLayout inherits Rectangle {
     in-out property <length> context-menu-anchor-right;
     in-out property <length> context-menu-anchor-top;
     in-out property <length> context-menu-content-top;
-    in-out property <bool> context-menu-preview-from-thread;
-    in-out property <MessageItemData> context-menu-preview-message;
-    in-out property <bool> context-menu-preview-mobile;
-    in-out property <length> context-menu-preview-row-width;
-    in-out property <length> context-menu-preview-row-x;
-    in-out property <length> context-menu-preview-row-y;
+    in-out property <bool> context-menu-from-thread;
+    in-out property <bool> context-menu-mobile;
     in-out property <bool> context-menu-visible;
     in property <ConversationKind> conversation-kind;
     in property <bool> conversation-read-only;
@@ -393,12 +389,8 @@ export component AppConversationLayout inherits Rectangle {
     }
     thread-clicked(id) => { root.thread-clicked(id); }
     more-clicked(sender-id, timestamp-ns, x, y) => {
-        root.context-menu-preview-message = self.menu-preview-message;
-        root.context-menu-preview-row-x = self.menu-preview-row-x;
-        root.context-menu-preview-row-y = self.menu-preview-row-y;
-        root.context-menu-preview-row-width = self.menu-preview-row-width;
-        root.context-menu-preview-mobile = self.mobile;
-        root.context-menu-preview-from-thread = false;
+        root.context-menu-mobile = self.mobile;
+        root.context-menu-from-thread = false;
         root.context-menu-content-top = self.content-top;
         root.context-menu-anchor-top = self.menu-anchor-top;
         root.context-menu-anchor-bottom = self.menu-anchor-bottom;

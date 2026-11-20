@@ -66,6 +66,7 @@ pub struct Flickable {
 
     pub interactive: Property<bool>,
     pub immediate_child_press: Property<bool>,
+    pub drag_axis_lock: Property<bool>,
     pub mouse_drag_pan_enabled: Property<bool>,
 
     pub flicked: Callback<VoidArg>,
@@ -841,10 +842,14 @@ impl FlickableData {
 
         // We should capture the mouse movement, if the flickable can move in this
         // axis, and the mouse has moved more than the threshold in this axis.
+        let dx = abs(mouse_delta.x_length());
+        let dy = abs(mouse_delta.y_length());
         ((content_width > flickable_width || flick.content_x() != zero)
-            && abs(mouse_delta.x_length()) > DISTANCE_THRESHOLD)
+            && dx > DISTANCE_THRESHOLD
+            && (!flick.drag_axis_lock() || dx >= dy))
             || ((content_height > flickable_height || flick.content_y() != zero)
-                && abs(mouse_delta.y_length()) > DISTANCE_THRESHOLD)
+                && dy > DISTANCE_THRESHOLD
+                && (!flick.drag_axis_lock() || dy >= dx))
     }
 
     /// Whether the flickable has any content to pan in either direction, regardless of mouse movement.

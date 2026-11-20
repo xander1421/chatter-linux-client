@@ -22,11 +22,9 @@ export component MessageBody inherits VerticalLayout {
     in property <length> press-anchor-y;
     in property <[RichTextBlock]> rich-content;
     in property <bool> selection-mode;
-    in property <bool> swipe-active;
     in property <length> text-max-width;
     callback begin-message-press(length, length, length, length, length, length);
     callback move-message-press(length, length);
-    callback end-swipe(bool);
     callback cancel-hold();
     callback selection-toggled(string);
     callback open-message-link(string, string);
@@ -75,12 +73,10 @@ export component MessageBody inherits VerticalLayout {
                             self.absolute-position.y + self.mouse-y);
                     }
                     if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                        root.end-swipe(event.kind == PointerEventKind.cancel);
                         root.cancel-hold();
                     }
                 }
                 link-clicked(url, display-text) => {
-                    if (root.swipe-active) { return; }
                     if (root.hold-tier != 0) { return; }
                     if root.selection-mode { root.selection-toggled(root.message-id); }
                     else { root.open-message-link(url, display-text); }
@@ -105,7 +101,7 @@ export component MessageBody inherits VerticalLayout {
         wrap: word-wrap;
 
         // Text owns its pointer events. Give touch the same
-        // swipe/hold stream as the surrounding bubble;
+        // hold stream as the surrounding bubble;
         // desktop keeps native text selection.
         if root.mobile: TouchArea {
             pointer-event(event) => {
@@ -118,7 +114,6 @@ export component MessageBody inherits VerticalLayout {
                         root.bubble-right);
                 }
                 if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                    root.end-swipe(event.kind == PointerEventKind.cancel);
                     root.cancel-hold();
                 }
             }
@@ -127,7 +122,6 @@ export component MessageBody inherits VerticalLayout {
                     self.absolute-position.y + self.mouse-y);
             }
             clicked => {
-                if (root.swipe-active) { return; }
                 if (root.selection-mode) { root.selection-toggled(root.message-id); return; }
                 if (root.hold-tier != 0) { root.clear-hold-tier(); return; }
                 root.message-clicked(root.message-id);

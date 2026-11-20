@@ -49,11 +49,49 @@ pub struct TouchArea {
     pub double_clicked: Callback<VoidArg>,
     pub moved: Callback<VoidArg>,
     pub pointer_event: Callback<PointerEventArg>,
+    pub filter_pointer_event: Callback<PointerEventArg, EventResult>,
     pub scroll_event: Callback<PointerScrollEventArg, EventResult>,
     /// FIXME: remove this
     pub cached_rendering_data: CachedRenderingData,
     /// true when we are currently grabbing the mouse
     grabbed: Cell<bool>,
+    filter_tracking: Cell<bool>,
+    filter_grabbed: Cell<bool>,
+}
+
+impl TouchArea {
+    fn dispatch_filter_event(
+        self: Pin<&Self>,
+        kind: PointerEventKind,
+        touch_finger_id: i32,
+        window_adapter: &Rc<dyn WindowAdapter>,
+    ) -> EventResult {
+        Self::FIELD_OFFSETS.filter_pointer_event().apply_pin(self).call(&(PointerEvent {
+            button: PointerEventButton::Left,
+            kind,
+            modifiers: window_adapter.window().0.context().0.modifiers.get().into(),
+            touch_finger_id,
+        },))
+    }
+
+    fn cancel_pointer_grab(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>) {
+        if self.grabbed.replace(false) {
+            self.pressed.set(false);
+            Self::FIELD_OFFSETS.pointer_event().apply_pin(self).call(&(PointerEvent {
+                button: PointerEventButton::Other,
+                kind: PointerEventKind::Cancel,
+                modifiers: window_adapter.window().0.context().0.modifiers.get().into(),
+                touch_finger_id: 0,
+            },));
+        }
+    }
+
+    fn cancel_filter(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>) {
+        self.filter_grabbed.set(false);
+        if self.filter_tracking.replace(false) {
+            self.dispatch_filter_event(PointerEventKind::Cancel, 0, window_adapter);
+        }
+    }
 }
 
 impl Item for TouchArea {
@@ -79,16 +117,9 @@ impl Item for TouchArea {
         cursor: &mut MouseCursorInner,
     ) -> InputEventFilterResult {
         if !self.enabled() {
+            self.cancel_filter(window_adapter);
             self.has_hover.set(false);
-            if self.grabbed.replace(false) {
-                self.pressed.set(false);
-                Self::FIELD_OFFSETS.pointer_event().apply_pin(self).call(&(PointerEvent {
-                    button: PointerEventButton::Other,
-                    kind: PointerEventKind::Cancel,
-                    modifiers: window_adapter.window().0.context().0.modifiers.get().into(),
-                    touch_finger_id: 0,
-                },));
-            }
+            self.cancel_pointer_grab(window_adapter);
             return InputEventFilterResult::ForwardAndIgnore;
         }
         if matches!(event, MouseEvent::DragMove { .. } | MouseEvent::Drop { .. }) {
@@ -104,6 +135,38 @@ impl Item for TouchArea {
         if hovering {
             *cursor = self.mouse_cursor();
         }
+        match event {
+            MouseEvent::Pressed { button: PointerEventButton::Left, touch_finger_id, .. }
+                if Self::FIELD_OFFSETS.filter_pointer_event().apply_pin(self).has_handler() =>
+            {
+                self.filter_tracking.set(true);
+                self.dispatch_filter_event(
+                    PointerEventKind::Down,
+                    *touch_finger_id,
+                    window_adapter,
+                );
+            }
+            MouseEvent::Moved { touch_finger_id, .. } if self.filter_tracking.get() => {
+                if self.dispatch_filter_event(
+                    PointerEventKind::Move,
+                    *touch_finger_id,
+                    window_adapter,
+                ) == EventResult::Accept
+                {
+                    self.filter_grabbed.set(true);
+                    self.cancel_pointer_grab(window_adapter);
+                }
+            }
+            MouseEvent::Released { button: PointerEventButton::Left, touch_finger_id, .. }
+                if self.filter_tracking.replace(false) =>
+            {
+                self.dispatch_filter_event(PointerEventKind::Up, *touch_finger_id, window_adapter);
+            }
+            _ => {}
+        }
+        if self.filter_grabbed.get() {
+            return InputEventFilterResult::Intercept;
+        }
         InputEventFilterResult::ForwardAndInterceptGrab
     }
 
@@ -115,7 +178,17 @@ impl Item for TouchArea {
         _: &mut MouseCursorInner,
     ) -> InputEventResult {
         if matches!(event, MouseEvent::Exit) {
+            self.cancel_filter(window_adapter);
             Self::FIELD_OFFSETS.has_hover().apply_pin(self).set(false);
+        }
+        if self.filter_grabbed.get() {
+            return if matches!(event, MouseEvent::Released { button: PointerEventButton::Left, .. })
+            {
+                self.filter_grabbed.set(false);
+                InputEventResult::EventAccepted
+            } else {
+                InputEventResult::GrabMouse
+            };
         }
         if !self.enabled() {
             return InputEventResult::EventIgnored;
@@ -139,14 +212,7 @@ impl Item for TouchArea {
             }
             MouseEvent::Exit => {
                 Self::FIELD_OFFSETS.pressed().apply_pin(self).set(false);
-                if self.grabbed.replace(false) {
-                    Self::FIELD_OFFSETS.pointer_event().apply_pin(self).call(&(PointerEvent {
-                        button: PointerEventButton::Other,
-                        kind: PointerEventKind::Cancel,
-                        modifiers: window_adapter.window().0.context().0.modifiers.get().into(),
-                        touch_finger_id: 0,
-                    },));
-                }
+                self.cancel_pointer_grab(window_adapter);
 
                 InputEventResult::EventAccepted
             }
