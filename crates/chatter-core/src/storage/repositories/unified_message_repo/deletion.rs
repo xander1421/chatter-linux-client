@@ -21,6 +21,30 @@ fn queue_message_attachments(
     Ok(())
 }
 
+pub(in crate::storage::repositories) fn delete_exact_saved_row(
+    tx: &rusqlite::Transaction<'_>,
+    owner: &UserId,
+    id: &MessageId,
+    sent_at: u64,
+) -> Result<(), StorageError> {
+    let owned_row = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages'
+         AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3)",
+        params![id.to_string(), owner.to_string(), sent_at as i64],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !owned_row {
+        return Ok(());
+    }
+    queue_message_attachments(tx, id)?;
+    tx.execute(
+        "DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages'
+         AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
+        params![id.to_string(), owner.to_string(), sent_at as i64],
+    )?;
+    Ok(())
+}
+
 impl UnifiedMessageRepository {
     /// Delete a message by ID (hard delete — CASCADE removes unified_reactions).
     /// Hard-delete every message of one conversation type.
@@ -183,12 +207,7 @@ impl UnifiedMessageRepository {
                 params![owner.to_string(), id.to_string(), sent_at as i64],
             )?;
         } else {
-            queue_message_attachments(&tx, id)?;
-            tx.execute(
-                "DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages'
-                 AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
-                params![id.to_string(), owner.to_string(), sent_at as i64],
-            )?;
+            delete_exact_saved_row(&tx, owner, id, sent_at)?;
         }
         tx.execute(
             "DELETE FROM saved_sync_outbox WHERE owner_id = ?1 AND message_id = ?2",

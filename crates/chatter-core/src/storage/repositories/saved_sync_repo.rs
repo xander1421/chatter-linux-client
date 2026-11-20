@@ -253,8 +253,7 @@ impl SavedSyncRepository {
             return Ok(false);
         }
         if acknowledged {
-            tx.execute("DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages' AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
-                params![id.to_string(), owner.to_string(), sent_at as i64])?;
+            super::unified_message_repo::delete_exact_saved_row(&tx, owner, id, sent_at)?;
             tx.execute("DELETE FROM saved_delete_outbox WHERE owner_id = ?1 AND message_id = ?2 AND generation = ?3",
                 params![owner.to_string(), id.to_string(), generation])?;
         } else {
@@ -272,6 +271,12 @@ impl SavedSyncRepository {
         }
         crate::state::send_session::check_send_session()?;
         tx.commit()?;
+        drop(conn);
+        if acknowledged {
+            if let Err(error) = super::attachment_repo::AttachmentRepository::retry_pending_cleanup(&self.db) {
+                tracing::warn!(%error, "Saved attachment cleanup will be retried");
+            }
+        }
         Ok(acknowledged)
     }
 

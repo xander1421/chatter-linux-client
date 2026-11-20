@@ -106,6 +106,12 @@ impl ConversationType {
         !self.is_secret_chat()
     }
 
+    /// Saved has one account-wide delete action.
+    #[must_use]
+    pub fn uses_plain_delete_confirmation(&self) -> bool {
+        matches!(self, Self::SavedMessages)
+    }
+
     /// Whether messages here offer "Reply in thread". Threads are a channel
     /// feature (none in 1:1 or groups, as in Signal).
     #[must_use]

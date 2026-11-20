@@ -33,6 +33,7 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     let scope =
         message_storage_scope(&ActiveConversation::Channel(id), Some(own), Some(&channel)).unwrap();
     assert_eq!(scope, ReactionScope::of(&records[0]));
+    assert!(scope.kind.uses_plain_delete_confirmation());
     let saved = scoped_stored_message(&repo, &scope, &own, now).unwrap();
     assert_eq!(saved.id, records[0].id);
     assert_eq!(saved.as_text(), Some("saved")); // copy reads this exact record
@@ -88,6 +89,7 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
         let normal = scoped_stored_message(&repo, &normal_scope, &own, now).unwrap();
         assert_eq!(normal.id, expected.id);
         assert!(require_remote_message_kind(&normal.conversation_type).is_ok());
+        assert!(!normal_scope.kind.uses_plain_delete_confirmation());
         assert!(
             stored_message_menu(&normal, true, now)
                 .actions
