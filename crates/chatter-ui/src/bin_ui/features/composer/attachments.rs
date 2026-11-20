@@ -329,28 +329,19 @@ pub(crate) fn wire_attachment_clicked(
                     tracing::info!("Added file(s) to pending attachments");
                 });
             }
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             {
-                // Open the themed source sheet (Gallery / Camera / Video / File).
+                // Open the themed source sheet for this platform.
                 // The chosen tile fires `composer-attach-source`, which launches
                 // that source and runs the staging pipeline (wire_attach_source).
                 let _ = (&chat_state, &ui_ctx_attach, &revision, &picker_session, &weak);
                 w.global::<crate::ChatPane>()
                     .set_composer_attach_sheet_visible(true);
             }
-            // iOS has no picker yet: chatter-core's file_picker is desktop-only
-            // (rfd) and there's no UIDocumentPickerViewController bridge. Warn
-            // rather than no-op silently.
-            #[cfg(target_os = "ios")]
-            {
-                let _ = (&chat_state, &weak, &ui_ctx_attach);
-                tracing::warn!("File picker not yet implemented on iOS");
-                w.invoke_finish_attachment_picker(true);
-            }
         });
 }
 
-/// Wire the attachment-source sheet (Android). A tile fires `composer-attach-source`
+/// Wire the mobile attachment-source sheet. A tile fires `composer-attach-source`
 /// with the chosen source (0 gallery, 1 file, 2 camera photo, 3 camera video);
 /// launch that source and stage whatever it returns through the same pipeline the
 /// plain picker uses. On desktop the sheet never opens, so this is a no-op.
@@ -364,20 +355,23 @@ pub(crate) fn wire_attach_source(
 
     window
         .global::<crate::ChatPane>()
+        .set_composer_attach_gallery_only(cfg!(target_os = "ios"));
+    window
+        .global::<crate::ChatPane>()
         .on_composer_attach_source(move |source: i32| {
             // Negative source = the sheet was dismissed without a choice (scrim
             // tap). Reset the picker-open latch that prepare-attachment-picker
             // set when the sheet opened, otherwise the guard in
             // on_attachment_clicked (get_composer_attachment_picker_open) stays
             // true and the Attach button never reopens the sheet.
-            if source < 0 {
+            if source < 0 || (cfg!(target_os = "ios") && source != 0) {
                 if let Some(w) = weak_window.upgrade() {
                     w.invoke_finish_attachment_picker(true);
                 }
                 return;
             }
             let _ = (&weak_window, &ui_ctx_attach, &chat_state, source);
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "ios"))]
             {
                 let weak = weak_window.clone();
                 let chat_state = chat_state.clone();
@@ -394,8 +388,12 @@ pub(crate) fn wire_attach_source(
                 }
 
                 tokio::spawn(async move {
+                    #[cfg(target_os = "android")]
                     let selected_files =
                         crate::platform::android::file_picker::pick_source(source).await;
+                    #[cfg(target_os = "ios")]
+                    let selected_files: Vec<_> =
+                        crate::platform::ios::pick_image().await.into_iter().collect();
                     finish_picker(&weak, &chat_state, conversation, revision);
                     if selected_files.is_empty() {
                         tracing::debug!("Attachment source cancelled or produced nothing");
@@ -403,11 +401,12 @@ pub(crate) fn wire_attach_source(
                     }
                     tracing::info!("Selected {} file(s) for attachment", selected_files.len());
                     for file_path in selected_files {
-                        // SAF/camera copies land in the purgeable cache dir and are
+                        // Mobile picker copies land in the purgeable cache dir and are
                         // ours: move them where a restart finds them (core owns it).
                         let origin = file_path;
                         if !picker_session.is_current() {
                             let _ = tokio::fs::remove_file(&origin).await;
+                            #[cfg(target_os = "android")]
                             if let Some(parent) = origin.parent() {
                                 let _ = tokio::fs::remove_dir(parent).await;
                             }

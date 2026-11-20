@@ -12,6 +12,7 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreVideo/CoreVideo.h>
+#import <PhotosUI/PhotosUI.h>
 #include <stdbool.h>
 
 // Camera buffers are borrowed only for the callback. The retained session is
@@ -150,6 +151,81 @@ void chatter_ios_camera_stop(void *session) {
     [capture.output setSampleBufferDelegate:nil queue:NULL];
     dispatch_sync(capture.frames, ^{});
   }
+}
+
+typedef void (*ChatterImagePicked)(void *, const char *);
+
+@interface ChatterPhotoPicker : NSObject <PHPickerViewControllerDelegate>
+@property(nonatomic) void *context;
+@property(nonatomic) ChatterImagePicked callback;
+@end
+
+// PHPicker holds its delegate weakly. Keep it alive until dismissal and
+// serialize presentation on the main queue.
+static ChatterPhotoPicker *activePhotoPicker;
+
+@implementation ChatterPhotoPicker
+- (void)picker:(PHPickerViewController *)picker
+    didFinishPicking:(NSArray<PHPickerResult *> *)results {
+  picker.delegate = nil;
+  NSItemProvider *provider = results.firstObject.itemProvider;
+  ChatterImagePicked callback = self.callback;
+  void *context = self.context;
+  [picker dismissViewControllerAnimated:YES completion:^{
+    activePhotoPicker = nil;
+    if (!provider || ![provider canLoadObjectOfClass:UIImage.class]) {
+      callback(context, NULL);
+      return;
+    }
+    [provider loadObjectOfClass:UIImage.class
+             completionHandler:^(id<NSItemProviderReading> object, NSError *error) {
+      UIImage *image = (UIImage *)object;
+      NSData *data = image ? UIImagePNGRepresentation(image) : nil;
+      // Keep a sandbox copy because the create dialog reads it again on save.
+      NSString *filename = [NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"png"];
+      NSString *directory = NSSearchPathForDirectoriesInDomains(NSCachesDirectory,
+                                                                NSUserDomainMask, YES).firstObject;
+      NSString *path = [directory stringByAppendingPathComponent:filename];
+      if (!data || !path || ![data writeToFile:path options:NSDataWritingAtomic error:&error]) {
+        NSLog(@"[chatter] Could not load selected photo: %@", error);
+        callback(context, NULL);
+        return;
+      }
+      callback(context, path.fileSystemRepresentation);
+    }];
+  }];
+}
+@end
+
+void chatter_ios_pick_image(void *context, ChatterImagePicked callback) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    UIViewController *presenter = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+      if (scene.activationState == UISceneActivationStateForegroundActive &&
+          [scene isKindOfClass:UIWindowScene.class]) {
+        presenter = ((UIWindowScene *)scene).keyWindow.rootViewController;
+        if (presenter) break;
+      }
+    }
+    while (presenter.presentedViewController) {
+      presenter = presenter.presentedViewController;
+    }
+    if (activePhotoPicker || !presenter.viewIfLoaded.window || presenter.isBeingDismissed) {
+      callback(context, NULL);
+      return;
+    }
+
+    PHPickerConfiguration *configuration = [PHPickerConfiguration new];
+    configuration.filter = PHPickerFilter.imagesFilter;
+    configuration.selectionLimit = 1;
+    PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:configuration];
+    activePhotoPicker = [ChatterPhotoPicker new];
+    activePhotoPicker.callback = callback;
+    activePhotoPicker.context = context;
+    picker.delegate = activePhotoPicker;
+    picker.modalPresentationStyle = UIModalPresentationFullScreen;
+    [presenter presentViewController:picker animated:YES completion:nil];
+  });
 }
 
 // Called by chatter-ui's shared clipboard adapter. Recovery codes are kept on

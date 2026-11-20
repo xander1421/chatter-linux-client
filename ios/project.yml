@@ -102,6 +102,8 @@ targets:
           - -framework
           - MetalKit
           - -framework
+          - PhotosUI
+          - -framework
           - Network
     # Default build runs chatter-core's on-device smoke harness. For the real
     # Slint UI (links clean, not yet run on a device):

@@ -332,6 +332,7 @@ export component AppConversationLayout inherits Rectangle {
     emoji-picker-visible <=> root.composer-emoji-picker-visible;
     gif-picker-visible <=> root.composer-gif-picker-visible;
     attach-sheet-visible <=> root.composer-attach-sheet-visible;
+    attach-gallery-only: ChatPane.composer-attach-gallery-only;
     gifs-available: root.composer-gifs-available;
 
     settings-clicked => { root.chat-settings-clicked(); }
