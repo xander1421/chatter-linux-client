@@ -8,6 +8,7 @@ import { AuthFlow } from "app_auth_flow.slint";
 import { AppConversationLayout } from "chat/app_conversation_layout.slint";
 import { AppCallDock } from "calls/app_call_dock.slint";
 import { AppEdgeSwipe } from "chat/app_edge_swipe.slint";
+import { MeshGlobal } from "mesh/mesh_global.slint";
 import { MainStatusNotices } from "main_status_notices.slint";
 import { AppThreadPanel } from "app_thread_panel.slint";
 import { AppSidebarHost } from "app_sidebar_host.slint";
@@ -567,6 +568,9 @@ export component MainChatShell inherits Rectangle {
             height: parent.height;
             is-signed-in: AuthFlow.is-signed-in;
             chat-covers-screen: root.compact-layout && SidebarPane.mobile-show-chat;
+            mesh-view: (!root.compact-layout || SidebarPane.mobile-show-chat)
+                && (ChatPane.channel-name != "" || ChatPane.loading-messages)
+                ? MeshGlobal.active-id != "" : SidebarPane.active-tab == "mesh";
             connection-status: root.connection-status;
             server-unreachable: root.server-unreachable;
             reconnect-attempt: root.connection-reconnect-attempt;
