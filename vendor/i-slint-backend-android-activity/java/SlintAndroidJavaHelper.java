@@ -57,6 +57,7 @@ class InputHandle extends ImageView {
     private int cursorX;
     private int cursorY;
     private int attr;
+    private boolean mDragged;
 
     public InputHandle(SlintInputView rootView, int attr) {
         super(rootView.getContext());
@@ -80,10 +81,12 @@ class InputHandle extends ImageView {
             case MotionEvent.ACTION_DOWN: {
                 mPressedX = ev.getRawX() - cursorX;
                 mPressedY = ev.getRawY() - cursorY;
+                mDragged = false;
                 break;
             }
 
             case MotionEvent.ACTION_MOVE: {
+                mDragged = true;
                 mRootView.hideActionMenu(ActionMode.DEFAULT_HIDE_DURATION);
                 int id = attr == android.R.attr.textSelectHandleLeft ? 1
                         : attr == android.R.attr.textSelectHandleRight ? 2 : 0;
@@ -93,6 +96,13 @@ class InputHandle extends ImageView {
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                // Dragging a selection handle changes the selected text, and
+                // updateSelectionMenu finishes the menu for the old text. Bring
+                // it back for the new selection once the drag has ended.
+                if (mDragged && attr != android.R.attr.textSelectHandle) {
+                    mRootView.showActionMenuAfterHandleDrag();
+                }
+                mDragged = false;
                 break;
         }
         return true;
@@ -538,11 +548,28 @@ class SlintInputView extends View {
 
     private ActionMode mCurrentActionMode;
     private String mSelectionText = "";
+    private boolean mHasSelection;
+    private final Runnable mShowMenuAfterDrag = new Runnable() {
+        @Override
+        public void run() {
+            if (mHasSelection) {
+                showActionMenu();
+            }
+        }
+    };
+
+    // The last selection update of a drag can arrive just after the finger
+    // lifts; wait for it so the menu is created for the final selection.
+    public void showActionMenuAfterHandleDrag() {
+        removeCallbacks(mShowMenuAfterDrag);
+        postDelayed(mShowMenuAfterDrag, 150);
+    }
 
     public void updateSelectionMenu(String text, boolean selected, int left, int top, int right, int bottom) {
         if (!selected || !mSelectionText.equals(text)) {
             hideActionMenu(-1);
         }
+        mHasSelection = selected;
         mSelectionText = text;
         selectionRect.set(left, top, right, bottom);
         if (mCurrentActionMode != null) {
