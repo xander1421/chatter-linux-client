@@ -24,25 +24,7 @@ fuzz_target!(|data: &[u8]| {
     // and AEAD-rejection path. Using zeros keeps the corpus deterministic.
     let recipient_seed = [0u8; 32];
 
-    // Property: NEVER panic. Err is fine. Ok(...) on random bytes is
-    // astronomically unlikely (AES-256-GCM has a 128-bit tag) and would
-    // indicate either a bug in libsignal/aead or a forgery — fuzzer should
-    // surface that as a finding via the assertion below.
-    match decrypt_envelope(data, &recipient_seed) {
-        Ok(plaintext) => {
-            // Defensive: reaching here means AEAD accepted random bytes. That
-            // would be a real cryptographic finding. Touch the bytes so the
-            // optimizer can't elide the call, then assert false to flag it.
-            let _ = std::hint::black_box(&plaintext);
-            // Don't panic in release-mode fuzzing (panic=abort is fine), but
-            // make sure libFuzzer notices via an assertion.
-            assert!(
-                plaintext.is_empty() || !plaintext.is_empty(),
-                "decrypt_envelope returned Ok on random bytes — investigate"
-            );
-        }
-        Err(_) => {
-            // Expected path: malformed / wrong-key / AEAD-tag-mismatch.
-        }
-    }
+    // Both outcomes are valid corpus inputs: the fixed seed also lets callers
+    // construct a valid encrypted envelope for the success path.
+    let _ = std::hint::black_box(decrypt_envelope(data, &recipient_seed));
 });
