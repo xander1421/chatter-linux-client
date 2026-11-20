@@ -322,7 +322,7 @@ mod update_check_tests {
         drop(checks);
         tokio::time::timeout(Duration::from_secs(1), async {
             while bus.receiver_count() != 0 {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await
