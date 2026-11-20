@@ -1,6 +1,5 @@
 import { ChatPane } from "app_chat_pane.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
-import { MessageItemData } from "chat/chat_layout.slint";
 
 export component AppThreadPanel inherits Rectangle {
     out property <length> composer-top: thread-panel.composer-top;
@@ -9,12 +8,8 @@ export component AppThreadPanel inherits Rectangle {
     in-out property <length> context-menu-anchor-left;
     in-out property <length> context-menu-anchor-right;
     in-out property <length> context-menu-anchor-top;
-    in-out property <bool> context-menu-preview-from-thread;
-    in-out property <MessageItemData> context-menu-preview-message;
-    in-out property <bool> context-menu-preview-mobile;
-    in-out property <length> context-menu-preview-row-width;
-    in-out property <length> context-menu-preview-row-x;
-    in-out property <length> context-menu-preview-row-y;
+    in-out property <bool> context-menu-from-thread;
+    in-out property <bool> context-menu-mobile;
     in property <bool> is-small-screen;
     // Same rule as the main composer (app_conversation_layout.slint).
     in property <bool> composer-enter-sends: true;
@@ -113,12 +108,8 @@ export component AppThreadPanel inherits Rectangle {
         audio-seek(id, pos) => { ChatPane.audio-seek(id, pos); }
         cancel-upload(id) => { ChatPane.cancel-upload(id); }
         more-clicked(sender-id, timestamp-ns, x, y) => {
-            root.context-menu-preview-message = self.menu-preview-message;
-            root.context-menu-preview-row-x = self.menu-preview-row-x;
-            root.context-menu-preview-row-y = self.menu-preview-row-y;
-            root.context-menu-preview-row-width = self.menu-preview-row-width;
-            root.context-menu-preview-mobile = self.mobile;
-            root.context-menu-preview-from-thread = true;
+            root.context-menu-mobile = self.mobile;
+            root.context-menu-from-thread = true;
             // The panel's own header is the menu's ceiling.
             ChatPane.context-menu-content-top = self.absolute-position.y;
             root.context-menu-anchor-top = self.menu-anchor-top;

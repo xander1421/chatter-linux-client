@@ -1328,6 +1328,9 @@ fn build(l: &mut Loader) {
         callback moved;
         /// <PointerEvent />
         callback pointer-event(event: PointerEvent);
+        /// Observes the left-button stream before children. Accepting a move
+        /// takes the pointer grab and cancels the child's press.
+        callback filter-pointer-event(event: PointerEvent) -> EventResult;
         /// Invoked when the mouse wheel was rotated or another scroll gesture was made.
         /// The `PointerScrollEvent` argument contains information about how much to scroll in what direction.
         /// <PointerScrollEvent />
@@ -1507,6 +1510,8 @@ fn build(l: &mut Loader) {
         /// Deliver presses to children immediately while retaining the Flickable's
         /// ability to take over a drag and cancel the child's press.
         in property <bool> immediate-child-press: false;
+        /// Start panning only when the dominant drag axis can scroll.
+        in property <bool> drag-axis-lock: false;
         /// When true, the content can be scrolled by clicking on it and dragging it with the cursor.
         /// Panning with a touch screen is only affected by `interactive`.
         in property <bool> mouse-drag-pan-enabled: true;

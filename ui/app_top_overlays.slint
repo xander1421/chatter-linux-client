@@ -4,8 +4,6 @@ import { ModalHostState } from "app_modal_host_state.slint";
 import { ChatPane } from "app_chat_pane.slint";
 import { CallView } from "app_call_view.slint";
 import { MessageInfo, MessageInfoModal } from "modals/message_info.slint";
-import { ChatLayout, MessageItemData } from "chat/chat_layout.slint";
-import { MeshGlobal } from "mesh/mesh_global.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu, MessageMenuActions } from "chat/message_context_menu.slint";
@@ -37,12 +35,8 @@ export component AppTopOverlays inherits Rectangle {
     in property <length> context-menu-anchor-left;
     in property <length> context-menu-anchor-right;
     in property <length> context-menu-anchor-top;
-    in property <bool> context-menu-preview-from-thread;
-    in property <MessageItemData> context-menu-preview-message;
-    in property <bool> context-menu-preview-mobile;
-    in property <length> context-menu-preview-row-width;
-    in property <length> context-menu-preview-row-x;
-    in property <length> context-menu-preview-row-y;
+    in property <bool> context-menu-from-thread;
+    in property <bool> context-menu-mobile;
     in property <bool> device-picker-presented;
     in property <string> exiting-modal;
     in property <bool> incoming-presented;
@@ -319,22 +313,11 @@ export component AppTopOverlays inherits Rectangle {
             ? root.context-menu-anchor-bottom - root.safe-area-top : 0px;
         anchor-left: root.context-menu-anchor-left;
         anchor-right: root.context-menu-anchor-right;
-        preview-message: root.context-menu-preview-message;
-        preview-row-x: root.context-menu-preview-row-x;
-        preview-row-y: root.context-menu-preview-row-y - root.safe-area-top;
-        preview-row-width: root.context-menu-preview-row-width;
-        preview-mobile: root.context-menu-preview-mobile;
-        preview-from-thread: root.context-menu-preview-from-thread;
-        preview-is-dm: ChatPane.is-dm;
-        preview-is-anonymous: ChatPane.conversation-kind == ConversationKind.anon-dm || ChatPane.conversation-kind == ConversationKind.anon-group;
-        preview-is-mesh: MeshGlobal.active-id != "";
-        preview-playing-attachment-id: ChatPane.current-playing-attachment-id;
-        preview-media-playing: ChatPane.is-media-playing;
-        preview-audio-progress: ChatPane.audio-progress;
-        preview-audio-elapsed: ChatPane.audio-elapsed;
+        mobile: root.context-menu-mobile;
+        from-thread: root.context-menu-from-thread;
         retry-clicked(id) => { ChatPane.message-clicked(id); }
         info-clicked(id) => { MessageInfo.open(id); }
-        can-thread: ChatPane.can-thread && !root.context-menu-preview-from-thread;
+        can-thread: ChatPane.can-thread && !root.context-menu-from-thread;
 
         close => {
             ChatPane.context-menu-visible = false;
