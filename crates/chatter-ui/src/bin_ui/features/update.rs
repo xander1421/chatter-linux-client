@@ -55,7 +55,9 @@ async fn check(
                     let global = window.global::<UpdateGlobal>();
                     global.set_state("idle".into());
                     global.set_error("".into());
-                    global.set_notice("In-app updates are not available for this platform yet".into());
+                    global.set_notice(
+                        "In-app updates are not available for this platform yet".into(),
+                    );
                 }
             });
         }

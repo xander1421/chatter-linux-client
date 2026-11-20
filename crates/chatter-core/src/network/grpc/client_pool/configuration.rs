@@ -235,7 +235,8 @@ impl GrpcClientPool {
         #[cfg(feature = "quic")]
         {
             // Stop direct UDP work before changing origin or entering Tor.
-            self.quic_probe_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.quic_probe_generation
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             if let Some(task) = self.quic_probe_task.lock().take() {
                 task.abort();
             }

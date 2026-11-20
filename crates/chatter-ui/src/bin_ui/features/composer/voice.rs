@@ -1,9 +1,7 @@
 //! Thin microphone permission and recording presentation bridge.
 use crate::{MainWindow, VoiceRecording};
 use chatter_core::client::ChatterClient;
-use chatter_core::client::{
-    RecordedVoiceNote, RecordingEvent, RecordingSession,
-};
+use chatter_core::client::{RecordedVoiceNote, RecordingEvent, RecordingSession};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -295,21 +293,30 @@ async fn send_recording(
             }
             match root.parse::<chatter_core::domain::ids::MessageId>() {
                 Ok(root) => Some(root),
-                Err(_) => { g.invoke_cancel(); return; }
+                Err(_) => {
+                    g.invoke_cancel();
+                    return;
+                }
             }
-        } else { None };
+        } else {
+            None
+        };
         match result {
             Ok(pending) => {
                 ready.lock().unwrap().take();
                 g.set_active(false);
                 if let Some(root) = thread_root {
                     client.add_thread_pending_attachment_for(
-                        root, client.chat_snapshot().attachment_revision, pending,
+                        root,
+                        client.chat_snapshot().attachment_revision,
+                        pending,
                     );
                     crate::bin_ui::features::thread::render_thread_attachments(
-                        &w, &client.thread_pending_attachments(&root),
+                        &w,
+                        &client.thread_pending_attachments(&root),
                     );
-                    w.global::<crate::ChatPane>().invoke_send_thread_reply("".into());
+                    w.global::<crate::ChatPane>()
+                        .invoke_send_thread_reply("".into());
                 } else {
                     client.add_pending_attachment(pending);
                     w.global::<crate::ChatPane>().invoke_send("".into());
@@ -317,9 +324,7 @@ async fn send_recording(
             }
             Err(error) => {
                 tracing::warn!(%error, "Voice upload failed; recording retained for retry");
-                g.set_status(
-                    chatter_i18n::tr("Upload failed. Tap Send to retry.").into(),
-                );
+                g.set_status(chatter_i18n::tr("Upload failed. Tap Send to retry.").into());
             }
         }
     });

@@ -202,17 +202,15 @@ pub fn verify_artifact(mut reader: impl Read, manifest: &UpdateManifest) -> Resu
 }
 
 #[cfg(target_os = "android")]
-pub fn android_handoff_version_code(
-    path: &Path,
-    manifest: &UpdateManifest,
-) -> Result<i64, String> {
+pub fn android_handoff_version_code(path: &Path, manifest: &UpdateManifest) -> Result<i64, String> {
     if manifest.platform != "android"
         || path.file_name().and_then(|name| name.to_str())
             != Some(format!("android-{}.download", manifest.version_code).as_str())
     {
         return Err("verified Android update does not match the downloaded artifact".into());
     }
-    i64::try_from(manifest.version_code).map_err(|_| "Android update version code is invalid".into())
+    i64::try_from(manifest.version_code)
+        .map_err(|_| "Android update version code is invalid".into())
 }
 
 fn update_url(origin: &str, path: &str) -> Result<String, String> {
@@ -356,7 +354,9 @@ pub async fn check_latest(
     // Native installers and signed release channels currently exist only for
     // Android and Linux. Never query another OS's executable update channel.
     if !matches!(platform, "android" | "linux") {
-        return Err(format!("In-app updates are not available for {platform} yet"));
+        return Err(format!(
+            "In-app updates are not available for {platform} yet"
+        ));
     }
     if shield_requested && pool.transport_mode() != TransportMode::Onion {
         return Err("Shield requires Tor for update checks".into());
@@ -705,8 +705,16 @@ pub fn stage_linux_archive(
         let fields: Vec<_> = build.lines().collect();
         let expected_name = format!("version={}", manifest.version_name);
         let expected_code = format!("version_code={}", manifest.version_code);
-        if fields.iter().filter(|line| line.starts_with("version=")).count() != 1
-            || fields.iter().filter(|line| line.starts_with("version_code=")).count() != 1
+        if fields
+            .iter()
+            .filter(|line| line.starts_with("version="))
+            .count()
+            != 1
+            || fields
+                .iter()
+                .filter(|line| line.starts_with("version_code="))
+                .count()
+                != 1
             || !fields.contains(&expected_name.as_str())
             || !fields.contains(&expected_code.as_str())
         {
@@ -819,8 +827,7 @@ fn activate_linux_launcher(executable: &Path) -> Result<Option<LinuxLauncherRoll
             .permissions(),
     )
     .map_err(|_| "cannot preserve Linux launcher permissions")?;
-    std::fs::rename(temporary, &launcher)
-        .map_err(|_| "cannot activate Linux desktop launcher")?;
+    std::fs::rename(temporary, &launcher).map_err(|_| "cannot activate Linux desktop launcher")?;
     tracing::info!(
         "Linux desktop launcher points at verified update; original launcher saved for rollback"
     );
@@ -839,7 +846,9 @@ pub fn restart_into_linux_update(executable: &Path) -> Result<(), String> {
     let mut child = match std::process::Command::new(executable).spawn() {
         Ok(child) => child,
         Err(_) => {
-            if let Some(rollback) = rollback { rollback.restore()?; }
+            if let Some(rollback) = rollback {
+                rollback.restore()?;
+            }
             return Err("Could not restart into the verified update".into());
         }
     };
@@ -849,7 +858,9 @@ pub fn restart_into_linux_update(executable: &Path) -> Result<(), String> {
     for _ in 0..20 {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => {
-                if let Some(rollback) = rollback { rollback.restore()?; }
+                if let Some(rollback) = rollback {
+                    rollback.restore()?;
+                }
                 return Err("The verified update closed during startup".into());
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),

@@ -34,7 +34,11 @@ impl GrpcClientPool {
             }
         });
         let mut active = self.quic_probe_task.lock();
-        if self.quic_probe_generation.load(std::sync::atomic::Ordering::Acquire) != probe_generation {
+        if self
+            .quic_probe_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            != probe_generation
+        {
             task.abort();
         } else if let Some(previous) = active.replace(task.abort_handle()) {
             previous.abort();

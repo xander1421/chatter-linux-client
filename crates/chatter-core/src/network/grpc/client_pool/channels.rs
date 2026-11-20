@@ -84,9 +84,9 @@ impl GrpcClientPool {
                     let mut state = self.quic_probe.write();
                     if *state == QuicProbeState::Untried {
                         *state = QuicProbeState::Probing;
-                        let generation = self.quic_probe_generation.load(
-                            std::sync::atomic::Ordering::Acquire,
-                        );
+                        let generation = self
+                            .quic_probe_generation
+                            .load(std::sync::atomic::Ordering::Acquire);
                         self.spawn_quic_probe(uri, generation);
                     }
                 }
@@ -98,7 +98,9 @@ impl GrpcClientPool {
                 if let Ok(uri) = server_url.parse::<http::Uri>() {
                     match super::super::transport::build_quic(uri) {
                         Ok(channel) => {
-                            tracing::info!("transport: HTTP/3 (QUIC), promoting direct RPC channel");
+                            tracing::info!(
+                                "transport: HTTP/3 (QUIC), promoting direct RPC channel"
+                            );
                             *guard = Some(channel.clone());
                             return channel;
                         }

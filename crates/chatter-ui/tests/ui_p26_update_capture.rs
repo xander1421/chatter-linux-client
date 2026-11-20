@@ -51,26 +51,37 @@ fn capture_update_placement() {
         mock_time: true,
         threading: false,
         renderer_name: Some("software".into()),
-    }))).unwrap();
+    })))
+    .unwrap();
     let window = UpdateCapture::new().unwrap();
     let directory = std::env::var("P26_CAPTURE_DIR").ok();
     for phone in [true, false] {
         window.set_phone(phone);
-        window.window().set_size(if phone { LogicalSize::new(360., 740.) } else { LogicalSize::new(1100., 800.) });
+        window.window().set_size(if phone {
+            LogicalSize::new(360., 740.)
+        } else {
+            LogicalSize::new(1100., 800.)
+        });
         for theme in ["light", "dark"] {
             for about in [false, true] {
                 window.invoke_scenario(theme.into(), about);
                 let pixels = window.window().take_snapshot().unwrap();
-                let name = format!("p26-after-{}-{theme}-{}.png",
+                let name = format!(
+                    "p26-after-{}-{theme}-{}.png",
                     if phone { "phone" } else { "desktop" },
-                    if about { "about-error" } else { "banner" });
+                    if about { "about-error" } else { "banner" }
+                );
                 assert_eq!(pixels.width(), if phone { 360 } else { 1100 });
                 assert_eq!(pixels.height(), if phone { 740 } else { 800 });
                 if let Some(directory) = &directory {
                     image::save_buffer(
                         std::path::Path::new(directory).join(name),
-                        pixels.as_bytes(), pixels.width(), pixels.height(), image::ColorType::Rgba8,
-                    ).unwrap();
+                        pixels.as_bytes(),
+                        pixels.width(),
+                        pixels.height(),
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
                 }
             }
         }

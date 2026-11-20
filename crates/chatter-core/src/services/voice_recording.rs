@@ -225,8 +225,11 @@ mod tests {
         chat.set_active_conversation(conversation);
         chat.set_app_visible(false);
         let cache = tempfile::tempdir().unwrap();
-        let (_session, mut events) = RecordingSession::start(chat, conversation, cache.path().into());
-        let event = tokio::time::timeout(Duration::from_secs(2), events.recv()).await.unwrap();
+        let (_session, mut events) =
+            RecordingSession::start(chat, conversation, cache.path().into());
+        let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .unwrap();
         assert!(matches!(event, Some(RecordingEvent::Cancelled)));
         assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 0);
     }

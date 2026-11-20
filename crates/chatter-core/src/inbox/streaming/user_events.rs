@@ -15,12 +15,12 @@ use crate::inbox::events::{FriendRequestInfo, InboxEvent};
 use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, Next};
-use chatter_proto::UserPresence;
-use chatter_proto::chat_v1::FriendStatus;
-use chatter_proto::chat_v1::{friend_requests_filter, user_event};
 use crate::services::user::PROFILE_REFRESH_INTERVAL;
 use crate::services::user::conversions::proto_to_domain_profile;
 use crate::storage::repositories::{SettingsRepository, UserRepository};
+use chatter_proto::UserPresence;
+use chatter_proto::chat_v1::FriendStatus;
+use chatter_proto::chat_v1::{friend_requests_filter, user_event};
 
 /// Spawn the user events stream handler.
 ///

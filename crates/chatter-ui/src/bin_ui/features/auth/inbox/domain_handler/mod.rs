@@ -304,7 +304,11 @@ pub async fn handle_domain_event(
             crate::run_ui!(window, |w| {
                 for id in &conversation_ids {
                     helpers::update_unread_count(&w, &ui_ctx, &id.to_string(), 0);
-                    crate::bin_ui::features::sidebar::refresh_section_member(&w, &ui_ctx, &id.to_string());
+                    crate::bin_ui::features::sidebar::refresh_section_member(
+                        &w,
+                        &ui_ctx,
+                        &id.to_string(),
+                    );
                 }
             });
         }
@@ -318,7 +322,11 @@ pub async fn handle_domain_event(
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
                 for id in &conversation_ids {
-                    crate::bin_ui::features::sidebar::refresh_section_member(&w, &ui_ctx, &id.to_string());
+                    crate::bin_ui::features::sidebar::refresh_section_member(
+                        &w,
+                        &ui_ctx,
+                        &id.to_string(),
+                    );
                 }
                 helpers::recompute_total_unread(&w, &ui_ctx);
             });
