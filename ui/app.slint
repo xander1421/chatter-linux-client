@@ -36,6 +36,7 @@ import { AuthPages } from "auth_pages.slint";
 import { MainChatShell } from "main_chat_shell.slint";
 
 // Import main layout components
+import { MiniPlayer } from "components/mini_player.slint";
 import { Sidebar, ChatRowData, CustomSectionData, SidebarRowData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
@@ -91,10 +92,10 @@ export component MainWindow inherits Window {
 
     // ========== Safe area insets (Android status bar / nav bar / IME) ==========
     // Slint 1.15 splits two separate out-props on the Window:
-    //   * `safe-area-insets`  — system bars only (status bar / nav bar).
+    //   * `safe-area-insets` — system bars and display cutout.
     //   * `virtual-keyboard-size.height` — IME height when the keyboard is up.
-    // The Android backend feeds them from `WindowInsets.Type.systemBars()` and
-    // `WindowInsets.Type.ime()` respectively, so they must both be subtracted
+    // The Android backend reports the safe area separately from
+    // `WindowInsets.Type.ime()`, so they must both be subtracted
     // from the content area to lift the composer above the keyboard.
     property <length> safe-area-top: root.safe-area-insets.top;
     property <length> safe-area-bottom: InputPolicy.keyboard-includes-safe-area
@@ -198,6 +199,10 @@ export component MainWindow inherits Window {
     property <length> desktop-top-inset: root.macos-titlebar-height > 0px
         && !root.native-chat-row ? root.macos-titlebar-height : 0px;
     property <length> chat-traffic-lights-lead: 0px;
+    out property <bool> phone-chat-on-screen: root.compact-layout && SidebarPane.active-tab == "chats"
+        && SidebarPane.mobile-show-chat && !ModalHostState.settings-open;
+    property <length> phone-mini-player-inset: root.compact-layout && mini-player.visible
+        ? mini-player.height : 0px;
     // Keyboard is considered open when bottom inset exceeds the nav bar threshold
     property <bool> keyboard-open: safe-area-bottom > 80px;
     // Whether the mobile tab bar is on screen. The full-screen pages that leave
@@ -781,6 +786,28 @@ export component MainWindow inherits Window {
                 clicked => {}
             }
 
+            // Keep one strip above the phone pages within the inset content layer.
+            mini-player := MiniPlayer {
+                z: -2;
+                x: root.compact-layout ? root.safe-area-insets.left : 0px;
+                y: 0px;
+                width: max(0px, parent.width - self.x
+                    - (root.compact-layout ? root.safe-area-insets.right : 0px));
+                visible: root.current-view == "main" && !CallView.active-call-fullscreen
+                    && (root.compact-layout
+                        ? ChatPane.mini-player-loaded && (ChatPane.mini-player-elsewhere || !root.phone-chat-on-screen)
+                        : ChatPane.mini-player-elsewhere && !ModalHostState.settings-open);
+                title: ChatPane.mini-player-title;
+                sender: ChatPane.mini-player-sender;
+                playing: ChatPane.is-media-playing;
+                progress: ChatPane.audio-progress;
+                elapsed: ChatPane.audio-elapsed;
+                touch: root.is-mobile-platform;
+                toggle => { ChatPane.mini-player-toggle(); }
+                close => { ChatPane.mini-player-close(); }
+                open => { ChatPane.mini-player-open(); }
+            }
+
             // Main chat layout — parent Rectangle already accounts for all insets.
             if current-view == "main": MainChatShell {
                 z: -2;
@@ -790,7 +817,9 @@ export component MainWindow inherits Window {
                 visible: !ModalHostState.settings-open;
                 chat-push-progress <=> root.chat-push-progress;
                 width: 100%;
-                height: parent.height;
+                y: root.phone-mini-player-inset;
+                height: max(0px, parent.height - self.y);
+                top-inset: !root.compact-layout && mini-player.visible ? mini-player.height : 0px;
                 attachment-prepare-serial : root.attachment-prepare-serial;
                 attachment-restore-serial : root.attachment-restore-serial;
                 bottom-nav-visible : root.bottom-nav-visible;
@@ -857,7 +886,8 @@ export component MainWindow inherits Window {
             // Under Settings, as the chat shell above.
             visible: !ModalHostState.settings-open;
             width: parent.width;
-            height: parent.height;
+            y: root.phone-mini-player-inset;
+            height: max(0px, parent.height - self.y);
             bottom-nav-visible : root.bottom-nav-visible;
             compact-layout : root.compact-layout;
             is-mobile-platform : root.is-mobile-platform;
@@ -888,7 +918,7 @@ export component MainWindow inherits Window {
 
         AppSettingsHost {
             z: -1;
-            y: root.native-chat-row ? root.macos-titlebar-height : 0px;
+            y: root.phone-mini-player-inset + (root.native-chat-row ? root.macos-titlebar-height : 0px);
             width: parent.width;
             height: max(0px, parent.height - self.y);
             compact-layout : root.compact-layout;

@@ -98,11 +98,13 @@ pub(super) fn started(weak: slint::Weak<MainWindow>, attachment_id: &str) {
 fn show_track(w: &MainWindow) {
     let Some(client) = CLIENT.get() else { return };
     let pane = w.global::<crate::ChatPane>();
-    if let Some(track) = client.now_playing() {
+    let track = client.now_playing();
+    pane.set_mini_player_loaded(track.is_some());
+    if let Some(track) = track {
         pane.set_mini_player_title(track.title.into());
         pane.set_mini_player_sender(track.sender.into());
     }
-    pane.set_mini_player_visible(client.now_playing_elsewhere());
+    pane.set_mini_player_elsewhere(client.now_playing_elsewhere());
 }
 
 /// Progress-timer tick while a track is loaded. UI thread.
@@ -113,9 +115,9 @@ pub(super) fn tick(w: &MainWindow) {
         stop(w);
         return;
     }
-    // The strip follows navigation: hidden inside the track's conversation.
+    // Keep the track/conversation comparison current as navigation changes.
     w.global::<crate::ChatPane>()
-        .set_mini_player_visible(client.now_playing_elsewhere());
+        .set_mini_player_elsewhere(client.now_playing_elsewhere());
     if audio_state::playback_finished() {
         finished(w);
     }
@@ -151,7 +153,8 @@ pub(super) fn stop(w: &MainWindow) {
     }
     super::timers::stop_audio_progress_timer();
     let pane = w.global::<crate::ChatPane>();
-    pane.set_mini_player_visible(false);
+    pane.set_mini_player_loaded(false);
+    pane.set_mini_player_elsewhere(false);
     pane.set_current_playing_attachment_id("".into());
     pane.set_is_media_playing(false);
     pane.set_audio_progress(0.0);

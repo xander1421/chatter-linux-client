@@ -23,7 +23,9 @@ pub(crate) fn jump_to_conversation_message(
     conversation: ActiveConversation,
     message_id: &str,
 ) {
-    if ui_ctx.active_conversation() == conversation
+    // The selected conversation can still be behind a tab or Settings on phones.
+    if (!w.get_compact_layout() || w.get_phone_chat_on_screen())
+        && ui_ctx.active_conversation() == conversation
         && !w.global::<crate::ChatPane>().get_loading_messages()
     {
         jump_to_message(w, ui_ctx, message_id);
