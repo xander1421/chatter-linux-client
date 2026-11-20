@@ -1,7 +1,7 @@
 //! Exercise the real edge gesture, pointer capture, and responsive width policy.
-use chatter_ui::{DesktopChrome, MainWindow, ModalHostState, SearchPane, SidebarPane};
+use chatter_ui::{DesktopChrome, MainWindow, ModalHostState, SearchPane, SidebarPane, SidebarRowData};
 use i_slint_backend_testing::{self as testing, ElementHandle};
-use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use slint::platform::{PointerEventButton, WindowEvent};
 use std::{cell::Cell, rc::Rc, time::Duration};
 
@@ -50,13 +50,24 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
     chatter_ui::bin_ui::features::back::wire(&w);
+    let sidebar = w.global::<SidebarPane>();
+    // Production sidebar wiring populates the virtualized row model. This
+    // headless window only wires Back, so provide the quick-link rows here.
+    let rows: Vec<_> = ["search", "saved", "friends", "calls", "bottom"]
+        .into_iter()
+        .map(|kind| SidebarRowData {
+            key: kind.into(),
+            kind: kind.into(),
+            ..Default::default()
+        })
+        .collect();
+    sidebar.set_flat_rows(ModelRc::new(VecModel::from(rows)));
     w.global::<DesktopChrome>().set_macos(true);
     w.global::<DesktopChrome>().set_frame_inset(8.0);
     w.set_macos_titlebar_height(34.0);
     w.set_macos_traffic_lights_width(80.0);
     w.show().unwrap();
     size(&w, 1100.0);
-    let sidebar = w.global::<SidebarPane>();
     let saves = Rc::new(Cell::new(0));
     let saved = saves.clone();
     sidebar.on_toggle_sidebar(move || saved.set(saved.get() + 1));
