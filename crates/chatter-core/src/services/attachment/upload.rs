@@ -163,9 +163,8 @@ impl AttachmentService {
             ));
         }
 
-        // Sanitize outgoing media before encryption (MP4 metadata strip/relocate,
-        // WebP validation). File-streaming variant — never loads the attachment
-        // into memory. Malformed MP4/WebP is rejected; other formats untouched.
+        // Sanitize before encryption. Metadata removal streams to disk, with a
+        // bounded pixel decode when an image needs its EXIF orientation baked in.
         let sanitized_temp = {
             let p = file_path.to_path_buf();
             super::run_attachment_work(move || super::sanitize::sanitize_media_file(&p))
@@ -204,11 +203,18 @@ impl AttachmentService {
             "Encrypting attachment for CDN upload (streaming)"
         );
 
-        // Extract media metadata from the original file before encryption
+        // Derive image dimensions and previews from the same pixels we upload.
         let media_start = std::time::Instant::now();
         let media_meta = match known_media {
             Some(media) => media,
-            None => self.extract_media_metadata(file_path, &mime_type).await,
+            None => {
+                let media_path = if mime_type.starts_with("image/") {
+                    plaintext_path
+                } else {
+                    file_path
+                };
+                self.extract_media_metadata(media_path, &mime_type).await
+            }
         };
         if self.secret_chat {
             tracing::info!(

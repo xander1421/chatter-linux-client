@@ -4,7 +4,7 @@
 
 use crate::error::MediaError;
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageEncoder, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageFormat, ImageReader};
 use std::io::Cursor;
 use std::path::Path;
 
@@ -417,7 +417,6 @@ impl ImageProcessor {
         let mut decoder = reader
             .into_decoder()
             .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
-        use image::ImageDecoder;
         let (width, height) = decoder.dimensions();
         if width > max_edge
             || height > max_edge
@@ -435,7 +434,13 @@ impl ImageProcessor {
         decoder
             .set_limits(limits)
             .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
-        DynamicImage::from_decoder(decoder).map_err(|e| MediaError::InvalidFormat(e.to_string()))
+        let orientation = decoder
+            .orientation()
+            .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+        let mut image = DynamicImage::from_decoder(decoder)
+            .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+        image.apply_orientation(orientation);
+        Ok(image)
     }
 
     /// Generate thumbnail bytes from in-memory image data.
@@ -490,8 +495,8 @@ impl ImageProcessor {
     /// Generate a thumbnail as WebP bytes for embedding in protos.
     ///
     /// Creates a thumbnail (max [`INLINE_THUMBNAIL_MAX_SIZE`]) compressed as WebP.
-    /// For large images (>10MB), uses ffmpeg for memory-efficient streaming.
-    /// For smaller images, uses in-memory decoding (faster for small files).
+    /// For large images (>10MB), uses ffmpeg for memory-efficient streaming
+    /// when available. Bounded Android photos use the in-process decoder.
     ///
     /// # Arguments
     ///
@@ -503,10 +508,11 @@ impl ImageProcessor {
     pub fn generate_thumbnail_bytes(source: &Path) -> Result<(Vec<u8>, u32, u32), MediaError> {
         const LARGE_FILE_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB
 
-        // Check file size to decide approach
         let file_size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
-
-        if file_size > LARGE_FILE_THRESHOLD {
+        // Android has no ffmpeg executable. Re-encoding an oriented photo
+        // can cross the streaming threshold, so keep a bounded native path.
+        let android_native = cfg!(target_os = "android") && file_size <= PREVIEW_ENCODED_BYTES;
+        if file_size > LARGE_FILE_THRESHOLD && !android_native {
             // Large file: use ffmpeg for streaming decode (memory efficient)
             tracing::debug!(
                 "Using ffmpeg for large image thumbnail: {} ({} bytes)",
@@ -516,7 +522,6 @@ impl ImageProcessor {
             return Self::generate_thumbnail_ffmpeg(source, INLINE_THUMBNAIL_MAX_SIZE);
         }
 
-        // Small file: use in-memory decode (faster)
         let image = Self::load_image(source)?;
         // Lanczos3 (not the fast `.thumbnail()` box filter) keeps text legible.
         let thumbnail = image.resize(

@@ -7,9 +7,10 @@
 //!   `moov.meta` are dropped by us (mp4san preserves them; they carry Apple
 //!   GPS ©xyz and iTunes-style ItemList tags). JPEG APP1 (Exif+XMP — GPS,
 //!   serials, timestamps) and COM, and PNG eXIf/tEXt/zTXt/iTXt/tIME are
-//!   stripped losslessly (byte surgery, no re-encode). WebP structure is
-//!   validated. Malformed files are rejected — we never emit bytes we could
-//!   not parse.
+//!   stripped. A non-default EXIF orientation on a JPEG or still PNG is baked into the
+//!   pixels before upload. Other JPEGs and PNGs are stripped losslessly.
+//!   WebP structure is validated, and still WebP photos with EXIF are
+//!   normalized and stripped as well. Malformed files are rejected.
 //! - **Incoming** ([`validate_media`]): after decryption, before the plaintext is
 //!   handed to renderers (image crate, FFmpeg). Malformed MP4/WebP is rejected so
 //!   crafted files never reach the platform media parsers.
@@ -27,7 +28,11 @@
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use image::metadata::Orientation;
+use image::{ImageDecoder, ImageEncoder, ImageFormat, ImageReader};
 use signal_media::sanitize::webp;
+
+use crate::media::image_processor::PREVIEW_ENCODED_BYTES;
 
 use super::AttachmentError;
 
@@ -134,8 +139,7 @@ fn preflight_mp4<R: Read + Seek>(reader: &mut R) -> Result<(), AttachmentError> 
 /// Result of sanitizing outgoing media bytes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SanitizeOutcome {
-    /// MP4 metadata was rewritten (relocated/stripped); use these bytes instead
-    /// of the original.
+    /// Use these sanitized bytes in place of the original.
     Rewritten(Vec<u8>),
     /// Bytes validated clean, or the format is not covered; use the original
     /// bytes unchanged.
@@ -148,6 +152,19 @@ fn looks_like_mp4(data: &[u8]) -> bool {
 
 fn looks_like_webp(data: &[u8]) -> bool {
     data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP"
+}
+
+fn is_webp_photo_with_exif(header: &[u8]) -> bool {
+    const EXIF: u8 = 0x08;
+    const ANIMATED: u8 = 0x02;
+    // The first chunk of a validated extended WebP is VP8X. Its payload
+    // starts with the feature flags. Animated WebP needs a frame pipeline.
+    header.len() >= 21 && &header[12..16] == b"VP8X" && header[20] & (EXIF | ANIMATED) == EXIF
+}
+
+fn validate_webp(input: impl Read + mp4san::Skip) -> Result<(), AttachmentError> {
+    webp::sanitize(input)
+        .map_err(|e| AttachmentError::InvalidAttachment(format!("malformed WebP rejected: {e}")))
 }
 
 fn looks_like_jpeg(data: &[u8]) -> bool {
@@ -167,7 +184,10 @@ fn looks_like_png(data: &[u8]) -> bool {
 ///
 /// Policy on malformed structure: reject — same as the MP4/WebP paths, we do
 /// not send bytes we could not parse.
-fn strip_jpeg_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
+fn strip_jpeg_metadata(
+    data: &[u8],
+    orientation: &mut Option<Orientation>,
+) -> Result<Option<Vec<u8>>, AttachmentError> {
     let bad = |m: &str| AttachmentError::InvalidAttachment(format!("malformed JPEG rejected: {m}"));
     let mut out = Vec::with_capacity(data.len());
     out.extend_from_slice(&data[..2]); // SOI
@@ -204,6 +224,11 @@ fn strip_jpeg_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> 
         let drop = marker == 0xE1 /* APP1: Exif + XMP */ || marker == 0xFE /* COM */;
         if drop {
             dropped = true;
+            if marker == 0xE1 && orientation.is_none() {
+                *orientation = data[i + 4..i + 2 + len]
+                    .strip_prefix(b"Exif\0\0")
+                    .and_then(Orientation::from_exif_chunk);
+            }
         } else {
             out.extend_from_slice(&data[i..i + 2 + len]);
         }
@@ -214,7 +239,10 @@ fn strip_jpeg_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> 
 /// Strip privacy metadata from a PNG without re-encoding: drop eXIf (EXIF —
 /// GPS carrier), tEXt/zTXt/iTXt (free text) and tIME chunks; keep all others.
 /// Returns `None` when nothing was dropped.
-fn strip_png_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
+fn strip_png_metadata(
+    data: &[u8],
+    orientation: &mut Option<Orientation>,
+) -> Result<Option<Vec<u8>>, AttachmentError> {
     let bad = |m: &str| AttachmentError::InvalidAttachment(format!("malformed PNG rejected: {m}"));
     let mut out = Vec::with_capacity(data.len());
     out.extend_from_slice(&PNG_SIG);
@@ -232,9 +260,17 @@ fn strip_png_metadata(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentError> {
         if i + total > data.len() {
             return Err(bad("chunk length out of bounds"));
         }
+        // Re-encoding the decoded canvas would discard APNG's other frames.
+        if ty == b"acTL" {
+            *orientation = Some(Orientation::NoTransforms);
+        }
         let drop = matches!(ty, b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"tIME");
         if drop {
             dropped = true;
+            if ty == b"eXIf" && orientation.is_none() {
+                check_image_exif_size(len as u64, "PNG")?;
+                *orientation = Orientation::from_exif_chunk(&data[i + 8..i + 8 + len]);
+            }
         } else {
             out.extend_from_slice(&data[i..i + total]);
         }
@@ -302,6 +338,7 @@ fn stream_jpeg_metadata(
     input: &mut impl Read,
     output: &mut impl std::io::Write,
     len: u64,
+    orientation: &mut Option<Orientation>,
 ) -> Result<bool, AttachmentError> {
     let bad = |m| malformed_image("JPEG", m);
     let mut remaining = len.checked_sub(2).ok_or_else(|| bad("truncated SOI"))?;
@@ -343,7 +380,18 @@ fn stream_jpeg_metadata(
             output.write_all(&marker).map_err(image_io_error)?;
             output.write_all(&size).map_err(image_io_error)?;
         }
-        transfer_image_span(input, output, segment_len - 2, !drop, "JPEG")?;
+        let payload_len = segment_len - 2;
+        if marker[1] == 0xE1 && orientation.is_none() && payload_len >= 6 {
+            let mut prefix = [0; 6];
+            read_image_exact(input, &mut prefix, "JPEG")?;
+            if &prefix == b"Exif\0\0" {
+                *orientation = read_orientation(input, payload_len - 6, "JPEG")?;
+            } else {
+                transfer_image_span(input, output, payload_len - 6, false, "JPEG")?;
+            }
+        } else {
+            transfer_image_span(input, output, payload_len, !drop, "JPEG")?;
+        }
         remaining -= segment_len;
     }
 }
@@ -355,6 +403,7 @@ fn stream_png_metadata(
     input: &mut impl Read,
     output: &mut impl std::io::Write,
     len: u64,
+    orientation: &mut Option<Orientation>,
 ) -> Result<bool, AttachmentError> {
     let bad = |m| malformed_image("PNG", m);
     let mut remaining = len
@@ -378,19 +427,125 @@ fn stream_png_metadata(
             return Err(bad("chunk length out of bounds"));
         }
         let ty = &header[4..];
+        // Re-encoding the decoded canvas would discard APNG's other frames.
+        if ty == b"acTL" {
+            *orientation = Some(Orientation::NoTransforms);
+        }
         let drop = matches!(ty, b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"tIME");
         if drop {
             dropped = true;
         } else {
             output.write_all(&header).map_err(image_io_error)?;
         }
-        transfer_image_span(input, output, chunk_len + 4, !drop, "PNG")?;
+        if ty == b"eXIf" && orientation.is_none() {
+            *orientation = read_orientation(input, chunk_len, "PNG")?;
+            transfer_image_span(input, output, 4, false, "PNG")?;
+        } else {
+            transfer_image_span(input, output, chunk_len + 4, !drop, "PNG")?;
+        }
         if ty == b"IEND" {
             break;
         }
         remaining -= total;
     }
     Ok(dropped)
+}
+
+fn check_image_exif_size(len: u64, format: &str) -> Result<(), AttachmentError> {
+    if len > PREVIEW_ENCODED_BYTES {
+        return Err(malformed_image(format, "EXIF exceeds metadata budget"));
+    }
+    Ok(())
+}
+
+fn read_orientation(
+    input: &mut impl Read,
+    len: u64,
+    format: &str,
+) -> Result<Option<Orientation>, AttachmentError> {
+    check_image_exif_size(len, format)?;
+    let mut exif = vec![0; len as usize];
+    for chunk in exif.chunks_mut(IMAGE_COPY_BUFFER_SIZE) {
+        read_image_exact(input, chunk, format)?;
+    }
+    Ok(Orientation::from_exif_chunk(&exif))
+}
+
+/// Re-encode with the EXIF transform applied to the pixels. JPEG and PNG
+/// callers supply the orientation read during stripping. WebP's decoder
+/// reads its own EXIF. The encoder preserves ICC and omits privacy metadata.
+fn bake_orientation(
+    input: impl std::io::BufRead + Seek,
+    len: u64,
+    output: impl std::io::Write,
+    format: ImageFormat,
+    orientation: Option<Orientation>,
+) -> Result<(), AttachmentError> {
+    let invalid = |e: image::ImageError| {
+        AttachmentError::InvalidAttachment(format!("Cannot orient {format:?} attachment: {e}"))
+    };
+    if len > PREVIEW_ENCODED_BYTES {
+        return Err(AttachmentError::InvalidAttachment(
+            "Oriented image exceeds encoded byte budget".into(),
+        ));
+    }
+    let mut reader = ImageReader::with_format(input, format);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(512 * 1024 * 1024);
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    reader.limits(limits.clone());
+    let mut decoder = reader.into_decoder().map_err(invalid)?;
+    // Match the full-image decoder budget and allow for a second pixel buffer.
+    limits
+        .reserve(decoder.total_bytes().saturating_mul(2))
+        .map_err(invalid)?;
+    let orientation = match orientation {
+        Some(orientation) => orientation,
+        None => decoder.orientation().map_err(invalid)?,
+    };
+    let icc = decoder.icc_profile().map_err(invalid)?;
+    let mut pixels = image::DynamicImage::from_decoder(decoder).map_err(invalid)?;
+    pixels.apply_orientation(orientation);
+    match format {
+        ImageFormat::Jpeg => encode_upright(
+            image::codecs::jpeg::JpegEncoder::new_with_quality(output, 95),
+            &pixels,
+            icc,
+        ),
+        ImageFormat::Png => {
+            encode_upright(image::codecs::png::PngEncoder::new(output), &pixels, icc)
+        }
+        ImageFormat::WebP => encode_upright(
+            image::codecs::webp::WebPEncoder::new_lossless(output),
+            &pixels,
+            icc,
+        ),
+        _ => unreachable!("only JPEG, PNG and WebP support EXIF sanitization"),
+    }
+    .map_err(invalid)
+}
+
+fn encode_upright(
+    mut encoder: impl ImageEncoder,
+    pixels: &image::DynamicImage,
+    icc: Option<Vec<u8>>,
+) -> image::ImageResult<()> {
+    if let Some(icc) = icc {
+        encoder
+            .set_icc_profile(icc)
+            .map_err(image::ImageError::Unsupported)?;
+    }
+    encoder.write_image(
+        pixels.as_bytes(),
+        pixels.width(),
+        pixels.height(),
+        pixels.color().into(),
+    )
+}
+
+fn needs_orientation(orientation: &Orientation) -> bool {
+    *orientation != Orientation::NoTransforms
 }
 
 /// Own the partial output throughout parsing and flushing. All errors and the
@@ -403,24 +558,44 @@ fn sanitize_image_to_temp(
 ) -> Result<Option<tempfile::NamedTempFile>, AttachmentError> {
     use std::io::{BufWriter, Write};
     let mut temp = tempfile::NamedTempFile::new_in(directory).map_err(image_io_error)?;
+    let mut orientation = None;
     let dropped = {
         let mut output = BufWriter::with_capacity(IMAGE_COPY_BUFFER_SIZE, temp.as_file_mut());
         let dropped = if jpeg {
-            stream_jpeg_metadata(input, &mut output, len)?
+            stream_jpeg_metadata(input, &mut output, len, &mut orientation)?
         } else {
-            stream_png_metadata(input, &mut output, len)?
+            stream_png_metadata(input, &mut output, len, &mut orientation)?
         };
         output.flush().map_err(image_io_error)?;
         dropped
     };
-    Ok(if dropped { Some(temp) } else { None })
+    if let Some(orientation) = orientation.filter(needs_orientation) {
+        let stripped = temp.reopen().map_err(image_io_error)?;
+        let len = stripped.metadata().map_err(image_io_error)?.len();
+        let mut upright = tempfile::NamedTempFile::new_in(directory).map_err(image_io_error)?;
+        let mut output = BufWriter::new(upright.as_file_mut());
+        bake_orientation(
+            BufReader::new(stripped),
+            len,
+            &mut output,
+            if jpeg {
+                ImageFormat::Jpeg
+            } else {
+                ImageFormat::Png
+            },
+            Some(orientation),
+        )?;
+        output.flush().map_err(image_io_error)?;
+        drop(output);
+        return Ok(Some(upright));
+    }
+    Ok(dropped.then_some(temp))
 }
 
 /// Sanitize outgoing media bytes before they leave the device.
 ///
-/// Returns [`SanitizeOutcome::Rewritten`] when the MP4 metadata had to be
-/// modified (caller must upload the rewritten bytes), [`SanitizeOutcome::Unchanged`]
-/// when the input is already clean or is not a covered format.
+/// Returns [`SanitizeOutcome::Rewritten`] when the caller must upload changed
+/// bytes, and [`SanitizeOutcome::Unchanged`] when no rewrite is needed.
 ///
 /// # Errors
 ///
@@ -437,25 +612,47 @@ pub fn sanitize_media(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError
     }
 
     if looks_like_webp(content) {
-        // webpsan validates only; it never rewrites.
-        webp::sanitize(std::io::Cursor::new(content)).map_err(|e| {
-            AttachmentError::InvalidAttachment(format!("malformed WebP rejected: {e}"))
-        })?;
+        validate_webp(std::io::Cursor::new(content))?;
+        if is_webp_photo_with_exif(content) {
+            let mut output = Vec::new();
+            bake_orientation(
+                std::io::Cursor::new(content),
+                content.len() as u64,
+                &mut output,
+                ImageFormat::WebP,
+                None,
+            )?;
+            return Ok(SanitizeOutcome::Rewritten(output));
+        }
         return Ok(SanitizeOutcome::Unchanged);
     }
 
-    if looks_like_jpeg(content) {
-        return Ok(match strip_jpeg_metadata(content)? {
-            Some(bytes) => SanitizeOutcome::Rewritten(bytes),
-            None => SanitizeOutcome::Unchanged,
-        });
-    }
-
-    if looks_like_png(content) {
-        return Ok(match strip_png_metadata(content)? {
-            Some(bytes) => SanitizeOutcome::Rewritten(bytes),
-            None => SanitizeOutcome::Unchanged,
-        });
+    let jpeg = looks_like_jpeg(content);
+    let mut orientation = None;
+    let stripped = if jpeg {
+        strip_jpeg_metadata(content, &mut orientation)?
+    } else if looks_like_png(content) {
+        strip_png_metadata(content, &mut orientation)?
+    } else {
+        None
+    };
+    if let Some(bytes) = stripped {
+        if let Some(orientation) = orientation.filter(needs_orientation) {
+            let mut upright = Vec::new();
+            bake_orientation(
+                std::io::Cursor::new(&bytes),
+                bytes.len() as u64,
+                &mut upright,
+                if jpeg {
+                    ImageFormat::Jpeg
+                } else {
+                    ImageFormat::Png
+                },
+                Some(orientation),
+            )?;
+            return Ok(SanitizeOutcome::Rewritten(upright));
+        }
+        return Ok(SanitizeOutcome::Rewritten(bytes));
     }
 
     Ok(SanitizeOutcome::Unchanged)
@@ -468,11 +665,25 @@ pub fn sanitize_media(content: &[u8]) -> Result<SanitizeOutcome, AttachmentError
 /// the layout we would emit ourselves.
 ///
 pub fn validate_media(content: &[u8]) -> Result<(), AttachmentError> {
+    let mut input = std::io::Cursor::new(content);
+    let mut output = std::io::sink();
+    let len = content.len() as u64;
+    // A preset value skips gathering EXIF while checking the image structure.
+    let mut orientation = Some(Orientation::NoTransforms);
+    if looks_like_jpeg(content) {
+        return stream_jpeg_metadata(&mut input, &mut output, len, &mut orientation).map(|_| ());
+    }
+    if looks_like_png(content) {
+        return stream_png_metadata(&mut input, &mut output, len, &mut orientation).map(|_| ());
+    }
+    if looks_like_webp(content) {
+        return validate_webp(input);
+    }
     sanitize_media(content).map(|_| ())
 }
 
-/// Sanitize a media file on disk without loading it into memory — for the
-/// streaming (file-path) upload path, where attachments may be multi-GB.
+/// Sanitize a media file on disk for the streaming upload path. Only images
+/// that need an EXIF transform are decoded and re-encoded, within size limits.
 ///
 /// Same coverage and policy as [`sanitize_media`]. Returns `Some(temp)` holding
 /// the rewritten media when metadata had to be relocated/stripped (caller
@@ -487,23 +698,30 @@ pub fn sanitize_media_file(
         |e| AttachmentError::FileError(format!("Failed to open file for sanitizing: {e}"));
     let mut file = std::fs::File::open(path).map_err(open_err)?;
 
-    let mut magic = [0u8; 12];
+    let mut magic = [0u8; 21];
     let n = read_up_to(&mut file, &mut magic)
         .map_err(|e| AttachmentError::FileError(format!("Failed to sniff file: {e}")))?;
     file.seek(SeekFrom::Start(0))
         .map_err(|e| AttachmentError::FileError(format!("Failed to rewind file: {e}")))?;
 
     if looks_like_webp(&magic[..n]) {
-        // webpsan validates only; it never rewrites.
-        webp::sanitize(BufReader::new(file)).map_err(|e| {
-            AttachmentError::InvalidAttachment(format!("malformed WebP rejected: {e}"))
-        })?;
+        let mut reader = BufReader::new(file);
+        validate_webp(&mut reader)?;
+        if is_webp_photo_with_exif(&magic[..n]) {
+            let len = reader.get_ref().metadata().map_err(image_io_error)?.len();
+            reader.seek(SeekFrom::Start(0)).map_err(image_io_error)?;
+            super::ensure_attachments_dir().map_err(image_io_error)?;
+            let mut temp = tempfile::NamedTempFile::new_in(super::attachments_dir())
+                .map_err(image_io_error)?;
+            bake_orientation(reader, len, temp.as_file_mut(), ImageFormat::WebP, None)?;
+            return Ok(Some(temp));
+        }
         return Ok(None);
     }
 
     if looks_like_jpeg(&magic[..n]) || looks_like_png(&magic[..n]) {
-        // Use the descriptor that was sniffed, not a second path lookup. Only
-        // fixed-size input/output buffers are held while streaming to our temp.
+        // Use the descriptor that was sniffed and stream metadata removal to
+        // a private temporary file.
         let len = file.metadata().map_err(image_io_error)?.len();
         super::ensure_attachments_dir().map_err(|e| {
             AttachmentError::FileError(format!("Failed to create attachments dir: {e}"))
