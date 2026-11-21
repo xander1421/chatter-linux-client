@@ -15,6 +15,7 @@
 //! Selective, Signal-style: user-visible history and social graph only.
 //! - `messages` / `threads` / `unified_reactions` — full history including
 //!   pins (`is_pinned`), edits (`is_edited`/`edited_at`) and reaction state.
+//! - Countdown state and deletion tombstones for history restore.
 //! - `attachments` referenced by those messages, as pointers (CDN key, key,
 //!   digest, metadata) — never the bytes or this device's file paths. Without
 //!   them a restored or linked device had attachment ids it could not
@@ -58,13 +59,13 @@ use rusqlite::types::{Value as SqlValue, ValueRef};
 use crate::error::StorageError;
 use crate::storage::repositories::settings_repo::keys;
 use crate::storage::repositories::unified_message_repo::reaction_projection;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Payload schema version (independent of the container's format_version).
 /// Bump this for every change to backup content, including exported tables,
 /// columns, row selection, or the meaning of stored values. Older builds must
 /// reject newer payloads rather than silently importing only familiar fields.
-pub const PAYLOAD_VERSION: u32 = 1;
+pub const PAYLOAD_VERSION: u32 = 2;
 
 /// Whitelisted tables, in FK-safe import order (parents before children:
 /// `profiles`/`friendships` reference `users`, `memberships` references
@@ -75,6 +76,10 @@ pub const BACKUP_TABLES: &[&str] = &[
     "friendships",
     "channels",
     "memberships",
+    "deleted_messages",
+    "dm_receive_tombstones",
+    "pending_message_modifiers",
+    "ephemeral_messages",
     "messages",
     "attachments",
     "threads",
@@ -92,6 +97,15 @@ pub const OWN_PROFILE_SETTINGS_KEYS: &[&str] = &[keys::DISPLAY_NAME, keys::AVATA
 /// Conversation types whose message rows are backed up. Anon types are
 /// excluded together with their conversation tables (module doc).
 const MESSAGE_CONVERSATION_TYPES: &str = "('channel','server_dm','saved_messages')";
+
+const BACKUP_DELETE_MODIFIERS: &str = "('channel','server_dm','call:server_dm')";
+
+const LIFECYCLE_TABLES: &[&str] = &[
+    "deleted_messages",
+    "dm_receive_tombstones",
+    "pending_message_modifiers",
+    "ephemeral_messages",
+];
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BackupInfo {
@@ -194,6 +208,106 @@ fn column_to_sql_value(c: &ColumnValue) -> SqlValue {
     }
 }
 
+fn row_value<'a>(columns: &[String], values: &'a [SqlValue], column: &str) -> &'a SqlValue {
+    columns
+        .iter()
+        .position(|name| name == column)
+        .map_or(&SqlValue::Null, |index| &values[index])
+}
+
+fn text_value(value: &SqlValue) -> Option<&str> {
+    match value {
+        SqlValue::Text(text) => Some(text),
+        _ => None,
+    }
+}
+
+struct MessageExpiry {
+    ttl: i64,
+    expires_at: String,
+    deadline: chrono::DateTime<chrono::FixedOffset>,
+    read_at: Option<String>,
+    started: bool,
+}
+
+impl MessageExpiry {
+    fn from_row(columns: &[String], values: &[SqlValue]) -> Option<Self> {
+        let get = |name| row_value(columns, values, name);
+        let SqlValue::Integer(ttl) = get("ttl_seconds") else {
+            return None;
+        };
+        u32::try_from(*ttl).ok()?;
+        let SqlValue::Integer(started @ (0 | 1)) = get("countdown_started") else {
+            return None;
+        };
+        let expires_at = text_value(get("expires_at"))?;
+        let deadline = chrono::DateTime::parse_from_rfc3339(expires_at).ok()?;
+        Some(Self {
+            ttl: *ttl,
+            expires_at: expires_at.to_owned(),
+            deadline,
+            read_at: text_value(get("read_at")).map(str::to_owned),
+            started: *started == 1,
+        })
+    }
+
+    fn expired(&self) -> bool {
+        // Unread rows have a placeholder date that is replaced on read.
+        self.started && self.deadline <= chrono::Utc::now()
+    }
+
+    fn insert(&self, conn: &Connection, id: &str) -> Result<(), StorageError> {
+        conn.execute(
+            "INSERT INTO ephemeral_messages (message_id,ttl_seconds,expires_at,read_at,countdown_started)
+             VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![id, self.ttl, self.expires_at, self.read_at, self.started],
+        )?;
+        Ok(())
+    }
+}
+
+fn legacy_timer_unknown(
+    conn: &Connection,
+    kind: &str,
+    conversation: &SqlValue,
+) -> Result<bool, StorageError> {
+    match kind {
+        // A friend DM's timer can change or lapse. No v1 field proves that a
+        // particular message was untimed, even when no timer notice remains.
+        "server_dm" => Ok(true),
+        // A channel's TTL is fixed at creation. Missing metadata is ambiguous.
+        "channel" => Ok(!conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM channels WHERE id=?1 AND COALESCE(default_ttl_seconds,0)=0)",
+            [conversation],
+            |row| row.get::<_, bool>(0),
+        )?),
+        _ => Ok(false),
+    }
+}
+
+fn message_tombstoned(
+    conn: &Connection,
+    columns: &[String],
+    values: &[SqlValue],
+    archive_owner: &str,
+) -> Result<bool, StorageError> {
+    let message = |column| row_value(columns, values, column);
+    Ok(conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)
+             OR (?2='server_dm' AND EXISTS(SELECT 1 FROM dm_receive_tombstones
+                 WHERE owner_id IN (?6, (SELECT json_extract(value,'$') FROM settings WHERE key=?7))
+                 AND conversation_id=?3 AND sender_id=?4 AND sent_at=?5))
+             OR EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind='delete'
+                 AND (conversation_id IS NULL OR conversation_id=?3)
+                 AND ((body=?2 AND author_id=?4 AND target_sent_at=?5)
+                      OR (?2='server_dm' AND body='call:server_dm' AND author_id=?1 AND target_sent_at=0)))",
+    )?.query_row(
+        rusqlite::params![message("id"), message("conversation_type"), message("conversation_id"),
+            message("sender_id"), message("sent_at"), archive_owner, keys::CURRENT_USER_ID],
+        |row| row.get(0),
+    )?)
+}
+
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, StorageError> {
     // `table` is always from the compile-time whitelist here — never
     // attacker-controlled — but PRAGMA cannot be parameterized anyway.
@@ -270,6 +384,7 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
         let cols = table_columns(conn, table)?.join(", ");
         // Reaction metadata must obey the same privacy boundary as history.
         // A scope string alone is insufficient: require its retained target.
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
         let ownership = match table {
             "unified_reactions" => Some(format!(
                 "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
@@ -279,14 +394,22 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
                 "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
                  AND m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
                  AND m.sender_id={table}.author_id AND m.sent_at={table}.target_sent_at)")),
-            "messages" => Some(format!("conversation_type IN {MESSAGE_CONVERSATION_TYPES}")),
+            "messages" => Some(format!("conversation_type IN {MESSAGE_CONVERSATION_TYPES} AND is_deleted=0")),
+            "ephemeral_messages" => Some(format!(
+                "message_id IN (SELECT id FROM messages WHERE conversation_type IN {MESSAGE_CONVERSATION_TYPES} AND is_deleted=0)"
+            )),
+            "dm_receive_tombstones" => {
+                params.push(&user_id);
+                Some("owner_id=?1".to_owned())
+            }
+            "pending_message_modifiers" => Some(format!("kind='delete' AND body IN {BACKUP_DELETE_MODIFIERS}")),
             _ => None,
         };
         let select = match ownership {
             Some(predicate) => format!("SELECT {cols} FROM {table} WHERE {predicate}"),
             None => format!("SELECT {cols} FROM {table}"),
         };
-        dump_table(conn, &mut out, table, &select, &[], &mut rows, &|_| {
+        dump_table(conn, &mut out, table, &select, &params, &mut rows, &|_| {
             Ok(true)
         })?;
     }
@@ -383,6 +506,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
 
     // Per-table insert state, rebuilt at each TableHeader frame.
     struct TableState {
+        table: String,
         insert_sql: String,
         scoped_indices: Option<[usize; 6]>,
         ledger_table: Option<String>,
@@ -404,14 +528,20 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     let mut ledgers = Vec::new();
     let mut scoped_votes = Vec::new();
     let mut current: Option<TableState> = None;
+    let mut expiry_by_id = HashMap::new();
+    let mut legacy_timed_channels = HashSet::new();
+    let mut omitted_messages = HashSet::new();
+    let mut restored_replies = Vec::new();
+    let mut saw_messages = false;
+    let mut archive_owner = String::new();
 
-    let mut saw_info = false;
+    let mut version = None;
     while buf.has_remaining() {
         let f = Frame::decode_length_delimited(&mut buf)
             .map_err(|e| StorageError::InvalidData(format!("backup frame undecodable: {e}")))?;
         match f.payload {
             Some(frame::Payload::Info(info)) => {
-                if saw_info {
+                if version.is_some() {
                     return Err(StorageError::InvalidData(
                         "backup payload has duplicate info frames".into(),
                     ));
@@ -422,16 +552,17 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                         info.payload_version, PAYLOAD_VERSION
                     )));
                 }
-                if info.payload_version != PAYLOAD_VERSION {
+                if info.payload_version == 0 {
                     return Err(StorageError::InvalidData(format!(
                         "unsupported backup payload version {} (this build supports version {})",
                         info.payload_version, PAYLOAD_VERSION
                     )));
                 }
-                saw_info = true;
+                version = Some(info.payload_version);
+                archive_owner = info.user_id;
             }
             Some(frame::Payload::Table(th)) => {
-                if !saw_info {
+                if version.is_none() {
                     return Err(StorageError::InvalidData(
                         "backup table appears before info frame".into(),
                     ));
@@ -444,11 +575,23 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     )));
                 }
                 let table = th.table.as_str();
+                if LIFECYCLE_TABLES.contains(&table) && saw_messages {
+                    return Err(StorageError::InvalidData(
+                        "backup lifecycle records must precede messages".into(),
+                    ));
+                }
+                saw_messages |= table == "messages";
                 let live_cols = table_columns(&tx, table)?;
+                let mut seen_columns = HashSet::new();
                 for col in &th.columns {
                     if !live_cols.contains(col) {
                         return Err(StorageError::UnsupportedBackup(format!(
                             "backup table '{table}' contains unknown column '{col}'"
+                        )));
+                    }
+                    if !seen_columns.insert(col) {
+                        return Err(StorageError::InvalidData(format!(
+                            "backup table '{table}' repeats column '{col}'"
                         )));
                     }
                 }
@@ -559,6 +702,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     scoped_indices,
                     ledger_table,
                     columns: names.clone(),
+                    table: th.table,
                 });
                 summary.tables += 1;
             }
@@ -578,6 +722,93 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 summary.rows_seen += 1;
 
                 let params: Vec<SqlValue> = row.values.iter().map(column_to_sql_value).collect();
+                let get = |column| row_value(&state.columns, &params, column);
+                match state.table.as_str() {
+                    "ephemeral_messages" => {
+                        let id = text_value(get("message_id")).ok_or_else(|| {
+                            StorageError::InvalidData("backup countdown lacks message id".into())
+                        })?;
+                        let expiry =
+                            MessageExpiry::from_row(&state.columns, &params).ok_or_else(|| {
+                                StorageError::InvalidData("invalid backup countdown".into())
+                            })?;
+                        if expiry_by_id.insert(id.to_owned(), expiry).is_some() {
+                            return Err(StorageError::InvalidData(
+                                "duplicate backup countdown".into(),
+                            ));
+                        }
+                        continue;
+                    }
+                    "dm_receive_tombstones"
+                        if text_value(get("owner_id")) != Some(archive_owner.as_str()) =>
+                    {
+                        continue;
+                    }
+                    "pending_message_modifiers"
+                        if text_value(get("kind")) != Some("delete")
+                            || !matches!(
+                                text_value(get("body")),
+                                Some("channel" | "server_dm" | "call:server_dm")
+                            ) =>
+                    {
+                        continue;
+                    }
+                    "channels" if version == Some(1) => {
+                        if let (Some(id), SqlValue::Integer(ttl)) =
+                            (text_value(get("id")), get("default_ttl_seconds"))
+                            && *ttl > 0
+                        {
+                            legacy_timed_channels.insert(id.to_owned());
+                        }
+                    }
+                    "threads"
+                        if !tx.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1)",
+                            [get("root_message_id")],
+                            |row| row.get::<_, bool>(0),
+                        )? =>
+                    {
+                        continue;
+                    }
+                    "messages" => {
+                        let id = text_value(get("id")).ok_or_else(|| {
+                            StorageError::InvalidData("backup message lacks id".into())
+                        })?;
+                        let kind = text_value(get("conversation_type")).ok_or_else(|| {
+                            StorageError::InvalidData(
+                                "backup message lacks conversation type".into(),
+                            )
+                        })?;
+                        let expiry = expiry_by_id.get(id);
+                        if get("is_deleted") == &SqlValue::Integer(1)
+                            || message_tombstoned(&tx, &state.columns, &params, &archive_owner)?
+                            || expiry.is_some_and(MessageExpiry::expired)
+                            || (version == Some(1)
+                                && expiry.is_none()
+                                && (text_value(get("conversation_id")).is_some_and(|id| {
+                                    kind == "channel" && legacy_timed_channels.contains(id)
+                                }) || legacy_timer_unknown(&tx, kind, get("conversation_id"))?))
+                        {
+                            omitted_messages.insert(id.to_owned());
+                            continue;
+                        }
+                        let inserted = tx
+                            .prepare_cached(&state.insert_sql)?
+                            .execute(rusqlite::params_from_iter(&params))?;
+                        summary.rows_inserted += inserted;
+                        if inserted != 0 {
+                            if let Some(expiry) = expiry {
+                                expiry.insert(&tx, id)?;
+                                summary.rows_inserted += 1;
+                            }
+                            if let Some(parent) = text_value(get("reply_to")) {
+                                restored_replies.push((id.to_owned(), parent.to_owned()));
+                            }
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
                 if let Some(indices) = state.scoped_indices {
                     let text = |i: usize| match params.get(i) {
                         Some(SqlValue::Text(value)) => Ok(value.clone()),
@@ -633,10 +864,18 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
             None => {}
         }
     }
-    if !saw_info {
+    if version.is_none() {
         return Err(StorageError::InvalidData(
             "backup payload missing info frame".into(),
         ));
+    }
+    for (id, parent) in restored_replies {
+        tx.prepare_cached(
+            "UPDATE messages SET reply_to_text=NULL,reply_to_thumbnail=NULL,reply_to_thumbnail_mime=NULL,
+             content_json=CASE WHEN json_valid(content_json) AND json_type(content_json,'$.quote')='object'
+                 THEN json_set(content_json,'$.quote.preview','') ELSE content_json END
+             WHERE id=?1 AND (?3 OR EXISTS(SELECT 1 FROM deleted_messages WHERE id=?2))",
+        )?.execute(rusqlite::params![id, parent, omitted_messages.contains(&parent)])?;
     }
     // All action evidence is installed before any vote, regardless of frame
     // order. LWW merge applies only to actors absent before this restore.
@@ -683,6 +922,144 @@ mod tests {
             rusqlite::params![id, format!("{{\"text\":\"{text}\"}}"), sent_at],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn history_restore_preserves_countdowns_and_omits_deleted_messages() {
+        let src_dir = tempfile::tempdir().unwrap();
+        let dst_dir = tempfile::tempdir().unwrap();
+        let src = test_db(src_dir.path());
+        let dst = test_db(dst_dir.path());
+        let payload = {
+            let conn = src.connection().unwrap();
+            for (i, id) in [
+                "running",
+                "unread",
+                "expired",
+                "local-id",
+                "local-receipt",
+                "backup-id",
+                "backup-delete",
+                "reply",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                insert_message(&conn, id, "placeholder", i as i64 + 1);
+            }
+            conn.execute_batch(
+                "UPDATE messages SET conversation_type='server_dm',conversation_id='peer';
+                 UPDATE messages SET reply_to='expired',reply_to_text='expiring text' WHERE id='reply';
+                 INSERT INTO threads(root_message_id,conversation_id) VALUES ('expired','peer');
+                 INSERT INTO ephemeral_messages VALUES
+                     ('running',3600,'2099-01-01T01:00:00+00:00','2099-01-01T00:00:00+00:00',1),
+                     ('unread',3600,'2000-01-01T00:00:00+00:00',NULL,0),
+                     ('expired',3600,'2000-01-01T01:00:00+00:00','2000-01-01T00:00:00+00:00',1);
+                 INSERT INTO deleted_messages VALUES ('backup-id');
+                 INSERT INTO pending_message_modifiers(author_id,target_sent_at,kind,conversation_id,body,received_at)
+                   VALUES ('user-a',7,'delete','peer','server_dm',1);",
+            ).unwrap();
+            dump_frames(&conn, "owner").unwrap().0
+        };
+        let mut conn = dst.connection().unwrap();
+        conn.execute_batch(
+            "INSERT INTO deleted_messages VALUES ('local-id');
+             INSERT INTO dm_receive_tombstones VALUES ('owner','peer','user-a',5,1);",
+        )
+        .unwrap();
+        import_frames(&mut conn, &payload).unwrap();
+        assert_eq!(import_frames(&mut conn, &payload).unwrap().rows_inserted, 0);
+
+        let ids = conn
+            .prepare("SELECT id FROM messages ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(ids, ["reply", "running", "unread"]);
+        let running: (i64, String, String, bool) = conn.query_row(
+            "SELECT ttl_seconds,expires_at,read_at,countdown_started FROM ephemeral_messages WHERE message_id='running'",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert_eq!(
+            running,
+            (
+                3600,
+                "2099-01-01T01:00:00+00:00".into(),
+                "2099-01-01T00:00:00+00:00".into(),
+                true
+            )
+        );
+        assert!(conn.query_row(
+            "SELECT countdown_started=0 AND read_at IS NULL FROM ephemeral_messages WHERE message_id='unread'",
+            [], |row| row.get::<_, bool>(0),
+        ).unwrap());
+        conn.execute("UPDATE messages SET is_read=1 WHERE id='unread'", [])
+            .unwrap();
+        crate::storage::repositories::ephemeral_repo::start_read_countdowns(&conn).unwrap();
+        assert!(conn.query_row(
+            "SELECT countdown_started=1 AND expires_at > '2000-01-01' FROM ephemeral_messages WHERE message_id='unread'",
+            [], |row| row.get::<_, bool>(0),
+        ).unwrap());
+        assert!(
+            conn.query_row(
+                "SELECT reply_to_text IS NULL FROM messages WHERE id='reply'",
+                [],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM threads", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn history_restore_legacy_omits_potentially_timed_history() {
+        let src_dir = tempfile::tempdir().unwrap();
+        let dst_dir = tempfile::tempdir().unwrap();
+        let src = test_db(src_dir.path());
+        let dst = test_db(dst_dir.path());
+        let payload = {
+            let conn = src.connection().unwrap();
+            insert_message(&conn, "unknown-dm", "old DM", 1);
+            insert_message(&conn, "saved", "old saved note", 2);
+            conn.execute_batch(
+                "UPDATE messages SET conversation_type='server_dm' WHERE id='unknown-dm';
+                UPDATE messages SET conversation_type='saved_messages' WHERE id='saved';",
+            )
+            .unwrap();
+            dump_frames(&conn, "owner").unwrap().0
+        };
+        let mut input = payload.as_slice();
+        let Some(frame::Payload::Info(mut info)) =
+            Frame::decode_length_delimited(&mut input).unwrap().payload
+        else {
+            panic!("missing backup header");
+        };
+        info.payload_version = 1;
+        let mut legacy = Vec::new();
+        push_frame(&mut legacy, frame::Payload::Info(info));
+        let mut lifecycle = false;
+        while input.has_remaining() {
+            let frame = Frame::decode_length_delimited(&mut input).unwrap();
+            if let Some(frame::Payload::Table(header)) = &frame.payload {
+                lifecycle = LIFECYCLE_TABLES.contains(&header.table.as_str());
+            }
+            if !lifecycle {
+                frame.encode_length_delimited(&mut legacy).unwrap();
+            }
+        }
+        let mut conn = dst.connection().unwrap();
+        import_frames(&mut conn, &legacy).unwrap();
+        let restored: String = conn
+            .query_row("SELECT id FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(restored, "saved");
     }
 
     /// Inspect actual frame bytes and decoded row counts, not just SQL filters.
