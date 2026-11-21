@@ -1,0 +1,61 @@
+package com.chatter.client
+
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.util.Log
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+
+/**
+ * Direct Share: publishes the chats core selected as dynamic sharing shortcuts,
+ * so they show in other apps' share sheets next to apps like Telegram's.
+ *
+ * What is published, and when, is decided in chatter-core (`share_targets`):
+ * names only, a handful of identified chats, nothing at the private default
+ * notification level, nothing while signed out or while an app lock is enabled.
+ * This object only hands that list to Android and removes it again. The
+ * shortcut id is the opaque per-account key, never a user or channel id.
+ */
+object ShareTargets {
+    private const val TAG = "ChatterShareTargets"
+    // Matches res/xml/shortcuts.xml.
+    private const val CATEGORY = "com.chatter.client.category.SHARE_TARGET"
+
+    /**
+     * Replace every published target with [keys]/[labels] (parallel arrays);
+     * empty removes them all. Returns whether Android accepted the change, so
+     * the caller retries a refused one (rate limits, OEM quirks) instead of
+     * believing it is published.
+     */
+    fun publish(context: Context, keys: Array<String>, labels: Array<String>): Boolean {
+        // Sharing shortcuts need Android 10+. Below that Direct Share does not
+        // exist, so don't hand chat names to ShortcutManager for no benefit;
+        // report success (nothing to retry).
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        return try {
+            val cap = ShortcutManagerCompat.getMaxShortcutCountPerActivity(context)
+            val shortcuts = keys.indices.take(cap).map { i ->
+                ShortcutInfoCompat.Builder(context, keys[i])
+                    .setShortLabel(labels[i])
+                    .setLongLived(true)
+                    .setCategories(setOf(CATEGORY))
+                    // Required by the API; a tap on a share target delivers the
+                    // share intent to MainActivity, not this one.
+                    .setIntent(Intent(context, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
+                    .build()
+            }
+            if (shortcuts.isEmpty()) {
+                ShortcutManagerCompat.removeAllDynamicShortcuts(context)
+                true
+            } else {
+                ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)
+            }
+        } catch (e: RuntimeException) {
+            // Must never take the app down; the share sheet then simply lists
+            // Chatter without chats, and the next refresh tries again.
+            Log.w(TAG, "publishing share targets failed: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+}

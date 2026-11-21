@@ -16,6 +16,11 @@ pub fn register_client(client: Arc<ChatterClient>) {
     }
 }
 
+/// The app's client, for Android hooks that only hold `&ChatterClient`.
+pub(super) fn current_client() -> Option<Arc<ChatterClient>> {
+    CLIENT.lock().ok().and_then(|current| current.clone())
+}
+
 pub fn register_window(window: slint::Weak<crate::MainWindow>) {
     if let Ok(mut current) = WINDOW.lock() {
         *current = Some(window);
@@ -74,6 +79,8 @@ pub fn open_pending(window: &crate::MainWindow) {
     {
         return;
     }
+    // Keep the system share sheet in step with the chat list (core decides what, if anything).
+    super::share_targets::refresh(&client);
     open_pending_notification(window, &client);
     // After the notification route, never before: it resets the modal stack,
     // which would close a share picker opened first and strand the share.

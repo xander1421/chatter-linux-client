@@ -75,7 +75,12 @@
         android:allowBackup="false"
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="false"
+        android:appCategory="social"
         android:theme="@style/Theme.Chatter">
+        <!-- appCategory=social: a sideloaded app has no store category, so the
+             platform sees it as unclassified (ApplicationInfo.category -1),
+             unlike Telegram and Viber, which carry social. Declared so share
+             sheets and ranking UIs can treat Chatter as the messaging app it is. -->
         <!-- enableOnBackInvokedCallback=false: targetSdk 36 otherwise turns on
              predictive back, which stops dispatching KEYCODE_BACK. Slint's
              in-app navigation consumes that key (GameActivity -> Key::Back,
@@ -117,13 +122,20 @@
 
             <!-- Share-sheet target: lists Chatter when another app shares text,
                  a link or files. The payload is untrusted; MainActivity only
-                 stages it into a chat the user picks, never sends it. -->
+                 stages it into a chat (the one the user picked, or tapped as a
+                 Direct Share target), never sends it. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+
+            <!-- Direct Share: the recent chats ShareTargets publishes as
+                 sharing shortcuts (see res/xml/shortcuts.xml). -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <activity android:name=".VideoPlaybackActivity" android:exported="false"

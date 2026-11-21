@@ -5,6 +5,9 @@
 //! consent to send: it waits here until the account is ready, the destination
 //! picker opens, and only the user's choice of chat stages it — text into that
 //! chat's composer, files into its attachment tray — for the user's own Send.
+//! A share started from one of our Direct Share chats (`share_targets`) names
+//! its chat up front: when core resolves that key the picker is skipped, and the
+//! share is staged the same way.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,6 +20,9 @@ use slint::ComponentHandle;
 struct IncomingShare {
     text: String,
     files: Vec<PathBuf>,
+    /// The opaque key of a tapped Direct Share chat; empty for a plain share.
+    /// Untrusted until core resolves it.
+    shortcut: String,
 }
 
 impl IncomingShare {
@@ -61,6 +67,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShareReceived(
     _this: JObject,
     text: JString,
     paths: JObjectArray,
+    shortcut: JString,
 ) {
     env.with_env(|env| -> jni::errors::Result<_> {
         let text = text
@@ -72,6 +79,10 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShareReceived(
             .into_iter()
             .map(PathBuf::from)
             .collect();
+        let shortcut = shortcut
+            .try_to_string(&env)
+            .map(String::from)
+            .unwrap_or_default();
         // A newer share supersedes an unanswered one.
         for slot in [&WAITING, &OFFERED] {
             if let Some(old) = slot.lock().ok().and_then(|mut slot| slot.take()) {
@@ -79,7 +90,11 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShareReceived(
             }
         }
         if let Ok(mut waiting) = WAITING.lock() {
-            *waiting = Some(IncomingShare { text, files });
+            *waiting = Some(IncomingShare {
+                text,
+                files,
+                shortcut,
+            });
         }
         super::notification_route::open_pending_soon();
         Ok(())
@@ -87,12 +102,22 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShareReceived(
     .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
-/// Open the destination picker for a waiting share. Called on the UI thread
-/// once the account is signed in and on the main view; a no-op otherwise.
+/// Route a waiting share: straight into the chat of a tapped Direct Share
+/// target when core resolves its key, otherwise through the destination
+/// picker. Called on the UI thread once the account is signed in and on the
+/// main view; a no-op otherwise.
 pub fn open_pending(window: &crate::MainWindow, client: &Arc<ChatterClient>) {
     let Some(share) = WAITING.lock().ok().and_then(|mut slot| slot.take()) else {
         return;
     };
+    if chatter_core::ui::is_opaque_notification_key(&share.shortcut) {
+        if let Some(target) = client.conversation_for_share_target(&share.shortcut) {
+            // Nothing else is on screen to dismiss but stray layers.
+            crate::bin_ui::features::back::reset_to_chats(window);
+            stage_into(window, client, target, share);
+            return;
+        }
+    }
     let preview = share.preview();
     if let Ok(mut offered) = OFFERED.lock() {
         *offered = Some(share);
@@ -116,6 +141,16 @@ pub fn stage(window: &crate::MainWindow, client: &Arc<ChatterClient>, target: Ac
     };
     // Claimed above, so closing the picker no longer discards it.
     crate::bin_ui::features::back::close(window, "forward-message");
+    stage_into(window, client, target, share);
+}
+
+/// Open `target` and stage `share` into its composer and tray.
+fn stage_into(
+    window: &crate::MainWindow,
+    client: &Arc<ChatterClient>,
+    target: ActiveConversation,
+    share: IncomingShare,
+) {
     crate::bin_ui::features::chat::open::select_conversation(window, target);
     // The open commits synchronously (active conversation and its draft), so
     // what follows lands in the chosen chat.

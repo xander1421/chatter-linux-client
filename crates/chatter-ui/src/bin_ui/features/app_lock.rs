@@ -182,6 +182,9 @@ fn clear_inputs(pane: &AppLockPane<'_>) {
 pub(crate) fn refresh(window: &MainWindow, ui_ctx: &ChatterClient) {
     let pane = window.global::<AppLockPane>();
     pane.set_locked(ui_ctx.app_lock_is_locked());
+    // Locking removes the chats from the system share sheet; unlocking restores them.
+    #[cfg(target_os = "android")]
+    crate::platform::android::share_targets::refresh_current();
     match ui_ctx.app_lock_settings() {
         Ok(settings) => {
             pane.set_enabled(settings.enabled);
