@@ -6,17 +6,24 @@
 //! (`ChatterClient::share_targets`). This module only delivers the answer, and
 //! only when it changed: Android rate-limits shortcut updates.
 //!
-//! Three properties it must keep:
-//! * a sign-out can never be overtaken: [`clear`] flips a flag *before* doing
-//!   anything else, and every refresh checks it, so a refresh already queued
-//!   behind a sign-out cannot republish names;
-//! * nothing blocks a caller: refreshes run on a blocking task, [`clear`] never
-//!   waits for the lock on the calling thread, and the (slow) chat-list query
-//!   runs outside the lock;
-//! * a bursty chat list costs one rebuild, not one per update: requests
-//!   arriving while one is already waiting are folded into it.
+//! Properties it must keep:
+//! * **Read order is publish order.** Refreshes run one at a time (`REFRESH`),
+//!   each reading the chat list and publishing inside the same critical
+//!   section, so a refresh that read later can never be overwritten by one
+//!   that read earlier.
+//! * **A sign-out is never overtaken.** [`clear`] flips `SIGNED_OUT` before
+//!   anything else; every refresh checks it before reading and again right
+//!   before publishing. And a queued removal is skipped if the account signed
+//!   in again meanwhile ([`signed_in`]): the new account's own refresh sets
+//!   what Android should hold, and the removal must not erase it.
+//! * **Callers do not wait.** Refreshes and removals run on blocking tasks;
+//!   [`clear`] never waits on the (slow) chat-list query, since only `REFRESH`
+//!   is held across that. The one inline case is [`clear`] with no async
+//!   runtime at all, where removing is done on the spot rather than skipped.
+//! * **Bursts coalesce.** Requests arriving while a refresh is already waiting
+//!   are folded into it (it reads the state when it runs).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 
 use chatter_core::client::{ChatterClient, ShareTarget};
@@ -25,19 +32,11 @@ use jni::sys::jsize;
 
 use super::activity;
 
-struct Published {
-    /// What Android currently holds. `None` until the first successful push.
-    targets: Option<Vec<ShareTarget>>,
-    /// Sequence number of the newest request that has decided the state, so a
-    /// slower, older refresh cannot overwrite a newer one.
-    last_seq: u64,
-}
-
-static PUBLISHED: Mutex<Published> = Mutex::new(Published {
-    targets: None,
-    last_seq: 0,
-});
-static SEQ: AtomicU64 = AtomicU64::new(0);
+/// What Android currently holds. `None` until the first successful push.
+/// Held only around a push, never across the chat-list query.
+static PUBLISHED: Mutex<Option<Vec<ShareTarget>>> = Mutex::new(None);
+/// Serialises refreshes: held across the query *and* the publish.
+static REFRESH: Mutex<()> = Mutex::new(());
 /// Set by [`clear`] on sign-out, reset by [`signed_in`].
 static SIGNED_OUT: AtomicBool = AtomicBool::new(false);
 /// A refresh is waiting to run; a further request would be redundant.
@@ -62,10 +61,13 @@ pub fn refresh(client: &Arc<ChatterClient>) {
     };
     let client = client.clone();
     runtime.spawn_blocking(move || {
-        // From here a new request queues another run; this one reads the state
-        // as of now, so it already covers everything requested before it began.
+        let Ok(_serial) = REFRESH.lock() else {
+            QUEUED.store(false, SeqCst);
+            return;
+        };
+        // The state is read from here on, so this run covers every request
+        // made before it; a request from now on queues another run.
         QUEUED.store(false, SeqCst);
-        let seq = SEQ.fetch_add(1, SeqCst) + 1;
         if SIGNED_OUT.load(SeqCst) {
             return;
         }
@@ -73,15 +75,11 @@ pub fn refresh(client: &Arc<ChatterClient>) {
         let Ok(mut published) = PUBLISHED.lock() else {
             return;
         };
-        if SIGNED_OUT.load(SeqCst) || seq < published.last_seq {
-            return;
-        }
-        published.last_seq = seq;
-        if published.targets.as_ref() == Some(&targets) {
+        if SIGNED_OUT.load(SeqCst) || published.as_ref() == Some(&targets) {
             return;
         }
         match push(&targets) {
-            Ok(()) => published.targets = Some(targets),
+            Ok(()) => *published = Some(targets),
             // Left as "not published", so the next refresh tries again.
             Err(error) => tracing::warn!("share targets not published: {error}"),
         }
@@ -95,18 +93,21 @@ pub fn refresh_current() {
     }
 }
 
-/// Remove every published target (sign-out). Returns at once: the sign-out
-/// path is async and must not wait on a lock a refresh may be holding.
+/// Remove every published target (sign-out). Returns at once when an async
+/// runtime is available; with none it removes inline rather than skip it.
 pub fn clear() {
     SIGNED_OUT.store(true, SeqCst);
-    let seq = SEQ.fetch_add(1, SeqCst) + 1;
-    let remove = move || {
+    let remove = || {
         let Ok(mut published) = PUBLISHED.lock() else {
             return;
         };
-        published.last_seq = published.last_seq.max(seq);
+        // Signed in again before this ran: the new account's refresh owns the
+        // state now, and an unconditional removal would erase what it published.
+        if !SIGNED_OUT.load(SeqCst) {
+            return;
+        }
         match push(&[]) {
-            Ok(()) => published.targets = Some(Vec::new()),
+            Ok(()) => *published = Some(Vec::new()),
             Err(error) => tracing::warn!("share targets not cleared: {error}"),
         }
     };

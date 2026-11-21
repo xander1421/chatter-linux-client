@@ -2,6 +2,7 @@ package com.chatter.client
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
@@ -28,6 +29,10 @@ object ShareTargets {
      * believing it is published.
      */
     fun publish(context: Context, keys: Array<String>, labels: Array<String>): Boolean {
+        // Sharing shortcuts need Android 10+. Below that Direct Share does not
+        // exist, so don't hand chat names to ShortcutManager for no benefit;
+        // report success (nothing to retry).
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
         return try {
             val cap = ShortcutManagerCompat.getMaxShortcutCountPerActivity(context)
             val shortcuts = keys.indices.take(cap).map { i ->
