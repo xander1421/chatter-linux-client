@@ -51,6 +51,11 @@ export component Sidebar inherits Rectangle {
     // Saved messages is the open conversation: its quick link is the
     // selected row, as a chat row is.
     in property <bool> saved-open: false;
+    in property <string> saved-preview: "";
+    in property <string> saved-time: "";
+    property <bool> show-saved-preview: !root.collapsed && root.saved-preview != "";
+    property <string> saved-label: root.show-saved-preview
+        ? @tr("Saved messages: {}", root.saved-preview) : @tr("Saved messages");
     in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SidebarRowData]> flat-rows: [];
@@ -61,7 +66,7 @@ export component Sidebar inherits Rectangle {
             return row.chat.display-name;
         }
         if row.kind == "section-header" { return row.section.name; }
-        if row.kind == "saved" { return @tr("Saved messages"); }
+        if row.kind == "saved" { return root.saved-label; }
         if row.kind == "friends" { return AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); }
         if row.kind == "calls" { return @tr("Calls"); }
         if row.kind == "requests" { return @tr("Requests"); }
@@ -224,22 +229,9 @@ export component Sidebar inherits Rectangle {
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
     // ── Internal state ──
-    // Quick-link rows are 34px for mouse density; on a touch screen that is
-    // under a finger's width, so touch gets the 48px minimum instead.
-    // Quick-links (Search, Saved Messages) sit in the same column as the
-    // conversation rows, so on touch they take the same geometry and the same
-    // type. They were 48px tall with 14px grey labels next to 72px rows with
-    // 16px white names — close enough to look like a mistake rather than a
-    // distinction, which is what "the text is different sizes" is.
-    // NOT the conversation-row height. A conversation row is 72px because it
-    // carries a 52px avatar and two lines of text; a quick link carries one
-    // icon and one word. At the same 72px the two read as different sizes —
-    // the conversation rows look dense and the quick links look like they have
-    // a hole punched between them, which is the "huge space from Search to
-    // Saved" complaint. 56px is the standard list row: same type, same tap
-    // target, no cavern.
-    // Collapsed, a quick link is a rail row like a conversation's (48px) so
-    // every slot in the rail is one size.
+    // Search and empty Saved messages use the compact one-line geometry.
+    // With a preview, expanded Saved messages uses the conversation row height.
+    // Collapsed links use the rail geometry.
     property <length> quick-link-height: root.collapsed && DesktopChrome.macos ? 36px
         : (root.touch ? 56px : root.collapsed ? 48px : 34px) * Appearance.text-grow;
     // The panel's first row, pinned above the scroll. On desktop it takes the
@@ -474,12 +466,13 @@ export component Sidebar inherits Rectangle {
 
 
                 if entry.kind == "saved" && !AnonMode.enabled: Rectangle {
-                    height: root.quick-link-height;
+                    height: root.show-saved-preview
+                        ? (root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs
+                        : root.quick-link-height;
                     property <bool> press-active: false;
                     property <length> press-x: 0px;
                     property <length> press-y: 0px;
-                    // Match the chat rows' inset and radius without moving
-                    // the quick link's icon or label.
+                    // Match the chat rows’ inset and radius.
                     Rectangle {
                         x: root.collapsed ? 0px : Spacing.xs;
                         width: parent.width - 2 * self.x;
@@ -491,7 +484,7 @@ export component Sidebar inherits Rectangle {
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     }
                     accessible-role: list-item;
-                    accessible-label: @tr("Saved messages");
+                    accessible-label: root.saved-label;
                     accessible-action-default => { root.saved-messages-clicked(); }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
@@ -505,12 +498,69 @@ export component Sidebar inherits Rectangle {
                         border-radius: self.width / 2;
                         background: Colors.selected-indicator;
                     }
-                    if !root.collapsed: HorizontalLayout {
+                    if !root.collapsed && !root.show-saved-preview: HorizontalLayout {
                         padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
                         Text { text: @tr("Saved messages"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    }
+                    if root.show-saved-preview: HorizontalLayout {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * self.x;
+                        height: parent.height - Spacing.xxs;
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.sm;
+
+                        Rectangle {
+                            width: (root.touch ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop) + 4px;
+                            Image {
+                                source: Icons.bookmark;
+                                width: root.touch ? 24px : 16px;
+                                height: self.width;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.text-secondary;
+                            }
+                        }
+                        VerticalLayout {
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: root.touch ? Spacing.xs : Spacing.xxs;
+                            Text {
+                                text: @tr("Saved messages");
+                                min-width: 0px;
+                                color: Colors.text-primary;
+                                font-size: root.touch ? Typography.base : Typography.sm;
+                                font-weight: 500;
+                                overflow: elide;
+                            }
+                            Rectangle {
+                                property <length> preview-size: root.touch ? Typography.sm : Typography.xs;
+                                height: self.preview-size * 1.4;
+                                clip: true;
+                                Text {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    text: root.saved-preview;
+                                    wrap: no-wrap;
+                                    overflow: elide;
+                                    color: Colors.text-muted;
+                                    font-size: parent.preview-size;
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.saved-time;
+                            horizontal-stretch: 0;
+                            wrap: no-wrap;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs2;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;

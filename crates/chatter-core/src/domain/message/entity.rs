@@ -415,7 +415,7 @@ impl Message {
         };
         let max = (!text.is_empty()).then_some(200);
         let isolated = format_preview_body("", &body, max);
-        if is_own {
+        if is_own && self.conversation_type != ConversationType::SavedMessages {
             format!(
                 "{pin}{}",
                 chatter_i18n::trf("You: {}", &[&isolated])

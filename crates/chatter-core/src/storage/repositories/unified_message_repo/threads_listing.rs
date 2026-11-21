@@ -60,7 +60,7 @@ impl UnifiedMessageRepository {
                  ORDER BY m.sent_at DESC, m.sender_id DESC) AS rank \
                  FROM messages m WHERE m.conversation_id IN ({placeholders}) \
                  AND m.thread_id IS NULL \
-                 AND (m.conversation_type NOT IN ('anon_dm', 'anon_group') OR m.is_deleted = 0)), \
+                 AND (m.conversation_type NOT IN ('anon_dm', 'anon_group', 'saved_messages') OR m.is_deleted = 0)), \
                  candidates AS (SELECT r.id, r.conversation_id, r.conversation_type, r.sent_at, r.sender_id, \
                  ROW_NUMBER() OVER (PARTITION BY r.conversation_id, r.conversation_type \
                  ORDER BY r.sent_at DESC, r.sender_id DESC) AS preview_rank \

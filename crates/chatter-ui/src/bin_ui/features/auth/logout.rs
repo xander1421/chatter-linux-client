@@ -22,7 +22,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
             let state = recovery_client.auth_snapshot();
-            if !state.session_ended {
+            if state.current_user_id.is_some() {
                 continue;
             }
             let client = recovery_client.clone();
@@ -30,10 +30,14 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let revision = state.session_revision;
             let _ = slint::invoke_from_event_loop(move || {
                 let state = client.auth_snapshot();
-                if !state.session_ended || state.session_revision != revision {
+                if state.current_user_id.is_some() || state.session_revision != revision {
                     return;
                 }
                 if let Some(w) = weak.upgrade() {
+                    crate::bin_ui::features::sidebar::clear_saved_messages(&w);
+                    if !state.session_ended {
+                        return;
+                    }
                     w.global::<crate::AuthFlow>().set_is_signed_in(false);
                     w.set_current_view("login".into());
                     crate::bin_ui::features::back::reset_to_chats(&w);

@@ -894,6 +894,19 @@ fn wire_archive(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+pub(crate) fn refresh_saved_messages(window: &MainWindow, client: &ChatterClient) {
+    let (preview, time) = client.saved_messages_sidebar_preview();
+    let pane = window.global::<crate::SidebarPane>();
+    pane.set_saved_preview(preview.into());
+    pane.set_saved_time(time.into());
+}
+
+pub(crate) fn clear_saved_messages(window: &MainWindow) {
+    let pane = window.global::<crate::SidebarPane>();
+    pane.set_saved_preview("".into());
+    pane.set_saved_time("".into());
+}
+
 /// Apply a core sidebar snapshot on the UI thread after the caller's guards.
 pub(crate) fn apply_chat_list(
     window: &MainWindow,
@@ -902,6 +915,7 @@ pub(crate) fn apply_chat_list(
 ) {
     use crate::bin_ui::converters::ChatRowExt;
     use slint::Model;
+    refresh_saved_messages(window, ui_ctx);
     let active = ui_ctx.active_conversation();
     // The snapshot may predate the open conversation's mark-read (it is
     // computed off the UI thread); its badge is re-read now so a stale count

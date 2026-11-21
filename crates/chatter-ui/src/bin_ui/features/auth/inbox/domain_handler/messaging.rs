@@ -39,6 +39,7 @@ pub(super) async fn handle_message_received(
 
     let update = ui_ctx.incoming_message(&message, scope);
     let conversation_id = message.conversation_id;
+    let saved = message.conversation_type == chatter_core::domain::ConversationType::SavedMessages;
     let timestamp_str = update
         .preview_at
         .map(chatter_core::ui::format::sidebar_time)
@@ -255,7 +256,10 @@ pub(super) async fn handle_message_received(
             }
         }
 
-        // Always update sidebar preview
+        if saved {
+            crate::bin_ui::features::sidebar::refresh_saved_messages(&w, &ui_ctx_ui);
+            return;
+        }
         crate::bin_ui::features::sidebar::apply_received_to_sidebar(
             &w,
             &ui_ctx_ui,
@@ -278,6 +282,9 @@ pub(super) fn handle_message_sent(
     preview: String,
     at: chrono::DateTime<chrono::Utc>,
 ) {
+    let saved = matches!(conversation, chatter_core::state::ActiveConversation::Channel(_))
+        && ui_ctx.conversation(conversation).storage_kind().ok()
+            == Some(chatter_core::domain::ConversationType::SavedMessages);
     let timestamp = chatter_core::ui::format::sidebar_time(at);
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
@@ -286,6 +293,10 @@ pub(super) fn handle_message_sent(
         if ui_ctx.opening_unread_dismissed_for(conversation) {
             w.global::<crate::ChatPane>().set_unread_index(-1);
             w.global::<crate::ChatPane>().set_unread_count(0);
+        }
+        if saved {
+            crate::bin_ui::features::sidebar::refresh_saved_messages(&w, &ui_ctx);
+            return;
         }
         crate::bin_ui::features::sidebar::update_sidebar_preview(
             &w,

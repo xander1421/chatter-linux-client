@@ -180,6 +180,29 @@ impl ChatterClient {
         }
     }
 
+    /// Sidebar preview and formatted time for the signed-in account's Saved messages.
+    pub fn saved_messages_sidebar_preview(&self) -> (String, String) {
+        use crate::domain::{ids::ChannelId, message::ConversationType};
+
+        let auth = self.auth_snapshot();
+        let Some(owner) = auth.current_user_id else {
+            return Default::default();
+        };
+        let id = ChannelId::from(owner);
+        let latest = self
+            .messages()
+            .message_repo
+            .sidebar_latest_batch(&[id])
+            .unwrap_or_default();
+        let (preview, at) =
+            self.sidebar_activity(latest.get(&(id.to_string(), ConversationType::SavedMessages)));
+        let time = at.map(crate::ui::format::sidebar_time).unwrap_or_default();
+        if !self.session_is_current(auth.session_revision) {
+            return Default::default();
+        }
+        (preview, time)
+    }
+
     /// The storage bucket a channel's messages and pins are filed under.
     ///
     /// Never hardcode `ConversationType::Channel` for a channel: its messages

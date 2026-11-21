@@ -165,6 +165,7 @@ fn publish_friends(
 pub fn show_cached_chat_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let rows = ui_ctx.sidebar_rows();
     if rows.is_empty() {
+        crate::bin_ui::features::sidebar::refresh_saved_messages(window, ui_ctx);
         return;
     }
     crate::bin_ui::features::sidebar::apply_chat_list(window, ui_ctx, rows);
@@ -185,14 +186,16 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // The sidebar snapshot is local. Paint it before any channel/profile RPC
     // so returning users see their conversations on the first main-view frame.
     let cached_rows = ui_ctx.sidebar_rows();
-    if !cached_rows.is_empty() {
-        let cached_client = ui_ctx.clone();
-        crate::run_history_ui!(window_weak, session_owner, |w| {
+    let cached_client = ui_ctx.clone();
+    crate::run_history_ui!(window_weak, session_owner, |w| {
+        if cached_rows.is_empty() {
+            crate::bin_ui::features::sidebar::refresh_saved_messages(&w, &cached_client);
+        } else {
             crate::bin_ui::features::sidebar::apply_chat_list(&w, &cached_client, cached_rows);
             w.global::<crate::SidebarPane>()
                 .set_chat_rows_loading(false);
-        });
-    }
+        }
+    });
 
     // Friends tab, off the awaits below. ListFriends used to run before the
     // first paint and, on failure, publish an empty list over people the
