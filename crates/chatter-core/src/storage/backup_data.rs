@@ -724,6 +724,12 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 let params: Vec<SqlValue> = row.values.iter().map(column_to_sql_value).collect();
                 let get = |column| row_value(&state.columns, &params, column);
                 match state.table.as_str() {
+                    "settings"
+                        if !text_value(get("key"))
+                            .is_some_and(|key| OWN_PROFILE_SETTINGS_KEYS.contains(&key)) =>
+                    {
+                        continue;
+                    }
                     "ephemeral_messages" => {
                         let id = text_value(get("message_id")).ok_or_else(|| {
                             StorageError::InvalidData("backup countdown lacks message id".into())
@@ -922,6 +928,68 @@ mod tests {
             rusqlite::params![id, format!("{{\"text\":\"{text}\"}}"), sent_at],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn history_restore_applies_only_profile_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = test_db(dir.path());
+        let mut conn = db.connection().unwrap();
+        let mut payload = Vec::new();
+        push_frame(
+            &mut payload,
+            frame::Payload::Info(BackupInfo {
+                payload_version: PAYLOAD_VERSION,
+                user_id: "owner".into(),
+                created_at_ms: 0,
+            }),
+        );
+        push_frame(
+            &mut payload,
+            frame::Payload::Table(TableHeader {
+                table: "settings".into(),
+                columns: ["value", "updated_at", "key"].map(str::to_owned).to_vec(),
+            }),
+        );
+        for (key, value) in [(keys::APP_LOCK, "{}"), (keys::DISPLAY_NAME, "\"Alice\"")] {
+            push_frame(
+                &mut payload,
+                frame::Payload::Row(RowFrame {
+                    values: [value, "2026-01-01", key]
+                        .map(|text| ColumnValue {
+                            kind: Some(column_value::Kind::Text(text.into())),
+                        })
+                        .to_vec(),
+                }),
+            );
+        }
+        let summary = import_frames(&mut conn, &payload).unwrap();
+        assert_eq!((summary.rows_inserted, summary.rows_skipped), (1, 1));
+        let (key, value): (String, String) = conn
+            .query_row("SELECT key,value FROM settings", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            (key.as_str(), value.as_str()),
+            (keys::DISPLAY_NAME, "\"Alice\"")
+        );
+
+        conn.execute(
+            "INSERT INTO settings(key,value,updated_at) VALUES (?1,'local','2026-01-01')",
+            [keys::APP_LOCK],
+        )
+        .unwrap();
+        let summary = import_frames(&mut conn, &payload).unwrap();
+        assert_eq!((summary.rows_inserted, summary.rows_skipped), (0, 2));
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key=?1",
+                [keys::APP_LOCK],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "local");
     }
 
     #[test]
