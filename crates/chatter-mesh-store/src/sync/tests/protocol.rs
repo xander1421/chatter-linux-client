@@ -417,7 +417,7 @@ fn a_truncated_filter_carries_a_cursor_and_a_complete_one_does_not() {
 // -- expiry ------------------------------------------------------------
 
 #[test]
-fn public_messages_expire_at_exactly_six_hours() {
+fn public_messages_stop_syncing_after_six_hours_and_are_pruned_on_schedule() {
     let config = SyncConfig::default();
     assert_eq!(config.public_message_max_age_secs, 6 * 60 * 60);
     let window_ms = config.public_message_max_age_secs * 1000;
@@ -432,10 +432,19 @@ fn public_messages_expire_at_exactly_six_hours() {
     manager.on_public_packet_seen(&past_boundary, NOW);
     assert_eq!(manager.message_count(), 1, "one millisecond past is stale");
 
-    // And the boundary packet drops out a millisecond later.
+    let request = empty_request(SyncTypeFlags::PUBLIC_MESSAGES);
+    let sends = manager.handle_request_sync(&them(), &request, NOW);
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0].packet.packet_id(), at_boundary.packet_id());
+
     manager.maintenance(&[], NOW).expect("maintenance");
-    assert_eq!(manager.message_count(), 1);
     manager.maintenance(&[], NOW + 1).expect("maintenance");
+    assert_eq!(manager.message_count(), 1, "the prune interval has not elapsed");
+    assert!(manager.handle_request_sync(&them(), &request, NOW + 1).is_empty());
+
+    manager
+        .maintenance(&[], NOW + MAINTENANCE_INTERVAL_SECS)
+        .expect("prune at the next maintenance interval");
     assert_eq!(manager.message_count(), 0);
 }
 
