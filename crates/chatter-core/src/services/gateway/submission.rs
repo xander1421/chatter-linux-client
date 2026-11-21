@@ -59,19 +59,36 @@ pub(crate) fn user_post(content: &chatter_proto::content_v1::Content) -> bool {
     )
 }
 
-pub(crate) fn prepare(
-    db: &Database,
-    owner: &str,
-    peer: &str,
-    plaintext: &[u8],
-) -> Result<Admission, StorageError> {
+fn admission_key(owner: &str, peer: &str, plaintext: &[u8]) -> String {
     let mut hash = Sha256::new();
     hash.update(owner.as_bytes());
     hash.update([0]);
     hash.update(peer.as_bytes());
     hash.update([0]);
     hash.update(plaintext);
-    let key = format!("send.anonymous.v1:{}", hex::encode(hash.finalize()));
+    format!("send.anonymous.v1:{}", hex::encode(hash.finalize()))
+}
+
+/// An existing delivery keeps its prior admission outcome even if a fresh
+/// recipient check or route would be unavailable now.
+pub(crate) fn existing(
+    db: &Database, owner: &str, peer: &str, plaintext: &[u8],
+) -> Result<Option<Admission>, StorageError> {
+    use rusqlite::OptionalExtension as _;
+    let confirmed: Option<bool> = db.read_connection()?.query_row(
+        "SELECT json_extract(value,'$.confirmed') FROM settings WHERE key=?1",
+        [admission_key(owner, peer, plaintext)], |row| row.get(0),
+    ).optional()?;
+    Ok(confirmed.map(|confirmed| if confirmed { Admission::Confirmed } else { Admission::Unconfirmed }))
+}
+
+pub(crate) fn prepare(
+    db: &Database,
+    owner: &str,
+    peer: &str,
+    plaintext: &[u8],
+) -> Result<Admission, StorageError> {
+    let key = admission_key(owner, peer, plaintext);
     let value = serde_json::json!({"ciphertext":null,"confirmed":false,"owner":owner,"peer":peer,"next_attempt":0,"lease_until":0,"attempts":0}).to_string();
     let conn = db.connection()?;
     if conn.execute(

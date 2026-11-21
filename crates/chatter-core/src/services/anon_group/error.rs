@@ -50,6 +50,15 @@ pub enum AnonGroupError {
     #[error("message error: {0}")]
     MessageError(String),
 
+    #[error("waiting for the recipient's Key Transparency proof: {0}")]
+    RecipientKeyVerifying(#[source] crate::error::NetworkError),
+
+    #[error("recipient's identity is not verified")]
+    RecipientKeyUnverified,
+
+    #[error("recipient's identity changed")]
+    RecipientIdentityChanged,
+
     /// Crypto error.
     #[error("crypto error: {0}")]
     CryptoError(String),
@@ -71,11 +80,25 @@ pub enum AnonGroupError {
     UserBlocked(UserId),
 }
 
+impl AnonGroupError {
+    pub(super) fn key_wait_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::RecipientKeyVerifying(_) => Some("Verifying key"),
+            Self::RecipientKeyUnverified => Some("Key not verified"),
+            Self::RecipientIdentityChanged => Some("Identity changed"),
+            _ => None,
+        }
+    }
+}
+
 impl From<crate::services::pairwise::PairwiseError> for AnonGroupError {
     fn from(e: crate::services::pairwise::PairwiseError) -> Self {
         use crate::services::pairwise::PairwiseError;
         match e {
             PairwiseError::Network(e) => Self::MessageError(e.to_string()),
+            PairwiseError::RecipientKeyVerifying(error) => Self::RecipientKeyVerifying(error),
+            PairwiseError::RecipientKeyUnverified { .. } => Self::RecipientKeyUnverified,
+            PairwiseError::RecipientIdentityChanged { .. } => Self::RecipientIdentityChanged,
             PairwiseError::Storage(e) => Self::Storage(e),
             e => Self::CryptoError(e.to_string()),
         }

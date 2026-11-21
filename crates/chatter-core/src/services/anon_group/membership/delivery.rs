@@ -21,125 +21,61 @@ impl AnonGroupService {
         content: Content,
     ) -> Result<(), AnonGroupError> {
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
-        // Existing test fixtures cover a replay with a previously claimed
-        // admission and no route. KT preflight runs before a new route can
-        // spend any token or start encryption.
-        let expected_key = if self.grpc_pool.secret_route_available() {
-            let device = peer_device.ok_or_else(|| AnonGroupError::InvalidData("recipient is not bound to a device".into()))?;
-            if self.pairwise_service.has_session(peer_id, device).await? {
-                self.pairwise_service.verify_existing_recipient(peer_id).await?;
-                None
-            } else {
-                Some(self.pairwise_service.verify_anonymous_prekey_recipient(peer_id).await?)
-            }
-        } else {
-            None
-        };
-        // 1. Serialize content
+        use crate::services::gateway::submission::{self, Admission};
+
         let plaintext = content.encode_to_vec();
-        let retained = if crate::services::gateway::submission::user_post(&content) {
-            let owner = self.current_user_id()?;
-            match crate::services::gateway::submission::prepare(
-                self.settings_repo.database(),
-                &owner.to_string(),
-                &peer_id.to_string(),
-                &plaintext,
+        let owner = submission::user_post(&content).then(|| self.current_user_id()).transpose()?;
+        if let Some(owner) = owner {
+            if let Some(existing) = submission::existing(
+                self.settings_repo.database(), &owner.to_string(), &peer_id.to_string(), &plaintext,
             )? {
-                crate::services::gateway::submission::Admission::First(key) => Some(key),
-                crate::services::gateway::submission::Admission::Confirmed => {
-                    crate::services::gateway::submission::mark_existing_submission();
+                submission::mark_existing_submission();
+                return match existing {
+                    Admission::Confirmed => Ok(()),
+                    _ => Err(AnonGroupError::DeliveryUnconfirmed),
+                };
+            }
+        }
+        #[cfg(test)]
+        if let Ok((ready, resume)) = RECIPIENT_PREPARED.try_with(Clone::clone) {
+            ready.notify_one();
+            resume.notified().await;
+        }
+        self.check_recipient_session(None)?;
+        let device = peer_device.ok_or_else(|| AnonGroupError::InvalidData("recipient is not bound to a device".into()))?;
+        let has_session = self.pairwise_service.has_session(peer_id, device).await?;
+        let expected_key = if has_session {
+            self.pairwise_service.verify_existing_recipient(peer_id).await?;
+            None
+        } else {
+            Some(self.pairwise_service.verify_anonymous_prekey_recipient(peer_id).await?)
+        };
+        self.grpc_pool.secret_channel().map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
+        self.pairwise_service.ensure_sender_certificate().await?;
+        self.check_recipient_session(None)?;
+        let retained = if let Some(owner) = owner {
+            match submission::prepare(self.settings_repo.database(), &owner.to_string(), &peer_id.to_string(), &plaintext)? {
+                Admission::First(key) => Some(key),
+                Admission::Confirmed => {
+                    submission::mark_existing_submission();
                     return Ok(());
                 }
-                crate::services::gateway::submission::Admission::Unconfirmed => {
-                    crate::services::gateway::submission::mark_existing_submission();
+                Admission::Unconfirmed => {
+                    submission::mark_existing_submission();
                     return Err(AnonGroupError::DeliveryUnconfirmed);
                 }
             }
         } else {
             None
         };
-
-        // No known recipient device: nothing could open the message, and no
-        // other device of theirs is guessed. Placed after the submission
-        // lookup so an already-claimed post still reports its own state.
-        let Some(device) = peer_device else {
-            if let Some(key) = retained.as_ref() {
-                crate::services::gateway::submission::discard_before_encryption(
-                    self.settings_repo.database(),
-                    key,
-                );
-            }
-            return Err(AnonGroupError::InvalidData(
-                "recipient is not bound to a device".into(),
-            ));
-        };
-        // 2. Encrypt with Signal Protocol (pairwise, no DM-specific layers).
-        //
-        // If a usable session already exists, encrypt locally — no prekey
-        // fetch, no server contact, no token spent. On FIRST contact with a
-        // member there is no session yet; establishing one via the normal
-        // AUTHENTICATED prekey fetch would let the server observe "user X is
-        // starting a session with member Y", and over a fan-out that
-        // reconstructs the group roster this feature promises to hide. So we
-        // bootstrap the session ANONYMOUSLY (blind token + anonymous prekey
-        // fetch), matching the anon-DM design. Cost stays at ~1 token per new
-        // peer (first contact only), not per message.
-        let has_session = self
-            .pairwise_service
-            .has_session(peer_id, device)
-            .await
-            .map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                AnonGroupError::CryptoError(e.to_string())
-            })?;
-        #[cfg(test)]
-        if let Ok((ready, resume)) = RECIPIENT_PREPARED.try_with(Clone::clone) {
-            ready.notify_one();
-            resume.notified().await;
-        }
         self.check_recipient_session(retained.as_deref())?;
-        // Secret-chat traffic goes over Tor or not at all; refuse before any
-        // network contact, token spend or encryption. Placed after the
-        // submission lookup so an already-claimed post still reports its own
-        // (local) state, and a fresh claim is released here.
-        if let Err(e) = self.grpc_pool.secret_channel() {
-            if let Some(key) = retained.as_ref() {
-                crate::services::gateway::submission::discard_before_encryption(
-                    self.settings_repo.database(),
-                    key,
-                );
-            }
-            return Err(AnonGroupError::MessageError(e.to_string()));
-        }
-        // Our own sealed-sender certificate first (fetched over Tor if it
-        // must be — never the normal transport), so a missing one fails before
-        // any token is spent. Names no recipient.
-        self.pairwise_service
-            .ensure_sender_certificate()
-            .await
-            .map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                AnonGroupError::from(e)
-            })?;
         let encryption = async {
             self.check_group_recipient(&content, peer_id, mailbox_pk)?;
-            let sealed = if has_session {
-                self.pairwise_service.encrypt_admitted_session(peer_id, device, &plaintext).await?
-            } else {
-                let key = expected_key.ok_or_else(|| AnonGroupError::CryptoError("recipient session changed before encryption".into()))?;
-                self.check_recipient_session(retained.as_deref())?;
+            let sealed = if let Some(key) = expected_key {
                 let token = self.claim_token()?;
                 self.pairwise_service.encrypt_anonymous(peer_id, Some(device), &plaintext, &token, &key).await?.0
+            } else {
+                self.pairwise_service.encrypt_admitted_session(peer_id, device, &plaintext).await?
             };
             Ok::<_, AnonGroupError>(sealed)
         }.await;

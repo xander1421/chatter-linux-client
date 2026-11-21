@@ -494,6 +494,7 @@ impl AnonGroupService {
         let mut sent_count = 0;
         let mut parked_count = 0;
         let mut unconfirmed = false;
+        let mut key_wait = None;
         // Fan out to each member's anonymous mailbox
         for member in &members {
             if member.user_id == current_user {
@@ -524,6 +525,7 @@ impl AnonGroupService {
                     self.record_group_delivery(group_id, &content, &member.user_id, "unknown")?;
                 }
                 Err(e) if parkable => {
+                    key_wait = e.key_wait_reason().or(key_wait);
                     // An expired originating session must not park old content.
                     crate::services::gateway::submission::mark_submission_started()?;
                     tracing::info!("Send to member failed ({}); parked for retry", e);
@@ -574,6 +576,12 @@ impl AnonGroupService {
             parked_count,
             queued_count
         );
+        if let Some(reason) = key_wait {
+            self.message_service.database.connection()?.execute(
+                "UPDATE messages SET failure_reason=?2 WHERE delivery_status='sending' AND id=(SELECT json_extract(value,'$.message_id') FROM settings WHERE key=?1)",
+                rusqlite::params![ledger_key, reason],
+            ).map_err(crate::error::StorageError::Database)?;
+        }
         if unconfirmed || parked_count > 0 {
             return Err(AnonGroupError::DeliveryUnconfirmed);
         }
@@ -656,6 +664,11 @@ impl AnonGroupService {
                     // increment a failure ceiling or claim it was undelivered.
                     tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
                         outcome = "unconfirmed", "Pending anon group delivery retained");
+                    break;
+                }
+                Err(e) if e.key_wait_reason().is_some() => {
+                    // Keep this recipient's original copy, with no deposit
+                    // started and no charge against its delivery-attempt cap.
                     break;
                 }
                 Err(e) => {
