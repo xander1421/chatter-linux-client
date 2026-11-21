@@ -74,7 +74,7 @@ export component LoginPage inherits Rectangle {
     callback go-to-recovery();
     callback go-to-link-device();
     callback continue-without-account();
-    callback accept-new-identity();
+    callback accept-new-identity(string);
 
     background: Materials.ambient;
 
@@ -220,7 +220,8 @@ export component LoginPage inherits Rectangle {
 
                     // Destructive and irreversible, so it is a deliberate
                     // second action rather than something login does for you.
-                    if root.identity-reset-available: VerticalLayout {
+                    if root.identity-reset-available: identity-reset := VerticalLayout {
+                        property <string> confirmation-password;
                         spacing: Spacing.sm;
 
                         Text {
@@ -230,11 +231,21 @@ export component LoginPage inherits Rectangle {
                             wrap: word-wrap;
                         }
 
+                        Input {
+                            placeholder: @tr("Current password");
+                            password: true;
+                            disabled: root.loading;
+                            text <=> identity-reset.confirmation-password;
+                        }
+
                         Button {
                             text: @tr("Start over with new keys");
                             variant: "destructive";
-                            disabled: root.loading;
-                            clicked => { root.accept-new-identity(); }
+                            disabled: root.loading || identity-reset.confirmation-password == "";
+                            clicked => {
+                                root.accept-new-identity(identity-reset.confirmation-password);
+                                identity-reset.confirmation-password = "";
+                            }
                         }
                     }
 

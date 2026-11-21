@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::{ChatterClient, ClientError, RecoveryResult};
-use crate::services::auth_service::{LoginResult, PendingRecoveryCodes};
+use crate::services::auth_service::{prove_password, LoginResult, PendingRecoveryCodes};
 use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::storage::repositories::settings_repo::keys;
 
@@ -253,7 +253,14 @@ impl ChatterClient {
         // skips the restore, and the account is left serving prekeys nobody
         // holds the private half of.
         if result.keys_restored || self.key_republish_pending() {
-            self.republish_identity_keys().await?;
+            // A failed proof exchange must also leave the republish pending.
+            self.set_key_republish_pending(true);
+            let mut auth_client = self
+                .auth()
+                .try_auth_client()
+                .ok_or(ClientError::NotConnected)?;
+            let proof = prove_password(&mut auth_client, password).await?;
+            self.republish_identity_keys(&mut auth_client, proof).await?;
         } else {
             // The server issued this login a device id it holds no bundle for
             // (every login gets a new one). Without this, a Log Out -> Log In
@@ -332,7 +339,9 @@ impl ChatterClient {
     pub async fn accept_new_identity(
         self: &Arc<Self>,
         need: KeyRecoveryNeed,
+        password: &str,
     ) -> Result<(), ClientError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
         if need.is_retryable() {
             return Err(ClientError::Validation(
                 chatter_i18n::trf(
@@ -354,11 +363,17 @@ impl ChatterClient {
             ));
         }
 
+        let mut auth_client = self
+            .auth()
+            .try_auth_client()
+            .ok_or(ClientError::NotConnected)?;
+        let proof = prove_password(&mut auth_client, password).await?;
         self.auth()
             .generate_identity_for_recovery()
             .map_err(ClientError::Auth)?;
 
-        self.republish_identity_keys().await?;
+        self.set_key_republish_pending(true);
+        self.republish_identity_keys(&mut auth_client, proof).await?;
 
         tracing::warn!(
             "minted and published a NEW identity key — every contact's safety number has changed"
@@ -373,20 +388,14 @@ impl ChatterClient {
     /// device's stale bundle is dropped. Publishing them separately is what
     /// produced the original corruption — an identity key from one generation
     /// served next to a signed prekey from another.
-    async fn republish_identity_keys(self: &Arc<Self>) -> Result<(), ClientError> {
-        let mut auth_client = self
-            .auth()
-            .try_auth_client()
-            .ok_or(ClientError::NotConnected)?;
-
-        // Mark the debt BEFORE incurring it. If this call dies halfway, the
-        // next login retries; the alternative is a device whose local keys are
-        // fine while the server serves prekeys for a device that is gone.
-        self.set_key_republish_pending(true);
-
+    async fn republish_identity_keys(
+        self: &Arc<Self>,
+        auth_client: &mut crate::network::grpc::AuthClient,
+        proof: chatter_proto::chat_v1::PasswordProof,
+    ) -> Result<(), ClientError> {
         let outcome = self
             .signal()
-            .republish_identity_bundle(&mut auth_client)
+            .republish_identity_bundle(auth_client, proof)
             .await
             .map_err(|e| ClientError::Validation(format!("failed to publish key material: {e}")))?;
 

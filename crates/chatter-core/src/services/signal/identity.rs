@@ -283,12 +283,18 @@ impl SignalService {
     pub async fn republish_identity_bundle(
         &self,
         auth_client: &mut AuthClient,
+        proof: chatter_proto::chat_v1::PasswordProof,
     ) -> Result<RepublishOutcome, ServiceError> {
         let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
             self.build_device_key_material().await?;
 
         let response = auth_client
-            .republish_identity_key(bundle, one_time_prekeys, kyber_one_time_prekeys)
+            .republish_identity_key(
+                bundle,
+                one_time_prekeys,
+                kyber_one_time_prekeys,
+                proof,
+            )
             .await
             .map_err(ServiceError::Network)?;
 
