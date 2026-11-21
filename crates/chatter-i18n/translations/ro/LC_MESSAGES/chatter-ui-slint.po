@@ -5697,8 +5697,10 @@ msgid "Anyone who types your exact username can find you"
 msgstr "Oricine introduce exact numele tău de utilizator te poate găsi"
 
 #: ui/settings/privacy_settings.slint:263
-msgid "Only people with your friend code can find you"
-msgstr "Doar persoanele care au codul tău de prietenie te pot găsi"
+msgid "Only people with your friend code or username link can find you"
+msgstr ""
+"Doar cine are codul tău de prieten sau linkul numelui de utilizator te poate "
+"găsi"
 
 #: ui/settings/privacy_settings.slint:358
 msgid "Read receipts"

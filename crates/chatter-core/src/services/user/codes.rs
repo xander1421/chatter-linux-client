@@ -234,9 +234,9 @@ impl UserService {
         Ok(png_bytes)
     }
 
-    /// Resolve a username link and verify its decrypted handle against the
-    /// same account binding used for a typed handle.
-    pub async fn resolve_username_link(&self, url: &str) -> Result<(String, UserId), UserError> {
+    /// A link is a capability to reach the owner even with discovery off.
+    /// Return a displayable handle only when the typed lookup confirms it.
+    pub async fn resolve_username_link(&self, url: &str) -> Result<(Option<String>, UserId), UserError> {
         let link =
             crate::domain::UsernameLink::parse(url).map_err(|_| UserError::InvalidUsernameLink)?;
 
@@ -250,11 +250,15 @@ impl UserService {
             .map_err(|_| UserError::InvalidUsernameLink)?;
         let username = usernames::decrypt_username(&link.entropy, &blob)
             .map_err(|_| UserError::InvalidUsernameLink)?;
-        verify_username_link_owner(user_id, self.resolve_username_binding(&username).await)?;
-        if let Err(e) = self.user_repo.set_known_username(&user_id, &username) {
-            tracing::warn!(error = %e, "Could not remember linked peer handle");
+        let verified_handle =
+            verify_username_link_owner(user_id, self.resolve_username_binding(&username).await)?
+                .then_some(username);
+        if let Some(handle) = verified_handle.as_deref() {
+            if let Err(e) = self.user_repo.set_known_username(&user_id, handle) {
+                tracing::warn!(error = %e, "Could not remember linked peer handle");
+            }
         }
-        Ok((username, user_id))
+        Ok((verified_handle, user_id))
     }
 
     /// Delete the current user's username link (server row + local copy).
@@ -334,11 +338,11 @@ impl UserService {
 fn verify_username_link_owner(
     owner: UserId,
     binding: Result<Option<UserId>, UserError>,
-) -> Result<(), UserError> {
-    if binding.ok().flatten() == Some(owner) {
-        Ok(())
-    } else {
-        Err(UserError::InvalidUsernameLink)
+) -> Result<bool, UserError> {
+    match binding {
+        Ok(Some(id)) if id == owner => Ok(true),
+        Ok(Some(_)) => Err(UserError::InvalidUsernameLink),
+        Ok(None) | Err(_) => Ok(false),
     }
 }
 
@@ -349,16 +353,12 @@ mod username_link_binding_tests {
     #[test]
     fn username_link_binding_requires_the_owner() {
         let owner = UserId::new();
-        assert!(verify_username_link_owner(owner, Ok(Some(owner))).is_ok());
-        for binding in [
-            Ok(Some(UserId::new())),
-            Ok(None),
-            Err(UserError::NotLoggedIn),
-        ] {
-            assert!(matches!(
-                verify_username_link_owner(owner, binding),
-                Err(UserError::InvalidUsernameLink)
-            ));
-        }
+        assert!(verify_username_link_owner(owner, Ok(Some(owner))).unwrap());
+        assert!(matches!(
+            verify_username_link_owner(owner, Ok(Some(UserId::new()))),
+            Err(UserError::InvalidUsernameLink)
+        ));
+        assert!(!verify_username_link_owner(owner, Ok(None)).unwrap());
+        assert!(!verify_username_link_owner(owner, Err(UserError::NotLoggedIn)).unwrap());
     }
 }

@@ -57,8 +57,8 @@ impl UserService {
 
     /// Set this account's "Who can find me by my username" setting on the
     /// server. With `false` the server answers "no match" to everyone else's
-    /// username lookup for this account. Friend codes still reach it. Returns
-    /// the value the server persisted.
+    /// username lookup for this account. Friend codes and username links still
+    /// reach it. Returns the value the server persisted.
     pub async fn set_username_discoverability(
         &self,
         discoverable: bool,

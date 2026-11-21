@@ -874,7 +874,7 @@ fn wire_resolve(
                 let is_link = chatter_core::domain::UsernameLink::is_username_link(&handle);
                 let (shown_handle, looked_up) = if is_link {
                     match ui_ctx.resolve_username_link(&handle).await {
-                        Ok((username, uid)) => (username, Ok(Some(uid))),
+                        Ok((username, uid)) => (username.unwrap_or_default(), Ok(Some(uid))),
                         Err(e) => (handle.clone(), Err(e)),
                     }
                 } else {
@@ -892,6 +892,8 @@ fn wire_resolve(
                             ui_ctx.contact_name(&uid).filter(|name| !name.is_empty())
                         {
                             local
+                        } else if display.is_empty() && shown_handle.is_empty() {
+                            chatter_core::ui::friend_display_name_placeholder(&uid)
                         } else if display.is_empty() {
                             shown_handle.clone()
                         } else {

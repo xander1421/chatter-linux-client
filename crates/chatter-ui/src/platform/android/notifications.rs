@@ -37,6 +37,14 @@ pub(crate) fn consume_call_consent(call_id: &str, action: &str, token: &str) -> 
         .unwrap_or(false)
 }
 
+pub(crate) fn authorize_full_screen(call_id: &str, token: &str, accepted: impl FnOnce()) {
+    if let Ok(mut state) = CALL_CONSENT.lock() {
+        if state.consume(call_id, call_consent::FULL_SCREEN, token, std::time::Instant::now()) {
+            accepted();
+        }
+    }
+}
+
 pub(crate) fn consume_and_cancel_call_consent(call_id: &str, action: &str, token: &str) -> bool {
     let Ok(mut state) = CALL_CONSENT.lock() else {
         return false;
@@ -464,7 +472,7 @@ impl AndroidNotifications {
     }
 
     fn cancel_call_platform(&self, call_id: &str) -> Result<(), SystemError> {
-        super::activity::clear_incoming_call_window(call_id);
+        super::call_actions::ring_notification_cancelled(call_id);
         let id = call_identity::request_code(call_id);
         with_jni_env(|env| {
             let context = get_app_context(env)?;

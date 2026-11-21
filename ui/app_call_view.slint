@@ -3,6 +3,11 @@ import { ModalHostState } from "app_modal_host_state.slint";
 import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 export global CallView {
+    // Android sets this only for a verified full-screen intent.
+    in property <string> keyguard-call-id;
+    callback leave-keyguard-call();
+    callback keyguard-call-ended(string);
+
     // ========== Call properties ==========
     in-out property <bool> incoming-call-visible: false;
     // Back while ringing hides the full-screen ring (Signal): the call keeps

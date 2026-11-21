@@ -262,7 +262,7 @@ export component PrivacySettings inherits VerticalLayout {
                 width: max(0px, parent.width - parent.padding * 2);
                 text: root.username-discoverable
                     ? @tr("Anyone who types your exact username can find you")
-                    : @tr("Only people with your friend code can find you");
+                    : @tr("Only people with your friend code or username link can find you");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;

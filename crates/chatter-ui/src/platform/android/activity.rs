@@ -146,6 +146,11 @@ pub fn open_play_store_update() -> Result<(), String> {
 
 /// Clear the lock-screen window flags for this incoming call.
 pub fn clear_incoming_call_window(call_id: &str) {
+    super::call_actions::forget_call_window(call_id);
+    update_call_window(jni::jni_str!("clearIncomingCallWindow"), call_id);
+}
+
+pub(crate) fn update_call_window(method: &jni::strings::JNIStr, call_id: &str) {
     let Ok(act) = activity() else {
         return;
     };
@@ -153,7 +158,7 @@ pub fn clear_incoming_call_window(call_id: &str) {
         let call_id = env.new_string(call_id).map_err(|e| e.to_string())?;
         let result = env.call_method(
             act,
-            jni::jni_str!("clearIncomingCallWindow"),
+            method,
             jni::jni_sig!("(Ljava/lang/String;)V"),
             &[jni::objects::JValue::Object(&call_id)],
         );
@@ -162,7 +167,7 @@ pub fn clear_incoming_call_window(call_id: &str) {
         }
         result.map(|_| ()).map_err(|e| e.to_string())
     }) {
-        tracing::warn!(%error, "Could not clear incoming call window");
+        tracing::warn!(%error, "Could not update incoming call window");
     }
 }
 
@@ -400,6 +405,7 @@ pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
     let done = std::cell::Cell::new(false);
     let res = i_slint_backend_android_activity::set_frame_presented_callback(move || {
         crate::record_startup_frame(&slint::RenderingState::AfterRendering);
+        super::call_actions::call_window_frame_presented();
         if done.replace(true) {
             return;
         }

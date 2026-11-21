@@ -419,13 +419,15 @@ class MainActivity : GameActivity() {
     }
 
     /** The SurfaceView Slint draws into, covered until its first frame. */
+    private lateinit var slintSurface: View
     private var launchCover: View? = null
+    private var callCoverId: String? = null
 
     /** Called from Rust (JNI) after Slint's first frame; idempotent. */
     @Suppress("unused")
     fun firstFrameDrawn() {
         runOnUiThread {
-            launchCover?.background = null
+            if (callCoverId == null) launchCover?.background = null
             launchCover = null
         }
     }
@@ -496,6 +498,8 @@ class MainActivity : GameActivity() {
      * like a picker selection, so Rust stages and cleans them the same way.
      */
     private fun dispatchShare(intent: Intent) {
+        if ((intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE)
+            && deferCallWindowRoute()) return
         val action = intent.action
         if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
         // Consume it: onNewIntent/setIntent and recreation must not re-share.
@@ -581,10 +585,7 @@ class MainActivity : GameActivity() {
                 }
                 else -> {
                     if (intent.getBooleanExtra("auto_accept", false)) return
-                    if (nativeShowIncomingCall(callId, action, capability) &&
-                        action == "com.chatter.client.CALL_FULL_SCREEN") {
-                        setIncomingCallWindow(callId, true)
-                    }
+                    nativeShowIncomingCall(callId, action, capability)
                 }
             }
         } catch (_: RuntimeException) {
@@ -593,19 +594,85 @@ class MainActivity : GameActivity() {
     }
 
     private var lockScreenCallId: String? = null
+    private var callUnlockPending = false
 
-    // Called by Rust when the ring notification is withdrawn. Match the call
-    // so late cancellation of an earlier ring cannot clear its replacement.
+    // Rust installs the call-only surface before asking Android to show it.
     @androidx.annotation.Keep
-    fun clearIncomingCallWindow(callId: String) {
-        runOnUiThread { setIncomingCallWindow(callId, false) }
+    fun showVerifiedCallWindow(callId: String) {
+        runOnUiThread {
+            lockScreenCallId = callId
+            callUnlockPending = false
+            if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != false) {
+                // Cover the previously submitted frame before revealing the window.
+                callCoverId = callId
+                slintSurface.setBackgroundColor(themeBackground())
+                getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    ?.hideSoftInputFromWindow(slintSurface.windowToken, 0)
+                setIncomingCallWindow(true)
+            } else {
+                finishCallWindow(callId, false)
+            }
+        }
     }
 
-    // A verified full-screen intent must wake a locked phone and show the
-    // ring UI (owner 2026-11-06). Keep the keyguard in place beneath it.
-    private fun setIncomingCallWindow(callId: String, show: Boolean) {
-        if (!show && lockScreenCallId != callId) return
-        lockScreenCallId = if (show) callId else null
+    @androidx.annotation.Keep
+    fun verifiedCallFrameDrawn(callId: String) {
+        runOnUiThread { removeCallCover(callId) }
+    }
+
+    private fun removeCallCover(callId: String) {
+        if (callCoverId != callId) return
+        callCoverId = null
+        if (launchCover == null) slintSurface.background = null
+    }
+
+    @androidx.annotation.Keep
+    fun clearIncomingCallWindow(callId: String) {
+        runOnUiThread {
+            if (lockScreenCallId == callId) finishCallWindow(callId, false)
+            else nativeCallWindowCleared(callId, false)
+        }
+    }
+
+    @androidx.annotation.Keep
+    fun requestCallWindowUnlock(callId: String) {
+        runOnUiThread {
+            if (lockScreenCallId != callId || callUnlockPending) return@runOnUiThread
+            val keyguard = getSystemService(KeyguardManager::class.java) ?: return@runOnUiThread
+            if (!keyguard.isKeyguardLocked) {
+                finishCallWindow(callId, true)
+                return@runOnUiThread
+            }
+            callUnlockPending = true
+            keyguard.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                override fun onDismissSucceeded() {
+                    if (lockScreenCallId == callId) finishCallWindow(callId, true)
+                }
+                override fun onDismissCancelled() {
+                    if (lockScreenCallId == callId) callUnlockPending = false
+                }
+                override fun onDismissError() {
+                    if (lockScreenCallId == callId) callUnlockPending = false
+                }
+            })
+        }
+    }
+
+    private fun finishCallWindow(callId: String, navigate: Boolean) {
+        if (lockScreenCallId != callId) return
+        // Drop the Android flags before allowing Slint to reveal normal routes.
+        setIncomingCallWindow(false)
+        removeCallCover(callId)
+        lockScreenCallId = null
+        callUnlockPending = false
+        nativeCallWindowCleared(callId, navigate)
+        if (navigate) {
+            if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)
+            dispatchShare(intent)
+        }
+    }
+
+    private fun setIncomingCallWindow(show: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(show)
             setTurnScreenOn(show)
@@ -617,6 +684,13 @@ class MainActivity : GameActivity() {
         }
     }
 
+    private fun deferCallWindowRoute(): Boolean {
+        val callId = lockScreenCallId ?: return false
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == false) return false
+        requestCallWindowUnlock(callId)
+        return true
+    }
+
     private fun dispatchMessageNotification(intent: Intent) {
         if (intent.action != "com.chatter.client.MESSAGE_OPEN") {
             nativeNotificationOpened("")
@@ -624,7 +698,7 @@ class MainActivity : GameActivity() {
         }
         // A notification opened from the lock screen can reach onCreate or
         // onNewIntent before unlock. Keep its key until onResume can route it.
-        if (getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true) return
+        if (deferCallWindowRoute() || getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true) return
         try {
             val key = intent.getStringExtra("notification_conversation_key") ?: ""
             if (key.isEmpty() || (key.length == 48 && key.all { it in '0'..'9' || it in 'a'..'f' })) {
@@ -720,7 +794,9 @@ class MainActivity : GameActivity() {
     private external fun nativeAcceptIncomingCall(callId: String, capability: String)
 
     /** Implemented in Rust. Re-shows a ringing call's screen that Back hid. */
-    private external fun nativeShowIncomingCall(callId: String, action: String, capability: String): Boolean
+    private external fun nativeShowIncomingCall(callId: String, action: String, capability: String)
+
+    private external fun nativeCallWindowCleared(callId: String, navigate: Boolean)
 
     /** Called from Rust (JNI, any thread): Slint's state for the IME's field. UTF-16 offsets. */
     @Suppress("unused")
@@ -785,7 +861,7 @@ class MainActivity : GameActivity() {
         if ((event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) &&
             !event.isShiftPressed
         ) {
-            if (event.action == KeyEvent.ACTION_DOWN) nativeImeEditorAction()
+            if (event.action == KeyEvent.ACTION_DOWN && lockScreenCallId == null) nativeImeEditorAction()
             return true
         }
         return super.dispatchKeyEvent(event)
@@ -856,7 +932,10 @@ class MainActivity : GameActivity() {
      * the S9 already did. With no keyboard up, Back is untouched.
      */
     override fun createSurfaceView(): InputEnabledSurfaceView =
-        BackHidesImeSurfaceView().also { launchCover = it }
+        BackHidesImeSurfaceView().also {
+            slintSurface = it
+            launchCover = it
+        }
 
     // --- Refresh rate ----------------------------------------------------------
     // An app that does not vote is left at the panel's default rate, which on a

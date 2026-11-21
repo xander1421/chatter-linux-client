@@ -33,6 +33,21 @@ pub mod timers;
 /// Note: call_service is passed separately because it's initialized post-boot
 /// via AppContext.init_call_service() and stored in a OnceLock.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    #[cfg(target_os = "android")]
+    {
+        let weak = window.as_weak();
+        window.global::<crate::CallView>().on_leave_keyguard_call(move || {
+            if let Some(w) = weak.upgrade() {
+                let id = w.global::<crate::CallView>().get_keyguard_call_id();
+                crate::platform::android::activity::update_call_window(
+                    jni::jni_str!("requestCallWindowUnlock"), id.as_str(),
+                );
+            }
+        });
+        window.global::<crate::CallView>().on_keyguard_call_ended(|id| {
+            crate::platform::android::activity::clear_incoming_call_window(id.as_str());
+        });
+    }
     use slint::{ComponentHandle, Model, ModelRc, VecModel};
     window.global::<crate::CallView>().on_select_call_tile_indices(|participants, pinned_id| {
         let tiles: Vec<crate::CallParticipantData> = participants.iter().collect();

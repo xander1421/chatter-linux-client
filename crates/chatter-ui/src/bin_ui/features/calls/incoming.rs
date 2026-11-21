@@ -525,6 +525,9 @@ fn show_answering(w: &MainWindow, call_id: &str) {
 /// covers every later departure.
 fn open_call_screen(w: &MainWindow) {
     let call_view = w.global::<crate::CallView>();
+    if !call_view.get_keyguard_call_id().is_empty() {
+        return;
+    }
     call_view.invoke_save_call_route();
     crate::bin_ui::features::back::reset_to_chats(&w);
     if w.get_compact_layout() {

@@ -198,6 +198,10 @@ pub fn reset_to_chats(w: &MainWindow) {
 ///
 /// Split out from the callback so tests can drive it directly.
 pub fn handle_back(window: &MainWindow) -> bool {
+    if !window.global::<crate::CallView>().get_keyguard_call_id().is_empty() {
+        window.global::<crate::CallView>().invoke_leave_keyguard_call();
+        return true;
+    }
     // Locked (core's decision, mirrored in AppLockPane): the lock screen covers
     // everything, so Back must not pop the hidden layers behind it. It leaves
     // the app, as Signal's lock screen does.
@@ -218,10 +222,6 @@ pub fn handle_back(window: &MainWindow) -> bool {
             .global::<crate::CallView>()
             .get_incoming_call_minimized()
     {
-        #[cfg(target_os = "android")]
-        crate::platform::android::activity::clear_incoming_call_window(
-            window.global::<crate::CallView>().get_incoming_call_data().call_id.as_str(),
-        );
         window
             .global::<crate::CallView>()
             .set_incoming_call_minimized(true);

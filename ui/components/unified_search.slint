@@ -247,7 +247,7 @@ component PersonRow inherits Rectangle {
     height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
     accessible-role: button;
-    accessible-label: root.name + ", @" + root.handle;
+    accessible-label: root.handle == "" ? root.name : root.name + ", @" + root.handle;
     accessible-enabled: root.interactive;
     accessible-action-default => { if root.interactive { root.clicked(); } }
     keys := FocusScope {
@@ -294,7 +294,7 @@ component PersonRow inherits Rectangle {
                 color: Colors.text-primary;
                 font-size: Typography.sm;
             }
-            Text {
+            if root.handle != "": Text {
                 text: "@" + root.handle;
                 color: Colors.text-muted;
                 font-size: Typography.xs;
