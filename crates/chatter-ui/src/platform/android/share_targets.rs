@@ -24,7 +24,7 @@
 //!   are folded into it (it reads the state when it runs).
 
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chatter_core::client::{ChatterClient, ShareTarget};
 use jni::objects::{JObject, JValue};
@@ -41,6 +41,15 @@ static REFRESH: Mutex<()> = Mutex::new(());
 static SIGNED_OUT: AtomicBool = AtomicBool::new(false);
 /// A refresh is waiting to run; a further request would be redundant.
 static QUEUED: AtomicBool = AtomicBool::new(false);
+
+/// Lock, recovering a poisoned guard. A panic in a query or a JNI push must not
+/// leave every later refresh silently returning: both locks guard values that
+/// are valid whichever way a holder ended (`()`, and the last-known list).
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// The account is signed in (again): refreshes may publish.
 pub fn signed_in() {
@@ -61,10 +70,7 @@ pub fn refresh(client: &Arc<ChatterClient>) {
     };
     let client = client.clone();
     runtime.spawn_blocking(move || {
-        let Ok(_serial) = REFRESH.lock() else {
-            QUEUED.store(false, SeqCst);
-            return;
-        };
+        let _serial = lock(&REFRESH);
         // The state is read from here on, so this run covers every request
         // made before it; a request from now on queues another run.
         QUEUED.store(false, SeqCst);
@@ -72,9 +78,7 @@ pub fn refresh(client: &Arc<ChatterClient>) {
             return;
         }
         let targets = client.share_targets();
-        let Ok(mut published) = PUBLISHED.lock() else {
-            return;
-        };
+        let mut published = lock(&PUBLISHED);
         if SIGNED_OUT.load(SeqCst) || published.as_ref() == Some(&targets) {
             return;
         }
@@ -98,9 +102,7 @@ pub fn refresh_current() {
 pub fn clear() {
     SIGNED_OUT.store(true, SeqCst);
     let remove = || {
-        let Ok(mut published) = PUBLISHED.lock() else {
-            return;
-        };
+        let mut published = lock(&PUBLISHED);
         // Signed in again before this ran: the new account's refresh owns the
         // state now, and an unconditional removal would erase what it published.
         if !SIGNED_OUT.load(SeqCst) {
