@@ -532,6 +532,25 @@ async fn rejected_announces_do_not_use_the_new_candidate_budget() {
 }
 
 #[tokio::test]
+async fn out_of_order_link_local_fragments_never_enter_the_gossip_store() {
+    let (mut runtime, _radio, state) = runtime();
+    let link = LinkId::new("/mock/out-of-order");
+    state.with(|inner| inner.links.link_up(link.clone(), LinkRole::Central));
+    let request = RequestSyncPacket::new(19, 4096, (0..160).collect());
+    let packet = BitchatPacket::new(
+        MessageType::RequestSync, [0xAC; 8], None, now_millis(),
+        request.encode().unwrap(), chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+    );
+    let fragments = chatter_mesh::fragment::plan_fragments(&packet, 48, [5; 8]).unwrap();
+    assert!(fragments.len() > 1);
+    for mut fragment in fragments.into_iter().rev() {
+        fragment.payload[12] = MessageType::Message.as_u8();
+        runtime.on_packet(&link, fragment).await;
+        assert_eq!(runtime.gossip.fragment_count(), 0);
+    }
+}
+
+#[tokio::test]
 async fn a_refused_announce_is_not_kept_or_re_served_by_the_gossip_store() {
     // Refusing a forgery from our own registry is only half the job. The
     // gossip store keeps the latest announce per peer and serves it to
