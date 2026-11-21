@@ -240,12 +240,11 @@ impl TokenManager {
     /// Cached DER/expiry rows are never a source of trust; verify the signed
     /// manifest again on every load and use its authenticated activation times.
     pub fn get_cached_server_key(&self) -> Result<Option<ServerPublicKey>, MailboxError> {
-        let key = self
-            .load_cached_manifest()
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(|m| ServerPublicKey::from_manifest(m).ok());
+        let key = match self.load_cached_manifest() {
+            Ok(manifest) => manifest.as_ref().and_then(|m| ServerPublicKey::from_manifest(m).ok()),
+            Err(MailboxError::InvalidServerKey(_)) => None,
+            Err(error) => return Err(error),
+        };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -739,6 +738,17 @@ mod tests {
         conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', 'corrupt', 'now')", []).unwrap();
         drop(conn);
         assert!(tm.get_cached_server_key().unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_manifest_propagates_storage_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("tokens.db"), "testpass").unwrap());
+        // An unmigrated database has no settings table.
+        assert!(matches!(
+            TokenManager::new(db).get_cached_server_key(),
+            Err(MailboxError::Storage(_))
+        ));
     }
 
     #[test]
