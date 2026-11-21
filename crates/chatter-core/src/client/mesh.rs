@@ -666,7 +666,7 @@ impl ChatterClient {
                     "Server did not answer within the startup budget (offline mode)"
                 );
                 self.services.grpc_pool.note_connect_timeout(fence);
-                crate::network::server_monitor::mirror(self.offline_state());
+                crate::network::server_monitor::mirror_initial(self.offline_state(), false);
             }
         };
         self.start_server_monitor();

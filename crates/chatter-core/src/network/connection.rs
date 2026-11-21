@@ -209,11 +209,13 @@ impl ServerStatus {
 struct Evidence {
     at_ms: u64,
     revision: u64,
+    reachable_revision: u64,
 }
 
 static EVIDENCE: std::sync::Mutex<Evidence> = std::sync::Mutex::new(Evidence {
     at_ms: 0,
     revision: 0,
+    reachable_revision: 0,
 });
 
 /// Monotonic origin for the serialized evidence timestamp.
@@ -250,6 +252,9 @@ fn record_evidence(
 ) {
     evidence.at_ms = now_ms().max(evidence.at_ms);
     evidence.revision += 1;
+    if status == ServerStatus::Reachable {
+        evidence.reachable_revision = evidence.revision;
+    }
     // `send_if_modified` wakes only when the value changes, so a successful RPC
     // that reports Reachable again does not poke waiters. Subscribers see
     // the offline→online edge the banner already shows via OfflineState.
@@ -315,6 +320,19 @@ pub fn subscribe_server_status() -> tokio::sync::watch::Receiver<ServerStatus> {
 /// Read the process-global server reachability.
 pub fn server_status() -> ServerStatus {
     *server_status_watch().borrow()
+}
+
+/// Read the latest status and last positive evidence for outage confirmation.
+pub(crate) fn monitor_evidence() -> (ServerStatus, u64) {
+    read_monitor_evidence(&EVIDENCE, server_status_watch())
+}
+
+fn read_monitor_evidence(
+    evidence: &std::sync::Mutex<Evidence>,
+    tx: &tokio::sync::watch::Sender<ServerStatus>,
+) -> (ServerStatus, u64) {
+    let evidence = evidence.lock().unwrap();
+    (*tx.borrow(), evidence.reachable_revision)
 }
 
 /// How long ago the wire last told us anything, or `None` if it never has.
@@ -387,6 +405,51 @@ impl ConnectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_evidence_revision_advances_only_for_reachable_observations() {
+        let (tx, _) = tokio::sync::watch::channel(ServerStatus::Unknown);
+        let evidence = std::sync::Mutex::new(Evidence::default());
+
+        for (status, expected_revision) in [
+            (ServerStatus::Unreachable, 0),
+            (ServerStatus::Reachable, 2),
+            (ServerStatus::Reachable, 3),
+            (ServerStatus::Unknown, 3),
+            (ServerStatus::Unreachable, 3),
+        ] {
+            record_evidence(&mut evidence.lock().unwrap(), &tx, status);
+            assert_eq!(
+                read_monitor_evidence(&evidence, &tx),
+                (status, expected_revision)
+            );
+        }
+    }
+
+    #[test]
+    fn monitor_evidence_exposes_positive_observation_coalesced_by_watch() {
+        let (tx, mut rx) = tokio::sync::watch::channel(ServerStatus::Unknown);
+        let evidence = std::sync::Mutex::new(Evidence::default());
+        let record = |status| record_evidence(&mut evidence.lock().unwrap(), &tx, status);
+        record(ServerStatus::Reachable);
+        record(ServerStatus::Unreachable);
+        assert_eq!(*rx.borrow_and_update(), ServerStatus::Unreachable);
+        let before = read_monitor_evidence(&evidence, &tx);
+
+        record(ServerStatus::Reachable);
+        record(ServerStatus::Unreachable);
+
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), ServerStatus::Unreachable);
+        let after = read_monitor_evidence(&evidence, &tx);
+        assert_eq!(
+            (before, after),
+            (
+                (ServerStatus::Unreachable, 1),
+                (ServerStatus::Unreachable, 3)
+            )
+        );
+    }
 
     #[test]
     fn newer_rpc_evidence_rejects_old_probe_even_without_status_edge() {

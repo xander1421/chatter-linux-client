@@ -33,18 +33,20 @@ impl ChatterClient {
     /// This forces an immediate connection attempt to verify reachability.
     /// Optional — RPCs will auto-connect on first use if skipped.
     ///
-    /// Mirrors authoritative reachability into `offline_state`, including newer
-    /// RPC evidence that superseded this dial. Dial errors remain caller errors;
-    /// a rejected stale outcome never independently changes the displayed state.
+    /// Mirrors initial reachability into `offline_state`. Once the monitor is
+    /// running, it owns display transitions. The caller still gets the dial result.
     pub async fn connect(&self) -> Result<(), ClientError> {
         // First contact after a signed-out start: the user has acted, on the
         // transport they chose, so the reachability monitor may run now (it
         // never probes while the pool is on onion).
-        if self.server_contact_deferred.swap(false, Ordering::SeqCst) {
+        let first_contact = self.server_contact_deferred.swap(false, Ordering::SeqCst);
+        if first_contact {
             self.start_server_monitor();
         }
         let result = self.services.grpc_pool.connect().await;
-        crate::network::server_monitor::mirror(self.offline_state());
+        if first_contact || !self.server_monitor_started.load(Ordering::SeqCst) {
+            crate::network::server_monitor::mirror_initial(self.offline_state(), first_contact);
+        }
         result.map_err(Into::into)
     }
 

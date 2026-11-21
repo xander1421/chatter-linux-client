@@ -161,9 +161,11 @@ impl GrpcClientPool {
             ))?;
         #[cfg(feature = "onion")]
         {
-            let ch: GrpcTransport = Self::create_endpoint(&onion, self.timeout)?
-                .connect_with_connector_lazy(self.onion_connector())
-                .into();
+            let endpoint = Self::create_endpoint(&onion, self.timeout)?;
+            let ch = GrpcTransport::from_onion(
+                endpoint.connect_with_connector_lazy(self.onion_connector()),
+                self.transport_mode.clone(),
+            );
             Ok(super::super::AuthClient::new(ch, self.auth_clone()))
         }
         #[cfg(not(feature = "onion"))]

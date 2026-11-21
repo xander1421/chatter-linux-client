@@ -108,7 +108,10 @@ impl GrpcClientPool {
         {
             Self::note_onion_dial(mode, true);
         }
-        *guard = Some(channel);
+        if fresh && channel.is_http3() && !guard.as_ref().is_some_and(GrpcTransport::is_http3) {
+            tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
+        }
+        *guard = Some(channel.for_pool(self.transport_mode.clone(), mode));
         Ok(crate::network::connection::server_status()
             == crate::network::connection::ServerStatus::Reachable)
     }
@@ -264,7 +267,15 @@ impl GrpcClientPool {
             }
         }
 
-        Ok((channel?.into(), true))
+        let channel = channel?;
+        #[cfg(feature = "onion")]
+        if mode == TransportMode::Onion {
+            return Ok((
+                GrpcTransport::from_onion(channel, self.transport_mode.clone()),
+                true,
+            ));
+        }
+        Ok((channel.into(), true))
     }
 
     /// Dial the server and throw the connection away: a reachability probe.
@@ -286,13 +297,62 @@ impl GrpcClientPool {
     /// [`channel`]: Self::channel
     /// [`call_with_retry`]: Self::call_with_retry
     pub async fn probe(&self) -> Result<(), NetworkError> {
+        self.probe_inner(false).await
+    }
+
+    pub(crate) async fn probe_for_confirmation(&self) -> Result<(), NetworkError> {
+        self.probe_inner(true).await
+    }
+
+    async fn probe_lazy_direct(&self, endpoint: &Endpoint) -> Result<(), NetworkError> {
+        let tcp = async {
+            endpoint
+                .connect_with_connector(crate::network::pq_tls::grpc_connector(endpoint))
+                .await
+                .map(|_| ())
+                .map_err(|error| {
+                    NetworkError::ConnectionFailed(format!("connection failed: {error}"))
+                })
+        };
+        #[cfg(feature = "quic")]
+        {
+            let quic = async {
+                tokio::time::timeout(
+                    QUIC_PROBE_TIMEOUT,
+                    super::super::transport::probe_quic(endpoint.uri()),
+                )
+                .await
+                .map_err(|_| NetworkError::Timeout)?
+                .map_err(|error| {
+                    NetworkError::ConnectionFailed(format!("QUIC probe failed: {error}"))
+                })
+            };
+            use futures::FutureExt;
+            futures::future::select_ok([tcp.boxed(), quic.boxed()])
+                .await
+                .map(|_| ())
+        }
+        #[cfg(not(feature = "quic"))]
+        tcp.await
+    }
+
+    async fn probe_inner(&self, require_fresh: bool) -> Result<(), NetworkError> {
         use crate::network::connection::{
             ServerStatus, server_evidence_revision, set_server_status_if_current,
         };
 
         let (endpoint, mode, generation) = self.snapshot();
+        if require_fresh && mode != TransportMode::Direct {
+            return Ok(());
+        }
         let revision = server_evidence_revision();
         let result = self.dial_network(&endpoint, mode).await;
+        let result = match result {
+            Ok((_, false)) if require_fresh => {
+                self.probe_lazy_direct(&endpoint).await.map(|()| true)
+            }
+            other => other.map(|(_, fresh)| fresh),
+        };
         // A transport swap uses this same lock, so validation and publication
         // cannot race the switch after the generation check.
         let _guard = self.channel.read();
@@ -306,7 +366,7 @@ impl GrpcClientPool {
             ));
         }
         match result {
-            Ok((_channel, fresh)) => {
+            Ok(fresh) => {
                 if fresh && set_server_status_if_current(ServerStatus::Reachable, revision) {
                     Self::note_onion_dial(mode, true);
                 }

@@ -5,6 +5,7 @@ impl GrpcClientPool {
     ///
     /// Drops every cached channel. Safe to call multiple times.
     pub fn disconnect(&self) {
+        tracing::event!(target: "network_transport::channels_disconnected", tracing::Level::INFO, {});
         *self.channel.write() = None;
         *self.unidentified_channel.write() = None;
         *self.secret_channel.write() = None;
@@ -38,10 +39,18 @@ impl GrpcClientPool {
                 "QUIC channel failed in use — falling back to TCP for the rest of this session"
             );
             *probe = QuicProbeState::Failed;
+            tracing::event!(target: "network_transport::quic_demoted", tracing::Level::INFO, {});
         }
     }
     #[cfg(not(feature = "quic"))]
     pub(super) fn note_transport_error(&self) {}
+
+    /// Keep a newly created pool on TCP for transport comparisons.
+    #[cfg(all(feature = "quic", feature = "testing"))]
+    #[doc(hidden)]
+    pub fn disable_quic_for_testing(&self) {
+        *self.quic_probe.write() = QuicProbeState::Failed;
+    }
 
     /// Check if currently connected.
     pub fn is_connected(&self) -> bool {
@@ -100,9 +109,9 @@ impl GrpcClientPool {
                 if let Ok(uri) = server_url.parse::<http::Uri>() {
                     match super::super::transport::build_quic(uri) {
                         Ok(channel) => {
-                            tracing::info!(
-                                "transport: HTTP/3 (QUIC), promoting direct RPC channel"
-                            );
+                            let channel = channel
+                                .for_pool(self.transport_mode.clone(), TransportMode::Direct);
+                            tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
                             *guard = Some(channel.clone());
                             return channel;
                         }
@@ -122,13 +131,16 @@ impl GrpcClientPool {
 
         #[cfg(feature = "onion")]
         let channel: GrpcTransport = if *self.transport_mode.read() == TransportMode::Onion {
-            endpoint
-                .connect_with_connector_lazy(self.onion_connector())
-                .into()
+            GrpcTransport::from_onion(
+                endpoint.connect_with_connector_lazy(self.onion_connector()),
+                self.transport_mode.clone(),
+            )
         } else {
-            endpoint
-                .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
-                .into()
+            GrpcTransport::from(
+                endpoint
+                    .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint)),
+            )
+            .for_pool(self.transport_mode.clone(), TransportMode::Direct)
         };
         #[cfg(not(feature = "onion"))]
         let channel: GrpcTransport = endpoint
