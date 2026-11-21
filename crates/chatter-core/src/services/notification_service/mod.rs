@@ -159,7 +159,7 @@ impl NotificationService {
                 let Some(service) = service.upgrade() else {
                     break;
                 };
-                let (_, remaining) = service.sync_message_privacy(&mut service.message_posts());
+                let remaining = service.with_message_privacy(|_, _, remaining| remaining);
                 drop(service);
                 if let Some(remaining) = remaining {
                     tokio::select! {
@@ -179,14 +179,32 @@ impl NotificationService {
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    fn sync_message_privacy(
+    fn with_app_lock_state<T>(&self, f: impl FnOnce((bool, u64, Option<Duration>)) -> T) -> T {
+        match self.app_lock.get() {
+            Some(lock) => lock.with_notification_lock_state(f),
+            None => f((false, 0, None)),
+        }
+    }
+
+    fn with_message_privacy<T>(
+        &self,
+        f: impl FnOnce(&mut MessageNotifications, NotificationDetailLevel, Option<Duration>) -> T,
+    ) -> T {
+        let mut posts = self.message_posts();
+        // Keep the lock state stable through the sink call and preserve the
+        // same mutex order in both posting and the cancellation watcher.
+        self.with_app_lock_state(|(locked, generation, remaining)| {
+            let remaining = self.cancel_locked_previews(&mut posts, generation, remaining);
+            f(&mut posts, self.detail_for_lock_state(locked), remaining)
+        })
+    }
+
+    fn cancel_locked_previews(
         &self,
         posts: &mut MessageNotifications,
-    ) -> (NotificationDetailLevel, Option<Duration>) {
-        let Some(lock) = self.app_lock.get() else {
-            return (self.detail_level(), None);
-        };
-        let (locked, generation, mut remaining) = lock.notification_lock_state();
+        generation: u64,
+        mut remaining: Option<Duration>,
+    ) -> Option<Duration> {
         if posts.lock_generation != generation {
             match self.deliver(|sink| sink.cancel_message_notifications()) {
                 Ok(cancelled) => {
@@ -202,12 +220,7 @@ impl NotificationService {
                 }
             }
         }
-        let level = if locked {
-            NotificationDetailLevel::None
-        } else {
-            self.detail_level()
-        };
-        (level, remaining)
+        remaining
     }
 
     /// Whether the app lock is engaged right now.
@@ -220,10 +233,15 @@ impl NotificationService {
     /// shows "Locked message" while `KeyCachingService.isLocked`). Re-read on
     /// every post, so a lock that expires in the background applies at once.
     pub fn effective_detail_level(&self) -> NotificationDetailLevel {
-        if self.app_locked() {
-            return NotificationDetailLevel::None;
+        self.detail_for_lock_state(self.app_locked())
+    }
+
+    fn detail_for_lock_state(&self, locked: bool) -> NotificationDetailLevel {
+        if locked {
+            NotificationDetailLevel::None
+        } else {
+            self.detail_level()
         }
-        self.detail_level()
     }
 
     /// Show `conversation_id`'s notification for an incoming message,
@@ -240,14 +258,14 @@ impl NotificationService {
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        let mut notifications = self.message_posts();
-        let (level, _) = self.sync_message_privacy(&mut notifications);
-        let (title, body) = Self::message_text(level, sender_name, message_preview, private);
-        self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
-        // Requests and reactions replace this conversation's OS notification.
-        // Its earlier message entries can no longer be restored.
-        notifications.entries.remove(&key);
-        Ok(())
+        self.with_message_privacy(|notifications, level, _| {
+            let (title, body) = Self::message_text(level, sender_name, message_preview, private);
+            self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
+            // Requests and reactions replace this conversation's OS notification.
+            // Its earlier message entries can no longer be restored.
+            notifications.entries.remove(&key);
+            Ok(())
+        })
     }
 
     fn message_text(
@@ -290,54 +308,54 @@ impl NotificationService {
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        let mut notifications = self.message_posts();
-        let (level, _) = self.sync_message_privacy(&mut notifications);
-        let (title, body) = Self::message_text(level, sender_name, message_preview, private);
-        self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
-        let entries = notifications.entries.entry(key).or_default();
-        entries.retain(|entry| entry.id != message_id);
-        entries.push(MessageNotification {
-            id: message_id,
-            sender_name: sender_name.map(str::to_owned),
-            message_preview: message_preview.map(str::to_owned),
-            private,
-            priority,
-        });
-        Ok(())
+        self.with_message_privacy(|notifications, level, _| {
+            let (title, body) = Self::message_text(level, sender_name, message_preview, private);
+            self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
+            let entries = notifications.entries.entry(key).or_default();
+            entries.retain(|entry| entry.id != message_id);
+            entries.push(MessageNotification {
+                id: message_id,
+                sender_name: sender_name.map(str::to_owned),
+                message_preview: message_preview.map(str::to_owned),
+                private,
+                priority,
+            });
+            Ok(())
+        })
     }
 
     /// Remove deleted or expired messages from whichever conversations posted
     /// them. A prior message remains visible when the newest one is removed.
     pub fn remove_message_notifications(&self, message_ids: &[crate::domain::ids::MessageId]) {
-        let mut notifications = self.message_posts();
-        let (level, _) = self.sync_message_privacy(&mut notifications);
-        for (key, entries) in &mut notifications.entries {
-            let was_latest = entries
-                .last()
-                .is_some_and(|entry| message_ids.contains(&entry.id));
-            let old_len = entries.len();
-            entries.retain(|entry| !message_ids.contains(&entry.id));
-            if entries.len() == old_len || !was_latest {
-                continue;
+        self.with_message_privacy(|notifications, level, _| {
+            for (key, entries) in &mut notifications.entries {
+                let was_latest = entries
+                    .last()
+                    .is_some_and(|entry| message_ids.contains(&entry.id));
+                let old_len = entries.len();
+                entries.retain(|entry| !message_ids.contains(&entry.id));
+                if entries.len() == old_len || !was_latest {
+                    continue;
+                }
+                let result = if let Some(entry) = entries.last() {
+                    let (title, body) = Self::message_text(
+                        level,
+                        entry.sender_name.as_deref(),
+                        entry.message_preview.as_deref(),
+                        entry.private,
+                    );
+                    self.deliver(|sink| sink.show_conversation(key, &title, &body, entry.priority))
+                } else {
+                    self.deliver(|sink| sink.cancel_conversation(key))
+                };
+                if let Err(error) = result {
+                    tracing::warn!(%error, "Could not update notification for removed message");
+                }
             }
-            let result = if let Some(entry) = entries.last() {
-                let (title, body) = Self::message_text(
-                    level,
-                    entry.sender_name.as_deref(),
-                    entry.message_preview.as_deref(),
-                    entry.private,
-                );
-                self.deliver(|sink| sink.show_conversation(key, &title, &body, entry.priority))
-            } else {
-                self.deliver(|sink| sink.cancel_conversation(key))
-            };
-            if let Err(error) = result {
-                tracing::warn!(%error, "Could not update notification for removed message");
-            }
-        }
-        notifications
-            .entries
-            .retain(|_, entries| !entries.is_empty());
+            notifications
+                .entries
+                .retain(|_, entries| !entries.is_empty());
+        })
     }
 
     /// Dismiss `conversation_id`'s notification (it was read).
@@ -378,13 +396,13 @@ impl NotificationService {
         title: &str,
         body: &str,
     ) -> Result<(), SystemError> {
-        match self.effective_detail_level() {
+        self.with_app_lock_state(|(locked, _, _)| match self.detail_for_lock_state(locked) {
             NotificationDetailLevel::None => {
                 let body = chatter_i18n::tr("Incoming call");
                 self.deliver(|sink| sink.show_incoming_call(call_id, "Chatter", &body))
             }
             _ => self.deliver(|sink| sink.show_incoming_call(call_id, title, body)),
-        }
+        })
     }
 
     /// Dismiss the incoming-call notification for `call_id` (accepted,

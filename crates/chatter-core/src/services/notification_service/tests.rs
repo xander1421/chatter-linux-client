@@ -597,6 +597,12 @@ async fn locked_app_hides_sender_and_content() {
     );
 }
 
+async fn receive_notification<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>) -> Option<T> {
+    tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for a notification action")
+}
+
 #[tokio::test]
 async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
     use crate::services::app_lock::{AppLock, LockTimeout};
@@ -665,43 +671,163 @@ async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
     };
     post();
     assert_eq!(
-        rx.recv().await,
+        receive_notification(&mut rx).await,
         Some(Action::Message("Alice".into(), "private text".into()))
     );
     service
         .show_incoming_call("ringing", "Alice", "Call")
         .unwrap();
-    assert_eq!(rx.recv().await, Some(Action::Call("ringing".into())));
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::Call("ringing".into()))
+    );
 
     lock.set_visible_at(false, SystemTime::now() - Duration::from_secs(59));
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .unwrap(),
+        receive_notification(&mut rx).await,
         Some(Action::CancelMessages)
     );
     post();
     assert_eq!(
-        rx.recv().await,
+        receive_notification(&mut rx).await,
         Some(Action::Message("Chatter".into(), "New message".into()))
     );
     service
         .show_incoming_call("locked", "Alice", "Call")
         .unwrap();
-    assert_eq!(rx.recv().await, Some(Action::Call("locked".into())));
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::Call("locked".into()))
+    );
 
     lock.set_visible(true);
     lock.attempt_unlock("482916").unwrap();
     post();
     assert_eq!(
-        rx.recv().await,
+        receive_notification(&mut rx).await,
         Some(Action::Message("Alice".into(), "private text".into()))
     );
     lock.lock_now();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .unwrap(),
+        receive_notification(&mut rx).await,
         Some(Action::CancelMessages)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_lock_serializes_transition_with_notification_delivery() {
+    use crate::services::app_lock::{AppLock, LockTimeout};
+    use std::sync::mpsc;
+    use tokio::sync::{mpsc as async_mpsc, oneshot};
+
+    struct PausedDelivery {
+        actions: async_mpsc::UnboundedSender<String>,
+        pause: Mutex<Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>>,
+    }
+
+    impl NotificationSink for PausedDelivery {
+        fn show(&self, _: &str, _: &str, _: NotificationPriority) -> Result<(), SystemError> {
+            unreachable!()
+        }
+
+        fn show_conversation(
+            &self,
+            _: &str,
+            _: &str,
+            body: &str,
+            _: NotificationPriority,
+        ) -> Result<(), SystemError> {
+            if let Some((entered, release)) = self.pause.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            self.actions.send(body.to_owned()).unwrap();
+            Ok(())
+        }
+
+        fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+            self.actions.send(String::new()).unwrap();
+            Ok(true)
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::storage::Database::open(&dir.path().join("n.db"), "p").unwrap();
+    db.run_migrations().unwrap();
+    let settings = Arc::new(
+        crate::storage::repositories::settings_repo::SettingsRepository::new(Arc::new(db)),
+    );
+    let lock = Arc::new(AppLock::new(settings));
+    lock.enable(None, "482916", "482916", LockTimeout::OneMinute)
+        .unwrap();
+    let (actions, mut received) = async_mpsc::unbounded_channel();
+    let (entered, wait_for_entry) = oneshot::channel();
+    let (release, wait_for_release) = mpsc::channel();
+    let service = Arc::new(NotificationService::new(Arc::new(PausedDelivery {
+        actions,
+        pause: Mutex::new(Some((entered, wait_for_release))),
+    })));
+    service.set_detail_level(NotificationDetailLevel::NameAndMessage);
+    service.set_app_lock(lock.clone());
+
+    let channel = crate::domain::ids::ChannelId::new();
+    let post = move |service: &NotificationService| {
+        service
+            .show_message_notification(
+                &channel,
+                Some("Alice"),
+                Some("private text"),
+                false,
+                NotificationPriority::Normal,
+            )
+            .unwrap()
+    };
+    let first_post = tokio::task::spawn_blocking({
+        let service = service.clone();
+        move || post(&service)
+    });
+    tokio::time::timeout(Duration::from_secs(5), wait_for_entry)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (started, wait_for_lock) = oneshot::channel();
+    let mut transition = tokio::task::spawn_blocking(move || {
+        started.send(()).unwrap();
+        lock.lock_now();
+    });
+    tokio::time::timeout(Duration::from_secs(5), wait_for_lock)
+        .await
+        .unwrap()
+        .unwrap();
+    let waited_for_delivery = tokio::time::timeout(Duration::from_millis(100), &mut transition)
+        .await
+        .is_err();
+    release.send(()).unwrap();
+    assert!(
+        waited_for_delivery,
+        "the app locked before the pending preview was posted"
+    );
+    tokio::time::timeout(Duration::from_secs(5), first_post)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), transition)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        receive_notification(&mut received).await.as_deref(),
+        Some("private text")
+    );
+
+    post(&service);
+    assert_eq!(
+        receive_notification(&mut received).await.as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        receive_notification(&mut received).await.as_deref(),
+        Some("New message")
     );
 }
