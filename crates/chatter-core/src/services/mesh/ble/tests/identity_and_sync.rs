@@ -68,7 +68,7 @@ async fn a_peer_heard_only_by_relay_is_not_marked_connected() {
 /// The registry had recorded the victim's signing key since first contact.
 /// Nothing compared it.
 #[tokio::test]
-async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_peer() {
+async fn auditclient2_announce_squat_cannot_take_over_a_proven_peer() {
     let (mut runtime, _radio, state) = runtime();
 
     let victim_identity = MeshIdentity::generate(&mut os_rng());
@@ -103,7 +103,7 @@ async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_p
         runtime
             .on_announce(&victim_link, &honest_packet, &victim)
             .await,
-        "the honest announce establishes the pin"
+        "the honest announce creates a candidate"
     );
     let pinned_signing_key = state
         .with(|inner| {
@@ -150,6 +150,26 @@ async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_p
         inner.links.set_writable(&attacker_link, true);
         inner.max_write.insert(attacker_link.clone(), 512);
     });
+
+    assert!(
+        runtime
+            .on_announce(&attacker_link, &forged_packet, &victim)
+            .await
+    );
+    assert!(state.with(|inner| inner.peers.pinned(&victim).is_none()));
+    assert!(state.with(|inner| !inner.peers.info(&victim).unwrap().verified_nickname));
+    assert!(
+        runtime
+            .on_announce(&victim_link, &honest_packet, &victim)
+            .await
+    );
+    assert!(state.with(|inner| inner.peers.pin_noise_identity(
+        &victim,
+        &victim_identity.static_public(),
+        &victim_identity.signing_public(),
+        now_millis(),
+    )));
+    state.with(|inner| inner.links.link_down(&attacker_link));
 
     runtime.save_pins().expect("save pins");
     state.with(|inner| {
@@ -317,7 +337,9 @@ async fn a_sync_request_from_a_peer_that_never_announced_is_not_answered() {
     );
 
     let before = radio.write_count();
-    runtime.on_request_sync(&packet, &stranger).await;
+    runtime
+        .on_request_sync(&LinkId::new("/mock/stranger"), &packet, &stranger)
+        .await;
     runtime.drain_writes().await;
 
     assert_eq!(
@@ -373,14 +395,25 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
         chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
     );
 
+    let history = signed(
+        &subject_peer,
+        &subject,
+        MessageType::Message,
+        b"public history".to_vec(),
+        true,
+    );
+    runtime.gossip.on_public_packet_seen(&history, now_secs());
     let before = radio.write_count();
-    runtime.on_request_sync(&packet, &subject_peer).await;
+    runtime.on_request_sync(&link, &packet, &subject_peer).await;
     runtime.drain_writes().await;
 
     assert!(
         radio.write_count() > before,
         "an announced peer must still get its diff"
     );
+    assert!(radio.writes().iter().skip(before).all(|(_, bytes)| {
+        codec::decode(bytes).is_ok_and(|packet| packet.message_type() == Some(MessageType::Message))
+    }));
 }
 
 #[tokio::test]

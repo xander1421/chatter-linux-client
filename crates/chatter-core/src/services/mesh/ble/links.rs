@@ -162,10 +162,7 @@ impl BleRuntime {
         tokio::spawn(async move {
             let result = radio.connect(&address).await;
             // A closed receiver means the runtime has stopped; nothing to apply.
-            let _ = tx.send(DialOutcome {
-                address,
-                result,
-            });
+            let _ = tx.send(DialOutcome { address, result });
         });
     }
 
@@ -175,10 +172,7 @@ impl BleRuntime {
         // state must issue a fresh StartScanning on the next tick.
         #[cfg(target_os = "linux")]
         self.state.with(|state| state.duty.reset());
-        let DialOutcome {
-            address,
-            result,
-        } = outcome;
+        let DialOutcome { address, result } = outcome;
         let address = address.as_str();
         match result {
             Ok(link) => {
@@ -571,7 +565,7 @@ impl BleRuntime {
     ///   dedup cache, so a replay of one could not be recognised.
     /// - In the past. A future timestamp past the skew stays refused.
     /// - Not our own: the guard has already refused that, checked again here.
-    /// - On a link bound to a peer with a pinned, verified announce, and we have
+    /// - On a link bound to a peer that has announced, and we have
     ///   a sync request outstanding to that peer.
     /// - Inside the retention window our own store keeps for the type.
     /// - Not already held by the store. With the dedup cache in `on_packet`, a
@@ -599,7 +593,11 @@ impl BleRuntime {
         }
         let peer = bound?;
         let author_key = self.state.with(|state| {
-            if state.peers.pinned(peer).is_none() {
+            if !state
+                .peers
+                .info(peer)
+                .is_some_and(|info| info.signing_public_key.is_some())
+            {
                 return None;
             }
             state
@@ -672,7 +670,8 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
     ) -> bool {
-        self.handle_typed_with_verdict(link, packet, claimed, None).await
+        self.handle_typed_with_verdict(link, packet, claimed, None)
+            .await
     }
 
     async fn handle_typed_with_verdict(
@@ -717,7 +716,7 @@ impl BleRuntime {
                 return self.on_signal_carrier(packet, claimed).await;
             }
             Some(MessageType::CourierEnvelope) => self.on_courier_envelope(packet, claimed).await,
-            Some(MessageType::RequestSync) => self.on_request_sync(packet, claimed).await,
+            Some(MessageType::RequestSync) => self.on_request_sync(link, packet, claimed).await,
             Some(MessageType::FileTransfer) => self.on_file_transfer(packet, claimed),
             Some(MessageType::FileManifest) => self.on_file_manifest(packet, claimed),
             Some(MessageType::FileChunk) => self.on_file_chunk(packet, claimed),

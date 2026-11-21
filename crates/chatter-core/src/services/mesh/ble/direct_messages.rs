@@ -7,6 +7,20 @@ impl BleRuntime {
         else {
             return;
         };
+        use super::secure_ingress::{SIGNING_BINDING_REQUEST, SIGNING_PIN_INTENT_MS};
+        let now = now_millis();
+        self.signing_pin_intent.retain(|_, at| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS);
+        let (pinned, supports_binding) = self.state.with(|state| {
+            (state.peers.pinned(peer).is_some(), state.chatter_hello.get(peer).is_some_and(|hello| {
+                hello.capabilities & super::super::chatter_hello::NOISE_SIGNING_BINDING != 0
+            }))
+        });
+        if !pinned && (self.signing_pin_intent.contains_key(peer) || self.signing_pin_intent.len() < 512) {
+            self.signing_pin_intent.insert(peer.clone(), now);
+            if supports_binding {
+                self.send_private_control(peer, SIGNING_BINDING_REQUEST).await;
+            }
+        }
         let payload = encode_noise_payload(NoisePayloadType::PrivateMessage, &tlv);
 
         let sealed = self

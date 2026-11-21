@@ -1,37 +1,24 @@
 use super::*;
 
 impl BleRuntime {
-    pub(super) async fn on_request_sync(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+    pub(super) async fn on_request_sync(
+        &mut self,
+        link: &LinkId,
+        packet: &BitchatPacket,
+        claimed: &PeerId,
+    ) {
         let Ok(request) = RequestSyncPacket::decode(&packet.payload) else {
             return;
         };
-
-        // A sync response can replay the entire store, and the filter does not
-        // constrain that: a GCS filter that is empty or undecodable matches
-        // nothing, so `handle_request_sync` reads it as "the requester holds none
-        // of it" and answers with everything. Content is not the exposure —
-        // public messages are already public and private ones are sealed — but
-        // announces and prekey bundles are *keyed by their owner's identity*, and
-        // handing the set of them to a stranger hands over the list of everyone
-        // this device has met, plus the material to start a session with each.
-        //
-        // So a request is only answered for a peer that has proved an identity to
-        // us: a verified announce, which since it must derive the sender ID from
-        // the Noise key it carries is a real binding rather than a claim. Honest
-        // peers announce on connect before they ask, so this costs a real device
-        // nothing.
-        let known = self.state.with(|state| {
-            state
-                .peers
-                .info(claimed)
-                .is_some_and(|record| record.verified_nickname)
+        let (announced, authenticated) = self.state.with(|state| {
+            let announced = state.links.peer_for(link) == Some(claimed)
+                && state
+                    .peers
+                    .info(claimed)
+                    .is_some_and(|peer| peer.signing_public_key.is_some());
+            (announced, state.links.is_noise_authenticated(link, claimed))
         });
-        if !known {
-            tracing::debug!(
-                target: "mesh::ble",
-                peer = %claimed,
-                "sync request from a peer with no verified announce ignored"
-            );
+        if !announced && !authenticated {
             return;
         }
 
@@ -39,7 +26,13 @@ impl BleRuntime {
             .gossip
             .handle_request_sync(claimed, &request, now_secs());
         for send in sends {
-            if send.packet.message_type() == Some(MessageType::GroupMessage) {
+            let kind = send.packet.message_type();
+            // An announce-only peer can synchronize the public room. The
+            // contact archive and private epochs require a live Noise link.
+            if !authenticated && kind != Some(MessageType::Message) {
+                continue;
+            }
+            if kind == Some(MessageType::GroupMessage) {
                 // The store carries opaque ciphertext from any group. Only a
                 // current member of this exact epoch may receive a sync copy.
                 let Some(group_id) = PrivateChannel::envelope_group_id(&send.packet.payload) else {
@@ -55,7 +48,10 @@ impl BleRuntime {
                 if channel.stale
                     || channel.epoch != epoch
                     || channel.member_key(claimed).is_none()
-                    || channel.departed.iter().any(|member| member.peer == claimed.as_str())
+                    || channel
+                        .departed
+                        .iter()
+                        .any(|member| member.peer == claimed.as_str())
                 {
                     continue;
                 }

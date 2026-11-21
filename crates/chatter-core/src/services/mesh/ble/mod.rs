@@ -64,7 +64,6 @@ use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::sync::{GossipSyncManager, SyncConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::domain::mesh::account_binding::BindingV1;
 use super::chatter_hello::ChatterHello;
 use super::config::MeshConfig;
 use super::events::{MeshEvent, MeshMessage};
@@ -78,12 +77,13 @@ use super::private_channel::{
 };
 use super::router::{RouterCommand, RouterHandle};
 use super::signal_mesh;
-use crate::domain::mesh::frames::{self, BundleFrame};
 use super::state::{
     LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs,
 };
 use super::timeline::MeshEvents;
 use super::transport::BleCommand;
+use crate::domain::mesh::account_binding::BindingV1;
+use crate::domain::mesh::frames::{self, BundleFrame};
 use crate::storage::{
     KeyStore,
     mesh_binding_store::{MeshBindingStore, PeerBinding},
@@ -194,6 +194,8 @@ pub struct BleRuntime {
     last_throughput_report_ms: u64,
     /// Per-ingress budget for open channels, independent of outbound pacing.
     channel_ingress: std::collections::HashMap<String, (u64, u32)>,
+    announce_ingress: std::collections::HashMap<(String, bool), (u64, u32)>,
+    signing_pin_intent: std::collections::HashMap<PeerId, u64>,
     private_ingress: std::collections::HashMap<String, (u64, u32)>,
     /// Authenticated private authors share one budget across relay links.
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
@@ -281,6 +283,8 @@ impl BleRuntime {
             frames_written: std::sync::atomic::AtomicU64::new(0),
             last_throughput_report_ms: 0,
             channel_ingress: std::collections::HashMap::new(),
+            announce_ingress: std::collections::HashMap::new(),
+            signing_pin_intent: std::collections::HashMap::new(),
             dial_tx,
             dial_rx: Some(dial_rx),
             dial_in_flight: false,
@@ -380,28 +384,36 @@ impl BleRuntime {
         self.originate_broadcast(&packet).await;
     }
 
-    /// A peer's prekey bundle. Cached and re-gossiped only if it verifies
-    /// against the signing key pinned from that owner's verified announce — the
-    /// bundle's own signature proves nothing about whose static key it names.
+    /// Relay well-formed owner packets through the bounded gossip archive.
+    /// Only a Noise-bound key authorizes caching a bundle for local sealing.
     fn on_prekey_bundle(&mut self, packet: &BitchatPacket) -> bool {
         let Ok(bundle) = PrekeyBundle::decode(&packet.payload) else {
             return false;
         };
-        if bundle.owner_static == self.identity.static_public() {
+        let owner = PeerId::from_noise_key(&bundle.owner_static);
+        if owner == self.identity.peer_id()
+            || owner != PeerId::from_bytes(&packet.sender_id)
+            || !packet.is_broadcast()
+        {
             return false;
         }
-        let owner = PeerId::from_noise_key(&bundle.owner_static);
         let now_ms = now_millis();
         self.state.with(|state| {
-            let verified = state.peers.pinned(&owner).is_some_and(|pin| {
-                pin.noise_public_key.as_slice() == bundle.owner_static.as_slice()
-                    && <[u8; 32]>::try_from(pin.signing_public_key.as_slice())
-                        .is_ok_and(|key| bundle.verify(&key))
-            });
-            if verified {
+            let pin = state.peers.pinned(&owner);
+            let signing_key = pin
+                .map(|pin| pin.signing_public_key.as_slice())
+                .or_else(|| state.peers.info(&owner)?.signing_public_key.as_deref());
+            let Some(key) = signing_key else {
+                // A relay may see the bundle before the owner's announce.
+                return packet.signature.is_some();
+            };
+            if !<[u8; 32]>::try_from(key).is_ok_and(|key| bundle.verify(&key)) {
+                return false;
+            }
+            if pin.is_some_and(|pin| pin.noise_public_key.as_slice() == bundle.owner_static) {
                 state.prekeys.peers.ingest(bundle, now_ms);
             }
-            verified
+            true
         })
     }
 
@@ -499,11 +511,12 @@ impl BleRuntime {
 
         loop {
             let backlogged = !self.state.with(|state| state.writes.is_empty());
-            let quiet = !self.dial_in_flight && self.state.with(|state| {
-                state.links.links().next().is_none()
-                    && state.pending_dms.is_empty()
-                    && state.writes.is_empty()
-            });
+            let quiet = !self.dial_in_flight
+                && self.state.with(|state| {
+                    state.links.links().next().is_none()
+                        && state.pending_dms.is_empty()
+                        && state.writes.is_empty()
+                });
             tokio::select! {
                 event = radio.next_event() => match event {
                     Some(event) => {

@@ -20,6 +20,38 @@ impl BleRuntime {
     ) -> bool {
         let local = self.identity.peer_id();
         let now_ms = now_millis();
+        let (tracked, direct) = self.state.with(|state| {
+            let tracked =
+                state.peers.pinned(claimed).is_some() || state.peers.info(claimed).is_some();
+            let direct = packet.ttl == DIRECT_ANNOUNCE_TTL
+                && state
+                    .links
+                    .peer_for(link)
+                    .is_none_or(|bound| bound == claimed);
+            (tracked, direct)
+        });
+        if !tracked {
+            let key = (link.to_string(), direct);
+            self.announce_ingress
+                .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
+            if self.announce_ingress.len() >= 128 && !self.announce_ingress.contains_key(&key) {
+                let oldest_relay = self
+                    .announce_ingress
+                    .iter()
+                    .filter(|((_, direct), _)| !direct)
+                    .min_by_key(|(_, (start, _))| *start)
+                    .map(|(key, _)| key.clone());
+                let Some(oldest_relay) = oldest_relay.filter(|_| direct) else {
+                    return false;
+                };
+                self.announce_ingress.remove(&oldest_relay);
+            }
+            let budget = self.announce_ingress.entry(key).or_insert((now_ms, 0));
+            if budget.1 >= 60 {
+                return false;
+            }
+            budget.1 += 1;
+        }
         let now_s = now_secs();
 
         // What the trust decision needs from our own tables, read before it runs.
@@ -30,7 +62,6 @@ impl BleRuntime {
         // it looks at the signature.
         let (presence, link_bound_elsewhere, existing_noise_key, existing_signing_key) =
             self.state.with(|state| {
-                let record = state.peers.info(claimed);
                 let pin = state.peers.pinned(claimed);
                 (
                     state.links.presence(claimed),
@@ -38,10 +69,8 @@ impl BleRuntime {
                         .links
                         .peer_for(link)
                         .is_some_and(|bound| bound != claimed),
-                    pin.map(|p| p.noise_public_key.clone())
-                        .or_else(|| record.and_then(|r| r.noise_public_key.clone())),
-                    pin.map(|p| p.signing_public_key.clone())
-                        .or_else(|| record.and_then(|r| r.signing_public_key.clone())),
+                    pin.map(|p| p.noise_public_key.clone()),
+                    pin.map(|p| p.signing_public_key.clone()),
                 )
             });
 
@@ -121,31 +150,7 @@ impl BleRuntime {
             return false;
         }
 
-        if !self.state.with(|state| state.peers.can_pin(claimed)) {
-            self.degraded("Peer identity storage is full; new peers are refused.".to_string());
-            return false;
-        }
         let announcement = accepted.announcement.clone();
-        // Commit the pin before exposing the peer as trusted. A failed write
-        // leaves no accepted identity that would silently lose its pin on restart.
-        let persisted = self.state.with(|state| -> Result<(), String> {
-            if state.peers.pinned(claimed).is_some() {
-                return Ok(());
-            }
-            let mut candidate = state.peers.clone();
-            candidate.upsert_verified_announce(claimed, &announcement, false, now_ms);
-            let sealed = self
-                .sealer
-                .seal(&candidate.pins_to_bytes())
-                .map_err(|e| e.to_string())?;
-            self.storage
-                .save(StorageKey::PeerPins, &sealed)
-                .map_err(|e| e.to_string())
-        });
-        if let Err(error) = persisted {
-            self.degraded(format!("Peer identity pin could not be saved: {error}"));
-            return false;
-        }
         let direct = VerifiedDirectAnnounce::from_packet(
             claimed.clone(),
             packet,
@@ -174,10 +179,13 @@ impl BleRuntime {
                 // into "connected".
                 let connected = accepted.connected_flag().unwrap_or(false);
 
-                let update =
-                    state
-                        .peers
-                        .upsert_verified_announce(claimed, &announcement, connected, now_ms);
+                let update = state.peers.upsert_verified_announce_preserving(
+                    claimed,
+                    &announcement,
+                    connected,
+                    now_ms,
+                    |peer| state.links.presence(peer).any(),
+                );
                 // Bind first, always. `rebind_after_verified_direct` refuses an
                 // *unbound* link by design — it exists for the contested case, where a
                 // link already belongs to someone else and a verified direct announce
@@ -301,7 +309,11 @@ impl BleRuntime {
                 // coming up never completes and was never retried; restart it
                 // once it is older than the stall window.
                 let last_open = state.dm_handshake_at_ms.get(claimed).copied();
-                let attempts = state.known_peer_reopen_attempts.get(claimed).copied().unwrap_or(0);
+                let attempts = state
+                    .known_peer_reopen_attempts
+                    .get(claimed)
+                    .copied()
+                    .unwrap_or(0);
                 let jitter_ms = claimed
                     .to_routing_bytes()
                     .map(|bytes| u64::from_be_bytes(bytes) % 1_000)
@@ -309,14 +321,15 @@ impl BleRuntime {
                 let due = last_open.is_none_or(|last| {
                     now_ms.saturating_sub(last) >= known_peer_retry_delay_ms(attempts, jitter_ms)
                 });
-                state.peers.pinned(claimed).is_some()
-                    && !state.sessions.has_session(claimed)
-                    && due
+                state.peers.pinned(claimed).is_some() && !state.sessions.has_session(claimed) && due
             })
             && self.state.can_write_to(claimed)
         {
             let first_attempt = self.state.with(|state| {
-                let attempts = state.known_peer_reopen_attempts.entry(claimed.clone()).or_default();
+                let attempts = state
+                    .known_peer_reopen_attempts
+                    .entry(claimed.clone())
+                    .or_default();
                 *attempts = attempts.saturating_add(1);
                 *attempts == 1
             });

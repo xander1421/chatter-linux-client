@@ -498,7 +498,7 @@ async fn our_prekey_bundle_is_saved_before_it_is_published() {
 }
 
 #[tokio::test]
-async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
+async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_sealing() {
     let (mut runtime, _radio, state) = runtime();
     let owner = MeshIdentity::generate(&mut os_rng());
     let announcement = AnnouncementPacket::new(
@@ -547,7 +547,22 @@ async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
             .is_none()
     );
 
-    // The genuine one is cached, so offline mail to the owner seals to it.
+    // Announce-only relays can propagate it, but cannot use it for sealing.
+    assert!(runtime.on_prekey_bundle(&bundle_packet(&genuine)));
+    assert!(
+        state
+            .with(|inner| inner
+                .prekeys
+                .peers
+                .take(&owner.static_public(), now_millis()))
+            .is_none()
+    );
+    assert!(state.with(|inner| inner.peers.pin_noise_identity(
+        &owner.peer_id(),
+        &owner.static_public(),
+        &owner.signing_public(),
+        now_millis(),
+    )));
     assert!(runtime.on_prekey_bundle(&bundle_packet(&genuine)));
     let (_, prekey_id) = super::super::prekeys::seal_offline(
         &state,
@@ -615,7 +630,9 @@ async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
         envelope.encode().expect("encodes"),
         chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
     );
-    runtime.on_courier_envelope(&packet, &sender.peer_id()).await;
+    runtime
+        .on_courier_envelope(&packet, &sender.peer_id())
+        .await;
 
     match events.try_recv() {
         Ok(MeshEvent::Message(message)) => {

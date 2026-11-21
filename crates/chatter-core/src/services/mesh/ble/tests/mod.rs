@@ -66,8 +66,8 @@ fn runtime_parts() -> (
     (runtime, radio, state, timeline)
 }
 
-/// A peer in the registry with a known signing key, as a verified announce
-/// would have left it. Returns the identity that has to sign for it.
+/// A fixture for a verified live record. Some tests use fixed routing IDs
+/// independently of this signing key, so they do not create a durable pin.
 fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> MeshIdentity {
     let identity = MeshIdentity::generate(&mut os_rng());
     let announcement = AnnouncementPacket::new(
@@ -82,6 +82,9 @@ fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> M
         inner
             .peers
             .upsert_verified_announce(peer, &announcement, true, now_millis());
+        let mut record = inner.peers.info(peer).unwrap().clone();
+        record.verified_nickname = true;
+        inner.peers.upsert(record);
     });
     identity
 }
@@ -89,8 +92,16 @@ fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> M
 #[tokio::test]
 async fn leave_requires_the_pinned_signature_and_preserves_the_pin() {
     let (mut runtime, _radio, state) = runtime();
-    let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &peer, "Alice");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let peer = identity.peer_id();
+    assert!(state.with(|inner| inner.peers.pin_noise_identity(
+        &peer, &identity.static_public(), &identity.signing_public(), now_millis(),
+    )));
+    let announce = AnnouncementPacket::new(
+        "Alice".into(), identity.static_public().to_vec(), identity.signing_public().to_vec(),
+        None, None, None,
+    );
+    state.with(|inner| inner.peers.upsert_verified_announce(&peer, &announce, true, now_millis()));
     let attacker = MeshIdentity::generate(&mut os_rng());
     let link = LinkId::new("/mock/leave");
     let mut packet = BitchatPacket::new(

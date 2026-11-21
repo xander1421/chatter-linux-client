@@ -223,7 +223,7 @@ struct CachedBundle {
 
 impl PeerBundles {
     /// Cache a bundle whose signature the caller has verified against the
-    /// owner's announce-pinned signing key. Strictly newer replaces; past
+    /// owner's Noise-bound signing key. Strictly newer replaces; past
     /// [`MAX_CACHED_BUNDLES`] the least recently updated owner is evicted.
     pub fn ingest(&mut self, bundle: PrekeyBundle, now_ms: u64) -> bool {
         if let Some(cached) = self.bundles.get(&bundle.owner_static)
