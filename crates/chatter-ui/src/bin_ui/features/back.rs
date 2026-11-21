@@ -205,6 +205,10 @@ pub fn handle_back(window: &MainWindow) -> bool {
         background_app();
         return false;
     }
+    if !window.global::<crate::CallView>().get_keyguard_call_id().is_empty() {
+        window.global::<crate::CallView>().invoke_leave_keyguard_call();
+        return true;
+    }
     if window.global::<crate::ChatPane>().get_link_confirm_url() != "" {
         window.global::<crate::ChatPane>().set_link_confirm_url("".into());
         return true;

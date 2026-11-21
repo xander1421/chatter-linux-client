@@ -1,6 +1,7 @@
 import { DesktopChrome } from "theme/desktop_chrome.slint";
 import { InputPolicy } from "theme/input_policy.slint";
 import { AppViewTransition } from "app_view_transition.slint";
+import { ActiveCallView, IncomingCallModal } from "calls/mod.slint";
 import { AppCallLifecycle } from "app_call_lifecycle.slint";
 import { AppModalTransitions } from "app_modal_transitions.slint";
 import { CallView } from "app_call_view.slint";
@@ -437,6 +438,16 @@ export component MainWindow inherits Window {
     // Android's Activity calls this directly for hardware/gesture Back, even
     // when Slint has no focused item. The scope below also routes desktop
     // Back/Escape here. Navigation decisions live in features/back.rs.
+    private property <string> keyguard-route: root.current-view + "|" + SidebarPane.active-tab
+        + "|" + ChatPane.channel-id + "|" + root.active-modal
+        + "|" + (SidebarPane.mobile-show-chat ? "chat" : "list")
+        + "|" + (SearchPane.unified-search-open ? "search" : "");
+    changed keyguard-route => {
+        if CallView.keyguard-call-id != "" && CallView.active-call-visible
+            && CallView.active-call-data.call-id == CallView.keyguard-call-id {
+            CallView.leave-keyguard-call();
+        }
+    }
     callback back-pressed();
     callback mouse-navigation(bool); // true = Forward
     callback navigation-changed();
@@ -660,6 +671,12 @@ export component MainWindow inherits Window {
         capture-key-pressed(event) => {
             // Locked: no shortcut may act on the hidden app behind the lock
             // screen. The PIN field gets the keys; Back reaches key-pressed.
+            if (CallView.keyguard-call-id != "" && !AppLockPane.locked) {
+                if (event.text == Key.Back || event.text == Key.Escape) {
+                    CallView.leave-keyguard-call();
+                }
+                return accept;
+            }
             if (AppLockPane.locked) { return reject; }
             if (event.text == Key.Tab || event.text == Key.Backtab || event.text == Key.UpArrow || event.text == Key.DownArrow
                 || event.text == Key.LeftArrow || event.text == Key.RightArrow) {
@@ -676,6 +693,13 @@ export component MainWindow inherits Window {
         }
 
         key-pressed(event) => {
+            if (CallView.keyguard-call-id != "" && !AppLockPane.locked) {
+                if (event.text == Key.Back || event.text == Key.Escape) {
+                    CallView.leave-keyguard-call();
+                    return accept;
+                }
+                return reject;
+            }
             if (AppLockPane.locked) {
                 // Back leaves the app (features/back.rs); nothing else acts.
                 if (event.text == Key.Back) { root.back-pressed(); return accept; }
@@ -745,6 +769,8 @@ export component MainWindow inherits Window {
         TouchArea {
             width: root.width;
             height: root.height;
+            visible: CallView.keyguard-call-id == "";
+            enabled: self.visible;
             // Parent hit testing observes pointer movement before child controls handle it.
             changed mouse-x => { Appearance.keyboard-focus-visible = false; }
             changed mouse-y => { Appearance.keyboard-focus-visible = false; }
@@ -982,6 +1008,53 @@ export component MainWindow inherits Window {
         }
 
         }
+        }
+
+        // The regular app is hidden while Android shows the verified call
+        // over the keyguard, including during answer and unlock transitions.
+        if CallView.keyguard-call-id != "": Rectangle {
+            width: root.width;
+            height: root.height;
+            background: Colors.surface;
+            if CallView.active-call-visible
+                && CallView.active-call-data.call-id == CallView.keyguard-call-id: ActiveCallView {
+                y: root.safe-area-top;
+                width: parent.width;
+                height: parent.height - root.safe-area-top - root.safe-area-bottom;
+                show: true;
+                fullscreen: true;
+                viewport-height: self.height;
+                is-mobile-platform: true;
+                call-data: CallView.active-call-data;
+                is-muted: CallView.call-is-muted;
+                is-video-enabled: CallView.call-is-video-enabled;
+                speaker-toggle: CallView.call-speaker-toggle;
+                speaker-on: CallView.call-speaker-on;
+                local-video-frame: CallView.call-local-video-frame;
+                remote-video-frames: CallView.call-remote-video-frames;
+                select-tile-indices(participants, pinned-id) => {
+                    return CallView.select-call-tile-indices(participants, pinned-id);
+                }
+                video-layout-revision: CallView.call-video-layout-revision;
+                video-size(id, width, height, screen) => { CallView.report-call-video-size(id, width, height, screen); }
+                end-call => { CallView.call-end(); }
+                toggle-mute => { CallView.call-toggle-mute(); }
+                toggle-video => { CallView.call-toggle-video(); }
+                swap-camera => { CallView.call-swap-camera(); }
+                toggle-speaker => { CallView.call-toggle-speaker(); }
+                fullscreen-toggle => { CallView.leave-keyguard-call(); }
+                toggle-screen-share => { CallView.leave-keyguard-call(); }
+                show-audio-input => { CallView.leave-keyguard-call(); }
+                show-audio-output => { CallView.leave-keyguard-call(); }
+            }
+            if CallView.incoming-call-visible
+                && CallView.incoming-call-data.call-id == CallView.keyguard-call-id: IncomingCallModal {
+                show: true;
+                call-data: CallView.incoming-call-data;
+                replaces-active: CallView.incoming-call-replaces-active;
+                accept-call => { CallView.accept-incoming-call(CallView.keyguard-call-id); }
+                decline-call => { CallView.decline-incoming-call(CallView.keyguard-call-id); }
+            }
         }
 
         // Above everything, including modals, calls and toasts (core decides

@@ -113,14 +113,11 @@ impl ChatterClient {
         crate::services::user::UserService::username_link_qr(url, size)
     }
 
-    /// Resolve someone's username link to their (decrypted username, account
-    /// id). The decryption happens locally with the URL-fragment entropy —
-    /// the server never learns the username. The account id is the link
-    /// owner's, so a link reaches them even with username discovery off.
+    /// Resolve a link to its owner and, if independently confirmed, its handle.
     pub async fn resolve_username_link(
         &self,
         url: &str,
-    ) -> Result<(String, crate::domain::ids::UserId), crate::services::user::UserError> {
+    ) -> Result<(Option<String>, crate::domain::ids::UserId), crate::services::user::UserError> {
         // An identified server request, like `lookup_by_username`.
         if self.anon_mode_enabled() {
             return Err(crate::services::user::UserError::HandleLookupForbiddenInAnonMode);

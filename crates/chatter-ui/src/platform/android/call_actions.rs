@@ -2,7 +2,7 @@
 //!
 //! Accept stays an activity PendingIntent for Android 14+ foregrounding;
 //! Decline stays a nonexported headless receiver. Both consume a call/action
-//! capability before cancellation. Body/full-screen open use separate one-shot
+//! capability before acting. Body/full-screen open use separate call-bound
 //! capabilities before changing the UI. Core call/session checks still apply.
 
 use slint::ComponentHandle;
@@ -20,11 +20,15 @@ static CALL_CLIENT: OnceLock<Arc<ChatterClient>> = OnceLock::new();
 struct CallWindow {
     window: Option<slint::Weak<crate::MainWindow>>,
     pending_accept: Option<String>,
+    full_screen_call: Option<String>,
+    covered_until_frame: Option<String>,
 }
 
 static MAIN_WINDOW: Mutex<CallWindow> = Mutex::new(CallWindow {
     window: None,
     pending_accept: None,
+    full_screen_call: None,
+    covered_until_frame: None,
 });
 
 /// Register the client used to accept/decline calls from notification actions.
@@ -35,13 +39,16 @@ pub fn register_call_client(client: Arc<ChatterClient>) {
 /// Register the main window so the Accept activity-intent can drive the in-app
 /// accept handler.
 pub fn register_main_window(window: slint::Weak<crate::MainWindow>) {
-    let pending = {
+    let (pending, full_screen) = {
         let mut state = MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         state.window = Some(window.clone());
-        state.pending_accept.clone()
+        (state.pending_accept.clone(), state.full_screen_call.clone())
     };
     if let Some(call_id) = pending {
-        dispatch_accept(window, call_id);
+        dispatch_accept(window.clone(), call_id);
+    }
+    if let Some(call_id) = full_screen {
+        dispatch_full_screen(window, call_id);
     }
 }
 
@@ -93,7 +100,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeAcceptIncoming
             let Ok(capability) = (capability).try_to_string(&env).map(String::from) else {
                 return;
             };
-            if !super::notifications::consume_and_cancel_call_consent(
+            if !super::notifications::consume_call_consent(
                 &call_id,
                 super::notifications::call_consent::ACCEPT,
                 &capability,
@@ -140,31 +147,131 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCa
             let Ok(capability) = (capability).try_to_string(&env).map(String::from) else {
                 return;
             };
-            if !matches!(
-                action.as_str(),
-                super::notifications::call_consent::OPEN
-                    | super::notifications::call_consent::FULL_SCREEN
-            ) || !super::notifications::consume_call_consent(&call_id, &action, &capability)
+            if action == super::notifications::call_consent::FULL_SCREEN {
+                super::notifications::authorize_full_screen(&call_id, &capability, || {
+                    let weak = {
+                        let mut state = MAIN_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+                        if state.full_screen_call.as_deref() == Some(call_id.as_str()) {
+                            return;
+                        }
+                        state.full_screen_call = Some(call_id.clone());
+                        state.window.clone()
+                    };
+                    if let Some(weak) = weak {
+                        dispatch_full_screen(weak, call_id.clone());
+                    }
+                });
+                return;
+            }
+            if action != super::notifications::call_consent::OPEN
+                || !super::notifications::consume_call_consent(&call_id, &action, &capability)
             {
                 return;
             }
-            let Some(weak) = main_window() else {
+            if let Some(weak) = main_window() {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if w.global::<crate::CallView>().get_incoming_call_visible()
+                            && w.global::<crate::CallView>()
+                                .get_incoming_call_data()
+                                .call_id
+                                == call_id.as_str()
+                        {
+                            w.global::<crate::CallView>()
+                                .set_incoming_call_minimized(false);
+                        }
+                    }
+                });
+            }
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+fn dispatch_full_screen(weak: slint::Weak<crate::MainWindow>, call_id: String) {
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let mut state = MAIN_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        if state.full_screen_call.as_deref() != Some(call_id.as_str()) {
+            return;
+        }
+        state.covered_until_frame = Some(call_id.clone());
+        drop(state);
+        let view = w.global::<crate::CallView>();
+        view.set_keyguard_call_id(call_id.clone().into());
+        super::activity::update_call_window(jni::jni_str!("showVerifiedCallWindow"), &call_id);
+    });
+}
+
+pub(super) fn call_window_frame_presented() {
+    let call_id = MAIN_WINDOW
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .covered_until_frame
+        .take();
+    if let Some(call_id) = call_id {
+        super::activity::update_call_window(jni::jni_str!("verifiedCallFrameDrawn"), &call_id);
+    }
+}
+
+/// Notification cancellation also happens on answer. The matching active
+/// call screen then owns cleanup through its own presentation lifecycle.
+pub(crate) fn ring_notification_cancelled(call_id: &str) {
+    let call_id = call_id.to_owned();
+    let Some(weak) = main_window() else {
+        forget_call_window(&call_id);
+        return;
+    };
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            let view = w.global::<crate::CallView>();
+            if view.get_active_call_visible() && view.get_active_call_data().call_id == call_id.as_str() {
                 return;
-            };
+            }
+        }
+        super::activity::clear_incoming_call_window(&call_id);
+    });
+}
+
+pub(super) fn forget_call_window(call_id: &str) {
+    let mut state = MAIN_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    if state.full_screen_call.as_deref() == Some(call_id) {
+        state.full_screen_call = None;
+    }
+    if state.covered_until_frame.as_deref() == Some(call_id) {
+        state.covered_until_frame = None;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeCallWindowCleared(
+    mut env: jni::EnvUnowned<'_>,
+    _class: JClass,
+    call_id: JString,
+    navigate: jni::sys::jboolean,
+) {
+    env.with_env(|env| -> jni::errors::Result<_> {
+        let call_id = call_id.try_to_string(&env)?;
+        forget_call_window(&call_id);
+        if let Some(weak) = main_window() {
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    if w.global::<crate::CallView>().get_incoming_call_visible()
-                        && w.global::<crate::CallView>()
-                            .get_incoming_call_data()
-                            .call_id
-                            == call_id.as_str()
-                    {
-                        w.global::<crate::CallView>()
-                            .set_incoming_call_minimized(false);
+                let Some(w) = weak.upgrade() else { return };
+                let view = w.global::<crate::CallView>();
+                if view.get_keyguard_call_id() != call_id.as_str() {
+                    return;
+                }
+                if navigate != jni::sys::JNI_FALSE {
+                    if view.get_active_call_visible() && view.get_active_call_data().call_id == call_id.as_str() {
+                        view.set_active_call_fullscreen(false);
+                        view.invoke_restore_call_route();
+                    } else if view.get_incoming_call_data().call_id == call_id.as_str() {
+                        view.set_incoming_call_minimized(true);
                     }
                 }
+                view.set_keyguard_call_id("".into());
             });
-        })())
+        }
+        Ok(())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
 }

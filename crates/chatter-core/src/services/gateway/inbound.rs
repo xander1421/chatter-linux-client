@@ -254,14 +254,8 @@ pub enum DmContent {
     /// takes over now. Decrypting it already did that; dispatching it must do
     /// nothing, and the caller acks.
     NullMessage,
-    /// Not content at all: the authenticated sender is blocked, so the
-    /// envelope was never parsed. The DM-mailbox twin of
-    /// [`SealedSenderResult::DroppedBlockedSender`] — same decision, same
-    /// point in the pipeline, a different return shape because
-    /// `process_dm_message` hands back content rather than an outcome.
-    ///
-    /// Dispatching this must do nothing at all; the caller still acks.
-    DroppedBlockedSender,
+    /// An authenticated envelope denied before any DM content is dispatched.
+    DroppedMailboxContent { reason: &'static str },
 }
 
 // =============================================================================
@@ -447,6 +441,10 @@ pub enum SealedSenderResult {
         peer_device_id: u32,
         timestamp_ms: u64,
     },
+    /// Pairwise channel content denied by the verified membership or mute gate.
+    DroppedChannelContent,
+    AwaitingChannelMembership(PairwiseChannelContent),
+
     /// The sender is blocked. The envelope decrypted and the sender was
     /// authenticated — by the sealed sender certificate, or by holding the
     /// Double Ratchet session for the address it claimed — and the gateway
@@ -468,4 +466,36 @@ pub enum SealedSenderResult {
     /// re-fetching and re-decrypting it on every poll for as long as the block
     /// stands.
     DroppedBlockedSender { sender_id: UserId },
+}
+
+
+/// Authenticated channel content retained across device inbox redeliveries.
+/// A pairwise ratchet has already advanced before we can read the channel ID.
+#[derive(Clone, Debug)]
+pub struct PairwiseChannelContent {
+    pub(crate) channel_id: crate::domain::ids::ChannelId,
+    pub(crate) sender_id: UserId,
+    pub(crate) sender_device_id: u32,
+    pub(crate) content: Box<chatter_proto::content_v1::Content>,
+}
+pub(crate) fn content_channel(inner: &chatter_proto::content_v1::content::Content) -> Option<&str> {
+    use chatter_proto::content_v1::content;
+    match inner {
+        content::Content::DataMessage(dm) => Some(&dm.channel_id),
+        content::Content::Typing(typing) => Some(&typing.channel_id),
+        content::Content::Receipt(receipt) => Some(&receipt.channel_id),
+        content::Content::Pin(pin) => Some(&pin.channel_id),
+        content::Content::Edit(edit) => edit.data_message.as_ref().map(|dm| dm.channel_id.as_str()),
+        // Channel reactions encode the channel as "channel:{id}:{author}"
+        // (control.rs `parse_channel_reaction_author`).
+        content::Content::Reaction(reaction) => reaction
+            .target_author_aci
+            .strip_prefix("channel:")
+            .and_then(|rest| rest.split_once(':'))
+            .map(|(channel, _)| channel),
+        content::Content::CallEvent(event) => Some(&event.channel_id),
+        content::Content::GroupCallSignal(signal) => Some(&signal.channel_id),
+        content::Content::GroupMailboxAddress(address) => Some(&address.channel_id),
+        _ => None,
+    }
 }

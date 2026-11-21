@@ -3424,3 +3424,6 @@ msgstr ""
 #: crates/chatter-core/src/client/activity.rs
 msgid "Registered"
 msgstr ""
+
+msgid "This username link is invalid or expired."
+msgstr ""

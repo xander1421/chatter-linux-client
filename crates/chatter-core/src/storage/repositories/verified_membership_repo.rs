@@ -307,6 +307,32 @@ impl VerifiedMembershipRepository {
             .is_some())
     }
 
+    /// Read the signed membership and exclusion together. Absence is
+    /// unresolved, while an exclusion or inactive entry is a known refusal.
+    pub(crate) fn content_admission(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &str,
+        now_ns: u64,
+    ) -> Result<Option<bool>, StorageError> {
+        let conn = self.db.connection()?;
+        let (excluded, status, muted_until) = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM verified_channel_exclusions e
+                            WHERE e.channel_id = ?1 AND e.user_id = ?2),
+                    m.status, m.muted_until
+             FROM (SELECT 1)
+             LEFT JOIN verified_channel_members m ON m.channel_id = ?1 AND m.user_id = ?2",
+            params![channel_id.to_string(), user_id],
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, Option<i32>>(1)?, row.get::<_, Option<i64>>(2)?)),
+        )?;
+        if excluded {
+            return Ok(Some(false));
+        }
+        Ok(status.zip(muted_until).map(|(status, muted_until)| {
+            status == MemberStatus::Active as i32 && (muted_until as u64) <= now_ns
+        }))
+    }
+
     /// `user_id`'s signed mute in `channel_id` (Unix nanoseconds; 0 = none,
     /// `u64::MAX` = until unmuted); 0 when not in the verified state. Decoded
     /// in Rust: `u64::MAX` is stored as the i64 -1, so SQL cannot compare it.

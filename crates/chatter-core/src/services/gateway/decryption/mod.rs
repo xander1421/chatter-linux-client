@@ -233,6 +233,57 @@ impl MessageGateway {
         result.map(|outcome| (None, Some(outcome)))
     }
 
+    /// Common admission and dispatch for channel payloads from both pairwise
+    /// transports, including already-authenticated content on redelivery.
+    pub(crate) async fn route_pairwise_channel(
+        &self,
+        pending: super::inbound::PairwiseChannelContent,
+    ) -> Result<SealedSenderResult, ServiceError> {
+        let super::inbound::PairwiseChannelContent {
+            channel_id, sender_id, sender_device_id, content,
+        } = pending;
+        if sender_is_blocked(&self.user_repo, &self.settings_repo, &sender_id)? {
+            return Ok(SealedSenderResult::DroppedBlockedSender { sender_id });
+        }
+        let gate = crate::services::message::GroupStateGate::new(&self.settings_repo);
+        match gate.content_admission(&channel_id, &sender_id) {
+            Some(true) => {}
+            Some(false) => return Ok(SealedSenderResult::DroppedChannelContent),
+            None => {
+                return Ok(SealedSenderResult::AwaitingChannelMembership(
+                    super::inbound::PairwiseChannelContent {
+                        channel_id, sender_id, sender_device_id, content,
+                    },
+                ));
+            }
+        }
+        match content.content {
+            Some(content::Content::DataMessage(data)) if data.delete.is_none() => {
+                self.store_data_message(data, Some(sender_id)).await
+            }
+            Some(content::Content::GroupMailboxAddress(announcement)) => {
+                Ok(SealedSenderResult::MailboxAnnouncement { sender_id, channel_id, announcement })
+            }
+            _ => Ok(SealedSenderResult::ControlContent { sender_id, sender_device_id, content }),
+        }
+    }
+
+    fn pairwise_channel(
+        content: &Content,
+        sender_id: UserId,
+        sender_device_id: u32,
+    ) -> Result<Option<super::inbound::PairwiseChannelContent>, ServiceError> {
+        let Some(channel) = content.content.as_ref()
+            .and_then(super::inbound::content_channel)
+            .filter(|channel| !channel.is_empty()) else { return Ok(None) };
+        let channel_id = channel.parse().map_err(|e| {
+            ServiceError::Validation(format!("Invalid pairwise channel ID: {e}"))
+        })?;
+        Ok(Some(super::inbound::PairwiseChannelContent {
+            channel_id, sender_id, sender_device_id, content: Box::new(content.clone()),
+        }))
+    }
+
     /// Inner implementation that processes decrypted plaintext.
     /// Separated to ensure plaintext zeroization happens in the outer function.
     async fn process_incoming_message_inner(
@@ -270,6 +321,11 @@ impl MessageGateway {
             plaintext,
             "sealed_sender",
         ) {
+            if let Some(pending) = Self::pairwise_channel(
+                &content_proto, sender_id, u32::from(sender_address.device_id()),
+            )? {
+                return self.route_pairwise_channel(pending).await;
+            }
             let ct_name = content_type_name(&content_proto.content);
 
             tracing::info!(
@@ -360,30 +416,6 @@ impl MessageGateway {
                     distribution_message: skdm.distribution_message.clone(),
                     timestamp: content_proto.timestamp,
                     profile_key_changed,
-                });
-            }
-
-            // Handle GroupMailboxAddress - member is announcing their ephemeral mailbox (NDSS '21)
-            if let Some(content::Content::GroupMailboxAddress(announcement)) = content_proto.content
-            {
-                let channel_id: crate::domain::ids::ChannelId =
-                    announcement.channel_id.parse().map_err(|e| {
-                        ServiceError::Validation(format!(
-                            "Invalid channel_id in GroupMailboxAddress: {}",
-                            e
-                        ))
-                    })?;
-                tracing::info!(
-                    sender_id = %sender_id,
-                    channel_id = %channel_id,
-                    mailbox_pk_len = announcement.mailbox_pk.len(),
-                    "GATEWAY: Received GroupMailboxAddress announcement via sealed sender"
-                );
-                // Return the announcement for processing by group coordinator
-                return Ok(SealedSenderResult::MailboxAnnouncement {
-                    sender_id,
-                    channel_id,
-                    announcement,
                 });
             }
 

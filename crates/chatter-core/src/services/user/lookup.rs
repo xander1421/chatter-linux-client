@@ -15,6 +15,20 @@ impl UserService {
         &self,
         username: &str,
     ) -> Result<Option<crate::domain::UserId>, UserError> {
+        let user_id = self.resolve_username_binding(username).await?;
+        if let Some(id) = user_id.as_ref() {
+            if let Err(e) = self.user_repo.set_known_username(id, username) {
+                tracing::warn!(error = %e, "Could not remember looked-up peer handle");
+            }
+        }
+        Ok(user_id)
+    }
+
+    /// Resolve a registered handle without changing the local profile cache.
+    pub(super) async fn resolve_username_binding(
+        &self,
+        username: &str,
+    ) -> Result<Option<crate::domain::UserId>, UserError> {
         // The lookup is an existence oracle. Only a complete handle may reach
         // the server — a caller that fires per keystroke must not turn it into
         // a prefix/enumeration probe.
@@ -27,18 +41,10 @@ impl UserService {
         let hash = crate::crypto::auth_crypto::hash_username_lookup(username)
             .map_err(|e| UserError::InvalidInput(format!("invalid username: {e}")))?;
         let mut user_client = self.user_client();
-        match user_client.lookup_username(hash).await? {
-            Some(id_str) => {
-                let user_id = id_str.parse().ok();
-                if let Some(id) = user_id.as_ref() {
-                    if let Err(e) = self.user_repo.set_known_username(id, username) {
-                        tracing::warn!(error = %e, "Could not remember looked-up peer handle");
-                    }
-                }
-                Ok(user_id)
-            }
-            None => Ok(None),
-        }
+        Ok(user_client
+            .lookup_username(hash)
+            .await?
+            .and_then(|id| id.parse().ok()))
     }
 
     /// Read this account's "Who can find me by my username" setting from the
@@ -51,8 +57,8 @@ impl UserService {
 
     /// Set this account's "Who can find me by my username" setting on the
     /// server. With `false` the server answers "no match" to everyone else's
-    /// username lookup for this account; friend codes and username links
-    /// still reach it. Returns the value the server persisted.
+    /// username lookup for this account. Friend codes and username links still
+    /// reach it. Returns the value the server persisted.
     pub async fn set_username_discoverability(
         &self,
         discoverable: bool,

@@ -5,6 +5,14 @@ import { VoiceRecording } from "chat/voice_recording.slint";
 export component AppCallLifecycle inherits Rectangle {
     width: 0px;
     height: 0px;
+    private property <string> active-id: CallView.active-call-visible ? CallView.active-call-data.call-id : "";
+    private property <string> previous-active-id;
+    changed active-id => {
+        if self.previous-active-id != "" && self.previous-active-id == CallView.keyguard-call-id {
+            CallView.keyguard-call-ended(self.previous-active-id);
+        }
+        self.previous-active-id = self.active-id;
+    }
     private property <bool> observed-active-call-visible: CallView.active-call-visible;
     changed observed-active-call-visible => {
         if CallView.active-call-visible { VoiceRecording.cancel(); }

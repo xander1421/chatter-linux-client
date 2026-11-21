@@ -192,6 +192,9 @@ pub enum UserError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("invalid or expired username link")]
+    InvalidUsernameLink,
+
     /// Network operation failed.
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
@@ -211,6 +214,9 @@ impl UserError {
     #[must_use]
     pub fn user_message(&self) -> String {
         match self {
+            Self::InvalidUsernameLink => {
+                chatter_i18n::tr("This username link is invalid or expired.")
+            }
             Self::NotLoggedIn => chatter_i18n::tr("You're signed out."),
             Self::UserNotFound(_) => chatter_i18n::tr("No account found."),
             Self::NotAuthorized | Self::Network(NetworkError::PermissionDenied) => {

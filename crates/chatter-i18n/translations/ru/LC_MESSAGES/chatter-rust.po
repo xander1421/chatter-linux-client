@@ -3947,3 +3947,6 @@ msgstr "Не удалось выполнить действие с канало�
 #: crates/chatter-core/src/client/activity.rs
 msgid "Registered"
 msgstr "Зарегистрировано"
+
+msgid "This username link is invalid or expired."
+msgstr "Эта ссылка на имя пользователя недействительна или устарела."
