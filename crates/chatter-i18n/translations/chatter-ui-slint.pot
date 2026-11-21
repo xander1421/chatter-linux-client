@@ -4200,6 +4200,10 @@ msgstr ""
 msgid "Saved messages"
 msgstr ""
 
+#: ui/sidebar/sidebar.slint
+msgid "Saved messages: {}"
+msgstr ""
+
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "↑ / ↓, Home / End"
 msgstr ""

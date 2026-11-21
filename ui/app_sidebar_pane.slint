@@ -7,6 +7,8 @@ export global SidebarPane {
     in property <[ChatRowData]> chat-rows: [];
     in property <[ChatRowData]> archived-rows: [];
     in-out property <bool> archive-open: false;
+    in property <string> saved-preview: "";
+    in property <string> saved-time: "";
     in-out property <bool> chat-rows-loading: true;
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SidebarRowData]> flat-rows: [];

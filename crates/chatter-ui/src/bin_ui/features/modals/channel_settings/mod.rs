@@ -980,7 +980,8 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             &channel,
                         );
                     let rows = ui_ctx.sidebar_rows();
-                    (metadata, rows)
+                    let saved = crate::bin_ui::features::sidebar::SavedPreview::read(&ui_ctx);
+                    (metadata, rows, saved)
                 });
                 let ctx_for_paint = ui_ctx.clone();
                 paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
@@ -988,7 +989,8 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                     match result {
-                        Ok((metadata, rows)) => {
+                        Ok((metadata, rows, saved)) => {
+                            saved.apply(w, &ctx_for_paint);
                             apply_saved_channel(w, &ctx_for_paint, epoch, metadata, rows)
                         }
                         Err(e) => {

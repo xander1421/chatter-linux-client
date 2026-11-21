@@ -4164,6 +4164,10 @@ msgstr "Ctrl + 0"
 msgid "Saved messages"
 msgstr "Mensajes guardados"
 
+#: ui/sidebar/sidebar.slint
+msgid "Saved messages: {}"
+msgstr "Mensajes guardados: {}"
+
 #: ui/modals/keyboard_shortcuts.slint:135
 msgid "↑ / ↓, Home / End"
 msgstr "↑ / ↓, Home / End"

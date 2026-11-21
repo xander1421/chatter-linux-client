@@ -606,6 +606,7 @@ pub async fn handle_domain_event(
                 .as_ref()
                 .map(crate::bin_ui::features::chat::open::channel::ChannelMetadata::from_channel);
             let rows = ui_ctx.sidebar_rows();
+            let saved = crate::bin_ui::features::sidebar::SavedPreview::read(ui_ctx);
             let weak = window.clone();
             let ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -613,6 +614,7 @@ pub async fn handle_domain_event(
                 if !ctx.composer_session_is_current(session_revision) {
                     return;
                 }
+                saved.apply(&w, &ctx);
                 crate::bin_ui::features::sidebar::apply_chat_list(&w, &ctx, rows);
                 if opened == chatter_core::state::ActiveConversation::Channel(channel_id)
                     && ctx.active_conversation() == opened

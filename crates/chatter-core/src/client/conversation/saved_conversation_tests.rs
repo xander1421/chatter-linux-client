@@ -451,3 +451,79 @@ async fn saved_delete_recovery_publishes_the_persisted_id_to_the_ui() {
         } if conversation_id == ChannelId::from(owner) && target_message_id == id
     ));
 }
+
+#[tokio::test]
+async fn saved_messages_sidebar_preview_tracks_visible_history() {
+    use crate::domain::attachment::{Attachment, FileMetadata};
+    use crate::domain::ids::AttachmentId;
+
+    let (client, dir) = super::tests::test_client();
+    let owner = UserId::new();
+    let id = ChannelId::from(owner);
+    client.auth_state().set_logged_in(owner, 1, "fixture".into());
+    let repo = &client.messages().message_repo;
+    let empty = (String::new(), String::new());
+    assert_eq!(client.saved_messages_sidebar_preview(), empty);
+
+    let note = Message::new_text(
+        id,
+        ConversationType::SavedMessages,
+        Some(owner),
+        "a note".into(),
+        1,
+    );
+    repo.insert(&note).unwrap();
+    let note_preview = (
+        crate::domain::message::format_preview_body("", "a note", None),
+        crate::ui::format::sidebar_time(note.created_at),
+    );
+    assert_eq!(client.saved_messages_sidebar_preview(), note_preview);
+
+    let photo_id = AttachmentId::new();
+    let photo = Attachment::new(
+        photo_id,
+        FileMetadata::new("pic.jpg".into(), "image/jpeg".into(), 10),
+    );
+    let path = dir.path().join("pic.enc");
+    std::fs::write(&path, b"fixture").unwrap();
+    client
+        .attachments()
+        .attachment_repo()
+        .insert_with_file_path(&photo, &path)
+        .unwrap();
+    let photo_at = 86_400_000_000_001;
+    let mut newest = Message::new_text(
+        id,
+        ConversationType::SavedMessages,
+        Some(owner),
+        String::new(),
+        photo_at,
+    );
+    newest.attachments = vec![photo_id];
+    repo.insert(&newest).unwrap();
+    let collider = Message::new_text(
+        id,
+        ConversationType::ServerDm,
+        Some(owner),
+        "other chat".into(),
+        photo_at + 1,
+    );
+    repo.insert(&collider).unwrap();
+    let (preview, time) = client.saved_messages_sidebar_preview();
+    assert!(preview.contains("Photo"), "{preview:?}");
+    assert!(!preview.contains("You:"), "{preview:?}");
+    assert_eq!(time, crate::ui::format::sidebar_time(newest.created_at));
+
+    repo.soft_delete_batch(&[newest.id]).unwrap();
+    assert_eq!(client.saved_messages_sidebar_preview(), note_preview);
+    client
+        .auth_state()
+        .set_logged_in(UserId::new(), 1, "next account".into());
+    assert_eq!(client.saved_messages_sidebar_preview(), empty);
+    client.auth_state().set_logged_in(owner, 1, "fixture".into());
+    client.auth_state().set_logged_out();
+    assert_eq!(client.saved_messages_sidebar_preview(), empty);
+    client.auth_state().set_logged_in(owner, 1, "fixture".into());
+    repo.delete(&note.id).unwrap();
+    assert_eq!(client.saved_messages_sidebar_preview(), empty);
+}
