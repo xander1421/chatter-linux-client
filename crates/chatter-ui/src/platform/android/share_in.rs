@@ -115,7 +115,7 @@ pub fn stage(window: &crate::MainWindow, client: &Arc<ChatterClient>, target: Ac
     };
     // Claimed above, so closing the picker no longer discards it.
     crate::bin_ui::features::back::close(window, "forward-message");
-    crate::bin_ui::features::sidebar::select_conversation(window, target);
+    crate::bin_ui::features::chat::open::select_conversation(window, target);
     // The open commits synchronously (active conversation and its draft), so
     // what follows lands in the chosen chat.
     if client.active_conversation() != target {
