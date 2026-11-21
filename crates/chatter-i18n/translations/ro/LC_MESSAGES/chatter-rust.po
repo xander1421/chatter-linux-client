@@ -3986,3 +3986,11 @@ msgstr "Înregistrat"
 
 msgid "This username link is invalid or expired."
 msgstr "Acest link de nume de utilizator este nevalid sau a expirat."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Fluxul audio și video al apelului folosește o conexiune directă și poate dezvălui adresa ta IP."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield indisponibil"

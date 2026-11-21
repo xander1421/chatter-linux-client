@@ -62,6 +62,7 @@ impl GrpcClientPool {
             direct_url: Arc::new(RwLock::new(server_url.to_string())),
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
+            transport_token: Arc::new(RwLock::new(tokio_util::sync::CancellationToken::new())),
             transport_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             unidentified_channel: Arc::new(RwLock::new(None)),
             #[cfg(feature = "onion")]
@@ -244,10 +245,16 @@ impl GrpcClientPool {
         }
         *self.endpoint.write() = endpoint;
         *self.transport_mode.write() = mode;
+        {
+            let mut token = self.transport_token.write();
+            token.cancel();
+            *token = tokio_util::sync::CancellationToken::new();
+        }
         self.transport_gen
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *channel = None;
         *self.unidentified_channel.write() = None;
+        *self.secret_channel.write() = None;
         #[cfg(feature = "onion")]
         {
             *self.unidentified_health.write() = None;

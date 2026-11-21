@@ -112,6 +112,7 @@ pub struct GrpcClientPool {
     /// before a swap must not install its channel after it — that is how a
     /// direct dial still in flight when Shield was switched on would otherwise
     /// become the cached channel every later RPC rides.
+    transport_token: Arc<RwLock<tokio_util::sync::CancellationToken>>,
     transport_gen: Arc<std::sync::atomic::AtomicU64>,
     /// Separate channel for the unidentified (no auth header) clients of the
     /// ordinary sealed-sender DM path, so their traffic rides its OWN
@@ -390,7 +391,7 @@ mod tests {
         let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
 
         // Materialise a (lazy) channel — pool now reports connected + caches it.
-        let _ch = pool.channel();
+        let old = pool.channel();
         assert!(pool.is_connected(), "channel() should cache a channel");
 
         // Any transport switch — even Direct→Direct — must drop the cache.
@@ -401,6 +402,8 @@ mod tests {
              channel() rebuilds over the new transport"
         );
         assert!(pool.try_channel().is_none());
+        assert!(!old.is_current(), "an old holder must be fenced");
+        assert!(pool.channel().is_current(), "new holders redial in the new generation");
     }
 
     #[test]

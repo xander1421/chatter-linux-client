@@ -7,6 +7,24 @@ use super::{ChatterClient, ClientError};
 #[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 
+#[cfg(feature = "media")]
+impl ChatterClient {
+    pub fn call_needs_shield_confirmation(&self) -> bool {
+        self.anon_mode_enabled()
+            || self.services.grpc_pool.transport_mode()
+                == crate::network::grpc::client_pool::TransportMode::Onion
+    }
+
+    fn require_shield_call_confirmation(&self, confirmed: bool) -> Result<(), ClientError> {
+        if self.call_needs_shield_confirmation() && !confirmed {
+            return Err(ClientError::Validation(
+                chatter_i18n::tr("Call media connects directly and can reveal your IP address.").into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 mod group;
 mod history;
 mod incoming;

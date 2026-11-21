@@ -5974,3 +5974,11 @@ msgstr "Ir al mensaje"
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr "Sin leer: {}"
+
+#: ui/chat/call_confirm.slint
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "El audio y el vídeo de la llamada se conectan directamente y pueden revelar tu dirección IP."
+
+#: ui/anon_mode/shield_network_banner.slint
+msgid "Couldn't reach the server over Tor. Shield is still on."
+msgstr "No se pudo conectar con el servidor a través de Tor. Shield sigue activado."

@@ -24,6 +24,10 @@ pub enum NetworkError {
     #[error("server unavailable")]
     Unavailable,
 
+    /// The request or stream used a handle from before a route switch.
+    #[error("transport changed")]
+    TransportChanged,
+
     /// Authentication required or invalid.
     #[error("authentication required")]
     Unauthenticated,
@@ -87,6 +91,9 @@ impl NetworkError {
         let mut source = StdError::source(status);
         let mut connect_error = false;
         while let Some(error) = source {
+            if matches!(error.downcast_ref::<Self>(), Some(Self::TransportChanged)) {
+                return Self::TransportChanged;
+            }
             if format!("{error:?}").contains("ConnectError") {
                 connect_error = true;
                 break;
@@ -181,6 +188,7 @@ impl NetworkError {
             self,
             NetworkError::RequestNotSent(_)
                 | NetworkError::Unavailable
+                | NetworkError::TransportChanged
                 | NetworkError::RateLimited
                 | NetworkError::ServerError(_)
                 | NetworkError::Timeout

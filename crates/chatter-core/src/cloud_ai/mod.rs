@@ -169,8 +169,8 @@ impl AnyCloudBackend {
     ///
     /// Separate constructor because it needs a live authenticated gRPC client,
     /// not settings.
-    pub fn broker(client: crate::network::grpc::ai_client::AiClient) -> Self {
-        Self::Broker(BrokerBackend::new(client))
+    pub fn broker(pool: std::sync::Arc<crate::network::grpc::client_pool::GrpcClientPool>) -> Self {
+        Self::Broker(BrokerBackend::new(pool))
     }
 
     pub fn kind(&self) -> CloudProviderKind {

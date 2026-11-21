@@ -171,9 +171,26 @@ fn spawn_start(
     call_type: CallType,
     ui_ctx: Arc<ChatterClient>,
 ) {
+    let Some(window) = weak.upgrade() else { return };
+    let revision = ui_ctx.auth_snapshot().session_revision;
+    let client = ui_ctx.clone();
+    super::with_shield_confirmation(&window, &client, false, move |confirmed| {
+        if ui_ctx.auth_snapshot().session_revision == revision {
+            spawn_confirmed_start(weak, conversation, call_type, ui_ctx, confirmed);
+        }
+    });
+}
+
+fn spawn_confirmed_start(
+    weak: slint::Weak<MainWindow>,
+    conversation: ActiveConversation,
+    call_type: CallType,
+    ui_ctx: Arc<ChatterClient>,
+    shield_confirmed: bool,
+) {
     cancel_pending_start();
     let revision = ui_ctx.auth_snapshot().session_revision;
-    let attempt = chatter_core::client::calls::CallStartAttempt::default();
+    let attempt = chatter_core::client::calls::CallStartAttempt::new(shield_confirmed);
     let generation = START.with(|slot| {
         let mut slot = slot.borrow_mut();
         slot.0 += 1;

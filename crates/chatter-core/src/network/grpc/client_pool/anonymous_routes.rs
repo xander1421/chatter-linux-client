@@ -33,18 +33,19 @@ impl GrpcClientPool {
         #[cfg(feature = "onion")]
         {
             if *self.transport_mode.read() == TransportMode::Onion {
-                if let Some(ch) = self.unidentified_channel.read().clone() {
+                if let Some(ch) = self.unidentified_channel.read().clone().filter(GrpcTransport::is_current) {
                     return ch;
                 }
                 let mut guard = self.unidentified_channel.write();
-                if let Some(ch) = guard.clone() {
+                if let Some(ch) = guard.clone().filter(GrpcTransport::is_current) {
                     return ch;
                 }
+                let token = self.transport_token.read().clone();
                 let endpoint = self.endpoint.read().clone();
                 let ch = GrpcTransport::from_onion(
                     endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
                     self.transport_mode.clone(),
-                );
+                ).in_generation(token);
                 *guard = Some(ch.clone());
                 return ch;
             }
@@ -58,14 +59,18 @@ impl GrpcClientPool {
         if self.transport_mode() != TransportMode::Onion {
             return Ok(());
         }
-        let (endpoint, _, generation) = self.snapshot();
+        let token = self.transport_token.read().clone();
+        let (endpoint, mode, generation) = self.snapshot();
+        if mode != TransportMode::Onion {
+            return Ok(());
+        }
         let channel = endpoint
             .connect_with_connector(self.unidentified_onion_connector())
             .await
             .map_err(|e| {
                 NetworkError::ConnectionFailed(format!("anonymous onion preconnect: {e}"))
             })?;
-        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone());
+        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
         let mut probe = super::super::AnonymousMailboxClient::new(channel.clone());
         tokio::time::timeout(
             Duration::from_secs(15),

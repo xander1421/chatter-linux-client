@@ -3950,3 +3950,11 @@ msgstr "Зарегистрировано"
 
 msgid "This username link is invalid or expired."
 msgstr "Эта ссылка на имя пользователя недействительна или устарела."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Аудио и видео звонка передаются напрямую и могут раскрыть ваш IP-адрес."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield недоступен"

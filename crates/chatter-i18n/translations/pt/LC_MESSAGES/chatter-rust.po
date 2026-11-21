@@ -3956,3 +3956,11 @@ msgstr "Registrado"
 
 msgid "This username link is invalid or expired."
 msgstr "Este link de nome de usuário é inválido ou expirou."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "O áudio e o vídeo da chamada usam uma ligação direta e podem revelar o seu endereço IP."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield indisponível"

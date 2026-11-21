@@ -54,78 +54,13 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak.clone();
             let ui_ctx = ctx_for_accept.clone();
             let revision = ui_ctx.auth_snapshot().session_revision;
-            dismiss_incoming(revision, &call_id_str);
-            if let Some(w) = weak.upgrade() {
-                load_presented_incoming(&w, &ui_ctx, revision, &call_id_str);
-            }
-
-            let replaces_active = weak
-                .upgrade()
-                .map(|w| {
-                    w.global::<crate::CallView>()
-                        .get_incoming_call_replaces_active()
-                })
-                .unwrap_or(false);
-            #[cfg(target_os = "android")]
-            let is_video = weak
-                .upgrade()
-                .map(|w| {
-                    w.global::<crate::CallView>()
-                        .get_incoming_call_data()
-                        .is_video_call
-                })
-                .unwrap_or(false);
-
-            // Swap the modal for the call view now; the accept flow repaints
-            // it with the real call on success.
-            if let Some(w) = weak.upgrade() {
-                show_answering(&w, &call_id_str);
-                w.global::<crate::CallView>()
-                    .set_incoming_call_visible(false);
-                w.global::<crate::CallView>()
-                    .set_incoming_call_replaces_active(false);
-            }
-
-            slint::spawn_local(async move {
-                // Answering without the microphone joins a call nobody can
-                // hear, so wait for the prompt's answer first (see
-                // outgoing.rs). Refused: say why and decline, rather than
-                // leave the caller ringing a modal that is already gone.
-                #[cfg(target_os = "android")]
-                {
-                    use crate::platform::android::permissions;
-                    let mut perms = vec![permissions::RECORD_AUDIO];
-                    if is_video {
-                        perms.push(permissions::CAMERA);
-                    }
-                    permissions::ensure(&perms).await;
-                    if let Some((message, name)) = denied_call_permission(is_video) {
-                        if ui_ctx.call_session_is_current(revision) {
-                            fail_incoming_call(&weak, &ui_ctx, revision, &call_id_str, message);
-                            permissions::show_call_permission_denied(name);
-                        }
-                        tokio::spawn(async move {
-                            let _ = ui_ctx
-                                .decline_presented_incoming_call_in_session(&call_id_str, revision)
-                                .await;
-                        });
-                        return;
-                    }
+            let Some(window) = weak.upgrade() else { return };
+            let client = ui_ctx.clone();
+            super::with_shield_confirmation(&window, &client, true, move |confirmed| {
+                if ui_ctx.call_session_is_current(revision) {
+                    queue_accept(weak, ui_ctx, call_id_str, revision, confirmed);
                 }
-                #[cfg(target_os = "ios")]
-                if let Err(error) = chatter_core::media::AudioRecorder::request_microphone_permission().await {
-                    if ui_ctx.call_session_is_current(revision) {
-                        fail_incoming_call(&weak, &ui_ctx, revision, &call_id_str, &error);
-                    }
-                    tokio::spawn(async move {
-                        let _ = ui_ctx.decline_presented_incoming_call_in_session(&call_id_str, revision).await;
-                    });
-                    return;
-                }
-                tracing::info!(target: "call_setup::accept_permissions_ready", "Call setup diagnostic");
-                tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active, revision));
-            })
-            .unwrap();
+            });
         }
     });
 
@@ -161,18 +96,100 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 }
 
+fn queue_accept(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    call_id_str: String,
+    revision: u64,
+    shield_confirmed: bool,
+) {
+    dismiss_incoming(revision, &call_id_str);
+    if let Some(w) = weak.upgrade() {
+        load_presented_incoming(&w, &ui_ctx, revision, &call_id_str);
+    }
+
+    let replaces_active = weak
+        .upgrade()
+        .map(|w| {
+            w.global::<crate::CallView>()
+                .get_incoming_call_replaces_active()
+        })
+        .unwrap_or(false);
+    #[cfg(target_os = "android")]
+    let is_video = weak
+        .upgrade()
+        .map(|w| {
+            w.global::<crate::CallView>()
+                .get_incoming_call_data()
+                .is_video_call
+        })
+        .unwrap_or(false);
+
+    // Swap the modal for the call view now; the accept flow repaints
+    // it with the real call on success.
+    if let Some(w) = weak.upgrade() {
+        show_answering(&w, &call_id_str);
+        w.global::<crate::CallView>()
+            .set_incoming_call_visible(false);
+        w.global::<crate::CallView>()
+            .set_incoming_call_replaces_active(false);
+    }
+
+    slint::spawn_local(async move {
+        // Answering without the microphone joins a call nobody can
+        // hear, so wait for the prompt's answer first (see
+        // outgoing.rs). Refused: say why and decline, rather than
+        // leave the caller ringing a modal that is already gone.
+        #[cfg(target_os = "android")]
+        {
+            use crate::platform::android::permissions;
+            let mut perms = vec![permissions::RECORD_AUDIO];
+            if is_video {
+                perms.push(permissions::CAMERA);
+            }
+            permissions::ensure(&perms).await;
+            if let Some((message, name)) = denied_call_permission(is_video) {
+                if ui_ctx.call_session_is_current(revision) {
+                    fail_incoming_call(&weak, &ui_ctx, revision, &call_id_str, message);
+                    permissions::show_call_permission_denied(name);
+                }
+                tokio::spawn(async move {
+                    let _ = ui_ctx
+                        .decline_presented_incoming_call_in_session(&call_id_str, revision)
+                        .await;
+                });
+                return;
+            }
+        }
+        #[cfg(target_os = "ios")]
+        if let Err(error) = chatter_core::media::AudioRecorder::request_microphone_permission().await {
+            if ui_ctx.call_session_is_current(revision) {
+                fail_incoming_call(&weak, &ui_ctx, revision, &call_id_str, &error);
+            }
+            tokio::spawn(async move {
+                let _ = ui_ctx.decline_presented_incoming_call_in_session(&call_id_str, revision).await;
+            });
+            return;
+        }
+        tracing::info!(target: "call_setup::accept_permissions_ready", "Call setup diagnostic");
+        tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active, revision, shield_confirmed));
+    })
+    .unwrap();
+}
+
 async fn accept(
     weak: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
     call_id: String,
     replaces_active: bool,
     revision: u64,
+    shield_confirmed: bool,
 ) {
     if !ui_ctx.call_session_is_current(revision) {
         return;
     }
     match ui_ctx
-        .accept_presented_incoming_call_in_session(&call_id, replaces_active, revision)
+        .accept_presented_incoming_call_in_session(&call_id, replaces_active, revision, shield_confirmed)
         .await
     {
         Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted, revision),

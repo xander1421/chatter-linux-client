@@ -4016,3 +4016,11 @@ msgstr "Registriert"
 
 msgid "This username link is invalid or expired."
 msgstr "Dieser Benutzernamen-Link ist ungültig oder abgelaufen."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Die Medienverbindung des Anrufs ist direkt und kann deine IP-Adresse offenlegen."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield nicht verfügbar"

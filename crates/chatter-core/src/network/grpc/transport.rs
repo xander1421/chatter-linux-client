@@ -30,6 +30,7 @@ use http::{Request, Response};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tonic::body::Body;
+use tokio_util::sync::CancellationToken;
 
 /// Records only evidence from an actual request; construction performs no I/O.
 #[derive(Clone)]
@@ -38,6 +39,27 @@ pub struct RecordingTransport<S, R = fn(ServerStatus)> {
     record: R,
     route: Route,
     failure_scope: FailureScope,
+    generation: Option<GenerationGuard>,
+}
+
+struct GenerationGuard {
+    token: CancellationToken,
+    cancellation: parking_lot::Mutex<Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
+}
+
+impl GenerationGuard {
+    fn new(token: CancellationToken) -> Self {
+        Self {
+            cancellation: parking_lot::Mutex::new(Box::pin(token.clone().cancelled_owned())),
+            token,
+        }
+    }
+}
+
+impl Clone for GenerationGuard {
+    fn clone(&self) -> Self {
+        Self::new(self.token.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -95,6 +117,15 @@ impl GrpcTransport {
         self
     }
 
+    pub(crate) fn in_generation(mut self, generation: CancellationToken) -> Self {
+        self.generation = Some(GenerationGuard::new(generation));
+        self
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        !self.generation.as_ref().is_some_and(|guard| guard.token.is_cancelled())
+    }
+
     /// The transport selected for this channel, not a reachability verdict.
     pub fn is_http3(&self) -> bool {
         #[cfg(feature = "quic")]
@@ -116,6 +147,7 @@ impl From<tonic::transport::Channel> for GrpcTransport {
             record: set_server_status,
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
+            generation: None,
         }
     }
 }
@@ -133,6 +165,11 @@ where
         Pin<Box<dyn std::future::Future<Output = Result<Self::Response, BoxError>> + Send>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
+        if self.generation.as_mut().is_some_and(|guard| {
+            guard.token.is_cancelled() || guard.cancellation.get_mut().as_mut().poll(cx).is_ready()
+        }) {
+            return Poll::Ready(Err(transport_changed().into()));
+        }
         self.inner.poll_ready(cx).map_err(|error| {
             let error = error.into();
             self.failure_scope.record(&self.record);
@@ -154,10 +191,24 @@ where
         let family = Family::from_path(request.uri().path());
         let route = self.route;
         let failure_scope = self.failure_scope.clone();
+        let generation = self.generation.as_ref().map(|guard| guard.token.clone());
+        if generation.as_ref().is_some_and(CancellationToken::is_cancelled) {
+            return Box::pin(async { Err(transport_changed().into()) });
+        }
+        let request = request.map(|body| fence_body(body, generation.clone()));
         let future = self.inner.call(request);
         let record = self.record.clone();
         Box::pin(async move {
-            match future.await {
+            let response = if let Some(generation) = generation.as_ref() {
+                tokio::select! {
+                    biased;
+                    _ = generation.cancelled() => return Err(transport_changed().into()),
+                    response = future => response,
+                }
+            } else {
+                future.await
+            };
+            match response {
                 Ok(response) => {
                     // One confirmation per protocol/process, from a real reply.
                     // Never log headers, credentials, paths or message bodies.
@@ -190,14 +241,14 @@ where
                         auth.observe(response.headers());
                     }
                     Ok(response.map(|inner| {
-                        Body::new(RecordingBody {
+                        fence_body(Body::new(RecordingBody {
                             inner,
                             record,
                             device_auth,
                             family,
                             route,
                             failure_scope,
-                        })
+                        }), generation)
                     }))
                 }
                 Err(error) => {
@@ -208,6 +259,56 @@ where
                 }
             }
         })
+    }
+}
+
+fn transport_changed() -> tonic::Status {
+    let mut status = tonic::Status::unavailable("transport changed");
+    status.set_source(std::sync::Arc::new(crate::error::NetworkError::TransportChanged));
+    status
+}
+
+fn fence_body(inner: Body, generation: Option<CancellationToken>) -> Body {
+    let Some(generation) = generation else { return inner };
+    Body::new(GenerationBody {
+        inner,
+        cancelled: Box::pin(generation.cancelled_owned()),
+        ended: false,
+    })
+}
+
+struct GenerationBody {
+    inner: Body,
+    cancelled: Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    ended: bool,
+}
+
+impl http_body::Body for GenerationBody {
+    type Data = bytes::Bytes;
+    type Error = tonic::Status;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        if this.ended {
+            return Poll::Ready(None);
+        }
+        if this.cancelled.as_mut().poll(cx).is_ready() {
+            this.ended = true;
+            this.inner = Body::empty();
+            return Poll::Ready(Some(Err(transport_changed())));
+        }
+        Pin::new(&mut this.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.ended || self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
     }
 }
 
@@ -503,6 +604,7 @@ mod quic_enabled {
             record: crate::network::connection::set_server_status as fn(super::ServerStatus),
             route: super::Route::H3,
             failure_scope: super::FailureScope::Unrestricted,
+            generation: None,
         })
     }
 
@@ -524,6 +626,33 @@ mod quic_enabled {
 #[cfg(test)]
 pub(crate) mod outcome_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn auditclient2_transport_generation_cancels_body_and_refuses_handle() {
+        use http_body::Body as _;
+        use tower::Service as _;
+
+        let generation = CancellationToken::new();
+        let mut handle = GrpcTransport::from(
+            tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy(),
+        ).in_generation(generation.clone());
+        let frames = Frames(VecDeque::from([Ok(Frame::data(bytes::Bytes::from_static(b"old")))]));
+        let mut body = fence_body(Body::new(frames), Some(generation.clone()));
+        generation.cancel();
+
+        assert!(!handle.is_current());
+        let ready = std::future::poll_fn(|cx| handle.poll_ready(cx)).await;
+        assert!(ready.unwrap_err().to_string().contains("transport changed"));
+        let err = handle.call(Request::new(Body::empty())).await.unwrap_err();
+        assert!(err.to_string().contains("transport changed"));
+        let frame = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;
+        let status = frame.unwrap().unwrap_err();
+        assert!(matches!(
+            crate::error::NetworkError::from_status(&status),
+            crate::error::NetworkError::TransportChanged
+        ));
+    }
+
     use crate::network::grpc::interceptors::AuthInterceptor;
     use chatter_proto::chat_v1::{
         GetDeviceMessagesRequest, message_service_client::MessageServiceClient,
@@ -602,6 +731,7 @@ pub(crate) mod outcome_tests {
             inner: reply,
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
+            generation: None,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let mut client = MessageServiceClient::with_interceptor(transport, AuthInterceptor::new());
@@ -647,6 +777,7 @@ pub(crate) mod outcome_tests {
                         record: move |status| captured.lock().unwrap().push(status),
                         route,
                         failure_scope: scope.clone(),
+                        generation: None,
                     };
                     let mut client = MessageServiceClient::new(transport);
                     assert!(
@@ -682,6 +813,7 @@ pub(crate) mod outcome_tests {
             },
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
+            generation: None,
             record: set_server_status as fn(ServerStatus),
         };
         let mut client = MessageServiceClient::with_interceptor(transport, AuthInterceptor::new());
@@ -779,6 +911,7 @@ pub(crate) mod outcome_tests {
             },
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
+            generation: None,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let mut client =
@@ -817,6 +950,7 @@ pub(crate) mod outcome_tests {
             inner: NotReady,
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
+            generation: None,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let result =

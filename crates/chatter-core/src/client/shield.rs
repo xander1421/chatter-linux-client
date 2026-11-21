@@ -114,23 +114,10 @@ impl ChatterClient {
     /// this method does not emit a domain event because the flag is a
     /// presentation concern, not a chatter-core state change.
     pub fn set_anon_mode_enabled(self: &Arc<Self>, enabled: bool) {
-        self.update_transport_epoch
-            .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
-        self.anon_mode.store(enabled, Ordering::Release);
-        // Suspend direct SSE synchronously at Shield entry, before queuing
-        // transport rebuild. configure_push holds this same admission lock.
-        if enabled {
-            if let Some(tx) = self.push_shutdown.lock().take() {
-                let _ = tx.send(());
-            }
-        }
-
         // Anon mode also routes the network transport over Tor (onion): enabling
-        // it switches the whole pool to the pinned .onion, disabling it switches
-        // back to direct. If onion isn't available (feature not built, no .onion
-        // pinned, or bootstrap fails), we log LOUDLY and keep the current
-        // transport — the UI filter still applies, but we must NOT pretend the
-        // network location is hidden when it isn't.
+        // it switches the whole pool to the pinned .onion; disabling it switches
+        // back to direct. A failed endpoint switch leaves the previous state.
+        // After a successful switch, an onion dial failure fails closed.
         use crate::network::grpc::client_pool::TransportMode;
         let mode = if enabled {
             TransportMode::Onion
@@ -144,13 +131,13 @@ impl ChatterClient {
         // CDN reqwest callsites branch on. Keyed on the real transport, not the
         // request, so a failed onion switch leaves it false — no false anonymity.
         let on_onion = self.services.grpc_pool.transport_mode() == TransportMode::Onion;
+        self.anon_mode.store(on_onion, Ordering::Release);
         crate::network::anon_http::ANON_HTTP_ACTIVE.store(on_onion, Ordering::Release);
 
         // Drive the Tor UI indicator: entering onion = Connecting (until the
         // first onion RPC round-trips, when the poller flips it to Connected);
-        // leaving onion = Off; Shield on but still direct = Unavailable, which
-        // the UI must show as "network location NOT hidden" for as long as it
-        // lasts — Shield is not allowed to look fully active.
+        // leaving onion = Off; a failed enable leaves Shield off and lets the
+        // UI report the unavailable transport.
         use crate::network::connection::TorStatus;
         crate::network::connection::set_tor_status(if on_onion {
             TorStatus::Connecting
@@ -164,12 +151,20 @@ impl ChatterClient {
             tracing::warn!(
                 requested = ?mode,
                 error = %e,
-                "anon mode: transport switch failed — UI filter applies but network location is NOT hidden"
+                "Shield transport switch failed; keeping previous transport"
             );
             // Transport unchanged: leave the long-lived loops alone. They are
             // already on the current (correct) transport, and tearing them down
             // would only churn connections for no anonymity gain.
             return;
+        }
+
+        self.update_transport_epoch
+            .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+        if on_onion {
+            if let Some(tx) = self.push_shutdown.lock().take() {
+                let _ = tx.send(());
+            }
         }
 
         // ANONYMITY-CRITICAL: set_transport_mode drops the pool's cached

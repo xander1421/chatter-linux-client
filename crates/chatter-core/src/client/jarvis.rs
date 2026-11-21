@@ -303,7 +303,7 @@ impl ChatterClient {
             // Managed tokens: the server holds the key, so this needs a live
             // authenticated client rather than settings.
             CloudMode::ServerBroker => Some(JarvisEngine::cloud(
-                AnyCloudBackend::broker(self.services.grpc_pool.ai_client()),
+                AnyCloudBackend::broker(self.services.grpc_pool.clone()),
                 cloud.model.clone(),
             )),
             // Bring-your-own-key: absent or blank key means no cloud engine.

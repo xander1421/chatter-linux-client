@@ -9,12 +9,14 @@ import { Button } from "../components/button.slint";
 export component CallConfirm inherits Rectangle {
     in property <string> channel-name;
     in property <bool> video: false;
+    in property <bool> shield: false;
+    in property <bool> answering: false;
     callback confirmed();
     callback cancelled();
 
     Modal {
         show: true;
-        title: root.video ? @tr("Start a video call?") : @tr("Start a call?");
+        title: root.answering ? @tr("Incoming call") : root.video ? @tr("Start a video call?") : @tr("Start a call?");
         modal-width: 400px;
         show-close: false;
         close => { root.cancelled(); }
@@ -23,7 +25,10 @@ export component CallConfirm inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: @tr("Everyone in {} will be notified.", root.channel-name);
+                width: parent.width;
+                text: root.shield
+                    ? @tr("Call media connects directly and can reveal your IP address.")
+                    : @tr("Everyone in {} will be notified.", root.channel-name);
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -38,7 +43,7 @@ export component CallConfirm inherits Rectangle {
                     clicked => { root.cancelled(); }
                 }
                 Button {
-                    text: @tr("Start call");
+                    text: root.shield ? @tr("Continue") : @tr("Start call");
                     clicked => { root.confirmed(); }
                 }
             }

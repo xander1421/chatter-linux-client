@@ -3972,3 +3972,11 @@ msgstr "Зареєстровано"
 
 msgid "This username link is invalid or expired."
 msgstr "Це посилання на ім’я користувача недійсне або прострочене."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Аудіо й відео виклику передаються напряму й можуть розкрити вашу IP-адресу."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield недоступний"
