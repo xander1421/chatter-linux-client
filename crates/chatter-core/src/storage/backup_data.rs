@@ -65,7 +65,7 @@ use std::collections::{HashMap, HashSet};
 /// Bump this for every change to backup content, including exported tables,
 /// columns, row selection, or the meaning of stored values. Older builds must
 /// reject newer payloads rather than silently importing only familiar fields.
-pub const PAYLOAD_VERSION: u32 = 3;
+pub const PAYLOAD_VERSION: u32 = 4;
 
 /// Whitelisted tables, in FK-safe import order (parents before children:
 /// `profiles`/`friendships` reference `users`, `memberships` references
@@ -442,7 +442,7 @@ fn dump_snapshot(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize), S
             "ephemeral_messages" => "message_id IN (SELECT id FROM retained_messages)".to_owned(),
             "threads" => "root_message_id IN (SELECT id FROM retained_messages)".to_owned(),
             "messages" => {
-                const EXCLUDED_PARENT: &str = "EXISTS (SELECT 1 FROM messages WHERE id=m.reply_to) AND
+                const EXCLUDED_PARENT: &str = "m.reply_to IS NOT NULL AND
                     NOT EXISTS (SELECT 1 FROM retained_messages parent WHERE parent.id=m.reply_to)";
                 cols = table_columns(conn, table)?
                     .iter()
@@ -1071,6 +1071,64 @@ mod tests {
             rusqlite::params![id, format!("{{\"text\":\"{text}\"}}"), sent_at],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn history_backup_redacts_quotes_without_a_retained_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = test_db(dir.path());
+        let conn = db.connection().unwrap();
+        insert_message(&conn, "deleted-parent", "original message", 1);
+        insert_message(&conn, "live-parent", "retained message", 2);
+        let replies = [
+            ("deleted", "deleted-parent", false),
+            ("missing", "missing-parent", false),
+            ("live", "live-parent", true),
+        ];
+        for (index, (id, parent, _)) in replies.into_iter().enumerate() {
+            insert_message(&conn, id, "reply", index as i64 + 3);
+            let content = serde_json::json!({
+                "text": format!("reply body {id}"),
+                "quote": { "preview": format!("{id} quote preview") },
+            });
+            conn.execute(
+                "UPDATE messages SET reply_to=?2, reply_to_text=?3, reply_to_thumbnail=?4,
+                    reply_to_thumbnail_mime=?5, content_json=?6 WHERE id=?1",
+                rusqlite::params![
+                    id,
+                    parent,
+                    format!("{id} cached text"),
+                    format!("{id} thumbnail").into_bytes(),
+                    format!("image/x-{id}"),
+                    content.to_string(),
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO deleted_messages VALUES ('deleted-parent');
+             DELETE FROM messages WHERE id='deleted-parent';",
+        )
+        .unwrap();
+
+        // Check the serialized bytes before import can clear a tombstoned quote.
+        let (payload, _) = dump_frames(&conn, "owner").unwrap();
+        let contains = |marker: &str| {
+            payload
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        };
+        for (id, _, retained) in replies {
+            assert!(contains(&format!("reply body {id}")));
+            for marker in [
+                format!("{id} cached text"),
+                format!("{id} quote preview"),
+                format!("{id} thumbnail"),
+                format!("image/x-{id}"),
+            ] {
+                assert_eq!(contains(&marker), retained, "{marker}");
+            }
+        }
     }
 
     #[test]
