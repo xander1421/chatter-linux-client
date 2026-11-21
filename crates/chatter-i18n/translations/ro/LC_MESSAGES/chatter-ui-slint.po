@@ -5999,3 +5999,9 @@ msgstr "Mergi la mesaj"
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr "Necitită: {}"
+
+msgid "Verifying key"
+msgstr "Se verifică cheia"
+
+msgid "Key not verified"
+msgstr "Cheie neverificată"

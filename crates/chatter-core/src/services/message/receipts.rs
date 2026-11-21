@@ -25,6 +25,10 @@ pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>
         "parked"
     } else if status == "sending" && failure_reason == Some(super::core::DELIVERY_UNCONFIRMED) {
         "unconfirmed"
+    } else if status == "sending" && failure_reason == Some("Verifying key") {
+        "verifying-key"
+    } else if status == "sending" && failure_reason == Some("Key not verified") {
+        "key-not-verified"
     } else {
         status
     }
@@ -448,6 +452,8 @@ mod tests {
         assert_eq!(shown("sending", Some(DELIVERY_UNCONFIRMED)), "unconfirmed");
         assert_eq!(shown("sending", Some("Waiting for connection")), "sending");
         assert_eq!(shown("sending", None), "sending");
+        assert_eq!(shown("sending", Some("Verifying key")), "verifying-key");
+        assert_eq!(shown("sending", Some("Key not verified")), "key-not-verified");
         assert_eq!(shown("failed", Some(DELIVERY_UNCONFIRMED)), "failed");
         assert_eq!(
             advance_delivery_status("unconfirmed", "delivered"),

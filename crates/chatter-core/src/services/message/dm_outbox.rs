@@ -807,11 +807,19 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
                     }
                     Err(error) => {
                         tracing::info!(message_id = %id, %error, "Sealed DM still unconfirmed; will replay");
-                        if let Err(error) =
-                            messages.settle_sealed_dm(&id, &generation, &Err(error), false)
-                        {
-                            tracing::warn!(%error, "Sealed DM backoff not recorded");
+                        let verification_wait = key_wait_reason(&error).is_some();
+                        match messages.settle_sealed_dm(&id, &generation, &Err(error), false) {
+                            Ok(true) if verification_wait => {
+                                client.event_bus().emit_domain(
+                                    crate::events::DomainEvent::MessageDeliveryChanged {
+                                        message_id: id, channel_id: conversation, status: "sending".into(),
+                                    },
+                                );
+                            }
+                            Err(error) => tracing::warn!(%error, "Sealed DM backoff not recorded"),
+                            _ => {}
                         }
+
                     }
                 }
             }

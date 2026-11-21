@@ -5974,3 +5974,9 @@ msgstr "Ir al mensaje"
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr "Sin leer: {}"
+
+msgid "Verifying key"
+msgstr "Verificando la clave"
+
+msgid "Key not verified"
+msgstr "Clave sin verificar"

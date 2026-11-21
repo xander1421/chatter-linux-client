@@ -206,6 +206,15 @@ export component MessageFooter inherits HorizontalLayout {
                 accessible-label: root.delivery-status == "upload-queued" ? @tr("Queued behind an earlier send; upload has not started") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
             }
 
+            if root.is-own && !root.mesh-delivery && (root.delivery-status == "verifying-key" || root.delivery-status == "key-not-verified"): Text {
+                text: root.delivery-status == "verifying-key" ? @tr("Verifying key") : @tr("Key not verified");
+                color: root.overlay-media ? #ffffff : Colors.text-muted;
+                font-size: Typography.xs;
+                font-italic: true;
+                accessible-role: text;
+                accessible-label: self.text;
+            }
+
             if root.is-own && !root.mesh-delivery && root.delivery-status == "parked": Text {
                 text: root.failure-reason;
                 color: root.overlay-media ? #ffffff : Colors.text-muted;

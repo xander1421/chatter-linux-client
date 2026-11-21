@@ -6000,3 +6000,9 @@ msgstr "Перейти до повідомлення"
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr "Непрочитане: {}"
+
+msgid "Verifying key"
+msgstr "Перевірка ключа"
+
+msgid "Key not verified"
+msgstr "Ключ не підтверджено"
