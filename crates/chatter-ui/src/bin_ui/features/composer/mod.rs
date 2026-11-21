@@ -4,6 +4,8 @@
 
 mod attachments;
 pub(crate) use attachments::render_attachments;
+#[cfg(target_os = "android")]
+pub(crate) use attachments::stage_owned_files;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use attachments::read_clipboard_image;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

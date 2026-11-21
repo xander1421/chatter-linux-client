@@ -149,7 +149,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnFilesPicked(
     .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
-fn read_string_array(env: &mut Env, arr: &JObjectArray) -> Result<Vec<String>, String> {
+pub(super) fn read_string_array(env: &mut Env, arr: &JObjectArray) -> Result<Vec<String>, String> {
     let len = arr.len(&env).map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {

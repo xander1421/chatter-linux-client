@@ -200,6 +200,37 @@ pub(crate) fn open_contact_share_modal(
     crate::bin_ui::features::back::push(w, "forward-message");
 }
 
+/// Marks the picker's source model as "a share-sheet payload is waiting for a
+/// destination". The payload itself is held by `platform::android::share_in`.
+const SHARE_IN_SOURCE: &str = "share-in:";
+
+/// Open the destination picker for content shared into Chatter from another
+/// app. `preview` is display text only.
+#[cfg(target_os = "android")]
+pub(crate) fn open_share_in_modal(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, preview: String) {
+    let state = w.global::<crate::ModalHostState>();
+    state.set_forward_contact_share(false);
+    state.set_forward_contact_name("".into());
+    state.set_forward_message_preview(preview.into());
+    state.set_forward_sources(ModelRc::new(VecModel::from(vec![SHARE_IN_SOURCE.into()])));
+    state.set_forward_search_text("".into());
+    let targets = forward_targets(w, ui_ctx, "");
+    state.set_forward_targets(ModelRc::new(VecModel::from(targets)));
+    crate::bin_ui::features::back::push(w, "forward-message");
+}
+
+/// Whether the picker is open for a share-sheet payload.
+pub(crate) fn is_share_in(w: &MainWindow) -> bool {
+    first_source(w).is_some_and(|source| source == SHARE_IN_SOURCE)
+}
+
+fn first_source(w: &MainWindow) -> Option<SharedString> {
+    w.global::<crate::ModalHostState>()
+        .get_forward_sources()
+        .iter()
+        .next()
+}
+
 /// Contact-share payload while the picker is open, if any.
 pub(crate) fn contact_share_text(w: &MainWindow) -> Option<String> {
     w.global::<crate::ModalHostState>()
@@ -247,7 +278,9 @@ pub(crate) fn forward_sources(w: &MainWindow) -> Option<Vec<(UserId, u64)>> {
 /// picker renders. The modal blocks conversation switches, so the active
 /// conversation is the sources' conversation.
 fn forward_targets(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<ForwardTarget> {
-    if contact_share_text(w).is_some() {
+    // A contact card or a share-sheet payload constrains no source messages, so
+    // either one picks from the unconstrained, mode-scoped destination list.
+    if contact_share_text(w).is_some() || is_share_in(w) {
         return ui_ctx.share_contact_destinations(query).into_iter().map(|d| ForwardTarget {
             avatar_source: crate::bin_ui::features::modals::target_avatar(ui_ctx, &d.kind, &d.id),
             is_anonymous: matches!(d.kind,

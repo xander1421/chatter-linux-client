@@ -135,6 +135,17 @@ fn set_stack(w: &MainWindow, stack: Vec<SharedString>) {
         w.global::<crate::ModalHostState>()
             .set_edit_profile_loading(false);
     }
+    // A share-sheet payload still unclaimed when the picker leaves the stack
+    // (cancelled, Back, or the stack reset) was never staged: drop its copies.
+    #[cfg(target_os = "android")]
+    if w.global::<crate::ModalHostState>()
+        .get_modal_stack()
+        .iter()
+        .any(|s| s == "forward-message")
+        && !stack.iter().any(|s| s == "forward-message")
+    {
+        crate::platform::android::share_in::discard_offered();
+    }
     // Settings stays mounted under what it opens, so Slint needs "anywhere on
     // the stack", which it cannot compute from an array itself.
     w.global::<crate::ModalHostState>()

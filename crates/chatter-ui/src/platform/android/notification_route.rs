@@ -44,19 +44,26 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeNotificationOp
         if let Ok(mut pending) = PENDING_KEY.lock() {
             *pending = Some(key);
         }
-        if let Some(window) = WINDOW.lock().ok().and_then(|current| current.clone()) {
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(window) = window.upgrade() {
-                    open_pending(&window);
-                }
-            });
-        }
+        open_pending_soon();
         Ok(())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
+/// Run [`open_pending`] on the UI thread. For JNI intake paths (a tapped
+/// notification, a share) that arrive while the window may already be ready.
+pub(super) fn open_pending_soon() {
+    if let Some(window) = WINDOW.lock().ok().and_then(|current| current.clone()) {
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = window.upgrade() {
+                open_pending(&window);
+            }
+        });
+    }
+}
+
 /// Called after the chat list has been published during startup or sign-in.
+/// Also routes a waiting share-sheet payload, which needs the same readiness.
 pub fn open_pending(window: &crate::MainWindow) {
     let Some(client) = CLIENT.lock().ok().and_then(|current| current.clone()) else {
         return;
@@ -67,6 +74,13 @@ pub fn open_pending(window: &crate::MainWindow) {
     {
         return;
     }
+    open_pending_notification(window, &client);
+    // After the notification route, never before: it resets the modal stack,
+    // which would close a share picker opened first and strand the share.
+    super::share_in::open_pending(window, &client);
+}
+
+fn open_pending_notification(window: &crate::MainWindow, client: &Arc<ChatterClient>) {
     let key = PENDING_KEY.lock().ok().and_then(|pending| pending.clone());
     if let Some(ref key) = key {
         if client.notification_tap_belongs_to_current_account(key) == Some(false) {
@@ -110,7 +124,7 @@ pub fn open_pending(window: &crate::MainWindow) {
                 .global::<crate::SidebarPane>()
                 .set_mobile_show_chat(false);
             crate::bin_ui::features::sidebar::navigation::load_pending_message_requests_count(
-                window, &client,
+                window, client,
             );
             window
                 .global::<crate::ModalHostState>()

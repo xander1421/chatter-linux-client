@@ -44,7 +44,12 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             // In the order they are to arrive.
             let contact_text = crate::bin_ui::features::chat::contact_share_text(&w);
-            let sources = if contact_text.is_none() { crate::bin_ui::features::chat::forward_sources(&w) } else { None };
+            let share_in = crate::bin_ui::features::chat::is_share_in(&w);
+            let sources = if contact_text.is_none() && !share_in {
+                crate::bin_ui::features::chat::forward_sources(&w)
+            } else {
+                None
+            };
 
             // The row's type tag is core's conversation vocabulary, so the target
             // resolves through core's own inverse — no second mapping to drift.
@@ -62,6 +67,13 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 );
                 return;
             };
+            if share_in {
+                // Not a send: open the chosen chat with the shared content
+                // staged (which also closes the picker).
+                #[cfg(target_os = "android")]
+                crate::platform::android::share_in::stage(&w, &ui_ctx, target);
+                return;
+            }
             if contact_text.is_none() && sources.as_ref().is_none_or(Vec::is_empty) {
                 return;
             }
