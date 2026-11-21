@@ -671,7 +671,7 @@ export component MainWindow inherits Window {
         capture-key-pressed(event) => {
             // Locked: no shortcut may act on the hidden app behind the lock
             // screen. The PIN field gets the keys; Back reaches key-pressed.
-            if (CallView.keyguard-call-id != "") {
+            if (CallView.keyguard-call-id != "" && !AppLockPane.locked) {
                 if (event.text == Key.Back || event.text == Key.Escape) {
                     CallView.leave-keyguard-call();
                 }
@@ -693,7 +693,7 @@ export component MainWindow inherits Window {
         }
 
         key-pressed(event) => {
-            if (CallView.keyguard-call-id != "") {
+            if (CallView.keyguard-call-id != "" && !AppLockPane.locked) {
                 if (event.text == Key.Back || event.text == Key.Escape) {
                     CallView.leave-keyguard-call();
                     return accept;

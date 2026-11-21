@@ -260,10 +260,6 @@ impl MessageGateway {
             let Some(sid) = sender_id else {
                 return Ok(SealedSenderResult::DroppedChannelContent);
             };
-            let gate = crate::services::message::GroupStateGate::new(&self.settings_repo);
-            if !gate.admits_content(&cid, &sid) {
-                return Ok(SealedSenderResult::DroppedChannelContent);
-            }
             profile_key_changed =
                 self.store_skdm_profile_key(&sid, data_message.profile_key.as_deref());
             // A server channel (sender-key or not) is filed as Channel;

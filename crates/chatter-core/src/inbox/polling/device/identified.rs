@@ -59,10 +59,14 @@ pub(super) async fn process_identified_sender_message(
     };
 
     // Decrypt using regular Signal Protocol (not sealed sender)
-    match message_gateway
-        .decrypt_identified_message(&msg.envelope, &sender_id, msg.source_device_id)
-        .await
-    {
+    let result = if let Some(result) = super::sender_key::retry_pairwise_channel(&msg.message_guid, message_gateway).await {
+        result
+    } else {
+        message_gateway
+            .decrypt_identified_message(&msg.envelope, &sender_id, msg.source_device_id)
+            .await
+    };
+    match result {
         Ok(SealedSenderResult::KeyExchange {
             sender_id,
             sender_device_id,
@@ -334,6 +338,11 @@ pub(super) async fn process_identified_sender_message(
                     stats,
                 );
             }
+        }
+        Ok(SealedSenderResult::AwaitingChannelMembership(pending)) => {
+            return super::sender_key::retain_pairwise_channel(
+                msg, pending, message_gateway, domain_tx, retry_budget,
+            );
         }
         Ok(SealedSenderResult::DroppedChannelContent) => {
             return crate::inbox::ack_policy::drop_and_ack(

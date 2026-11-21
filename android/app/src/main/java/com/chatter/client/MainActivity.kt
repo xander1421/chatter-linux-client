@@ -686,7 +686,6 @@ class MainActivity : GameActivity() {
 
     private fun deferCallWindowRoute(): Boolean {
         val callId = lockScreenCallId ?: return false
-        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == false) return false
         requestCallWindowUnlock(callId)
         return true
     }
@@ -861,7 +860,7 @@ class MainActivity : GameActivity() {
         if ((event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) &&
             !event.isShiftPressed
         ) {
-            if (event.action == KeyEvent.ACTION_DOWN && lockScreenCallId == null) nativeImeEditorAction()
+            if (event.action == KeyEvent.ACTION_DOWN) nativeImeEditorAction()
             return true
         }
         return super.dispatchKeyEvent(event)

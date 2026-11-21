@@ -96,6 +96,19 @@ impl GroupStateGate {
                 .is_ok_and(|until| until <= crate::inbox::ack_policy::now_ns())
     }
 
+    /// Distinguish a signed refusal from membership we have yet to sync.
+    pub(crate) fn content_admission(
+        &self,
+        channel_id: &ChannelId,
+        sender: &UserId,
+    ) -> Option<bool> {
+        self.repo
+            .content_admission(channel_id, &sender.to_string(), crate::inbox::ack_policy::now_ns())
+            .inspect_err(|e| tracing::warn!(%channel_id, %sender, error = %e, "Verified admission lookup failed"))
+            .ok()
+            .flatten()
+    }
+
     /// Check a peer's `(revision, state_hash)` stamp against our verified
     /// state. A fork marks the channel `Fork` (send-blocked until the user
     /// acknowledges it) — only on the word of a verified member, or anyone

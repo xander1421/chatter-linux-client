@@ -1,16 +1,64 @@
 use super::*;
+use crate::services::gateway::inbound::content_channel;
+use crate::services::gateway::inbound::PairwiseChannelContent;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 #[derive(Clone)]
-enum PendingSenderKey {
+enum PendingDeviceContent {
     Data(Vec<u8>),
+    Pairwise(PairwiseChannelContent),
 }
 
 // The sender-key receive state can advance before the message reaches its table.
 // Retry the authenticated plaintext on redelivery.
-static PENDING_SENDER_KEY: LazyLock<parking_lot::Mutex<HashMap<String, PendingSenderKey>>> =
+static PENDING_DEVICE_CONTENT: LazyLock<parking_lot::Mutex<HashMap<String, PendingDeviceContent>>> =
     LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
+pub(crate) async fn retry_pairwise_channel(
+    envelope_id: &str,
+    gateway: &MessageGateway,
+) -> Option<Result<SealedSenderResult, ServiceError>> {
+    let cached = PENDING_DEVICE_CONTENT.lock().get(envelope_id).cloned();
+    let Some(PendingDeviceContent::Pairwise(pending)) = cached else {
+        return None;
+    };
+    let result = gateway.route_pairwise_channel(pending).await;
+    if matches!(&result, Ok(outcome) if !matches!(outcome, SealedSenderResult::AwaitingChannelMembership(_))) {
+        PENDING_DEVICE_CONTENT.lock().remove(envelope_id);
+    }
+    Some(result)
+}
+
+pub(super) fn clear_pending_device_content(envelope_id: &str) {
+    PENDING_DEVICE_CONTENT.lock().remove(envelope_id);
+}
+
+pub(crate) fn retain_pairwise_channel(
+    msg: &DeviceMessage,
+    pending: PairwiseChannelContent,
+    gateway: &MessageGateway,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+    budget: &crate::inbox::ack_policy::RetryBudget,
+) -> crate::inbox::ack_policy::AckDecision {
+    let decision = sender_key_nonmember_decision(
+        pending.channel_id,
+        pending.sender_id,
+        msg.server_timestamp,
+        &gateway.message_repo,
+        &gateway.channel_repo,
+        domain_tx,
+        &msg.message_guid,
+        budget,
+    );
+    let mut cache = PENDING_DEVICE_CONTENT.lock();
+    if decision.should_ack() {
+        cache.remove(&msg.message_guid);
+    } else {
+        cache.insert(msg.message_guid.clone(), PendingDeviceContent::Pairwise(pending));
+    }
+    decision
+}
 
 /// Process a sender key encrypted message.
 #[allow(clippy::too_many_arguments)]
@@ -43,11 +91,9 @@ pub(super) async fn process_sender_key_message(
             .ok()
             .and_then(|ge| ge.channel_id.parse().ok());
 
-    let cached = PENDING_SENDER_KEY.lock().get(&msg.message_guid).cloned();
-    let routed = if let Some(cached) = cached {
-        Ok(match cached {
-            PendingSenderKey::Data(plaintext) => RouteResult::Decrypted(plaintext),
-        })
+    let cached = PENDING_DEVICE_CONTENT.lock().get(&msg.message_guid).cloned();
+    let routed = if let Some(PendingDeviceContent::Data(plaintext)) = cached {
+        Ok(RouteResult::Decrypted(plaintext))
     } else {
         message_gateway
             .route_encrypted_message(encrypted_data, sender_id, msg.source_device_id)
@@ -75,9 +121,9 @@ pub(super) async fn process_sender_key_message(
             ) {
                 DataOutcome::Handled => {}
                 DataOutcome::StoreFailed => {
-                    PENDING_SENDER_KEY
+                    PENDING_DEVICE_CONTENT
                         .lock()
-                        .insert(msg.message_guid.clone(), PendingSenderKey::Data(plaintext));
+                        .insert(msg.message_guid.clone(), PendingDeviceContent::Data(plaintext));
                     return AckDecision::Retain;
                 }
                 DataOutcome::Malformed(reason) => {
@@ -93,7 +139,7 @@ pub(super) async fn process_sender_key_message(
                         retry_budget,
                     );
                     if decision.should_ack() {
-                        PENDING_SENDER_KEY.lock().remove(&msg.message_guid);
+                        PENDING_DEVICE_CONTENT.lock().remove(&msg.message_guid);
                     }
                     return decision;
                 }
@@ -279,11 +325,10 @@ pub(super) async fn process_sender_key_message(
             // The gate refuses a sender outside our VERIFIED membership before
             // decrypting. That is usually a join we have not synced yet, so
             // the same bytes are admitted later: retain, not mark-and-drain.
-            // `admits` (not `admits_content`) so a muted member stays refused.
             if let Some(channel_id) = channel_id
                 && matches!(e, ServiceError::Validation(_))
-                && !crate::services::message::GroupStateGate::new(&message_gateway.settings_repo)
-                    .admits(&channel_id, sender_id)
+                && crate::services::message::GroupStateGate::new(&message_gateway.settings_repo)
+                    .content_admission(&channel_id, sender_id).is_none()
             {
                 return sender_key_nonmember_decision(
                     channel_id,
@@ -311,7 +356,7 @@ pub(super) async fn process_sender_key_message(
     }
 
     // Every other arm handled the message.
-    PENDING_SENDER_KEY.lock().remove(&msg.message_guid);
+    PENDING_DEVICE_CONTENT.lock().remove(&msg.message_guid);
     retry_budget.forget(&msg.message_guid);
     AckDecision::Ack
 }
@@ -325,26 +370,6 @@ fn sender_key_content(plaintext: &[u8]) -> Result<content::Content, String> {
 }
 
 /// The channel a `Content` names, if it names one.
-fn content_channel(inner: &content::Content) -> Option<&str> {
-    match inner {
-        content::Content::DataMessage(dm) => Some(&dm.channel_id),
-        content::Content::Typing(typing) => Some(&typing.channel_id),
-        content::Content::Receipt(receipt) => Some(&receipt.channel_id),
-        content::Content::Pin(pin) => Some(&pin.channel_id),
-        content::Content::Edit(edit) => edit.data_message.as_ref().map(|dm| dm.channel_id.as_str()),
-        // Channel reactions encode the channel as "channel:{id}:{author}"
-        // (control.rs `parse_channel_reaction_author`).
-        content::Content::Reaction(reaction) => reaction
-            .target_author_aci
-            .strip_prefix("channel:")
-            .and_then(|rest| rest.split_once(':'))
-            .map(|(channel, _)| channel),
-        content::Content::CallEvent(event) => Some(&event.channel_id),
-        content::Content::GroupCallSignal(signal) => Some(&signal.channel_id),
-        content::Content::GroupMailboxAddress(address) => Some(&address.channel_id),
-        _ => None,
-    }
-}
 
 /// A sender-key plaintext speaks only for the channel whose key decrypted it
 /// (the envelope's `GroupEncrypted.channel_id`, bound to the ciphertext's

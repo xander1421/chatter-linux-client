@@ -129,7 +129,7 @@ pub async fn process_device_message(
             envelope_type = msg.envelope_type,
             "[INBOX] Processing as identified sender message (PreKey/Ciphertext)"
         );
-        return process_identified_sender_message(
+        let decision = process_identified_sender_message(
             msg,
             event_tx,
             stats,
@@ -139,6 +139,10 @@ pub async fn process_device_message(
             retry_budget,
         )
         .await;
+        if decision.should_ack() {
+            super::sender_key::clear_pending_device_content(&msg.message_guid);
+        }
+        return decision;
     }
 
     // Check for ECIES_INIT (HPKE-encrypted initial contact, NDSS'21 compliant)
@@ -156,7 +160,7 @@ pub async fn process_device_message(
         message_guid = %msg.message_guid,
         "[INBOX] Processing as sealed sender message"
     );
-    process_sealed_sender_message(
+    let decision = process_sealed_sender_message(
         msg,
         pipeline,
         event_tx,
@@ -170,5 +174,9 @@ pub async fn process_device_message(
         domain_tx,
         retry_budget,
     )
-    .await
+    .await;
+    if decision.should_ack() {
+        super::sender_key::clear_pending_device_content(&msg.message_guid);
+    }
+    decision
 }

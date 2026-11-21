@@ -42,6 +42,8 @@ pub(super) async fn process_sealed_sender_message(
             channel_id,
             announcement,
         })
+    } else if let Some(result) = super::sender_key::retry_pairwise_channel(&msg.message_guid, message_gateway).await {
+        result
     } else {
         message_gateway.process_incoming_message(sealed_sender_msg).await
     };
@@ -73,6 +75,11 @@ pub(super) async fn process_sealed_sender_message(
                 retry_budget,
             ))
             .await;
+        }
+        Ok(SealedSenderResult::AwaitingChannelMembership(pending)) => {
+            return super::sender_key::retain_pairwise_channel(
+                msg, pending, message_gateway, domain_tx, retry_budget,
+            );
         }
         Ok(SealedSenderResult::DroppedChannelContent) => {
             return crate::inbox::ack_policy::drop_and_ack(

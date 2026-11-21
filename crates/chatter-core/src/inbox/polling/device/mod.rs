@@ -55,3 +55,6 @@ use ecies::process_ecies_init_message;
 use identified::process_identified_sender_message;
 use sealed::process_sealed_sender_message;
 use sender_key::process_sender_key_message;
+
+#[cfg(test)]
+pub(crate) use sender_key::{retain_pairwise_channel, retry_pairwise_channel};

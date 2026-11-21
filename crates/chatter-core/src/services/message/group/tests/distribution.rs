@@ -213,6 +213,16 @@
         revision: u64,
         members: &[UserId],
     ) -> crate::domain::verified_state::StateHash {
+        seed_verified_with_mute(c, channel_id, revision, members, None)
+    }
+
+    fn seed_verified_with_mute(
+        c: &crate::client::ChatterClient,
+        channel_id: ChannelId,
+        revision: u64,
+        members: &[UserId],
+        muted: Option<UserId>,
+    ) -> crate::domain::verified_state::StateHash {
         use chatter_proto::chat_v1 as pb;
         use crate::domain::verified_state::{
             ChannelRole, Member, MemberStatus, MembershipState, PendingChange, Policy,
@@ -230,7 +240,7 @@
                             role: ChannelRole::Member,
                             status: MemberStatus::Active,
                             identity_key: [5; 33],
-                            muted_until: 0,
+                            muted_until: if Some(*u) == muted { u64::MAX } else { 0 },
                         },
                     )
                 })

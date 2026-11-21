@@ -78,6 +78,9 @@ impl MessageGateway {
             plaintext,
             "identified_sender",
         ) {
+            if let Some(pending) = Self::pairwise_channel(&content_proto, *sender_id, sender_device_id)? {
+                return self.route_pairwise_channel(pending).await;
+            }
             // Check for KeyExchange
             if let Some(content::Content::KeyExchange(key_exchange)) = content_proto.content {
                 tracing::debug!(

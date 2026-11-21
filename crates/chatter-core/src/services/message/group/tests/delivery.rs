@@ -400,7 +400,11 @@
 
     #[tokio::test]
     async fn pairwise_channel_admission_requires_a_member() {
-        use chatter_proto::content_v1::DataMessage;
+        use crate::inbox::ack_policy::{AckDecision, RetryBudget};
+        use crate::inbox::polling::device::{retain_pairwise_channel, retry_pairwise_channel};
+        use crate::services::gateway::{SealedSenderResult, inbound::PairwiseChannelContent};
+        use chatter_proto::chat_v1::DeviceMessage;
+        use chatter_proto::content_v1::{Content, DataMessage, content};
 
         let t = two_members();
         let m = t.bob.messages();
@@ -412,34 +416,107 @@
             m.settings_repo.clone(),
             m.solicited_resends.clone(),
         );
+        seed_verified(&t.bob, t.channel_id, 2, &[t.bob_id]);
         let ts = TimestampNanos::now().as_u64();
-        for (sender, expected) in [(UserId::new(), false), (t.alice_id, true)] {
-            let result = gateway
-                .store_data_message(
-                    DataMessage {
-                        body: "channel message".into(),
-                        channel_id: t.channel_id.to_string(),
-                        timestamp: ts,
-                        ..Default::default()
-                    },
-                    Some(sender),
-                )
-                .await
-                .unwrap();
-            use crate::services::gateway::SealedSenderResult;
-            assert!(matches!(
-                (expected, result),
-                (true, SealedSenderResult::DataMessageReceived { .. })
-                    | (false, SealedSenderResult::DroppedChannelContent)
-            ));
-            assert_eq!(
-                m.message_repo
-                    .get_by_conversation_sender_timestamp(&t.channel_id, &sender, ts)
-                    .unwrap()
-                    .is_some(),
-                expected
-            );
-        }
+        let content = PairwiseChannelContent {
+            channel_id: t.channel_id,
+            sender_id: t.alice_id,
+            sender_device_id: 1,
+            content: Box::new(Content {
+                timestamp: ts,
+                content: Some(content::Content::DataMessage(DataMessage {
+                    body: "channel message".into(),
+                    channel_id: t.channel_id.to_string(),
+                    timestamp: ts,
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+        };
+        let stored = || m.message_repo
+            .get_by_conversation_sender_timestamp(&t.channel_id, &t.alice_id, ts)
+            .unwrap();
+        let SealedSenderResult::AwaitingChannelMembership(pending) =
+            gateway.route_pairwise_channel(content.clone()).await.unwrap()
+        else { panic!("an absent sender must wait for membership") };
+        assert!(stored().is_none());
+        let envelope = DeviceMessage {
+            message_guid: uuid::Uuid::new_v4().to_string(),
+            server_timestamp: ts,
+            ..Default::default()
+        };
+        assert_eq!(
+            retain_pairwise_channel(&envelope, pending, &gateway, None, &RetryBudget::default()),
+            AckDecision::Retain,
+        );
+        seed_verified(&t.bob, t.channel_id, 3, &[t.bob_id, t.alice_id]);
+        assert!(matches!(
+            retry_pairwise_channel(&envelope.message_guid, &gateway).await.unwrap().unwrap(),
+            SealedSenderResult::DataMessageReceived { .. }
+        ));
+        assert!(stored().is_some());
+        assert!(retry_pairwise_channel(&envelope.message_guid, &gateway).await.is_none());
+
+        seed_verified_with_mute(&t.bob, t.channel_id, 4, &[t.bob_id, t.alice_id], Some(t.alice_id));
+        assert!(matches!(
+            gateway.route_pairwise_channel(content.clone()).await.unwrap(),
+            SealedSenderResult::DroppedChannelContent
+        ));
+        seed_verified(&t.bob, t.channel_id, 5, &[t.bob_id, t.alice_id]);
+        VerifiedMembershipRepository::new(m.database.clone())
+            .exclude(&t.channel_id, &t.alice_id.to_string()).unwrap();
+        assert!(matches!(
+            gateway.route_pairwise_channel(content).await.unwrap(),
+            SealedSenderResult::DroppedChannelContent
+        ));
+    }
+
+    #[tokio::test]
+    async fn pairwise_channel_typing_requires_a_member() {
+        use crate::services::gateway::{SealedSenderResult, inbound::PairwiseChannelContent};
+        use crate::inbox::{events::InboxEvent, polling::device::dispatch_control_content, state::InboxStats};
+        use crate::services::gateway::build_typing_content_with_channel;
+
+        let t = two_members();
+        let m = t.bob.messages();
+        let gateway = crate::services::gateway::MessageGateway::new(
+            (*m.signal_service).clone(),
+            m.message_repo.clone(),
+            m.channel_repo.clone(),
+            m.user_repo.clone(),
+            m.settings_repo.clone(),
+            m.solicited_resends.clone(),
+        );
+        let payload = PairwiseChannelContent {
+            channel_id: t.channel_id,
+            sender_id: t.alice_id,
+            sender_device_id: 1,
+            content: Box::new(build_typing_content_with_channel(true, Some(&t.channel_id.to_string()))),
+        };
+        let SealedSenderResult::ControlContent { sender_id, sender_device_id, content } =
+            gateway.route_pairwise_channel(payload.clone()).await.unwrap()
+        else { panic!("verified member's typing was not dispatched") };
+        let (events, mut receiver) = tokio::sync::broadcast::channel(1);
+        dispatch_control_content(
+            content.content.unwrap(),
+            &sender_id,
+            sender_device_id,
+            "typing",
+            content.timestamp,
+            &events,
+            &std::sync::Arc::new(parking_lot::RwLock::new(InboxStats::default())),
+        );
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            InboxEvent::ChannelTyping { channel_id, sender_id, .. }
+                if channel_id == t.channel_id && sender_id == t.alice_id
+        ));
+        VerifiedMembershipRepository::new(m.database.clone())
+            .exclude(&t.channel_id, &t.alice_id.to_string()).unwrap();
+        assert!(matches!(
+            gateway.route_pairwise_channel(payload).await.unwrap(),
+            SealedSenderResult::DroppedChannelContent
+        ));
     }
 
     /// A pairwise resend may take the server id it carries only when this
