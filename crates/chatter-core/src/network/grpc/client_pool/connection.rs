@@ -110,8 +110,6 @@ impl GrpcClientPool {
         }
         if channel.is_http3() {
             tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
-        } else if mode == TransportMode::Direct {
-            tracing::event!(target: "network_transport::tcp_channel_created", tracing::Level::INFO, {});
         }
         *guard = Some(channel);
         Ok(crate::network::connection::server_status()

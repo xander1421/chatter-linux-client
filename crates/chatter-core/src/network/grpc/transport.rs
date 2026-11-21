@@ -65,6 +65,7 @@ impl GrpcTransport {
 
 impl From<tonic::transport::Channel> for GrpcTransport {
     fn from(channel: tonic::transport::Channel) -> Self {
+        tracing::event!(target: "network_transport::tcp_channel_created", tracing::Level::INFO, {});
         Self {
             inner: channel.into(),
             record: set_server_status,

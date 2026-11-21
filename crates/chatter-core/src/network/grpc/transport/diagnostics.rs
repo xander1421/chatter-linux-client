@@ -61,23 +61,6 @@ impl Family {
             _ => Self::Other,
         }
     }
-
-    fn emit(self) {
-        macro_rules! event {
-            ($family:literal) => {
-                tracing::event!(target: concat!("network_transport::method_", $family), tracing::Level::INFO, {})
-            };
-        }
-        match self {
-            Self::MailboxChallenge => event!("mailbox_challenge"),
-            Self::MailboxPoll => event!("mailbox_poll"),
-            Self::Message => event!("message"),
-            Self::StreamUserEvents => event!("stream_user_events"),
-            Self::StreamChannel => event!("stream_channel"),
-            Self::Presence => event!("presence"),
-            Self::Other => event!("other"),
-        }
-    }
 }
 
 fn classify(route: Route, error: &(dyn Error + 'static)) -> Class {
@@ -177,12 +160,38 @@ fn classify_h3_connection(error: &h3::error::ConnectionError) -> Class {
 }
 
 pub(super) fn failure(route: Route, phase: Phase, family: Family, error: &(dyn Error + 'static)) {
+    macro_rules! log_failure {
+        ($route:literal, $class:literal, $phase:literal, $family:literal) => {
+            tracing::event!(
+                target: concat!("network_transport::fail_", $route, "_", $class, "_", $phase, "__", $family),
+                tracing::Level::INFO,
+                {}
+            )
+        };
+    }
+    macro_rules! rpc {
+        ($route:literal, $class:literal, $phase:literal) => {
+            match family {
+                Family::MailboxChallenge => {
+                    log_failure!($route, $class, $phase, "mailbox_challenge")
+                }
+                Family::MailboxPoll => log_failure!($route, $class, $phase, "mailbox_poll"),
+                Family::Message => log_failure!($route, $class, $phase, "message"),
+                Family::StreamUserEvents => {
+                    log_failure!($route, $class, $phase, "stream_user_events")
+                }
+                Family::StreamChannel => log_failure!($route, $class, $phase, "stream_channel"),
+                Family::Presence => log_failure!($route, $class, $phase, "presence"),
+                Family::Other => log_failure!($route, $class, $phase, "other"),
+            }
+        };
+    }
     macro_rules! event {
         ($route:literal, $class:literal) => {
             match phase {
-                Phase::Ready => tracing::event!(target: concat!("network_transport::fail_", $route, "_", $class, "_ready"), tracing::Level::INFO, {}),
-                Phase::Call => tracing::event!(target: concat!("network_transport::fail_", $route, "_", $class, "_call"), tracing::Level::INFO, {}),
-                Phase::Body => tracing::event!(target: concat!("network_transport::fail_", $route, "_", $class, "_body"), tracing::Level::INFO, {}),
+                Phase::Ready => log_failure!($route, $class, "ready", "other"),
+                Phase::Call => rpc!($route, $class, "call"),
+                Phase::Body => rpc!($route, $class, "body"),
             }
         };
     }
@@ -200,10 +209,6 @@ pub(super) fn failure(route: Route, phase: Phase, family: Family, error: &(dyn E
     }
 
     let class = classify(route, error);
-    // Keep failure/method pairs in order even when requests fail concurrently.
-    // Lifecycle events may still appear between the two lines.
-    static FAILURE_LOG: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-    let _guard = FAILURE_LOG.lock();
     match route {
         Route::H2 => h2_classes!("h2", class),
         #[cfg(feature = "onion")]
@@ -217,7 +222,6 @@ pub(super) fn failure(route: Route, phase: Phase, family: Family, error: &(dyn E
             _ => event!("h3", "other"),
         },
     }
-    family.emit();
 }
 
 #[cfg(test)]
@@ -302,7 +306,9 @@ mod tests {
 
         let events = Events::default();
         tracing::subscriber::with_default(
-            tracing_subscriber::registry().with(events.clone()),
+            tracing_subscriber::registry().with(events.clone().with_filter(
+                tracing_subscriber::EnvFilter::new("warn,network_transport=info"),
+            )),
             || {
                 failure(
                     Route::H2,
@@ -327,12 +333,9 @@ mod tests {
         assert_eq!(
             *events.0.lock().unwrap(),
             [
-                "network_transport::fail_h2_connect_call",
-                "network_transport::method_mailbox_poll",
-                "network_transport::fail_h2_timeout_ready",
-                "network_transport::method_other",
-                "network_transport::fail_h2_io_body",
-                "network_transport::method_stream_channel",
+                "network_transport::fail_h2_connect_call__mailbox_poll",
+                "network_transport::fail_h2_timeout_ready__other",
+                "network_transport::fail_h2_io_body__stream_channel",
             ]
         );
     }

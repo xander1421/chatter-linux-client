@@ -139,9 +139,6 @@ impl GrpcClientPool {
         let channel: GrpcTransport = endpoint
             .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
             .into();
-        if self.transport_mode() == TransportMode::Direct {
-            tracing::event!(target: "network_transport::tcp_channel_created", tracing::Level::INFO, {});
-        }
         tracing::warn!(
             "GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)"
         );
