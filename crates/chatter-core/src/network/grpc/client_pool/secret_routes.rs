@@ -57,6 +57,7 @@ impl GrpcClientPool {
             let endpoint = Self::create_endpoint(&onion, self.timeout)?;
             let ch = GrpcTransport::from_onion(
                 endpoint.connect_with_connector_lazy(self.secret_onion_connector()),
+                self.transport_mode.clone(),
             );
             *guard = Some(ch.clone());
             Ok(ch)
@@ -87,7 +88,7 @@ impl GrpcClientPool {
             .connect_with_connector(self.secret_onion_connector())
             .await
             .map_err(|e| NetworkError::ConnectionFailed(format!("secret onion preconnect: {e}")))?;
-        let channel = GrpcTransport::from_onion(channel);
+        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone());
         // A completed h2 handshake does not prove the server can answer an
         // RPC after doze. Probe through this same isolated channel before it
         // becomes the cached secret route; the response is never persisted.

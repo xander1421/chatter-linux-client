@@ -15,23 +15,24 @@
 //!
 //! # What it will and will not claim
 //!
-//! It reports reachability, and only reachability: a TCP + HTTP/2 handshake the
-//! server answered. That is deliberately weaker than "logged in", "authorised",
+//! It reports reachability: a handshake or a response from the server. That is deliberately weaker than "logged in", "authorised",
 //! or "your messages are going through" — a reachable server can still reject
 //! every RPC — and the wording downstream must not upgrade it.
 //!
 //! # Why it mostly does nothing
 //!
-//! Real RPCs are better evidence than a synthetic dial, and
-//! the shared `GrpcTransport` service records response and transport outcomes.
-//! The task only dials when nothing on the wire has reported within
-//! [`PROBE_INTERVAL`]. Signed-out startup defers contact; after an explicit
-//! server action, idle Direct clients can recover using a synthetic dial.
+//! Real RPCs are better evidence than a synthetic dial, and the shared
+//! `GrpcTransport` records their outcomes. In Direct mode the monitor probes
+//! to confirm a suspected outage or after [`PROBE_INTERVAL`] of wire silence.
+//! Signed-out startup defers contact until an explicit server action.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::network::connection::{ConnectionState, ServerStatus, server_status, server_status_age};
+use crate::network::connection::{
+    ConnectionState, ServerStatus, monitor_evidence, server_status, server_status_age,
+    subscribe_server_status,
+};
 use crate::network::grpc::GrpcClientPool;
 use crate::state::OfflineState;
 
@@ -48,15 +49,20 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 /// How often the task wakes to check whether a probe is due.
 const TICK: Duration = Duration::from_secs(5);
 
-/// Run the reachability monitor.
-///
-/// Started by `ChatterClient::start_server_monitor`, which is called
-/// after restored signed-in startup or the first explicit server action.
-/// Signed-out startup defers contact and does not start this task. The handle
-/// is registered with the client's task list and aborted by
-/// `ChatterClient::shutdown`, which is why there is no exit condition here.
+/// Give a fresh handshake or a real RPC time to disprove a transient failure,
+/// while still showing a real outage promptly (including on onion).
+const OUTAGE_CONFIRMATION: Duration = Duration::from_secs(4);
+
+/// Run the reachability monitor until the client aborts its task.
 pub async fn run(pool: Arc<GrpcClientPool>, offline_state: OfflineState) {
-    run_with_timing(pool, offline_state, PROBE_INTERVAL, TICK).await;
+    run_with_timing(
+        pool,
+        offline_state,
+        PROBE_INTERVAL,
+        TICK,
+        OUTAGE_CONFIRMATION,
+    )
+    .await;
 }
 
 pub(crate) async fn run_with_timing(
@@ -64,49 +70,78 @@ pub(crate) async fn run_with_timing(
     offline_state: OfflineState,
     probe_interval: Duration,
     tick_interval: Duration,
+    confirmation: Duration,
 ) {
-    // Mirror whatever is already known before the first tick, so a UI that
-    // subscribes at startup is not left reading a default.
-    let mut status_rx = crate::network::connection::subscribe_server_status();
-    mirror(&offline_state);
+    let mut status_rx = subscribe_server_status();
     let mut tick = tokio::time::interval(tick_interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     tick.tick().await;
 
-    loop {
-        tokio::select! {
-            result = status_rx.changed() => {
-                if result.is_err() { return; }
-                mirror(&offline_state);
-                continue;
+    let pool = &*pool;
+    let probe = |confirm| {
+        Box::pin(async move {
+            if confirm {
+                pool.probe_for_confirmation().await
+            } else {
+                pool.probe().await
             }
-            _ = tick.tick() => {}
-        }
+        })
+    };
+    let mut in_flight = None;
+    let mut deadline = None;
+    let mut last_reachable = 0;
 
-        let stale = server_status_age().is_none_or(|age| age >= probe_interval);
-        if stale && probe_is_worth_it(&pool) {
-            // The result is recorded by `probe` itself; the error is only worth
-            // a debug line, because "the server is down" is an ordinary and
-            // expected condition for this app rather than a fault.
-            let probe = pool.probe();
-            tokio::pin!(probe);
-            loop {
-                tokio::select! {
-                    result = &mut probe => {
-                        if let Err(error) = result {
-                            tracing::debug!(%error, "server monitor: probe failed");
-                        }
-                        break;
-                    }
-                    result = status_rx.changed() => {
-                        if result.is_err() { return; }
-                        mirror(&offline_state);
-                    }
+    loop {
+        // Read the evidence together: a watch can coalesce a successful RPC
+        // followed immediately by another failure into an Unreachable reading.
+        let (status, reachable_revision) = monitor_evidence();
+        match status {
+            ServerStatus::Reachable => {
+                if deadline.take().is_some() {
+                    in_flight = None;
+                }
+                publish(&offline_state, ConnectionState::Connected);
+            }
+            ServerStatus::Unreachable
+                if offline_state.connection_state() == ConnectionState::Connected =>
+            {
+                if deadline.is_none() || reachable_revision != last_reachable {
+                    deadline = Some(tokio::time::Instant::now() + confirmation);
+                    in_flight = probe_is_worth_it(pool).then(|| probe(true));
+                }
+                if deadline.is_some_and(|at| tokio::time::Instant::now() >= at) {
+                    deadline = None;
+                    in_flight = None;
+                    publish(&offline_state, ConnectionState::Disconnected);
+                }
+            }
+            ServerStatus::Unreachable => publish(&offline_state, ConnectionState::Disconnected),
+            ServerStatus::Unknown => {
+                if deadline.take().is_some() {
+                    in_flight = None;
                 }
             }
         }
+        last_reachable = reachable_revision;
 
-        mirror(&offline_state);
+        tokio::select! {
+            result = status_rx.changed() => {
+                if result.is_err() { return; }
+            }
+            () = async { tokio::time::sleep_until(deadline.unwrap()).await }, if deadline.is_some() => {}
+            result = async { in_flight.as_mut().unwrap().await }, if in_flight.is_some() => {
+                in_flight = None;
+                if let Err(error) = result {
+                    tracing::debug!(%error, "server monitor: probe failed");
+                }
+            }
+            _ = tick.tick() => {
+                let stale = server_status_age().is_none_or(|age| age >= probe_interval);
+                if deadline.is_none() && in_flight.is_none() && stale && probe_is_worth_it(pool) {
+                    in_flight = Some(probe(false));
+                }
+            }
+        }
     }
 }
 
@@ -123,19 +158,28 @@ fn probe_is_worth_it(pool: &GrpcClientPool) -> bool {
     pool.transport_mode() == TransportMode::Direct
 }
 
-/// Publish the wire's answer into the store the UI subscribes to.
-///
-/// `Unknown` deliberately does not write anything: the store's own default is
-/// `Disconnected`, and turning "we have not looked yet" into "offline" would be
-/// the one guess this whole module exists to avoid.
-pub(crate) fn mirror(offline_state: &OfflineState) {
-    let next = match server_status() {
-        ServerStatus::Reachable => ConnectionState::Connected,
-        ServerStatus::Unreachable => ConnectionState::Disconnected,
-        ServerStatus::Unknown => return,
-    };
-    // `set_connection_state` broadcasts on every call, so only write on a real
-    // change — otherwise the UI thread would be woken every tick forever.
+/// Mirror the startup dial synchronously so sign-in can read its result as
+/// soon as the attempt returns. An already-connected store belongs to the
+/// monitor's confirmation path when the wire reports a failure.
+pub(crate) fn mirror_initial(offline_state: &OfflineState, first_contact: bool) {
+    match server_status() {
+        ServerStatus::Reachable => publish(offline_state, ConnectionState::Connected),
+        ServerStatus::Unreachable if first_contact => {
+            // The store starts Disconnected. First contact lifted the
+            // signed-out guard, so notify without overwriting concurrent recovery.
+            offline_state.notify_current();
+        }
+        ServerStatus::Unreachable
+            if offline_state.connection_state() != ConnectionState::Connected =>
+        {
+            publish(offline_state, ConnectionState::Disconnected);
+        }
+        _ => {}
+    }
+}
+
+fn publish(offline_state: &OfflineState, next: ConnectionState) {
+    // Store writes broadcast even if the value hasn't changed.
     if offline_state.connection_state() != next {
         offline_state.set_connection_state(next);
     }

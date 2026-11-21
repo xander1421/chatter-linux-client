@@ -37,15 +37,44 @@ pub struct RecordingTransport<S, R = fn(ServerStatus)> {
     inner: S,
     record: R,
     route: Route,
+    failure_scope: FailureScope,
+}
+
+#[derive(Clone)]
+enum FailureScope {
+    Unrestricted,
+    #[cfg(feature = "onion")]
+    Onion(std::sync::Arc<parking_lot::RwLock<super::client_pool::TransportMode>>),
+}
+
+impl FailureScope {
+    fn record(&self, record: impl FnOnce(ServerStatus)) {
+        match self {
+            Self::Unrestricted => record(ServerStatus::Unreachable),
+            #[cfg(feature = "onion")]
+            Self::Onion(mode) => {
+                // The handle can survive a route switch. Use the pool's
+                // current mode at publication, not the mode when it was built.
+                let mode = mode.read();
+                if *mode == super::client_pool::TransportMode::Onion {
+                    record(ServerStatus::Unreachable);
+                }
+            }
+        }
+    }
 }
 
 pub type GrpcTransport = RecordingTransport<RawTransport>;
 
 impl GrpcTransport {
     #[cfg(feature = "onion")]
-    pub(crate) fn from_onion(channel: tonic::transport::Channel) -> Self {
+    pub(crate) fn from_onion(
+        channel: tonic::transport::Channel,
+        pool_mode: std::sync::Arc<parking_lot::RwLock<super::client_pool::TransportMode>>,
+    ) -> Self {
         Self {
             route: Route::Tor,
+            failure_scope: FailureScope::Onion(pool_mode),
             ..channel.into()
         }
     }
@@ -70,6 +99,7 @@ impl From<tonic::transport::Channel> for GrpcTransport {
             inner: channel.into(),
             record: set_server_status,
             route: Route::H2,
+            failure_scope: FailureScope::Unrestricted,
         }
     }
 }
@@ -89,7 +119,7 @@ where
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
         self.inner.poll_ready(cx).map_err(|error| {
             let error = error.into();
-            (self.record)(ServerStatus::Unreachable);
+            self.failure_scope.record(&self.record);
             // Tower readiness runs before a request exists.
             diagnostics::failure(self.route, Phase::Ready, Family::Other, error.as_ref());
             error
@@ -107,6 +137,7 @@ where
         };
         let family = Family::from_path(request.uri().path());
         let route = self.route;
+        let failure_scope = self.failure_scope.clone();
         let future = self.inner.call(request);
         let record = self.record.clone();
         Box::pin(async move {
@@ -149,12 +180,13 @@ where
                             device_auth,
                             family,
                             route,
+                            failure_scope,
                         })
                     }))
                 }
                 Err(error) => {
                     let error = error.into();
-                    record(ServerStatus::Unreachable);
+                    failure_scope.record(record);
                     diagnostics::failure(route, Phase::Call, family, error.as_ref());
                     Err(error)
                 }
@@ -201,6 +233,7 @@ struct RecordingBody<R> {
     device_auth: Option<super::interceptors::DeviceAuthRequest>,
     family: Family,
     route: Route,
+    failure_scope: FailureScope,
 }
 
 impl<R: Fn(ServerStatus) + Unpin> http_body::Body for RecordingBody<R> {
@@ -222,7 +255,7 @@ impl<R: Fn(ServerStatus) + Unpin> http_body::Body for RecordingBody<R> {
         // trailer is a successful frame and retains Reachable, regardless of
         // its status code or message. Never inspect/log auth or payload data.
         if let Poll::Ready(Some(Err(error))) = &frame {
-            (this.record)(ServerStatus::Unreachable);
+            this.failure_scope.record(&this.record);
             diagnostics::failure(this.route, Phase::Body, this.family, error);
         } else if matches!(&frame, Poll::Ready(Some(Ok(_)))) {
             (this.record)(ServerStatus::Reachable);
@@ -453,6 +486,7 @@ mod quic_enabled {
             inner: RawTransport::Quic(tonic_h3::H3Channel::new(connector, uri, None)),
             record: crate::network::connection::set_server_status as fn(super::ServerStatus),
             route: super::Route::H3,
+            failure_scope: super::FailureScope::Unrestricted,
         })
     }
 
@@ -551,6 +585,7 @@ pub(crate) mod outcome_tests {
         let transport = RecordingTransport {
             inner: reply,
             route: Route::H2,
+            failure_scope: FailureScope::Unrestricted,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let mut client = MessageServiceClient::with_interceptor(transport, AuthInterceptor::new());
@@ -562,6 +597,49 @@ pub(crate) mod outcome_tests {
             .await;
         let observed = evidence.lock().unwrap().clone();
         (result, observed)
+    }
+
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn transport_route_outage_tor_failure_uses_current_pool_mode() {
+        use super::super::client_pool::TransportMode;
+
+        let mode = Arc::new(parking_lot::RwLock::new(TransportMode::Direct));
+        let scope = FailureScope::Onion(mode.clone());
+        for active_mode in [TransportMode::Direct, TransportMode::Onion] {
+            // Reuse the scope across switches, as cached clients and response
+            // bodies hold onto clones after borrowing their channel.
+            *mode.write() = active_mode;
+            for transport_failure in [true, false] {
+                let observed = Arc::new(Mutex::new(Vec::new()));
+                let captured = observed.clone();
+                let transport = RecordingTransport {
+                    inner: Reply {
+                        code: None,
+                        transport_failure,
+                        body_failure: !transport_failure,
+                    },
+                    record: move |status| captured.lock().unwrap().push(status),
+                    route: Route::Tor,
+                    failure_scope: scope.clone(),
+                };
+                let mut client = MessageServiceClient::new(transport);
+                assert!(
+                    client
+                        .get_device_messages(GetDeviceMessagesRequest {
+                            after_id: 0,
+                            limit: 1
+                        })
+                        .await
+                        .is_err()
+                );
+                let saw_unreachable = observed
+                    .lock()
+                    .unwrap()
+                    .contains(&ServerStatus::Unreachable);
+                assert_eq!(saw_unreachable, active_mode == TransportMode::Onion);
+            }
+        }
     }
 
     /// Controlled peer used by authority regressions: generated production RPC,
@@ -577,6 +655,7 @@ pub(crate) mod outcome_tests {
                 body_failure: false,
             },
             route: Route::H2,
+            failure_scope: FailureScope::Unrestricted,
             record: set_server_status as fn(ServerStatus),
         };
         let mut client = MessageServiceClient::with_interceptor(transport, AuthInterceptor::new());
@@ -673,6 +752,7 @@ pub(crate) mod outcome_tests {
                 body_failure: false,
             },
             route: Route::H2,
+            failure_scope: FailureScope::Unrestricted,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let mut client =
@@ -710,6 +790,7 @@ pub(crate) mod outcome_tests {
         let mut transport = RecordingTransport {
             inner: NotReady,
             route: Route::H2,
+            failure_scope: FailureScope::Unrestricted,
             record: move |status| captured.lock().unwrap().push(status),
         };
         let result =

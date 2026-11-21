@@ -129,7 +129,10 @@ impl GrpcClientPool {
 
         #[cfg(feature = "onion")]
         let channel: GrpcTransport = if *self.transport_mode.read() == TransportMode::Onion {
-            GrpcTransport::from_onion(endpoint.connect_with_connector_lazy(self.onion_connector()))
+            GrpcTransport::from_onion(
+                endpoint.connect_with_connector_lazy(self.onion_connector()),
+                self.transport_mode.clone(),
+            )
         } else {
             endpoint
                 .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))

@@ -209,11 +209,13 @@ impl ServerStatus {
 struct Evidence {
     at_ms: u64,
     revision: u64,
+    reachable_revision: u64,
 }
 
 static EVIDENCE: std::sync::Mutex<Evidence> = std::sync::Mutex::new(Evidence {
     at_ms: 0,
     revision: 0,
+    reachable_revision: 0,
 });
 
 /// Monotonic origin for the serialized evidence timestamp.
@@ -250,6 +252,9 @@ fn record_evidence(
 ) {
     evidence.at_ms = now_ms().max(evidence.at_ms);
     evidence.revision += 1;
+    if status == ServerStatus::Reachable {
+        evidence.reachable_revision = evidence.revision;
+    }
     // `send_if_modified` wakes only when the value changes, so a successful RPC
     // that reports Reachable again does not poke waiters. Subscribers see
     // the offline→online edge the banner already shows via OfflineState.
@@ -315,6 +320,12 @@ pub fn subscribe_server_status() -> tokio::sync::watch::Receiver<ServerStatus> {
 /// Read the process-global server reachability.
 pub fn server_status() -> ServerStatus {
     *server_status_watch().borrow()
+}
+
+/// Read the latest status and last positive evidence for outage confirmation.
+pub(crate) fn monitor_evidence() -> (ServerStatus, u64) {
+    let evidence = EVIDENCE.lock().unwrap();
+    (server_status(), evidence.reachable_revision)
 }
 
 /// How long ago the wire last told us anything, or `None` if it never has.
