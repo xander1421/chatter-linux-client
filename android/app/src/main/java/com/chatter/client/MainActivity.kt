@@ -502,8 +502,7 @@ class MainActivity : GameActivity() {
         intent.action = null
         if (pickerDestroyed || (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
         try {
-            val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-                ?.take(SHARE_TEXT_MAX).orEmpty()
+            val text = capShareText(intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty())
             val streams = if (action == Intent.ACTION_SEND_MULTIPLE) {
                 IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
             } else {
@@ -515,21 +514,50 @@ class MainActivity : GameActivity() {
                 .take(SHARE_MAX_FILES)
             if (text.isEmpty() && uris.isEmpty()) return
             pickerCopies.execute {
-                val paths = uris.mapNotNull { copyToCache(it) }
+                // One byte budget for the whole share: the copy runs before the
+                // user has chosen anything, so a sender must not be able to make
+                // us write without bound.
+                var budget = SHARE_MAX_BYTES
+                val paths = uris.mapNotNull { uri ->
+                    copyToCache(uri, budget)?.also { budget -= File(it).length() }
+                }
                 val failed = uris.size - paths.size
+                // Same teardown guard as deliverPickedUris: a copy that outlives
+                // the Activity must not be offered on a later launch.
+                val delivered = synchronized(filePickerRequest) {
+                    // Nothing usable arrived: no picker over an empty share.
+                    if (pickerDestroyed || (text.isEmpty() && paths.isEmpty())) false else {
+                        nativeShareReceived(text, paths.toTypedArray())
+                        true
+                    }
+                }
+                if (!delivered) paths.forEach { path ->
+                    val file = File(path)
+                    file.delete()
+                    file.parentFile?.delete()
+                }
                 if (failed > 0) runOnUiThread {
-                    Toast.makeText(
+                    if (!pickerDestroyed) Toast.makeText(
                         this,
                         if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
-                // Nothing usable arrived: no picker over an empty share.
-                if (text.isNotEmpty() || paths.isNotEmpty()) nativeShareReceived(text, paths.toTypedArray())
             }
         } catch (_: RuntimeException) {
             // Malformed public extras (or a shut-down executor) drop the share.
         }
+    }
+
+    /**
+     * Cap shared text at [SHARE_TEXT_MAX] UTF-16 units without splitting a
+     * surrogate pair: a lone surrogate is not a valid string across JNI and
+     * would silently drop the whole text.
+     */
+    private fun capShareText(text: String): String {
+        if (text.length <= SHARE_TEXT_MAX) return text
+        val cut = text.take(SHARE_TEXT_MAX)
+        return if (cut.last().isHighSurrogate()) cut.dropLast(1) else cut
     }
 
     private external fun nativeShareReceived(text: String, paths: Array<String>)
@@ -1255,7 +1283,20 @@ class MainActivity : GameActivity() {
         pendingCaptureFile = null
     }
 
-    private fun copyToCache(uri: Uri): String? {
+    /** Copy at most [max] bytes; a longer (or endless) stream fails rather than being cut. */
+    private fun copyBounded(input: java.io.InputStream, out: java.io.OutputStream, max: Long) {
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val n = input.read(buffer)
+            if (n < 0) return
+            total += n
+            if (total > max) throw java.io.IOException("too large")
+            out.write(buffer, 0, n)
+        }
+    }
+
+    private fun copyToCache(uri: Uri, maxBytes: Long = Long.MAX_VALUE): String? {
         var copiedFile: File? = null
         return try {
             // The display name comes from another app's content provider, so it
@@ -1276,7 +1317,7 @@ class MainActivity : GameActivity() {
                 val selectionDir = Files.createTempDirectory(dir.toPath(), "selection_").toFile()
                 val out = File(selectionDir, name)
                 copiedFile = out
-                out.outputStream().use { stream.copyTo(it) }
+                out.outputStream().use { copyBounded(stream, it, maxBytes) }
                 out.absolutePath
             }
         } catch (_: Exception) {
@@ -1531,8 +1572,12 @@ class MainActivity : GameActivity() {
         const val THEME_MODE = "mode"
         const val LAUNCH_COVER_TIMEOUT_MS = 5_000L
         // Bounds on what an untrusted sender can make us copy/hold.
-        const val SHARE_TEXT_MAX = 64 * 1024
+        const val SHARE_TEXT_MAX = 64 * 1024 // UTF-16 units
         const val SHARE_MAX_FILES = 32
+        // Total bytes copied per share: core's one-attachment cap
+        // (chatter-attachment-crypto MAX_ATTACHMENT_SIZE), so nothing that could
+        // have been sent is refused.
+        const val SHARE_MAX_BYTES = 2L * 1024 * 1024 * 1024
 
         // compileSdk is 35; these are Build.VERSION_CODES.BAKLAVA and
         // Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST from the API 36 SDK.

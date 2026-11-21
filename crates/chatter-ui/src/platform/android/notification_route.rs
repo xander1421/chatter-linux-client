@@ -74,7 +74,13 @@ pub fn open_pending(window: &crate::MainWindow) {
     {
         return;
     }
+    open_pending_notification(window, &client);
+    // After the notification route, never before: it resets the modal stack,
+    // which would close a share picker opened first and strand the share.
     super::share_in::open_pending(window, &client);
+}
+
+fn open_pending_notification(window: &crate::MainWindow, client: &Arc<ChatterClient>) {
     let key = PENDING_KEY.lock().ok().and_then(|pending| pending.clone());
     if let Some(ref key) = key {
         if client.notification_tap_belongs_to_current_account(key) == Some(false) {
@@ -118,7 +124,7 @@ pub fn open_pending(window: &crate::MainWindow) {
                 .global::<crate::SidebarPane>()
                 .set_mobile_show_chat(false);
             crate::bin_ui::features::sidebar::navigation::load_pending_message_requests_count(
-                window, &client,
+                window, client,
             );
             window
                 .global::<crate::ModalHostState>()

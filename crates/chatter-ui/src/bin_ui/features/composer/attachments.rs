@@ -397,7 +397,15 @@ pub(crate) fn wire_attach_source(
                         tracing::debug!("Attachment source cancelled or produced nothing");
                         return;
                     }
-                    stage_owned_files(selected_files, &chat_state, conversation, revision, picker_session, &weak).await;
+                    stage_owned_files(
+                        selected_files,
+                        &chat_state,
+                        conversation,
+                        revision,
+                        picker_session,
+                        &weak,
+                    )
+                    .await;
                 });
             }
         });

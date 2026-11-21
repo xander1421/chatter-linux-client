@@ -99,12 +99,22 @@ pub fn open_pending(window: &crate::MainWindow, client: &Arc<ChatterClient>) {
     crate::bin_ui::features::chat::open_share_in_modal(window, client, preview);
 }
 
-/// The user picked `target` in the picker: open that chat and stage the share
-/// into its composer. Nothing is sent.
+/// The picker closed without a choice: delete the unclaimed cache copies.
+/// Called by the modal stack whenever the forward picker leaves it.
+pub fn discard_offered() {
+    if let Some(share) = OFFERED.lock().ok().and_then(|mut slot| slot.take()) {
+        share.discard();
+    }
+}
+
+/// The user picked `target` in the picker: close it, open that chat and stage
+/// the share into its composer. Nothing is sent.
 pub fn stage(window: &crate::MainWindow, client: &Arc<ChatterClient>, target: ActiveConversation) {
     let Some(share) = OFFERED.lock().ok().and_then(|mut slot| slot.take()) else {
         return;
     };
+    // Claimed above, so closing the picker no longer discards it.
+    crate::bin_ui::features::back::close(window, "forward-message");
     crate::bin_ui::features::sidebar::select_conversation(window, target);
     // The open commits synchronously (active conversation and its draft), so
     // what follows lands in the chosen chat.
