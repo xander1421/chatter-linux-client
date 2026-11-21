@@ -350,7 +350,6 @@ pub(crate) fn wire_attach_source(
     ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
 ) {
     let weak_window = window.as_weak();
-    let ui_ctx_attach = ui_ctx.clone();
     let chat_state = ui_ctx.clone();
 
     window
@@ -370,12 +369,11 @@ pub(crate) fn wire_attach_source(
                 }
                 return;
             }
-            let _ = (&weak_window, &ui_ctx_attach, &chat_state, source);
+            let _ = (&weak_window, &chat_state, source);
             #[cfg(any(target_os = "android", target_os = "ios"))]
             {
                 let weak = weak_window.clone();
                 let chat_state = chat_state.clone();
-                let ui_ctx_attach = ui_ctx_attach.clone();
                 let Some(w) = weak.upgrade() else { return };
 
                 let snapshot = chat_state.chat_snapshot();
@@ -399,57 +397,73 @@ pub(crate) fn wire_attach_source(
                         tracing::debug!("Attachment source cancelled or produced nothing");
                         return;
                     }
-                    tracing::info!("Selected {} file(s) for attachment", selected_files.len());
-                    for file_path in selected_files {
-                        // Mobile picker copies land in the purgeable cache dir and are
-                        // ours: move them where a restart finds them (core owns it).
-                        let origin = file_path;
-                        if !picker_session.is_current() {
-                            let _ = tokio::fs::remove_file(&origin).await;
-                            #[cfg(target_os = "android")]
-                            if let Some(parent) = origin.parent() {
-                                let _ = tokio::fs::remove_dir(parent).await;
-                            }
-                            continue;
-                        }
-                        let staged =
-                            match ui_ctx_attach.stage_owned_file_async(origin.clone()).await {
-                                Ok(path) => path,
-                                Err(error) => {
-                                    let _ = tokio::fs::remove_file(&origin).await;
-                                    tracing::error!(%error, "Attachment staging failed");
-                                    continue;
-                                }
-                            };
-                        if staged == origin {
-                            let _ = tokio::fs::remove_file(&origin).await;
-                            tracing::warn!("Could not encrypt selected attachment");
-                            continue;
-                        }
-                        if let Err(e) = process_and_add_file(
-                            staged.clone(),
-                            None,
-                            &chat_state,
-                            conversation,
-                            revision,
-                            &weak,
-                        )
-                        .await
-                        {
-                            ui_ctx_attach.release_staged_files(&[PendingAttachment::new(
-                                AttachmentId::new(),
-                                String::new(),
-                                staged,
-                                0,
-                                String::new(),
-                            )]);
-                            tracing::error!("{}", e);
-                        }
-                    }
-                    update_attachments_ui(&chat_state, &weak);
+                    stage_owned_files(selected_files, &chat_state, conversation, revision, picker_session, &weak).await;
                 });
             }
         });
+}
+
+/// Stage cache-dir copies of picked/shared/captured files into `conversation`'s
+/// tray. They are ours: each is encrypted into core's staging dir (removing the
+/// cache copy) before it is shown. If the account changed while the files were
+/// being fetched they are deleted instead.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) async fn stage_owned_files(
+    selected_files: Vec<PathBuf>,
+    chat_state: &Arc<ChatterClient>,
+    conversation: ActiveConversation,
+    revision: u64,
+    picker_session: chatter_core::client::SessionGuard,
+    weak: &Weak<MainWindow>,
+) {
+    tracing::info!("Selected {} file(s) for attachment", selected_files.len());
+    for file_path in selected_files {
+        // Mobile picker/share copies land in the purgeable cache dir and are
+        // ours: move them where a restart finds them (core owns it).
+        let origin = file_path;
+        if !picker_session.is_current() {
+            let _ = tokio::fs::remove_file(&origin).await;
+            #[cfg(target_os = "android")]
+            if let Some(parent) = origin.parent() {
+                let _ = tokio::fs::remove_dir(parent).await;
+            }
+            continue;
+        }
+        let staged =
+            match chat_state.stage_owned_file_async(origin.clone()).await {
+                Ok(path) => path,
+                Err(error) => {
+                    let _ = tokio::fs::remove_file(&origin).await;
+                    tracing::error!(%error, "Attachment staging failed");
+                    continue;
+                }
+            };
+        if staged == origin {
+            let _ = tokio::fs::remove_file(&origin).await;
+            tracing::warn!("Could not encrypt selected attachment");
+            continue;
+        }
+        if let Err(e) = process_and_add_file(
+            staged.clone(),
+            None,
+            chat_state,
+            conversation,
+            revision,
+            weak,
+        )
+        .await
+        {
+            chat_state.release_staged_files(&[PendingAttachment::new(
+                AttachmentId::new(),
+                String::new(),
+                staged,
+                0,
+                String::new(),
+            )]);
+            tracing::error!("{}", e);
+        }
+    }
+    update_attachments_ui(chat_state, weak);
 }
 
 /// A cancelled or failed chooser still completes the input handover. A picker

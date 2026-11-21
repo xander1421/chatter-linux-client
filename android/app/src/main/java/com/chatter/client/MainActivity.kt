@@ -37,6 +37,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -267,6 +268,8 @@ class MainActivity : GameActivity() {
         // app classloader. Doing this from Rust's native thread fails.
         nativeInitWebrtc()
         dispatchCallNotification(intent)
+        // Restored after process death, the launch intent is the old share.
+        if (savedInstanceState == null) dispatchShare(intent)
     }
 
     override fun onDestroy() {
@@ -481,7 +484,55 @@ class MainActivity : GameActivity() {
         setIntent(intent)
         dispatchMessageNotification(intent)
         dispatchCallNotification(intent)
+        dispatchShare(intent)
     }
+
+    /**
+     * Share-sheet intake (ACTION_SEND / SEND_MULTIPLE from any app). The intent
+     * is public and untrusted: it is data for the user to place in a chat they
+     * choose, never consent to send. Only content:// streams are read — a
+     * file:// URI would make us copy our own private files for the sender — and
+     * never our own FileProvider. Files are copied to cacheDir/picked exactly
+     * like a picker selection, so Rust stages and cleans them the same way.
+     */
+    private fun dispatchShare(intent: Intent) {
+        val action = intent.action
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
+        // Consume it: onNewIntent/setIntent and recreation must not re-share.
+        intent.action = null
+        if (pickerDestroyed || (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+        try {
+            val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+                ?.take(SHARE_TEXT_MAX).orEmpty()
+            val streams = if (action == Intent.ACTION_SEND_MULTIPLE) {
+                IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+            } else {
+                listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+            }
+            val own = "$packageName.viewer-media"
+            val uris = streams
+                .filter { it.scheme == "content" && it.authority != own }
+                .take(SHARE_MAX_FILES)
+            if (text.isEmpty() && uris.isEmpty()) return
+            pickerCopies.execute {
+                val paths = uris.mapNotNull { copyToCache(it) }
+                val failed = uris.size - paths.size
+                if (failed > 0) runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                // Nothing usable arrived: no picker over an empty share.
+                if (text.isNotEmpty() || paths.isNotEmpty()) nativeShareReceived(text, paths.toTypedArray())
+            }
+        } catch (_: RuntimeException) {
+            // Malformed public extras (or a shut-down executor) drop the share.
+        }
+    }
+
+    private external fun nativeShareReceived(text: String, paths: Array<String>)
 
     private fun dispatchCallNotification(intent: Intent) {
         // Public launcher intents are untrusted. The action is routing only;
@@ -1479,6 +1530,9 @@ class MainActivity : GameActivity() {
         const val THEME_PREFS = "chatter_theme"
         const val THEME_MODE = "mode"
         const val LAUNCH_COVER_TIMEOUT_MS = 5_000L
+        // Bounds on what an untrusted sender can make us copy/hold.
+        const val SHARE_TEXT_MAX = 64 * 1024
+        const val SHARE_MAX_FILES = 32
 
         // compileSdk is 35; these are Build.VERSION_CODES.BAKLAVA and
         // Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST from the API 36 SDK.

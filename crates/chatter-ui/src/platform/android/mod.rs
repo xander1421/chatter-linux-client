@@ -21,6 +21,7 @@ pub mod permissions;
 pub mod qr_scanner;
 pub mod screen;
 pub mod share;
+pub mod share_in;
 pub mod system_settings;
 pub mod text_input;
 pub mod unifiedpush;

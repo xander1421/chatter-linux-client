@@ -114,6 +114,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Share-sheet target: lists Chatter when another app shares text,
+                 a link or files. The payload is untrusted; MainActivity only
+                 stages it into a chat the user picks, never sends it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <activity android:name=".VideoPlaybackActivity" android:exported="false"
