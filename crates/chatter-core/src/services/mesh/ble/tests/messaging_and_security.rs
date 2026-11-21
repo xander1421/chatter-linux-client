@@ -498,7 +498,7 @@ async fn our_prekey_bundle_is_saved_before_it_is_published() {
 }
 
 #[tokio::test]
-async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
+async fn auditclient2_prekey_bundle_requires_proven_signing_key() {
     let (mut runtime, _radio, state) = runtime();
     let owner = MeshIdentity::generate(&mut os_rng());
     let announcement = AnnouncementPacket::new(
@@ -548,6 +548,10 @@ async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
     );
 
     // The genuine one is cached, so offline mail to the owner seals to it.
+    assert!(!runtime.on_prekey_bundle(&bundle_packet(&genuine)), "announce alone cannot authorize offline sealing");
+    assert!(state.with(|inner| inner.peers.pin_noise_identity(
+        &owner.peer_id(), &owner.static_public(), &owner.signing_public(), now_millis(),
+    )));
     assert!(runtime.on_prekey_bundle(&bundle_packet(&genuine)));
     let (_, prekey_id) = super::super::prekeys::seal_offline(
         &state,

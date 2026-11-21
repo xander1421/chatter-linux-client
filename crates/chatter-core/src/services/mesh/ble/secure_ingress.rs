@@ -1,6 +1,27 @@
 use super::*;
+use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
+
+const SIGNING_BINDING_MAGIC: &[u8; 8] = b"CHTRNSB1";
+pub(super) const SIGNING_BINDING_REQUEST: &[u8; 8] = b"CHTRNSR1";
+pub(super) const SIGNING_PIN_INTENT_MS: u64 = 300_000;
+
+fn signing_binding_bytes(noise: &[u8; 32], transcript: &[u8; 32], signing: &[u8; 32]) -> Vec<u8> {
+    [SIGNING_BINDING_MAGIC.as_slice(), noise, transcript, signing].concat()
+}
 
 impl BleRuntime {
+    async fn send_mesh_signing_binding(&mut self, peer: &PeerId) {
+        let Some(transcript) = self.state.with(|state| state.sessions.handshake_hash(peer)) else {
+            return;
+        };
+        let key = self.identity.signing_public();
+        let proof = sign_bytes(&self.identity, &signing_binding_bytes(
+            &self.identity.static_public(), &transcript, &key,
+        ));
+        let frame = [SIGNING_BINDING_MAGIC.as_slice(), &key, &proof].concat();
+        self.send_private_control(peer, &frame).await;
+    }
+
     pub(super) async fn on_handshake(
         &mut self,
         link: &LinkId,
@@ -174,6 +195,8 @@ impl BleRuntime {
             .with(|state| state.links.mark_noise_authenticated(link, claimed));
 
         if let Some(hello) = ChatterHello::decode(&plaintext) {
+            let can_bind = hello.compatible()
+                && hello.capabilities & super::super::chatter_hello::NOISE_SIGNING_BINDING != 0;
             let signal_capable = hello.capabilities & super::super::chatter_hello::SIGNAL_MESH != 0
                 && hello.compatible()
                 && hello.max_carrier_bytes >= frames::MAX_CARRIER as u32;
@@ -193,6 +216,9 @@ impl BleRuntime {
                 state.chatter_hello.accept(claimed, hello);
             });
             tracing::info!(target: "mesh::ble", peer = %claimed, signal_capable, "Chatter Hello accepted");
+            if can_bind {
+                self.send_mesh_signing_binding(claimed).await;
+            }
             if signal_capable {
                 if let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device() {
                     if let Some(static_key) = self
@@ -236,6 +262,49 @@ impl BleRuntime {
                 }
             }
             self.emit_peers();
+            return;
+        }
+        if plaintext.as_slice() == SIGNING_BINDING_REQUEST {
+            self.send_mesh_signing_binding(claimed).await;
+            return;
+        }
+        if let Some(binding) = plaintext.strip_prefix(SIGNING_BINDING_MAGIC) {
+            let Ok(binding) = <&[u8; 96]>::try_from(binding) else { return };
+            let (key, proof) = binding.split_at(32);
+            let (Ok(key), Ok(proof)) = (<&[u8; 32]>::try_from(key), <&[u8; 64]>::try_from(proof)) else {
+                return;
+            };
+            let now = now_millis();
+            // An unsolicited handshake proves possession but does not give
+            // a radio stranger a slot in the durable contact table.
+            if !self.signing_pin_intent.get(claimed)
+                .is_some_and(|at| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS)
+            {
+                return;
+            }
+            let saved = self.state.with(|state| {
+                let Some(noise) = state.sessions.remote_static(claimed) else { return false };
+                let Some(transcript) = state.sessions.handshake_hash(claimed) else { return false };
+                if !verify_bytes(proof, &signing_binding_bytes(&noise, &transcript, key), key) {
+                    return false;
+                }
+                let mut candidate = state.peers.clone();
+                if !candidate.pin_noise_identity(claimed, &noise, key, now) {
+                    return false;
+                }
+                if state.peers.pinned(claimed).is_none() {
+                    let Ok(sealed) = self.sealer.seal(&candidate.pins_to_bytes()) else { return false };
+                    if self.storage.save(StorageKey::PeerPins, &sealed).is_err() {
+                        return false;
+                    }
+                }
+                state.peers = candidate;
+                true
+            });
+            if saved {
+                self.signing_pin_intent.remove(claimed);
+                self.emit_peers();
+            }
             return;
         }
         if let Some(proof) = BindingV1::decode(&plaintext) {

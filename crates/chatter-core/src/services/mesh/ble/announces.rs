@@ -20,6 +20,18 @@ impl BleRuntime {
     ) -> bool {
         let local = self.identity.peer_id();
         let now_ms = now_millis();
+        if !self.state.with(|state| state.peers.pinned(claimed).is_some()) {
+            let link = link.to_string();
+            self.announce_ingress.retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
+            if self.announce_ingress.len() >= 128 && !self.announce_ingress.contains_key(&link) {
+                return false;
+            }
+            let budget = self.announce_ingress.entry(link).or_insert((now_ms, 0));
+            if budget.1 >= 60 {
+                return false;
+            }
+            budget.1 += 1;
+        }
         let now_s = now_secs();
 
         // What the trust decision needs from our own tables, read before it runs.
@@ -30,7 +42,6 @@ impl BleRuntime {
         // it looks at the signature.
         let (presence, link_bound_elsewhere, existing_noise_key, existing_signing_key) =
             self.state.with(|state| {
-                let record = state.peers.info(claimed);
                 let pin = state.peers.pinned(claimed);
                 (
                     state.links.presence(claimed),
@@ -38,10 +49,8 @@ impl BleRuntime {
                         .links
                         .peer_for(link)
                         .is_some_and(|bound| bound != claimed),
-                    pin.map(|p| p.noise_public_key.clone())
-                        .or_else(|| record.and_then(|r| r.noise_public_key.clone())),
-                    pin.map(|p| p.signing_public_key.clone())
-                        .or_else(|| record.and_then(|r| r.signing_public_key.clone())),
+                    pin.map(|p| p.noise_public_key.clone()),
+                    pin.map(|p| p.signing_public_key.clone()),
                 )
             });
 
@@ -121,31 +130,7 @@ impl BleRuntime {
             return false;
         }
 
-        if !self.state.with(|state| state.peers.can_pin(claimed)) {
-            self.degraded("Peer identity storage is full; new peers are refused.".to_string());
-            return false;
-        }
         let announcement = accepted.announcement.clone();
-        // Commit the pin before exposing the peer as trusted. A failed write
-        // leaves no accepted identity that would silently lose its pin on restart.
-        let persisted = self.state.with(|state| -> Result<(), String> {
-            if state.peers.pinned(claimed).is_some() {
-                return Ok(());
-            }
-            let mut candidate = state.peers.clone();
-            candidate.upsert_verified_announce(claimed, &announcement, false, now_ms);
-            let sealed = self
-                .sealer
-                .seal(&candidate.pins_to_bytes())
-                .map_err(|e| e.to_string())?;
-            self.storage
-                .save(StorageKey::PeerPins, &sealed)
-                .map_err(|e| e.to_string())
-        });
-        if let Err(error) = persisted {
-            self.degraded(format!("Peer identity pin could not be saved: {error}"));
-            return false;
-        }
         let direct = VerifiedDirectAnnounce::from_packet(
             claimed.clone(),
             packet,

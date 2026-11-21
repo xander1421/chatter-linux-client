@@ -538,7 +538,7 @@ fn a_verified_announce_records_the_peer_and_reports_what_changed() {
 
     let record = registry.info(&peer(0xAA)).unwrap();
     assert_eq!(record.nickname, "alice2");
-    assert!(record.verified_nickname);
+    assert!(!record.verified_nickname);
     assert_eq!(record.last_seen_ms, 20);
     assert_eq!(record.noise_public_key.as_deref(), Some(&[0xAB; 32][..]));
     assert_eq!(registry.connected_count(), 1);
@@ -714,25 +714,32 @@ fn derived(noise_byte: u8, signing_byte: u8, nickname: &str) -> (PeerId, Announc
     (PeerId::from_noise_key(&noise), announcement)
 }
 
+fn pin(registry: &mut PeerRegistry, peer: &PeerId, announcement: &AnnouncementPacket, now: u64) {
+    assert!(registry.pin_noise_identity(
+        peer,
+        announcement.noise_public_key.as_slice().try_into().unwrap(),
+        announcement.signing_public_key.as_slice().try_into().unwrap(),
+        now,
+    ));
+}
+
 #[test]
-fn the_first_announce_pins_and_a_later_one_does_not_move_the_pin() {
+fn first_contact_cannot_pin_a_signing_key_under_someone_elses_noise_id() {
     let mut registry = PeerRegistry::new();
-    let (alice, first) = derived(1, 2, "alice");
+    let (alice, impostor) = derived(1, 9, "impostor");
+    registry.upsert_verified_announce(&alice, &impostor, true, 10);
+    assert!(registry.pinned(&alice).is_none());
+    assert!(!registry.info(&alice).unwrap().verified_nickname);
 
-    assert!(
-        registry
-            .upsert_verified_announce(&alice, &first, true, 10)
-            .pinned_now
-    );
+    let (_, genuine) = derived(1, 2, "alice");
+    registry.upsert_verified_announce(&alice, &genuine, true, 20);
+    assert!(!registry.info(&alice).unwrap().verified_nickname);
+    pin(&mut registry, &alice, &genuine, 21);
+    assert!(registry.info(&alice).unwrap().verified_nickname);
 
-    let (_, renamed) = derived(1, 9, "alice-renamed");
-    let update = registry.upsert_verified_announce(&alice, &renamed, true, 20);
-
-    assert!(!update.pinned_now);
-    let pin = registry.pinned(&alice).expect("pinned");
-    assert_eq!(pin.signing_public_key, vec![2; 32]);
-    assert_eq!(pin.nickname, "alice");
-    assert_eq!(pin.pinned_at_ms, 10);
+    registry.upsert_verified_announce(&alice, &impostor, true, 22);
+    assert_eq!(registry.pinned(&alice).unwrap().signing_public_key, vec![2; 32]);
+    assert_eq!(registry.info(&alice).unwrap().nickname, "alice");
 }
 
 #[test]
@@ -740,6 +747,7 @@ fn forgetting_a_peer_does_not_forget_its_pin() {
     let mut registry = PeerRegistry::new();
     let (alice, announcement) = derived(1, 2, "alice");
     registry.upsert_verified_announce(&alice, &announcement, false, 0);
+    pin(&mut registry, &alice, &announcement, 0);
 
     // Aged out as a disconnected peer, then removed outright, then the
     // whole registry cleared: every way a record can go.
@@ -764,7 +772,9 @@ fn pins_survive_a_round_trip_through_storage() {
     let (alice, a) = derived(1, 2, "alice");
     let (bob, b) = derived(3, 4, "bob");
     registry.upsert_verified_announce(&alice, &a, true, 10);
+    pin(&mut registry, &alice, &a, 10);
     registry.upsert_verified_announce(&bob, &b, true, 20);
+    pin(&mut registry, &bob, &b, 20);
 
     let mut restarted = PeerRegistry::new();
     restarted
@@ -780,11 +790,11 @@ fn pins_survive_a_round_trip_through_storage() {
 fn a_restored_pin_does_not_replace_one_already_held() {
     let (alice, stored) = derived(1, 2, "alice");
     let mut old = PeerRegistry::new();
-    old.upsert_verified_announce(&alice, &stored, true, 10);
+    pin(&mut old, &alice, &stored, 10);
 
     let mut registry = PeerRegistry::new();
     let (_, live) = derived(1, 7, "alice");
-    registry.upsert_verified_announce(&alice, &live, true, 99);
+    pin(&mut registry, &alice, &live, 99);
     registry
         .restore_pins(&old.pins_to_bytes())
         .expect("restore");
@@ -801,7 +811,9 @@ fn a_damaged_pin_blob_is_refused_whole() {
     let (alice, a) = derived(1, 2, "alice");
     let (bob, b) = derived(3, 4, "bob");
     registry.upsert_verified_announce(&alice, &a, true, 10);
+    pin(&mut registry, &alice, &a, 10);
     registry.upsert_verified_announce(&bob, &b, true, 20);
+    pin(&mut registry, &bob, &b, 20);
     let good = registry.pins_to_bytes();
 
     let mut wrong_version = good.clone();
@@ -826,11 +838,12 @@ fn a_damaged_pin_blob_is_refused_whole() {
 }
 
 #[test]
-fn a_full_pin_set_refuses_newcomers_and_keeps_what_it_has() {
+fn five_thousand_announces_cannot_fill_durable_pins() {
     let mut registry = PeerRegistry::new();
     let (alice, announcement) = derived(1, 2, "alice");
     registry.upsert_verified_announce(&alice, &announcement, true, 0);
-    for n in 0..MAX_PINNED_IDENTITIES as u64 {
+    pin(&mut registry, &alice, &announcement, 0);
+    for n in 0..5_000u64 {
         let noise = n.to_be_bytes().repeat(4);
         let flood = AnnouncementPacket::new(
             "flood".to_string(),
@@ -844,15 +857,40 @@ fn a_full_pin_set_refuses_newcomers_and_keeps_what_it_has() {
     }
 
     let (late, announcement) = derived(0xEE, 0xEF, "late");
-    let update = registry.upsert_verified_announce(&late, &announcement, true, 2);
-
-    assert!(!update.pinned_now);
+    registry.upsert_verified_announce(&late, &announcement, true, 2);
+    assert!(registry.len() <= 513);
     assert!(registry.pinned(&late).is_none());
     assert!(
         registry.info(&late).is_some(),
         "still a peer for this session"
     );
     assert!(registry.pinned(&alice).is_some());
+    pin(&mut registry, &late, &announcement, 3);
+    assert!(registry.pinned(&late).is_some());
+}
+
+#[test]
+fn announce_only_peer_expires_even_when_it_claims_presence() {
+    let mut registry = PeerRegistry::new();
+    let (alice, announcement) = derived(1, 2, "alice");
+    registry.upsert_verified_announce(&alice, &announcement, true, 0);
+    let changes = registry.reconcile_connectivity(
+        REACHABILITY_RETENTION_UNVERIFIED_MS + 1, &BTreeMap::new(),
+    );
+    assert_eq!(changes.removed.len(), 1);
+    assert!(registry.info(&alice).is_none());
+}
+
+#[test]
+fn version_one_announce_pins_are_not_restored_as_proven() {
+    let mut registry = PeerRegistry::new();
+    let (alice, a) = derived(1, 2, "alice");
+    pin(&mut registry, &alice, &a, 10);
+    let mut legacy = registry.pins_to_bytes();
+    legacy[0] = 1;
+    let mut restarted = PeerRegistry::new();
+    restarted.restore_pins(&legacy).unwrap();
+    assert!(restarted.pinned(&alice).is_none());
 }
 
 #[test]

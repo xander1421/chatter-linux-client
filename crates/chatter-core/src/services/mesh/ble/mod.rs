@@ -194,6 +194,8 @@ pub struct BleRuntime {
     last_throughput_report_ms: u64,
     /// Per-ingress budget for open channels, independent of outbound pacing.
     channel_ingress: std::collections::HashMap<String, (u64, u32)>,
+    announce_ingress: std::collections::HashMap<String, (u64, u32)>,
+    signing_pin_intent: std::collections::HashMap<PeerId, u64>,
     private_ingress: std::collections::HashMap<String, (u64, u32)>,
     /// Authenticated private authors share one budget across relay links.
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
@@ -281,6 +283,8 @@ impl BleRuntime {
             frames_written: std::sync::atomic::AtomicU64::new(0),
             last_throughput_report_ms: 0,
             channel_ingress: std::collections::HashMap::new(),
+            announce_ingress: std::collections::HashMap::new(),
+            signing_pin_intent: std::collections::HashMap::new(),
             dial_tx,
             dial_rx: Some(dial_rx),
             dial_in_flight: false,
@@ -381,7 +385,7 @@ impl BleRuntime {
     }
 
     /// A peer's prekey bundle. Cached and re-gossiped only if it verifies
-    /// against the signing key pinned from that owner's verified announce — the
+    /// against the signing key bound to the owner's Noise identity — the
     /// bundle's own signature proves nothing about whose static key it names.
     fn on_prekey_bundle(&mut self, packet: &BitchatPacket) -> bool {
         let Ok(bundle) = PrekeyBundle::decode(&packet.payload) else {
