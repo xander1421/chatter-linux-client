@@ -185,129 +185,132 @@ impl SendError {
 // =============================================================================
 
 /// Route an outgoing message intent to the correct service.
-pub async fn route_outgoing(
+pub fn route_outgoing<'a>(
     intent: OutgoingIntent,
-    services: &OutgoingServices<'_>,
-) -> Result<SendResult, SendError> {
-    match intent {
-        OutgoingIntent::ServerDm {
-            peer_id,
-            text,
-            attachment_pointers,
-            quote,
-        } => Ok(route_server_dm(
-            services.message_service,
-            &peer_id,
-            &text,
-            attachment_pointers,
-            quote,
-        )
-        .await?),
-
-        OutgoingIntent::Channel {
-            channel_id,
-            text,
-            attachment_pointers,
-            file_paths,
-            thread_id,
-            mentioned_integrations,
-            targets_ai_bot,
-            quote,
-        } => Ok(route_channel(
-            services.message_service,
-            services.group_fanout,
-            &channel_id,
-            &text,
-            attachment_pointers,
-            file_paths,
-            thread_id,
-            mentioned_integrations,
-            targets_ai_bot,
-            quote,
-        )
-        .await?),
-
-        OutgoingIntent::AnonDm {
-            conversation_id,
-            text,
-            attachment_pointers,
-            quote,
-        } => {
-            let anon_dm_service = services
-                .anon_dm_service
-                .ok_or_else(|| SendError::NotLoggedIn.before_submission())?;
-
-            // Safety Check: Centralized Block/Rate Limit
-            anon_dm_service
-                .check_conversation_not_blocked(&conversation_id)
-                .map_err(|e| SendError::from(e).before_submission())?;
-            anon_dm_service
-                .check_rate_limit(&conversation_id)
-                .map_err(|e| SendError::from(e).before_submission())?;
-
-            route_anon_dm(
-                anon_dm_service,
-                &conversation_id,
+    services: &'a OutgoingServices<'a>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SendResult, SendError>> + Send + 'a>> {
+    // Avoid embedding every transport's send future into the caller's stack.
+    Box::pin(async move {
+        match intent {
+            OutgoingIntent::ServerDm {
+                peer_id,
+                text,
+                attachment_pointers,
+                quote,
+            } => Ok(route_server_dm(
+                services.message_service,
+                &peer_id,
                 &text,
                 attachment_pointers,
                 quote,
             )
-            .await
-        }
+            .await?),
 
-        OutgoingIntent::AnonGroup {
-            group_id,
-            text,
-            attachment_pointers,
-            quote,
-        } => {
-            let anon_group_service = services
-                .anon_group_service
-                .ok_or_else(|| SendError::NotLoggedIn.before_submission())?;
-
-            // Safety Check: Centralized Block/Rate Limit
-            anon_group_service
-                .check_group_not_blocked(&group_id)
-                .map_err(|e| SendError::from(e).before_submission())?;
-            anon_group_service
-                .check_rate_limit(&group_id)
-                .map_err(|e| SendError::from(e).before_submission())?;
-
-            route_anon_group(
-                anon_group_service,
-                &group_id,
+            OutgoingIntent::Channel {
+                channel_id,
+                text,
+                attachment_pointers,
+                file_paths,
+                thread_id,
+                mentioned_integrations,
+                targets_ai_bot,
+                quote,
+            } => Ok(route_channel(
+                services.message_service,
+                services.group_fanout,
+                &channel_id,
                 &text,
                 attachment_pointers,
+                file_paths,
+                thread_id,
+                mentioned_integrations,
+                targets_ai_bot,
                 quote,
             )
-            .await
-        }
+            .await?),
 
-        OutgoingIntent::SavedMessages {
-            text,
-            attachment_ids,
-            quote,
-        } => {
-            // Unlike `route_channel`, nothing to patch afterwards:
-            // `save_message` puts the quote on the row before its insert and
-            // syncs it only once stored, so an insert error surfaces here.
-            let message = services
-                .message_service
-                .save_message(&text, attachment_ids, quote.as_ref())
-                .await?;
-            let sent_at = message.sent_at;
-            let att_ids = message.attachments.clone();
-            Ok(SendResult {
-                sent_at,
-                message: Some(message),
-                attachment_ids: att_ids,
-                gif_attachment_ids: vec![],
-                bootstrap_initiated: false,
-                anon_message_id: None,
-                send_error: None,
-            })
+            OutgoingIntent::AnonDm {
+                conversation_id,
+                text,
+                attachment_pointers,
+                quote,
+            } => {
+                let anon_dm_service = services
+                    .anon_dm_service
+                    .ok_or_else(|| SendError::NotLoggedIn.before_submission())?;
+
+                // Safety Check: Centralized Block/Rate Limit
+                anon_dm_service
+                    .check_conversation_not_blocked(&conversation_id)
+                    .map_err(|e| SendError::from(e).before_submission())?;
+                anon_dm_service
+                    .check_rate_limit(&conversation_id)
+                    .map_err(|e| SendError::from(e).before_submission())?;
+
+                route_anon_dm(
+                    anon_dm_service,
+                    &conversation_id,
+                    &text,
+                    attachment_pointers,
+                    quote,
+                )
+                .await
+            }
+
+            OutgoingIntent::AnonGroup {
+                group_id,
+                text,
+                attachment_pointers,
+                quote,
+            } => {
+                let anon_group_service = services
+                    .anon_group_service
+                    .ok_or_else(|| SendError::NotLoggedIn.before_submission())?;
+
+                // Safety Check: Centralized Block/Rate Limit
+                anon_group_service
+                    .check_group_not_blocked(&group_id)
+                    .map_err(|e| SendError::from(e).before_submission())?;
+                anon_group_service
+                    .check_rate_limit(&group_id)
+                    .map_err(|e| SendError::from(e).before_submission())?;
+
+                route_anon_group(
+                    anon_group_service,
+                    &group_id,
+                    &text,
+                    attachment_pointers,
+                    quote,
+                )
+                .await
+            }
+
+            OutgoingIntent::SavedMessages {
+                text,
+                attachment_ids,
+                quote,
+            } => {
+                // Unlike `route_channel`, nothing to patch afterwards:
+                // `save_message` puts the quote on the row before its insert and
+                // syncs it only once stored, so an insert error surfaces here.
+                let message = services
+                    .message_service
+                    .save_message(&text, attachment_ids, quote.as_ref())
+                    .await?;
+                let sent_at = message.sent_at;
+                let att_ids = message.attachments.clone();
+                Ok(SendResult {
+                    sent_at,
+                    message: Some(message),
+                    attachment_ids: att_ids,
+                    gif_attachment_ids: vec![],
+                    bootstrap_initiated: false,
+                    anon_message_id: None,
+                    send_error: None,
+                })
+            }
         }
-    }
+    })
 }
 
 /// Services needed by the outgoing router.
