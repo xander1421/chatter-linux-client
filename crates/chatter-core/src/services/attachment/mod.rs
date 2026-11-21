@@ -219,6 +219,35 @@ pub fn ensure_attachments_dir() -> std::io::Result<()> {
     Ok(())
 }
 
+async fn fence_cdn_transfer<T>(
+    token: tokio_util::sync::CancellationToken,
+    transfer: impl std::future::Future<Output = Result<T, AttachmentError>>,
+) -> Result<T, AttachmentError> {
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => Err(AttachmentError::NetworkError(
+            crate::error::NetworkError::TransportChanged.to_string(),
+        )),
+        result = transfer => result,
+    }
+}
+
+#[tokio::test]
+async fn retired_route_cancels_a_cdn_transfer_and_refuses_to_start_another() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let old = token.clone();
+    let cancelled = fence_cdn_transfer(token, async move {
+        old.cancel();
+        std::future::pending::<Result<(), AttachmentError>>().await
+    }).await;
+    assert!(matches!(cancelled, Err(AttachmentError::NetworkError(_))));
+
+    let token = tokio_util::sync::CancellationToken::new();
+    token.cancel();
+    assert!(fence_cdn_transfer::<()>(token, async { panic!("retired CDN route started") })
+        .await.is_err());
+}
+
 /// Attachment service for file operations.
 ///
 /// The `grpc_pool` field is required for upload/download operations but
@@ -308,7 +337,11 @@ impl AttachmentService {
     /// request would leak the real IP): always for a secret chat, else when
     /// the pool is routing over Tor (anon mode). A secret chat with no Tor
     /// route is an error, never a direct request.
-    pub(crate) fn cdn_over_tor(&self) -> Result<bool, AttachmentError> {
+    fn cdn_route(&self) -> Result<(bool, tokio_util::sync::CancellationToken), AttachmentError> {
+        use crate::network::grpc::client_pool::TransportMode;
+        let (mode, token) = self.grpc_pool.as_ref()
+            .map(|pool| pool.route_generation_snapshot())
+            .unwrap_or_else(|| (TransportMode::Direct, tokio_util::sync::CancellationToken::new()));
         if self.secret_chat {
             let pool = self.grpc_pool()?;
             if !pool.secret_route_available() {
@@ -319,11 +352,9 @@ impl AttachmentService {
                         .unwrap_or_else(|| "secret chats need Tor (onion)".into()),
                 ));
             }
-            return Ok(true);
+            return Ok((true, token));
         }
-        Ok(self.grpc_pool.as_ref().is_some_and(|p| {
-            p.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion
-        }))
+        Ok((mode == TransportMode::Onion, token))
     }
 
     #[cfg(feature = "onion")]
@@ -340,15 +371,19 @@ impl AttachmentService {
         }
     }
 
-    /// GET a presigned/CDN URL, over Tor when [`Self::cdn_over_tor`] and
-    /// direct otherwise.
+    /// GET a presigned/CDN URL over the selected transport.
     ///
     /// Returns the full body on 2xx, else a `NetworkError` carrying the status —
     /// same fail-on-non-2xx semantics the direct path had. Over Tor this
     /// tunnels through the pool's Tor client (real IP hidden); it never falls
     /// back to a direct request, so the leak stays closed.
     pub(crate) async fn cdn_http_get(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
-        if self.cdn_over_tor()? {
+        let (tor, token) = self.cdn_route()?;
+        fence_cdn_transfer(token, self.cdn_http_get_on_route(url, tor)).await
+    }
+
+    async fn cdn_http_get_on_route(&self, url: &str, tor: bool) -> Result<Vec<u8>, AttachmentError> {
+        if tor {
             #[cfg(feature = "onion")]
             {
                 let tor = self.storage_tor().await?;
@@ -397,7 +432,14 @@ impl AttachmentService {
         file: &mut tokio::fs::File,
         limit: u64,
     ) -> Result<u64, AttachmentError> {
-        if self.cdn_over_tor()? {
+        let (tor, token) = self.cdn_route()?;
+        fence_cdn_transfer(token, self.cdn_http_get_to_file_on_route(url, file, limit, tor)).await
+    }
+
+    async fn cdn_http_get_to_file_on_route(
+        &self, url: &str, file: &mut tokio::fs::File, limit: u64, tor: bool,
+    ) -> Result<u64, AttachmentError> {
+        if tor {
             #[cfg(feature = "onion")]
             {
                 let tor = self.storage_tor().await?;
@@ -438,8 +480,7 @@ impl AttachmentService {
         Ok(total)
     }
 
-    /// PUT `body` to a presigned URL, over Tor when [`Self::cdn_over_tor`] and
-    /// direct otherwise.
+    /// PUT `body` to a presigned URL over the selected transport.
     ///
     /// Returns `(status, etag)`; the caller decides how to treat the status
     /// (single PUTs error on non-2xx, multipart parts retry). Never falls back to
@@ -450,7 +491,14 @@ impl AttachmentService {
         body: Vec<u8>,
         content_type: &str,
     ) -> Result<(u16, Option<String>), AttachmentError> {
-        if self.cdn_over_tor()? {
+        let (tor, token) = self.cdn_route()?;
+        fence_cdn_transfer(token, self.cdn_http_put_on_route(url, body, content_type, tor)).await
+    }
+
+    async fn cdn_http_put_on_route(
+        &self, url: &str, body: Vec<u8>, content_type: &str, tor: bool,
+    ) -> Result<(u16, Option<String>), AttachmentError> {
+        if tor {
             #[cfg(feature = "onion")]
             {
                 let tor = self.storage_tor().await?;

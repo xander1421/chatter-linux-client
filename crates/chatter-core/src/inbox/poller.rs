@@ -254,8 +254,8 @@ impl InboxPoller {
             // the in-flight connect, and the next poll would restart it from
             // scratch — a livelock that never establishes the channel. Direct TCP
             // keeps the tight 15s.
-            let on_onion = self.grpc_pool.transport_mode()
-                == crate::network::grpc::client_pool::TransportMode::Onion;
+            let (mode, generation) = self.grpc_pool.route_generation_snapshot();
+            let on_onion = mode == crate::network::grpc::client_pool::TransportMode::Onion;
             let rpc_timeout = if on_onion {
                 std::time::Duration::from_secs(95)
             } else {
@@ -269,12 +269,15 @@ impl InboxPoller {
             // Drive the Tor indicator off the real onion RPC outcome (Circuit+RPC
             // signal): a completed round-trip = Connected, a timeout = Error. Only
             // touch it on onion — direct mode owns its own connection state.
-            if on_onion {
+            if on_onion && !generation.is_cancelled() {
                 use crate::network::connection::{TorStatus, set_tor_status};
+                use crate::error::NetworkError;
                 match &outcome {
                     Ok(Ok(_)) => set_tor_status(TorStatus::Connected),
-                    Err(_) => set_tor_status(TorStatus::Error),
-                    Ok(Err(_)) => {} // transport-level RPC error; leave as-is (may be app-level)
+                    Err(_) | Ok(Err(NetworkError::RequestNotSent(_) | NetworkError::ConnectionFailed(_))) => {
+                        set_tor_status(TorStatus::Error);
+                    }
+                    _ => {}
                 }
             }
             let result = outcome

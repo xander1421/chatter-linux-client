@@ -290,53 +290,40 @@ impl AttachmentService {
 
                 let upload_start = std::time::Instant::now();
 
-                // Anon mode: tunnel the PUT over Tor. The Tor client takes an
-                // in-memory body, so read the ciphertext (bounded by the ≤100 MiB
-                // single-PUT threshold) into memory rather than streaming the file.
-                #[cfg(feature = "onion")]
-                let sent = if self.cdn_over_tor()? {
-                    let bytes = tokio::fs::read(temp_file.path()).await.map_err(|e| {
-                        AttachmentError::FileError(format!("Failed to read temp file: {}", e))
-                    })?;
-                    let (status, _etag) = self
-                        .cdn_http_put(&upload_url, bytes, "application/octet-stream")
-                        .await?;
-                    Some(status)
-                } else {
-                    None
-                };
-                #[cfg(not(feature = "onion"))]
-                let sent: Option<u16> = if self.cdn_over_tor()? {
-                    return Err(super::no_tor());
-                } else {
-                    None
-                };
+                let (tor, generation) = self.cdn_route()?;
+                let status = super::fence_cdn_transfer(generation, async {
+                    if tor {
+                        #[cfg(feature = "onion")]
+                        {
+                            // The Tor client's single PUT takes a bounded in-memory body.
+                            let bytes = tokio::fs::read(temp_file.path()).await.map_err(|e| {
+                                AttachmentError::FileError(format!("Failed to read temp file: {e}"))
+                            })?;
+                            return self.cdn_http_put_on_route(
+                                &upload_url, bytes, "application/octet-stream", true,
+                            ).await.map(|(status, _)| status);
+                        }
+                        #[cfg(not(feature = "onion"))]
+                        return Err(super::no_tor());
+                    }
 
-                let status = if let Some(status) = sent {
-                    status
-                } else {
-                    // Direct: stream the encrypted temp file to PUT (O(CHUNK_SIZE) memory).
-                    let encrypted_file =
-                        tokio::fs::File::open(temp_file.path()).await.map_err(|e| {
-                            AttachmentError::FileError(format!("Failed to open temp file: {}", e))
-                        })?;
+                    // Direct: stream the encrypted temp file under the same generation.
+                    let encrypted_file = tokio::fs::File::open(temp_file.path()).await.map_err(|e| {
+                        AttachmentError::FileError(format!("Failed to open temp file: {e}"))
+                    })?;
                     let stream = tokio_util::io::ReaderStream::new(encrypted_file);
-                    let body = reqwest::Body::wrap_stream(stream);
                     let response = super::cdn_client()?
                         .put(&upload_url)
                         .header("Content-Type", "application/octet-stream")
                         .header("Content-Length", encrypt_result.ciphertext_size)
-                        .body(body)
+                        .body(reqwest::Body::wrap_stream(stream))
                         .send()
                         .await
-                        .map_err(|e| {
-                            AttachmentError::NetworkError(format!(
-                                "HTTP upload failed: {}",
-                                e.without_url()
-                            ))
-                        })?;
-                    response.status().as_u16()
-                };
+                        .map_err(|e| AttachmentError::NetworkError(format!(
+                            "HTTP upload failed: {}", e.without_url()
+                        )))?;
+                    Ok(response.status().as_u16())
+                }).await?;
 
                 if !(200..300).contains(&status) {
                     return Err(AttachmentError::NetworkError(format!(

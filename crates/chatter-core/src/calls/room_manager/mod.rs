@@ -171,6 +171,7 @@ struct E2eeState {
 
 // Keep native ownership of the receive ring: get_shared_key exports derived
 // native material, which must never be passed back through SetSharedKey.
+#[derive(Clone)]
 pub(crate) struct ReconnectKeys {
     provider: KeyProvider,
     epoch: u32,

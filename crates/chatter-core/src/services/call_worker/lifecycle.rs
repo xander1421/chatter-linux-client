@@ -9,7 +9,7 @@ fn media_transport(
 ) -> Result<Option<TransportToken>, CallError> {
     use crate::network::grpc::client_pool::TransportMode;
     let Some(pool) = pool else { return Ok(None); };
-    let (mode, token) = pool.media_transport_snapshot();
+    let (mode, token) = pool.route_generation_snapshot();
     if mode == TransportMode::Onion && !shield_confirmed {
         return Err(CallError::ConnectionFailed(chatter_i18n::tr(
             "Call media connects directly and can reveal your IP address.",
@@ -28,6 +28,33 @@ async fn connect_media<T>(
         _ = token.cancelled() => Err(CallError::CallEnded),
         result = connect => result,
     }
+}
+
+async fn undo_server_setup(
+    call_client: &Arc<TokioMutex<CallClient>>,
+    pool: Option<&GrpcClientPool>,
+    origin: Option<(String, Option<String>)>,
+    id: &str,
+) {
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        if let Some(pool) = pool {
+            let mut client = pool.call_client();
+            if origin.as_ref() == Some(&pool.call_origin()) {
+                let _ = client.leave_call(id).await;
+            }
+        } else {
+            let _ = call_client.lock().await.leave_call(id).await;
+        }
+    }).await;
+}
+
+fn admit_media(
+    pool: Option<&GrpcClientPool>, confirmed: bool,
+) -> Result<Option<crate::network::grpc::client_pool::DirectMediaLease>, CallError> {
+    if confirmed {
+        return Ok(None);
+    }
+    pool.map(GrpcClientPool::admit_unconsented_media).transpose()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -61,6 +88,7 @@ pub(super) async fn initiate_call_impl(
 
     tracing::info!(target: "call_setup::create_worker_begin", "Call setup diagnostic");
     let generation = media_transport(pool, shield_confirmed)?;
+    let origin = pool.map(GrpcClientPool::call_origin);
     // Create call on server
     let response = {
         let mut client = call_client.lock().await;
@@ -74,6 +102,7 @@ pub(super) async fn initiate_call_impl(
 
     // Once the server returns an identity, all subsequent errors/cancellation
     // have enough information to undo membership and partial media setup.
+    let mut media_lease = None;
     let prepared = async {
         if attempt.is_some_and(|a| a.is_cancelled()) {
             return Err(CallError::CallEnded);
@@ -81,7 +110,7 @@ pub(super) async fn initiate_call_impl(
         let call_id = CallId::from_str(&response.call_id).map_err(|_| CallError::InvalidCallId)?;
         let key_state = CallKeyState::new(encryption_root_key, &response.call_id)
             .map_err(|e| CallError::CryptoError(e.to_string()))?;
-        media_transport(pool, shield_confirmed)?;
+        media_lease = admit_media(pool, shield_confirmed)?;
         connect_media(generation, room_manager.connect(
             &response.livekit_url,
             &response.livekit_token,
@@ -97,12 +126,7 @@ pub(super) async fn initiate_call_impl(
         Ok(prepared) => prepared,
         Err(error) => {
             room_manager.disconnect().await;
-            let mut client = call_client.lock().await;
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                client.leave_call(&response.call_id),
-            )
-            .await;
+            undo_server_setup(call_client, pool, origin, &response.call_id).await;
             return Err(error);
         }
     };
@@ -138,6 +162,7 @@ pub(super) async fn initiate_call_impl(
     // Store active call
     *active_call.borrow_mut() = Some(ActiveCallState {
         shield_confirmed,
+        _unconsented_media: media_lease,
         reconnect_media: None,
         fresh_rejoin_used: false,
         call: call.clone(),
@@ -181,6 +206,7 @@ pub(super) async fn join_call_impl(
     let timing = crate::calls::timing::CallTiming::new("join_requested_worker");
 
     let generation = media_transport(pool, shield_confirmed)?;
+    let origin = pool.map(GrpcClientPool::call_origin);
     // Join call on server
     let response = {
         let mut client = call_client.lock().await;
@@ -207,24 +233,6 @@ pub(super) async fn join_call_impl(
     let key_state = CallKeyState::new(&root, &call_id.to_string())
         .map_err(|e| CallError::CryptoError(e.to_string()))?;
 
-    let connected = async {
-        media_transport(pool, shield_confirmed)?;
-        connect_media(generation, room_manager.connect_timed(
-            &response.livekit_url,
-            &response.livekit_token,
-            key_state.current_key_vec(),
-            timing.clone(),
-        )).await
-    }.await;
-    if let Err(error) = connected {
-        room_manager.disconnect().await;
-        let mut client = call_client.lock().await;
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(3), client.leave_call(&call_id.to_string()),
-        ).await;
-        return Err(error);
-    }
-
     // Convert proto to domain
     let call_info = response.call_info.ok_or(CallError::NotFound)?;
     let server_channel_id =
@@ -239,6 +247,26 @@ pub(super) async fn join_call_impl(
             ProtoCallType::Video | ProtoCallType::ScreenShare => CallType::Video,
             _ => CallType::Voice,
         };
+
+    let mut media_lease = None;
+    let connected = async {
+        media_lease = admit_media(pool, shield_confirmed)?;
+        connect_media(generation, room_manager.connect_timed(
+            &response.livekit_url,
+            &response.livekit_token,
+            key_state.current_key_vec(),
+            timing.clone(),
+        )).await?;
+        Ok(())
+    }.await;
+    match connected {
+        Ok(()) => {},
+        Err(error) => {
+            room_manager.disconnect().await;
+            undo_server_setup(call_client, pool, origin, &call_id.to_string()).await;
+            return Err(error);
+        }
+    };
 
     let mut call = Call::new(channel_id, initiator_id, call_type);
     call.id = call_id;
@@ -263,6 +291,7 @@ pub(super) async fn join_call_impl(
     };
     *active_call.borrow_mut() = Some(ActiveCallState {
         shield_confirmed,
+        _unconsented_media: media_lease,
         reconnect_media: None,
         fresh_rejoin_used: false,
         call: call.clone(),
@@ -495,6 +524,42 @@ pub(super) async fn suspend_for_reconnect(
     result
 }
 
+/// Route changes can interrupt a reconnect without ending the owned call.
+async fn retry_reconnect_after_transport_change<T, F, Fut>(
+    pool: Option<&GrpcClientPool>,
+    shield_confirmed: bool,
+    mut reconnect: F,
+) -> Result<T, CallError>
+where
+    F: FnMut(Option<TransportToken>) -> Fut,
+    Fut: std::future::Future<Output = Result<T, CallError>>,
+{
+    loop {
+        let generation = media_transport(pool, shield_confirmed)?;
+        let result = reconnect(generation.clone()).await;
+        if result.is_err() && generation.is_some_and(|token| token.is_cancelled()) {
+            continue;
+        }
+        return result;
+    }
+}
+
+#[tokio::test]
+async fn a_cancelled_reconnect_retries_on_the_new_transport() {
+    let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+    let mut attempts = 0;
+    let value = retry_reconnect_after_transport_change(Some(&pool), false, |token| {
+        attempts += 1;
+        let token = token.unwrap();
+        if attempts == 1 {
+            pool.set_url("https://localhost:50052").unwrap();
+        }
+        std::future::ready(if token.is_cancelled() { Err(CallError::CallEnded) } else { Ok(42) })
+    }).await.unwrap();
+    assert_eq!(attempts, 2);
+    assert_eq!(value, 42);
+}
+
 /// Reconnect to the current call after a connection drop.
 ///
 /// This gets a new token from the server and reconnects to LiveKit.
@@ -505,7 +570,7 @@ pub(super) async fn reconnect_impl(
     pool: Option<&GrpcClientPool>,
 ) -> Result<(), CallError> {
     // Get current call info
-    let (call_id, snapshot, livekit_url, mut candidate, started_at, shield_confirmed) = {
+    let (call_id, snapshot, livekit_url, original, started_at, shield_confirmed) = {
         let mut active = active_call.borrow_mut();
         let state = active.as_mut().ok_or(CallError::NotInCall)?;
         let snapshot = room_manager.snapshot_reconnect_keys(&state.key_state)?;
@@ -524,30 +589,36 @@ pub(super) async fn reconnect_impl(
         )
     };
 
-    let generation = media_transport(pool, shield_confirmed)?;
     tracing::info!(call_id = %call_id, "Attempting reconnection");
 
     // Capture belongs to the call, not the replaceable room transport.
     room_manager.disconnect_for_reconnect().await;
 
-    // Get a new token by rejoining the call
-    let response = {
-        let mut client = call_client.lock().await;
-        client
-            .join_call(&call_id)
-            .await
-            .map_err(|e| CallError::ServerError(format!("Reconnect failed: {}", e)))?
-    };
-
-    // Reconnect with the staged absolute epoch and retained native receive ring
-    media_transport(pool, shield_confirmed)?;
-    connect_media(generation, room_manager.connect_reusing_keys_aligned(
-            &livekit_url,
-            &response.livekit_token,
-            snapshot,
-            &mut candidate,
-            started_at,
-        )).await?;
+    let candidate = retry_reconnect_after_transport_change(pool, shield_confirmed, |generation| {
+        let call_id = &call_id;
+        let livekit_url = &livekit_url;
+        let snapshot = snapshot.clone();
+        let mut candidate = original.clone();
+        async move {
+            let response = connect_media(generation.clone(), async {
+                let response = if let Some(pool) = pool {
+                    pool.call_client().join_call(call_id).await
+                } else {
+                    call_client.lock().await.join_call(call_id).await
+                };
+                response.map_err(|e| CallError::ServerError(format!("Reconnect failed: {e}")))
+            }).await?;
+            media_transport(pool, shield_confirmed)?;
+            connect_media(generation, room_manager.connect_reusing_keys_aligned(
+                livekit_url,
+                &response.livekit_token,
+                snapshot,
+                &mut candidate,
+                started_at,
+            )).await?;
+            Ok(candidate)
+        }
+    }).await?;
     // No await between room initialization and committing its authoritative
     // chain. The actor restarts the timer before restoration can await.
     active_call

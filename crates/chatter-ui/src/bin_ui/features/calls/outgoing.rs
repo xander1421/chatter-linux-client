@@ -174,7 +174,7 @@ fn spawn_start(
     let Some(window) = weak.upgrade() else { return };
     let revision = ui_ctx.auth_snapshot().session_revision;
     let client = ui_ctx.clone();
-    super::with_shield_confirmation(&window, &client, None, move |confirmed| {
+    super::with_shield_confirmation(&window, &client, revision, None, move |confirmed| {
         if ui_ctx.auth_snapshot().session_revision == revision {
             spawn_confirmed_start(weak, conversation, call_type, ui_ctx, confirmed);
         }

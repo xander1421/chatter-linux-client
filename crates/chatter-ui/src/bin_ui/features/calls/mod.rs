@@ -30,16 +30,21 @@ mod room_events;
 pub mod timers;
 
 struct ConfirmedCall {
-    incoming: Option<(u64, String)>,
+    revision: u64,
+    incoming: Option<String>,
     run: Box<dyn FnOnce(bool)>,
 }
 
 fn reconcile_shield_confirmation(window: &MainWindow, revision: u64, ringing: Option<&str>) {
+    dismiss_shield_confirmation_if(window, |call| {
+        call.revision != revision || call.incoming.as_deref().is_some_and(|id| ringing != Some(id))
+    });
+}
+
+fn dismiss_shield_confirmation_if(window: &MainWindow, stale: impl FnOnce(&ConfirmedCall) -> bool) {
     let cleared = SHIELD_CONFIRM.with(|slot| {
         let mut slot = slot.borrow_mut();
-        if slot.as_ref().and_then(|call| call.incoming.as_ref())
-            .is_some_and(|(owner, call)| *owner != revision || ringing != Some(call.as_str()))
-        {
+        if slot.as_ref().is_some_and(stale) {
             slot.take();
             true
         } else {
@@ -60,13 +65,14 @@ thread_local! {
 fn with_shield_confirmation(
     window: &MainWindow,
     client: &ChatterClient,
-    incoming: Option<(u64, String)>,
+    revision: u64,
+    incoming: Option<String>,
     call: impl FnOnce(bool) + 'static,
 ) {
     if client.call_needs_shield_confirmation() {
         let answering = incoming.is_some();
         SHIELD_CONFIRM.with(|slot| *slot.borrow_mut() = Some(ConfirmedCall {
-            incoming, run: Box::new(call),
+            revision, incoming, run: Box::new(call),
         }));
         let view = window.global::<crate::CallView>();
         view.set_shield_confirmation_answering(answering);
@@ -98,13 +104,26 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
     use slint::{Model, ModelRc, VecModel};
     let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    let mut auth = client.subscribe_auth_snapshots();
+    let auth_window = weak.clone();
+    let auth_client = client.clone();
+    let _ = slint::spawn_local(async move {
+        while !matches!(auth.recv().await, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+            let Some(window) = auth_window.upgrade() else { break };
+            let revision = auth_client.auth_snapshot().session_revision;
+            dismiss_shield_confirmation_if(&window, |call| call.revision != revision);
+        }
+    });
     window.global::<crate::CallView>().on_shield_confirmation_answer(move |confirmed| {
         if let Some(window) = weak.upgrade() {
             window.global::<crate::CallView>().set_shield_confirmation_open(false);
         }
         let call = SHIELD_CONFIRM.with(|slot| slot.borrow_mut().take());
         if confirmed {
-            if let Some(call) = call {
+            if let Some(call) = call.filter(|call| {
+                call.revision == client.auth_snapshot().session_revision
+            }) {
                 (call.run)(true);
             }
         }

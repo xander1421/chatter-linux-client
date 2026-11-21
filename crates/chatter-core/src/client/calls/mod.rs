@@ -17,9 +17,7 @@ impl ChatterClient {
 
     fn require_shield_call_confirmation(&self, confirmed: bool) -> Result<(), ClientError> {
         if self.call_needs_shield_confirmation() && !confirmed {
-            return Err(ClientError::Validation(
-                chatter_i18n::tr("Call media connects directly and can reveal your IP address.").into(),
-            ));
+            return Err(ClientError::ShieldCallConfirmationRequired);
         }
         Ok(())
     }

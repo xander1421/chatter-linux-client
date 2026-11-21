@@ -55,7 +55,7 @@ impl ChatterClient {
             return Err(ClientError::Validation("call session changed".into()));
         }
         self.require_shield_call_confirmation(
-            self.call_completion_attempt(call_id).is_some_and(|attempt| attempt.shield_confirmed),
+            self.call_signaling().pending_dm_media_confirmed(call_id, peer_id),
         )?;
         let call_worker = self
             .call_service()

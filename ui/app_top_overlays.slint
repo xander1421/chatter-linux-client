@@ -393,7 +393,10 @@ export component AppTopOverlays inherits Rectangle {
     if CallView.shield-confirmation-open: CallConfirm {
         shield: true;
         answering: CallView.shield-confirmation-answering;
-        cancelled => { CallView.shield-confirmation-answer(false); }
+        cancelled => {
+            CallView.shield-confirmation-answer(false);
+            if !CallView.shield-confirmation-answering { root.refocus-composer(); }
+        }
         confirmed => { CallView.shield-confirmation-answer(true); }
     }
 

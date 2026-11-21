@@ -31,7 +31,11 @@ impl GrpcClientPool {
     /// Secret chats never use this: see [`Self::secret_channel`].
     pub fn unidentified_channel(&self) -> GrpcTransport {
         #[cfg(feature = "onion")]
-        {
+        loop {
+            {
+            // Match swap_endpoint's lock order. The mode, endpoint and token
+            // must describe the same generation before caching the channel.
+            let _channel = self.channel.read();
             if *self.transport_mode.read() == TransportMode::Onion {
                 if let Some(ch) = self.unidentified_channel.read().clone().filter(GrpcTransport::is_current) {
                     return ch;
@@ -49,18 +53,29 @@ impl GrpcClientPool {
                 *guard = Some(ch.clone());
                 return ch;
             }
+            }
+            let direct = self.channel();
+            let _channel = self.channel.read();
+            if self.transport_mode() == TransportMode::Direct && direct.is_current() {
+                return direct;
+            }
         }
+        #[cfg(not(feature = "onion"))]
         self.channel()
     }
 
     /// Establish and health-check Shield's anonymous deposit route in advance.
     #[cfg(feature = "onion")]
     pub async fn preconnect_unidentified(&self) -> Result<(), NetworkError> {
-        if self.transport_mode() != TransportMode::Onion {
-            return Ok(());
-        }
-        let token = self.transport_token.read().clone();
-        let (endpoint, mode, generation) = self.snapshot();
+        let (endpoint, mode, generation, token) = {
+            let _channel = self.channel.read();
+            (
+                self.endpoint.read().clone(),
+                self.transport_mode(),
+                self.transport_gen.load(std::sync::atomic::Ordering::Acquire),
+                self.transport_token.read().clone(),
+            )
+        };
         if mode != TransportMode::Onion {
             return Ok(());
         }

@@ -986,6 +986,7 @@ pub(super) fn run_call_worker(
                     let key_state = CallKeyState::new(&[8; 32], handle.as_str()).unwrap();
                     *active_call.borrow_mut() = Some(ActiveCallState {
                         shield_confirmed: false,
+                        _unconsented_media: None,
                         reconnect_media: None,
                         fresh_rejoin_used: false,
                         call, key_state,

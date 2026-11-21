@@ -60,7 +60,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
             super::with_shield_confirmation(
-                &window, &client, Some((revision, call_id_str.clone())), move |confirmed| {
+                &window, &client, revision, Some(call_id_str.clone()), move |confirmed| {
                     if is_current_ring(&ui_ctx, revision, &call_id_str) {
                         queue_accept(weak, ui_ctx, call_id_str, revision, confirmed);
                     }
@@ -209,6 +209,24 @@ async fn accept(
         .await
     {
         Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted, revision),
+        Err(chatter_core::client::ClientError::ShieldCallConfirmationRequired) => {
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if !is_current_ring(&ui_ctx, revision, &call_id) {
+                    return;
+                }
+                DISMISSED_INCOMING.with(|dismissed| {
+                    dismissed.borrow_mut().remove(&(revision, call_id.clone()));
+                });
+                let view = window.global::<crate::CallView>();
+                if view.get_active_call_data().call_id.as_str() == call_id {
+                    view.set_active_call_visible(false);
+                }
+                load_presented_incoming(&window, &ui_ctx, revision, &call_id);
+                view.set_incoming_call_visible(true);
+                view.invoke_accept_incoming_call(call_id.into());
+            });
+        }
         Err(e) => {
             tracing::error!(error = %e, "Failed to accept incoming call");
             // The answering view went up on the tap; take it down and say why.

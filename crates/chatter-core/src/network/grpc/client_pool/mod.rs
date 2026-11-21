@@ -114,6 +114,7 @@ pub struct GrpcClientPool {
     /// become the cached channel every later RPC rides.
     transport_token: Arc<RwLock<tokio_util::sync::CancellationToken>>,
     transport_gen: Arc<std::sync::atomic::AtomicU64>,
+    active_unconsented_media: Arc<std::sync::atomic::AtomicUsize>,
     /// Separate channel for the unidentified (no auth header) clients of the
     /// ordinary sealed-sender DM path, so their traffic rides its OWN
     /// connection — an isolated Tor circuit under onion — and the server can't
@@ -333,6 +334,36 @@ mod tests {
             pool.set_onion_address(None);
             assert!(pool.secret_channel().is_err());
         }
+    }
+
+    #[cfg(feature = "media")]
+    #[test]
+    fn shield_cannot_enable_while_an_unconsented_room_remains_owned() {
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        let onion = || tonic::transport::Endpoint::from_static("http://example.onion");
+        let room = pool.admit_unconsented_media().unwrap();
+        assert!(pool.swap_endpoint(onion(), TransportMode::Onion).is_err());
+        assert_eq!(pool.transport_mode(), TransportMode::Direct);
+        drop(room);
+        pool.swap_endpoint(onion(), TransportMode::Onion).unwrap();
+        assert!(pool.admit_unconsented_media().is_err());
+    }
+
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn endpoint_swap_clears_secret_probe_health_and_retires_anonymous_channels() {
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+        pool.set_transport_mode(TransportMode::Onion).unwrap();
+        let anonymous = pool.unidentified_channel();
+        let secret = pool.secret_channel().unwrap();
+        *pool.secret_health.write() = Some(std::time::Instant::now());
+
+        pool.set_transport_mode(TransportMode::Direct).unwrap();
+        assert!(!anonymous.is_current());
+        assert!(!secret.is_current());
+        assert!(pool.secret_health.read().is_none());
+        assert!(pool.unidentified_channel().is_current());
     }
 
     /// A direct-URL change while on onion (the sign-in form re-applies its
@@ -593,7 +624,7 @@ mod tests {
         pool.swap_endpoint(
             Endpoint::from_static("http://example.onion:443"),
             TransportMode::Onion,
-        );
+        ).unwrap();
         assert!(pool.quic_probe_task.lock().is_none());
         tokio::time::timeout(Duration::from_secs(1), async {
             while !old_probe.is_finished() {
@@ -715,5 +746,15 @@ mod transport_security_tests {
             assert!(GrpcClientPool::validate_direct_url(url).is_err(), "{url}");
         }
         assert!(GrpcClientPool::validate_direct_url("https://example.com").is_ok());
+    }
+}
+
+#[cfg(feature = "media")]
+pub(crate) struct DirectMediaLease(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(feature = "media")]
+impl Drop for DirectMediaLease {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }

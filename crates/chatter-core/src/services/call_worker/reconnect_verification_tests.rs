@@ -13,6 +13,7 @@ mod reconnect_timer_boundary_tests {
         chain.rotate([9; 32]).unwrap();
         Rc::new(RefCell::new(Some(ActiveCallState {
             shield_confirmed: false,
+            _unconsented_media: None,
             call,
             key_state: chain,
             livekit_url: String::new(),
@@ -335,6 +336,7 @@ mod verification_snapshot_tests {
         call.id = "11111111-2222-4333-8444-555555555555".parse().unwrap();
         ActiveCallState {
             shield_confirmed: false,
+            _unconsented_media: None,
             key_state: CallKeyState::new(&root, &call.id.to_string()).unwrap(),
             call,
             livekit_url: String::new(),

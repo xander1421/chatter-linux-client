@@ -331,6 +331,8 @@ pub enum ClientError {
     Inbox(String),
     #[error("Call ended")]
     CallEnded,
+    #[error("{}", chatter_i18n::tr("Call media connects directly and can reveal your IP address."))]
+    ShieldCallConfirmationRequired,
     #[error("inbox already started")]
     AlreadyStarted,
     #[error("auth error: {0}")]

@@ -289,11 +289,23 @@ mod transport_switch_tests {
         let listed = |c: &Arc<ChatterClient>| c.sidebar_rows().iter().any(|r| r.id == id);
 
         assert!(listed(&client), "a stored channel is listed outside Shield");
+        client.services.grpc_pool.set_onion_address(None);
         client.set_anon_mode_enabled(true);
-        assert!(
-            listed(&client) != client.anon_mode_enabled(),
-            "Shield filters the sidebar only while onion routing is active"
-        );
+        assert!(!client.anon_mode_enabled());
+        assert!(listed(&client), "an unavailable Shield leaves the channel listed");
+
+        #[cfg(feature = "onion")]
+        {
+            client.services.grpc_pool.set_onion_address(Some(format!(
+                "http://{}.onion:443", "a".repeat(56)
+            )));
+            client.set_anon_mode_enabled(true);
+        }
+        #[cfg(not(feature = "onion"))]
+        client.anon_mode.store(true, Ordering::Release);
+
+        assert!(client.anon_mode_enabled());
+        assert!(!listed(&client), "active Shield filters the channel locally");
         client.set_anon_mode_enabled(false);
         assert!(listed(&client), "leaving Shield lists it again");
     }
@@ -326,7 +338,7 @@ mod transport_switch_tests {
             crate::domain::call::CallType::Voice,
             attempt,
         ).await.unwrap_err();
-        assert!(matches!(err, crate::client::ClientError::Validation(_)));
+        assert!(matches!(err, crate::client::ClientError::ShieldCallConfirmationRequired));
         assert!(client.call_needs_shield_confirmation());
     }
 

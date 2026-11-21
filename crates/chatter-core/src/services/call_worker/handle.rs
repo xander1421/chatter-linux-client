@@ -63,6 +63,10 @@ impl CallWorkerHandle {
         Self::spawn_inner(pool.call_client(), Some(pool))
     }
 
+    pub(crate) fn media_confirmed(&self) -> bool {
+        self.shield_confirmed
+    }
+
     pub(crate) fn with_media_confirmation(&self, shield_confirmed: bool) -> Self {
         let mut handle = self.clone();
         handle.shield_confirmed = shield_confirmed;
