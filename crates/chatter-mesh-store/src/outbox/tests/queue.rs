@@ -196,7 +196,7 @@ fn reachable_flushes_walk_the_cap_to_exhaustion() {
 // --------------------------------------------------- secure vs insecure
 
 #[test]
-fn a_secure_flush_sends_and_stops_retaining() {
+fn a_secure_flush_sends_and_retains_until_acknowledged() {
     let (_storage, mut store) = new_store();
     let p = peer("aa");
     assert!(store.enqueue(&p, message("m1", 100)).is_none());
@@ -204,10 +204,11 @@ fn a_secure_flush_sends_and_stops_retaining() {
     let plan = store.flush(&p, LinkState::Secure, 200);
     assert_eq!(plan.send.len(), 1);
     assert!(plan.dropped.is_empty());
-    assert!(
-        store.queue(&p).is_empty(),
-        "a secure link is the one signal strong enough to stop retaining"
-    );
+    assert_eq!(store.queue(&p).len(), 1);
+    assert!(store.queued(&p, "m1").is_some());
+
+    assert!(store.mark_acked(&p, "m1", AckKind::Delivered).cleared);
+    assert!(store.queue(&p).is_empty());
 }
 
 #[test]

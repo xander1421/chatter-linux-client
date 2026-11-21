@@ -252,7 +252,7 @@ fn no_storage_failures(events: &[RouterEvent]) {
 // ----------------------------------------------------------- the four branches
 
 #[test]
-fn branch_one_connected_and_secure_sends_without_retaining_or_couriering() {
+fn branch_one_connected_and_secure_sends_and_retains_without_couriering() {
     let recipient = peer(1);
     let courier = peer(2);
     let transport = MockTransport::new()
@@ -269,11 +269,14 @@ fn branch_one_connected_and_secure_sends_without_retaining_or_couriering() {
     assert_eq!(outcome.link, LinkState::Secure);
     assert!(outcome.events.is_empty());
     assert_eq!(transport.private_sends().len(), 1);
-    // The strongest signal there is: nothing retained, nobody handed a copy,
-    // nothing parked on a relay.
-    assert!(router.outbox().queue(&recipient).is_empty());
+    assert!(router.outbox().queued(&recipient, "m1").is_some());
     assert!(transport.courier_sends().is_empty());
     assert!(bridge_log.borrow().is_empty());
+
+    let (ack, events) = router.mark_acked(&recipient, "m1", AckKind::Delivered);
+    assert!(ack.cleared);
+    assert!(router.outbox().queue(&recipient).is_empty());
+    no_storage_failures(&events);
 }
 
 #[test]
@@ -674,7 +677,7 @@ fn a_read_receipt_the_transport_refuses_is_not_recorded_as_sent() {
 // ----------------------------------------------------------------- flushes
 
 #[test]
-fn a_secure_flush_sends_and_stops_retaining() {
+fn a_secure_flush_sends_and_retains_until_acknowledged() {
     let recipient = peer(1);
     let transport = MockTransport::new();
     let directory = TestDirectory::default().with_key(&recipient, key(1));
@@ -687,8 +690,13 @@ fn a_secure_flush_sends_and_stops_retaining() {
     let events = router.flush_outbox(&recipient, 1_100);
 
     assert_eq!(transport.private_sends().len(), 1);
-    assert!(router.outbox().queue(&recipient).is_empty());
+    assert!(router.outbox().queued(&recipient, "m1").is_some());
     assert!(drops(&events).is_empty());
+    no_storage_failures(&events);
+
+    let (ack, events) = router.mark_acked(&recipient, "m1", AckKind::Delivered);
+    assert!(ack.cleared);
+    assert!(router.outbox().queue(&recipient).is_empty());
     no_storage_failures(&events);
 }
 
@@ -801,7 +809,21 @@ fn flush_all_covers_every_peer_with_retained_mail() {
 
     router.flush_all_outbox(1_100);
 
-    assert_eq!(transport.private_sends().len(), 2);
+    let sends = transport.private_sends();
+    assert_eq!(sends.len(), 2);
+    for (recipient, id) in [(&a, "m1"), (&b, "m2")] {
+        assert!(sends.iter().any(|(_, peer, sent_id)| peer == recipient && sent_id == id));
+        assert!(router.outbox().queued(recipient, id).is_some());
+    }
+
+    let (ack, events) = router.mark_acked(&a, "m1", AckKind::Delivered);
+    assert!(ack.cleared);
+    no_storage_failures(&events);
+    assert!(router.outbox().queued(&b, "m2").is_some());
+
+    let (ack, events) = router.mark_acked(&b, "m2", AckKind::Delivered);
+    assert!(ack.cleared);
+    no_storage_failures(&events);
     assert!(router.outbox().is_empty());
 }
 
