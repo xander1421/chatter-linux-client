@@ -11,11 +11,11 @@
 //! 4. Client unblinds the signature
 //! 5. Result: signature on original key that server cannot link to blinding request
 
-use chatter_proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use blind_rsa_signatures::{
     BlindSignature, BlindingResult, DefaultRng, PublicKeySha384PSSZeroDeterministic as PublicKey,
     Secret,
 };
+use chatter_proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use ed25519_dalek::{Signature, VerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::traits::PublicKeyParts;
@@ -23,9 +23,9 @@ use rsa::traits::PublicKeyParts;
 use std::future::Future;
 
 use crate::error::{MailboxError, NetworkError};
-use chatter_proto::chat_v1::GetConsistencyProofResponse;
 use crate::services::signal::kt_anchor;
 use crate::storage::repositories::SettingsRepository;
+use chatter_proto::chat_v1::GetConsistencyProofResponse;
 
 /// Server's RSA public key for blind signatures.
 ///
@@ -89,6 +89,13 @@ impl ServerPublicKey {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| MailboxError::InvalidServerKey("clock before Unix epoch".into()))?
             .as_nanos() as u64;
+        Self::authenticated_manifest_at(manifest, now)
+    }
+
+    pub(super) fn authenticated_manifest_at(
+        manifest: &GetBlindSignaturePublicKeyResponse,
+        now: u64,
+    ) -> Result<Self, MailboxError> {
         verify_manifest_in_log(manifest).inspect_err(|_| {
             tracing::warn!(target: "token_manifest::kt_proof", "manifest verification failed");
         })?;
