@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
+use crate::bin_ui::features::sidebar::SavedPreview;
 use crate::MainWindow;
 use crate::MessageItemData;
 use chatter_core::client::ChatterClient;
@@ -70,6 +71,7 @@ pub(super) async fn handle_message_received(
         });
     }
 
+    let saved = saved.then(|| SavedPreview::read(ui_ctx));
     let ui_ctx_ui = ui_ctx.clone();
     crate::bin_ui::features::history_owner::apply_if_current(window, update, move |w, update| {
         let is_active = update.is_active;
@@ -256,8 +258,8 @@ pub(super) async fn handle_message_received(
             }
         }
 
-        if saved {
-            crate::bin_ui::features::sidebar::refresh_saved_messages(&w, &ui_ctx_ui);
+        if let Some(saved) = saved {
+            saved.apply(&w, &ui_ctx_ui);
             return;
         }
         crate::bin_ui::features::sidebar::apply_received_to_sidebar(
@@ -285,6 +287,7 @@ pub(super) fn handle_message_sent(
     let saved = matches!(conversation, chatter_core::state::ActiveConversation::Channel(_))
         && ui_ctx.conversation(conversation).storage_kind().ok()
             == Some(chatter_core::domain::ConversationType::SavedMessages);
+    let saved = saved.then(|| SavedPreview::read(ui_ctx));
     let timestamp = chatter_core::ui::format::sidebar_time(at);
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
@@ -294,8 +297,8 @@ pub(super) fn handle_message_sent(
             w.global::<crate::ChatPane>().set_unread_index(-1);
             w.global::<crate::ChatPane>().set_unread_count(0);
         }
-        if saved {
-            crate::bin_ui::features::sidebar::refresh_saved_messages(&w, &ui_ctx);
+        if let Some(saved) = saved {
+            saved.apply(&w, &ui_ctx);
             return;
         }
         crate::bin_ui::features::sidebar::update_sidebar_preview(

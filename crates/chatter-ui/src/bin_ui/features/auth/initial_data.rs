@@ -14,6 +14,8 @@ use chatter_core::ui::message_row::initials_from_name;
 use crate::bin_ui::converters::{FriendDataExt, FriendRequestExt, FriendRequestSendData};
 use crate::{FriendData, FriendRequestData, MainWindow};
 
+use super::super::sidebar::SavedPreview;
+
 /// Bumped by every friends-list refresh. Only the newest refresh may publish:
 /// concurrent refreshes (accept handler, `FriendAccepted`, sync, tab switch)
 /// finish in any order, and an older one landing last repainted whatever it
@@ -163,9 +165,14 @@ fn publish_friends(
 /// Restore the local conversation snapshot before the main view first paints.
 /// The later initial-data refresh reconciles any server changes in place.
 pub fn show_cached_chat_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    tokio::spawn(async move {
+        let saved = SavedPreview::read(&client);
+        crate::run_ui!(weak, |w| saved.apply(&w, &client));
+    });
     let rows = ui_ctx.sidebar_rows();
     if rows.is_empty() {
-        crate::bin_ui::features::sidebar::refresh_saved_messages(window, ui_ctx);
         return;
     }
     crate::bin_ui::features::sidebar::apply_chat_list(window, ui_ctx, rows);
@@ -186,11 +193,11 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // The sidebar snapshot is local. Paint it before any channel/profile RPC
     // so returning users see their conversations on the first main-view frame.
     let cached_rows = ui_ctx.sidebar_rows();
+    let saved = SavedPreview::read(ui_ctx);
     let cached_client = ui_ctx.clone();
     crate::run_history_ui!(window_weak, session_owner, |w| {
-        if cached_rows.is_empty() {
-            crate::bin_ui::features::sidebar::refresh_saved_messages(&w, &cached_client);
-        } else {
+        saved.apply(&w, &cached_client);
+        if !cached_rows.is_empty() {
             crate::bin_ui::features::sidebar::apply_chat_list(&w, &cached_client, cached_rows);
             w.global::<crate::SidebarPane>()
                 .set_chat_rows_loading(false);
@@ -351,9 +358,11 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let search_shortcut_pref = ui_ctx.get_search_shortcut().as_str();
     let notification_detail = ui_ctx.notification_detail_level().as_str();
     let own_username = ui_ctx.full_username().unwrap_or_default();
+    let saved = SavedPreview::read(ui_ctx);
     crate::run_history_ui!(window_weak_ui, session_owner, |w| {
         // Reconcile rows by identity; replacing the model resets scroll and
         // flashes cached conversations a second time after server sync.
+        saved.apply(&w, &ui_ctx_for_refresh);
         crate::bin_ui::features::sidebar::apply_chat_list(&w, &ui_ctx_for_refresh, chat_rows);
         w.global::<crate::SidebarPane>()
             .set_chat_rows_loading(false);

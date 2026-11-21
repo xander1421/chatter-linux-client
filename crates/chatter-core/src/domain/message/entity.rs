@@ -328,7 +328,8 @@ impl Message {
     ///   its description.
     /// - Other empty-body messages with no attachments render as "[Message]".
     /// - If `current_user_id` is provided and matches this message's sender,
-    ///   the preview is prefixed with "You: " (text and attachments alike).
+    ///   text and attachment previews are prefixed with "You: ", except in
+    ///   Saved messages, where the prefix is omitted.
     /// - Other senders in channels and groups use the first word of the
     ///   resolved bubble sender name, followed by ": ". DMs, calls, and
     ///   system notices do not use this prefix.

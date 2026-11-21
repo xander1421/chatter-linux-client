@@ -9,7 +9,7 @@ pub(crate) mod navigation;
 pub mod sections;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use chatter_core::client::ChatterClient;
@@ -17,6 +17,7 @@ use chatter_core::client::ChatterClient;
 use crate::{MainWindow, run_ui};
 
 static NEXT_ARRIVAL_SERIAL: AtomicI32 = AtomicI32::new(1);
+static NEXT_SAVED_PREVIEW: AtomicU64 = AtomicU64::new(1);
 
 fn next_arrival_serial() -> i32 {
     NEXT_ARRIVAL_SERIAL.fetch_add(1, Ordering::Relaxed)
@@ -33,6 +34,7 @@ struct SidebarIndex {
     foldered: std::collections::HashSet<String>,
 }
 thread_local! {
+    static APPLIED_SAVED_PREVIEW: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static SIDEBAR_INDEX: std::cell::RefCell<SidebarIndex> = Default::default();
 }
 
@@ -416,7 +418,8 @@ fn wire_context_menu_mark_unread(window: &MainWindow, ui_ctx: &Arc<ChatterClient
         if let Err(error) = ctx.conversation(conv).mark_as_unread() {
             tracing::warn!(%error, "Could not mark conversation unread");
         }
-        history_changed(&weak, &ctx);
+        let (weak, ctx) = (weak.clone(), ctx.clone());
+        tokio::spawn(async move { history_changed(&weak, &ctx) });
     });
 }
 
@@ -804,8 +807,10 @@ pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<Cha
     for bytes in rows.iter().filter_map(|row| row.avatar_bytes.as_deref()) {
         crate::bin_ui::decode_cache::avatar_guarded(bytes, generation);
     }
+    let saved = SavedPreview::read(ui_ctx);
     let ui_ctx = ui_ctx.clone();
     run_ui!(weak, |w| {
+        saved.apply(&w, &ui_ctx);
         apply_chat_list(&w, &ui_ctx, rows);
     });
 }
@@ -894,11 +899,45 @@ fn wire_archive(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-pub(crate) fn refresh_saved_messages(window: &MainWindow, client: &ChatterClient) {
-    let (preview, time) = client.saved_messages_sidebar_preview();
-    let pane = window.global::<crate::SidebarPane>();
-    pane.set_saved_preview(preview.into());
-    pane.set_saved_time(time.into());
+pub(crate) struct SavedPreview {
+    revision: u64,
+    generation: u64,
+    preview: String,
+    time: String,
+}
+
+impl SavedPreview {
+    /// Read on the runtime, alongside the other sidebar data.
+    pub(crate) fn read(client: &ChatterClient) -> Self {
+        let revision = client.auth_snapshot().session_revision;
+        let generation = NEXT_SAVED_PREVIEW.fetch_add(1, Ordering::Relaxed);
+        let (preview, time) = client.saved_messages_sidebar_preview();
+        Self {
+            revision,
+            generation,
+            preview,
+            time,
+        }
+    }
+
+    pub(crate) fn apply(self, window: &MainWindow, client: &ChatterClient) {
+        if !client.session_is_current(self.revision) {
+            return;
+        }
+        // A slow rebuild can finish after a newer message update.
+        if !APPLIED_SAVED_PREVIEW.with(|applied| {
+            if self.generation <= applied.get() {
+                return false;
+            }
+            applied.set(self.generation);
+            true
+        }) {
+            return;
+        }
+        let pane = window.global::<crate::SidebarPane>();
+        pane.set_saved_preview(self.preview.into());
+        pane.set_saved_time(self.time.into());
+    }
 }
 
 pub(crate) fn clear_saved_messages(window: &MainWindow) {
@@ -915,7 +954,6 @@ pub(crate) fn apply_chat_list(
 ) {
     use crate::bin_ui::converters::ChatRowExt;
     use slint::Model;
-    refresh_saved_messages(window, ui_ctx);
     let active = ui_ctx.active_conversation();
     // The snapshot may predate the open conversation's mark-read (it is
     // computed off the UI thread); its badge is re-read now so a stale count
