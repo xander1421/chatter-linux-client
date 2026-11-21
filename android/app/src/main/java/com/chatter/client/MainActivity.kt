@@ -1,7 +1,9 @@
 package com.chatter.client
 
+import android.app.NotificationManager
 import android.app.UiModeManager
 import android.app.KeyguardManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -777,6 +779,8 @@ class MainActivity : GameActivity() {
         activityResumed = true
         callAudio.retryMediaService()
         applySecureScreen()
+        refreshFullScreenCallState()
+        maybeShowFullScreenCallPrompt()
         // A prelaunched Activity can be resumed without ever gaining focus.
         messagingBackground = !window.decorView.hasWindowFocus()
         nativeSetAppVisible(!messagingBackground)
@@ -787,6 +791,10 @@ class MainActivity : GameActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         val visible = hasFocus && activityResumed
+        if (visible) {
+            refreshFullScreenCallState()
+            maybeShowFullScreenCallPrompt()
+        }
         messagingBackground = !visible
         nativeSetAppVisible(visible)
         updateMessagingService()
@@ -1423,9 +1431,80 @@ class MainActivity : GameActivity() {
     /** Implemented in Rust (libchatter_ui.so). Delivers picked file paths. */
     private external fun nativeOnFilesPicked(request: Long, paths: Array<String>): Boolean
 
+    private data class FullScreenCallPrompt(val message: String, val allow: String, val later: String)
+
+    private var fullScreenCallPrompt: FullScreenCallPrompt? = null
+    private var runtimePermissionPending = false
+
+    private fun refreshFullScreenCallState(): Int {
+        if (Build.VERSION.SDK_INT < 34) return 0
+        val allowed = getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() == true
+        val state = if (allowed) 2 else 1
+        nativeFullScreenCallState(state)
+        return state
+    }
+
+    @androidx.annotation.Keep
+    fun prepareFullScreenCallPrompt(message: String, allow: String, later: String) {
+        if (Build.VERSION.SDK_INT < 34) return
+        runOnUiThread {
+            fullScreenCallPrompt = FullScreenCallPrompt(message, allow, later)
+            refreshFullScreenCallState()
+            maybeShowFullScreenCallPrompt()
+        }
+    }
+
+    private fun maybeShowFullScreenCallPrompt() {
+        val prompt = fullScreenCallPrompt ?: return
+        if (!activityResumed || !window.decorView.hasWindowFocus() || runtimePermissionPending ||
+            isFinishing || isDestroyed || lockScreenCallId != null ||
+            getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return
+
+        val prefs = getPreferences(MODE_PRIVATE)
+        if (prefs.getBoolean("full_screen_call_prompt_shown", false)) {
+            fullScreenCallPrompt = null
+            return
+        }
+        if (refreshFullScreenCallState() != 1) return
+
+        fullScreenCallPrompt = null
+        android.app.AlertDialog.Builder(this)
+            .setMessage(prompt.message)
+            .setNegativeButton(prompt.later, null)
+            .setPositiveButton(prompt.allow) { _, _ -> openFullScreenCallSettings() }
+            .show()
+        prefs.edit().putBoolean("full_screen_call_prompt_shown", true).apply()
+    }
+
+    @androidx.annotation.Keep
+    fun openFullScreenCallSettings() {
+        if (Build.VERSION.SDK_INT < 34) return
+        runOnUiThread {
+            try {
+                startActivity(Intent(
+                    Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                    Uri.fromParts("package", packageName, null)
+                ))
+            } catch (_: ActivityNotFoundException) {
+                try {
+                    startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                } catch (_: ActivityNotFoundException) {
+                    Log.w("ChatterCalls", "App notification settings unavailable")
+                }
+            }
+        }
+    }
+
+    private external fun nativeFullScreenCallState(state: Int)
+
     // --- Runtime permissions ---------------------------------------------------
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            if (Build.VERSION.SDK_INT >= 34) {
+                runtimePermissionPending = false
+                window.decorView.post { maybeShowFullScreenCallPrompt() }
+            }
             val granted = result.filterValues { it }.keys.toTypedArray()
             val denied = result.filterValues { !it }.keys.toTypedArray()
             callAudio.retryMediaService()
@@ -1451,7 +1530,20 @@ class MainActivity : GameActivity() {
     /** Called from Rust (JNI). Shows the system grant dialog for [permissions]. */
     @Suppress("unused")
     fun requestPermissions(permissions: Array<String>) {
-        runOnUiThread { permissionRequest.launch(permissions) }
+        runOnUiThread {
+            if (Build.VERSION.SDK_INT < 34) {
+                permissionRequest.launch(permissions)
+                return@runOnUiThread
+            }
+            runtimePermissionPending = true
+            try {
+                permissionRequest.launch(permissions)
+            } catch (error: RuntimeException) {
+                runtimePermissionPending = false
+                Log.w("ChatterCalls", "Runtime permission request unavailable", error)
+                maybeShowFullScreenCallPrompt()
+            }
+        }
     }
 
     /** Explain a refused call permission ([permission] is its display name) with a path to app settings. */

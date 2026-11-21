@@ -24,3 +24,11 @@ export global NotificationDelivery {
     callback load();
     callback push-enabled-changed(bool);
 }
+
+
+// Android 14+ permission, refreshed by the Activity.
+export global FullScreenCallPermission {
+    // 0 = unavailable, 1 = denied, 2 = allowed.
+    in property <int> state;
+    callback open-settings();
+}

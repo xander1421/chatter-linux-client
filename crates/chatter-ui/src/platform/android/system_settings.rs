@@ -1,6 +1,7 @@
 //! Reading and opening the OS's own settings.
 
-use jni::objects::JValue;
+use jni::objects::{JObject, JValue};
+use slint::ComponentHandle;
 
 use super::activity::{activity, clear_exception, with_jni_env};
 
@@ -106,4 +107,67 @@ pub fn open_message_notification_settings() {
     if let Err(e) = result {
         tracing::error!("Android: opening notification channel settings failed: {e}");
     }
+}
+
+/// Set up the one-time explanation alongside Android's startup permission flow.
+pub fn prepare_full_screen_call_prompt() {
+    let result = with_jni_env(|env| {
+        let act = activity()?;
+        let message = env.new_string(chatter_i18n::tr(
+            "Allow incoming calls to show on the lock screen.",
+        )).map_err(|e| e.to_string())?;
+        let allow = env.new_string(chatter_i18n::tr("Allow")).map_err(|e| e.to_string())?;
+        let later = env.new_string(chatter_i18n::tr("Not now")).map_err(|e| e.to_string())?;
+        let result = env.call_method(
+            &act,
+            jni::jni_str!("prepareFullScreenCallPrompt"),
+            jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+            &[JValue::Object(&message), JValue::Object(&allow), JValue::Object(&later)],
+        );
+        if result.is_err() {
+            clear_exception(env);
+        }
+        result.map(|_| ()).map_err(|e| e.to_string())
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "Android full-screen call permission setup failed");
+    }
+}
+
+pub fn open_full_screen_call_settings() {
+    let result = with_jni_env(|env| {
+        let act = activity()?;
+        let result = env.call_method(
+            &act,
+            jni::jni_str!("openFullScreenCallSettings"),
+            jni::jni_sig!("()V"),
+            &[],
+        );
+        if result.is_err() {
+            clear_exception(env);
+        }
+        result.map(|_| ()).map_err(|e| e.to_string())
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "Could not open Android full-screen call settings");
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeFullScreenCallState(
+    mut env: jni::EnvUnowned<'_>,
+    _this: JObject,
+    state: jni::sys::jint,
+) {
+    env.with_env(|_| -> jni::errors::Result<()> {
+        if let Some(weak) = super::call_actions::main_window() {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.global::<crate::FullScreenCallPermission>().set_state(state);
+                }
+            });
+        }
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>();
 }

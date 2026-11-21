@@ -554,6 +554,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // hardware the user may never use.
     use crate::platform::android::permissions;
     permissions::request(&[permissions::POST_NOTIFICATIONS]);
+    crate::platform::android::system_settings::prepare_full_screen_call_prompt();
 
     // Register CameraX as chatter-core's video capture backend so calls can
     // publish camera video (chatter-core drives capture, this feeds it frames).

@@ -4023,3 +4023,12 @@ msgstr "Shield nicht verfügbar"
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "End the active call before enabling Shield."
 msgstr "Beende den laufenden Anruf, bevor du Shield aktivierst."
+
+msgid "Allow"
+msgstr "Erlauben"
+
+msgid "Allow incoming calls to show on the lock screen."
+msgstr "Erlaube, dass eingehende Anrufe auf dem Sperrbildschirm angezeigt werden."
+
+msgid "Not now"
+msgstr "Jetzt nicht"

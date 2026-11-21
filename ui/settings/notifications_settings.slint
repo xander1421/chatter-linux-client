@@ -6,7 +6,7 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { ToggleRow } from "../components/toggle_row.slint";
 import { Icons } from "../theme/icons.slint";
-import { NotificationSound, NotificationDelivery } from "notification_sound.slint";
+import { NotificationSound, NotificationDelivery, FullScreenCallPermission } from "notification_sound.slint";
 
 export component NotificationsSettings inherits VerticalLayout {
     in property <bool> mobile-platform;
@@ -179,6 +179,37 @@ export component NotificationsSettings inherits VerticalLayout {
                         root.notification-detail = opt.key;
                         root.notification-detail-changed(opt.key);
                     }
+                }
+            }
+        }
+    }
+
+    if FullScreenCallPermission.state > 0: Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.xs;
+            Text {
+                width: parent.width;
+                wrap: word-wrap;
+                text: @tr("Incoming calls on the lock screen");
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Text {
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    text: FullScreenCallPermission.state == 2 ? @tr("Allowed") : @tr("Not allowed");
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+                if FullScreenCallPermission.state == 1: Button {
+                    text: @tr("Allow");
+                    clicked => { FullScreenCallPermission.open-settings(); }
                 }
             }
         }

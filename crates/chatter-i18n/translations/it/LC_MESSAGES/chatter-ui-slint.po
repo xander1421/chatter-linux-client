@@ -5995,3 +5995,15 @@ msgstr "Impossibile raggiungere il server tramite Tor. Shield è ancora attivo."
 
 msgid "Waiting for anonymous credentials"
 msgstr "In attesa di credenziali anonime"
+
+msgid "Incoming calls on the lock screen"
+msgstr "Chiamate in arrivo sulla schermata di blocco"
+
+msgid "Allowed"
+msgstr "Consentito"
+
+msgid "Not allowed"
+msgstr "Non consentito"
+
+msgid "Allow"
+msgstr "Consenti"

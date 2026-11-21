@@ -5987,3 +5987,15 @@ msgid "Couldn't reach the server over Tor. Shield is still on."
 
 msgid "Waiting for anonymous credentials"
 msgstr ""
+
+msgid "Incoming calls on the lock screen"
+msgstr ""
+
+msgid "Allowed"
+msgstr ""
+
+msgid "Not allowed"
+msgstr ""
+
+msgid "Allow"
+msgstr ""

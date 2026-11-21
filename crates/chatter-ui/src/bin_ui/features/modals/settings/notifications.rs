@@ -23,6 +23,9 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let sound = window.global::<crate::NotificationSound>();
     #[cfg(target_os = "android")]
     {
+        window.global::<crate::FullScreenCallPermission>().on_open_settings(
+            crate::platform::android::system_settings::open_full_screen_call_settings,
+        );
         sound.set_mode("system".into());
         sound.on_open_system_settings(
             crate::platform::android::system_settings::open_message_notification_settings,
