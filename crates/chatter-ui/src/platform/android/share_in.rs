@@ -50,8 +50,9 @@ impl IncomingShare {
 
 /// Received, picker not yet shown (no signed-in main view to show it in).
 static WAITING: Mutex<Option<IncomingShare>> = Mutex::new(None);
-/// Picker open: held until the user picks a chat. Dismissing the picker leaves
-/// the (purgeable) cache copies here until the next share replaces them.
+/// Picker open: held until the user picks a chat. `stage` claims it; if the
+/// picker leaves the modal stack unclaimed (cancel, Back, reset) `discard_offered`
+/// deletes the cache copies at once.
 static OFFERED: Mutex<Option<IncomingShare>> = Mutex::new(None);
 
 #[unsafe(no_mangle)]
