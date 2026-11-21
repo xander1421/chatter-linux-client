@@ -89,6 +89,13 @@ impl ServerPublicKey {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| MailboxError::InvalidServerKey("clock before Unix epoch".into()))?
             .as_nanos() as u64;
+        Self::authenticated_manifest_at(manifest, now)
+    }
+
+    pub(super) fn authenticated_manifest_at(
+        manifest: &GetBlindSignaturePublicKeyResponse,
+        now: u64,
+    ) -> Result<Self, MailboxError> {
         verify_manifest_in_log(manifest).inspect_err(|_| {
             tracing::warn!(target: "token_manifest::kt_proof", "manifest verification failed");
         })?;

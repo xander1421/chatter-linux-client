@@ -69,6 +69,25 @@ fn grant_error(e: crate::error::NetworkError) -> MailboxError {
     }
 }
 
+// Hold the cached manifest stable across fetch, verification and replacement.
+static MANIFEST_REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn check_manifest_continuity(
+    cached: &GetBlindSignaturePublicKeyResponse,
+    offered: &GetBlindSignaturePublicKeyResponse,
+) -> Result<(), MailboxError> {
+    let same = |id: &str, der: &[u8]| offered.key_id == id && offered.public_key == der;
+    if same(&cached.key_id, &cached.public_key)
+        || cached.next_key.as_ref().is_some_and(|next| same(&next.key_id, &next.public_key))
+    {
+        return Ok(());
+    }
+    tracing::warn!(target: "token_manifest::continuity", "manifest verification failed");
+    Err(MailboxError::InvalidServerKey(
+        "manifest current key contradicts the cached rotation schedule".into(),
+    ))
+}
+
 /// Token manager for blind-signed mailbox tokens.
 ///
 /// Handles the complete token lifecycle from server key retrieval through
@@ -104,6 +123,8 @@ impl TokenManager {
     ) -> Result<ServerPublicKey, MailboxError> {
         tracing::info!("TokenManager: refresh_server_key called");
 
+        let _refresh = MANIFEST_REFRESH.lock().await;
+
         // Check for cached valid key first
         tracing::info!("TokenManager: checking for cached server key...");
         if let Some(key) = self.get_cached_server_key()? {
@@ -115,6 +136,13 @@ impl TokenManager {
             tracing::info!("TokenManager: cached key expired");
         } else {
             tracing::info!("TokenManager: no cached key found");
+        }
+
+        let cached = self.load_cached_manifest()?;
+        if let Some(previous) = &cached {
+            // Reauthenticate the previous manifest at its signed activation time:
+            // an expired manifest is still the commitment to its successor.
+            ServerPublicKey::authenticated_manifest_at(previous, previous.valid_from)?;
         }
 
         // Fetch new key from server with timeout to prevent hangs
@@ -135,6 +163,9 @@ impl TokenManager {
                     tracing::error!("get_blind_signature_public_key failed: {}", e);
                     MailboxError::Network(e.to_string())
                 })?;
+                if let Some(previous) = &cached {
+                    check_manifest_continuity(previous, &response)?;
+                }
                 tracing::info!("Got blind signature public key from server");
                 Ok(response)
             },
@@ -160,6 +191,17 @@ impl TokenManager {
     /// Cached DER/expiry rows are never a source of trust; verify the signed
     /// manifest again on every load and use its authenticated activation times.
     pub fn get_cached_server_key(&self) -> Result<Option<ServerPublicKey>, MailboxError> {
+        let key = self.load_cached_manifest().ok().flatten()
+            .as_ref()
+            .and_then(|m| ServerPublicKey::from_manifest(m).ok());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(u64::MAX);
+        Ok(key.filter(|k| k.valid_until.saturating_sub(now) > 3_600_000_000_000))
+    }
+
+    fn load_cached_manifest(&self) -> Result<Option<GetBlindSignaturePublicKeyResponse>, MailboxError> {
         let conn = self
             .db
             .connection()
@@ -175,17 +217,13 @@ impl TokenManager {
         let Some(encoded) = encoded else {
             return Ok(None);
         };
-        let manifest = hex::decode(encoded)
-            .ok()
-            .and_then(|b| GetBlindSignaturePublicKeyResponse::decode(b.as_slice()).ok());
-        let key = manifest
-            .as_ref()
-            .and_then(|m| ServerPublicKey::from_manifest(m).ok());
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(u64::MAX);
-        Ok(key.filter(|k| k.valid_until.saturating_sub(now) > 3_600_000_000_000))
+        let invalid = |e: &dyn std::fmt::Display| {
+            MailboxError::Storage(format!("could not decode cached manifest: {e}"))
+        };
+        let bytes = hex::decode(encoded).map_err(|e| invalid(&e))?;
+        let manifest = GetBlindSignaturePublicKeyResponse::decode(bytes.as_slice())
+            .map_err(|e| invalid(&e))?;
+        Ok(Some(manifest))
     }
 
     /// Store a server public key in the database.
@@ -670,6 +708,30 @@ mod tests {
         stripped.kt_proof = None;
         cache(&stripped);
         assert!(tm.get_cached_server_key().unwrap().is_none());
+    }
+
+    #[test]
+    fn manifest_continuity_requires_same_key_or_committed_successor() {
+        let mut cached = GetBlindSignaturePublicKeyResponse {
+            key_id: "current".into(),
+            public_key: vec![1],
+            next_key: Some(Default::default()),
+            ..Default::default()
+        };
+        let next = cached.next_key.as_mut().unwrap();
+        next.key_id = "next".into();
+        next.public_key = vec![2];
+        let mut offered = cached.clone();
+        assert!(check_manifest_continuity(&cached, &offered).is_ok());
+
+        offered.key_id = "next".into();
+        offered.public_key = vec![2];
+        assert!(check_manifest_continuity(&cached, &offered).is_ok());
+
+        offered.public_key = vec![3];
+        assert!(check_manifest_continuity(&cached, &offered).is_err());
+        offered.key_id = "unannounced".into();
+        assert!(check_manifest_continuity(&cached, &offered).is_err());
     }
 
     #[test]
