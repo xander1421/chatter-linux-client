@@ -7,7 +7,7 @@ use crate::error::SystemError;
 use super::{AccountNotificationKeys, NotificationService};
 
 impl NotificationService {
-    pub(super) fn current_key(
+    pub(crate) fn current_key(
         &self,
         conversation_id: &crate::domain::ids::ChannelId,
     ) -> Result<String, SystemError> {

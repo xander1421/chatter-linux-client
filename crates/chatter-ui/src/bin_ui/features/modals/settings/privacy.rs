@@ -81,6 +81,9 @@ pub(super) fn wire_preferences(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             if let Err(e) = ui_ctx_detail.set_notification_detail_level(level) {
                 tracing::error!("Failed to save notification detail level: {}", e);
             }
+            // Names reach the system share sheet only where notifications show them.
+            #[cfg(target_os = "android")]
+            crate::platform::android::share_targets::refresh(&ui_ctx_detail);
             if let Some(w) = weak_detail.upgrade() {
                 w.global::<crate::SettingsPane>()
                     .set_settings_notification_detail(

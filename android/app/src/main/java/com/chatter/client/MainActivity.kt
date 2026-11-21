@@ -38,6 +38,7 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -513,6 +514,10 @@ class MainActivity : GameActivity() {
                 .filter { it.scheme == "content" && it.authority != own }
                 .take(SHARE_MAX_FILES)
             if (text.isEmpty() && uris.isEmpty()) return
+            // Set when the user tapped one of our Direct Share chats. Public
+            // input like the rest: Rust accepts only an opaque key that resolves
+            // to a chat of this account, otherwise it shows the picker.
+            val shortcutId = intent.getStringExtra(ShortcutManagerCompat.EXTRA_SHORTCUT_ID).orEmpty().take(64)
             pickerCopies.execute {
                 // One byte budget for the whole share: the copy runs before the
                 // user has chosen anything, so a sender must not be able to make
@@ -527,7 +532,7 @@ class MainActivity : GameActivity() {
                 val delivered = synchronized(filePickerRequest) {
                     // Nothing usable arrived: no picker over an empty share.
                     if (pickerDestroyed || (text.isEmpty() && paths.isEmpty())) false else {
-                        nativeShareReceived(text, paths.toTypedArray())
+                        nativeShareReceived(text, paths.toTypedArray(), shortcutId)
                         true
                     }
                 }
@@ -560,7 +565,12 @@ class MainActivity : GameActivity() {
         return if (cut.last().isHighSurrogate()) cut.dropLast(1) else cut
     }
 
-    private external fun nativeShareReceived(text: String, paths: Array<String>)
+    private external fun nativeShareReceived(text: String, paths: Array<String>, shortcutId: String)
+
+    /** Called by Rust: the chats core allows in the system share sheet (empty removes them). */
+    fun setShareTargets(keys: Array<String>, labels: Array<String>) {
+        ShareTargets.publish(this, keys, labels)
+    }
 
     private fun dispatchCallNotification(intent: Intent) {
         // Public launcher intents are untrusted. The action is routing only;

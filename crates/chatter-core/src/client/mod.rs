@@ -681,6 +681,7 @@ pub use crate::services::mesh::{
     RadioDown,
 };
 pub use crate::services::notification_service::NotificationDetailLevel;
+pub use share_targets::ShareTarget;
 pub use crate::services::profile_visibility::ProfileVisibility;
 pub use crate::services::quick_switcher::QuickSwitcherEntry;
 pub use crate::services::search::{SearchQuery, SearchShortcut};
@@ -702,6 +703,7 @@ mod call_facade;
 mod core_access;
 mod event_streams;
 mod mesh;
+mod share_targets;
 mod sidebar;
 mod trust;
 pub use auth_state::{ResultScope, SessionGuard};
