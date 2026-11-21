@@ -486,7 +486,9 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeEditorActio
 
 /// Thin platform hook: account policy is owned by chatter-core.
 fn set_messaging_signed_in(signed_in: bool) {
-    if !signed_in {
+    if signed_in {
+        super::share_targets::signed_in();
+    } else {
         super::share_targets::clear();
     }
     let result = (|| -> Result<(), String> {

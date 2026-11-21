@@ -567,10 +567,12 @@ class MainActivity : GameActivity() {
 
     private external fun nativeShareReceived(text: String, paths: Array<String>, shortcutId: String)
 
-    /** Called by Rust: the chats core allows in the system share sheet (empty removes them). */
-    fun setShareTargets(keys: Array<String>, labels: Array<String>) {
+    /**
+     * Called by Rust: the chats core allows in the system share sheet (empty
+     * removes them). False when Android refused, so Rust retries.
+     */
+    fun setShareTargets(keys: Array<String>, labels: Array<String>): Boolean =
         ShareTargets.publish(this, keys, labels)
-    }
 
     private fun dispatchCallNotification(intent: Intent) {
         // Public launcher intents are untrusted. The action is routing only;

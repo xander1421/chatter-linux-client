@@ -12,18 +12,23 @@ import androidx.core.content.pm.ShortcutManagerCompat
  *
  * What is published, and when, is decided in chatter-core (`share_targets`):
  * names only, a handful of identified chats, nothing at the private default
- * notification level, nothing while signed out or locked. This object only
- * hands that list to Android and removes it again. The shortcut id is the
- * opaque per-account key, never a user or channel id.
+ * notification level, nothing while signed out or while an app lock is enabled.
+ * This object only hands that list to Android and removes it again. The
+ * shortcut id is the opaque per-account key, never a user or channel id.
  */
 object ShareTargets {
     private const val TAG = "ChatterShareTargets"
     // Matches res/xml/shortcuts.xml.
     private const val CATEGORY = "com.chatter.client.category.SHARE_TARGET"
 
-    /** Replace every published target with [keys]/[labels] (parallel arrays); empty removes them all. */
-    fun publish(context: Context, keys: Array<String>, labels: Array<String>) {
-        try {
+    /**
+     * Replace every published target with [keys]/[labels] (parallel arrays);
+     * empty removes them all. Returns whether Android accepted the change, so
+     * the caller retries a refused one (rate limits, OEM quirks) instead of
+     * believing it is published.
+     */
+    fun publish(context: Context, keys: Array<String>, labels: Array<String>): Boolean {
+        return try {
             val cap = ShortcutManagerCompat.getMaxShortcutCountPerActivity(context)
             val shortcuts = keys.indices.take(cap).map { i ->
                 ShortcutInfoCompat.Builder(context, keys[i])
@@ -35,12 +40,17 @@ object ShareTargets {
                     .setIntent(Intent(context, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
                     .build()
             }
-            if (shortcuts.isEmpty()) ShortcutManagerCompat.removeAllDynamicShortcuts(context)
-            else ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)
+            if (shortcuts.isEmpty()) {
+                ShortcutManagerCompat.removeAllDynamicShortcuts(context)
+                true
+            } else {
+                ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)
+            }
         } catch (e: RuntimeException) {
-            // Rate limits and OEM quirks must never take the app down; the
-            // share sheet then simply lists Chatter without chats.
+            // Must never take the app down; the share sheet then simply lists
+            // Chatter without chats, and the next refresh tries again.
             Log.w(TAG, "publishing share targets failed: ${e.javaClass.simpleName}")
+            false
         }
     }
 }
