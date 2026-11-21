@@ -74,6 +74,13 @@ pub(super) async fn process_sealed_sender_message(
             ))
             .await;
         }
+        Ok(SealedSenderResult::DroppedChannelContent) => {
+            return crate::inbox::ack_policy::drop_and_ack(
+                "pairwise channel sender not admitted",
+                &msg.message_guid,
+                retry_budget,
+            );
+        }
         // Blocked. This is the arm that matters most: on the sealed path the
         // sender certificate is the ONLY thing that ever names the sender —
         // `DeviceMessage.SourceUserID` is empty here — so the server could not

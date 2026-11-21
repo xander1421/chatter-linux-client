@@ -139,6 +139,9 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let revision = ui_ctx.auth_snapshot().session_revision;
                 dismiss_incoming(revision, &call_id_str);
 
+                #[cfg(target_os = "android")]
+                crate::platform::android::activity::clear_incoming_call_window(&call_id_str);
+
                 if let Some(w) = weak.upgrade() {
                     w.global::<crate::CallView>()
                         .set_incoming_call_visible(false);

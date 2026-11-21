@@ -144,6 +144,28 @@ pub fn open_play_store_update() -> Result<(), String> {
     })
 }
 
+/// Clear the lock-screen window flags for this incoming call.
+pub fn clear_incoming_call_window(call_id: &str) {
+    let Ok(act) = activity() else {
+        return;
+    };
+    if let Err(error) = with_jni_env(|env| {
+        let call_id = env.new_string(call_id).map_err(|e| e.to_string())?;
+        let result = env.call_method(
+            act,
+            jni::jni_str!("clearIncomingCallWindow"),
+            jni::jni_sig!("(Ljava/lang/String;)V"),
+            &[jni::objects::JValue::Object(&call_id)],
+        );
+        if result.is_err() {
+            clear_exception(env);
+        }
+        result.map(|_| ()).map_err(|e| e.to_string())
+    }) {
+        tracing::warn!(%error, "Could not clear incoming call window");
+    }
+}
+
 /// Clear any pending JNI exception so a failed call can't abort the next one
 /// (ART's CheckJNI SIGABRTs if a JNI call is made with an exception pending).
 pub fn clear_exception(env: &mut Env) {

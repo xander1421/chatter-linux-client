@@ -581,15 +581,10 @@ class MainActivity : GameActivity() {
                 }
                 else -> {
                     if (intent.getBooleanExtra("auto_accept", false)) return
-                    // A full-screen-intent launch happens while the device is
-                    // locked/dozing (the server call wake). The notification posts
-                    // with sound, but without these the Activity never turns the
-                    // screen on or shows over the keyguard, so the callee "sees
-                    // nothing" on a locked phone (owner 2026-11-06).
-                    if (action == "com.chatter.client.CALL_FULL_SCREEN") {
-                        wakeScreenForIncomingCall()
+                    if (nativeShowIncomingCall(callId, action, capability) &&
+                        action == "com.chatter.client.CALL_FULL_SCREEN") {
+                        setIncomingCallWindow(callId, true)
                     }
-                    nativeShowIncomingCall(callId, action, capability)
                 }
             }
         } catch (_: RuntimeException) {
@@ -597,26 +592,28 @@ class MainActivity : GameActivity() {
         }
     }
 
-    // Wake the screen and show the incoming-call UI over the keyguard. Pairs
-    // with the call notification's full-screen intent; the ring UI itself owns
-    // dismissal, so these are not cleared here (a declined/ended call closes it).
-    private fun wakeScreenForIncomingCall() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                setShowWhenLocked(true)
-                setTurnScreenOn(true)
-                getSystemService(KeyguardManager::class.java)
-                    ?.requestDismissKeyguard(this, null)
-            } else {
-                @Suppress("DEPRECATION")
-                window.addFlags(
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
-                        or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-                        or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                )
-            }
-        } catch (_: RuntimeException) {
-            // A window/keyguard call failing is never a reason to drop the call.
+    private var lockScreenCallId: String? = null
+
+    // Called by Rust when the ring notification is withdrawn. Match the call
+    // so late cancellation of an earlier ring cannot clear its replacement.
+    @androidx.annotation.Keep
+    fun clearIncomingCallWindow(callId: String) {
+        runOnUiThread { setIncomingCallWindow(callId, false) }
+    }
+
+    // A verified full-screen intent must wake a locked phone and show the
+    // ring UI (owner 2026-11-06). Keep the keyguard in place beneath it.
+    private fun setIncomingCallWindow(callId: String, show: Boolean) {
+        if (!show && lockScreenCallId != callId) return
+        lockScreenCallId = if (show) callId else null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(show)
+            setTurnScreenOn(show)
+        } else {
+            @Suppress("DEPRECATION")
+            val flags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            if (show) window.addFlags(flags) else window.clearFlags(flags)
         }
     }
 
@@ -723,7 +720,7 @@ class MainActivity : GameActivity() {
     private external fun nativeAcceptIncomingCall(callId: String, capability: String)
 
     /** Implemented in Rust. Re-shows a ringing call's screen that Back hid. */
-    private external fun nativeShowIncomingCall(callId: String, action: String, capability: String)
+    private external fun nativeShowIncomingCall(callId: String, action: String, capability: String): Boolean
 
     /** Called from Rust (JNI, any thread): Slint's state for the IME's field. UTF-16 offsets. */
     @Suppress("unused")

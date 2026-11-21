@@ -4013,3 +4013,6 @@ msgstr "Kanalvorgang fehlgeschlagen: {}"
 #: crates/chatter-core/src/client/activity.rs
 msgid "Registered"
 msgstr "Registriert"
+
+msgid "This username link is invalid or expired."
+msgstr "Dieser Benutzernamen-Link ist ungültig oder abgelaufen."

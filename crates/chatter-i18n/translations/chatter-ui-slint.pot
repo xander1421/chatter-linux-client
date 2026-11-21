@@ -5660,7 +5660,7 @@ msgid "Anyone who types your exact username can find you"
 msgstr ""
 
 #: ui/settings/privacy_settings.slint:263
-msgid "Only people with your friend code or username link can find you"
+msgid "Only people with your friend code can find you"
 msgstr ""
 
 #: ui/settings/privacy_settings.slint:358

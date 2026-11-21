@@ -826,8 +826,8 @@ fn wire_changed(
 
 /// On Enter over a `nickname.discriminator` query or a pasted
 /// `chatter://u/…` username link: exact resolution to a single account.
-/// Privacy: exact-match only (no enumeration); a username link decrypts
-/// LOCALLY (core `resolve_username_link`) and names its owner directly.
+/// Core decrypts username links locally and verifies the handle against the
+/// link owner with the same exact-match lookup as a typed handle.
 fn wire_resolve(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
@@ -871,8 +871,6 @@ fn wire_resolve(
             let ui_ctx = ui_ctx.clone();
             let requests = requests.clone();
             tokio::spawn(async move {
-                // Username link → (decrypted handle, owner account); plain handle
-                // → hashed lookup, which a Nobody account answers as "no match".
                 let is_link = chatter_core::domain::UsernameLink::is_username_link(&handle);
                 let (shown_handle, looked_up) = if is_link {
                     match ui_ctx.resolve_username_link(&handle).await {

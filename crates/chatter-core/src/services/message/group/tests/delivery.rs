@@ -398,6 +398,50 @@
         );
     }
 
+    #[tokio::test]
+    async fn pairwise_channel_admission_requires_a_member() {
+        use chatter_proto::content_v1::DataMessage;
+
+        let t = two_members();
+        let m = t.bob.messages();
+        let gateway = crate::services::gateway::MessageGateway::new(
+            (*m.signal_service).clone(),
+            m.message_repo.clone(),
+            m.channel_repo.clone(),
+            m.user_repo.clone(),
+            m.settings_repo.clone(),
+            m.solicited_resends.clone(),
+        );
+        let ts = TimestampNanos::now().as_u64();
+        for (sender, expected) in [(UserId::new(), false), (t.alice_id, true)] {
+            let result = gateway
+                .store_data_message(
+                    DataMessage {
+                        body: "channel message".into(),
+                        channel_id: t.channel_id.to_string(),
+                        timestamp: ts,
+                        ..Default::default()
+                    },
+                    Some(sender),
+                )
+                .await
+                .unwrap();
+            use crate::services::gateway::SealedSenderResult;
+            assert!(matches!(
+                (expected, result),
+                (true, SealedSenderResult::DataMessageReceived { .. })
+                    | (false, SealedSenderResult::DroppedChannelContent)
+            ));
+            assert_eq!(
+                m.message_repo
+                    .get_by_conversation_sender_timestamp(&t.channel_id, &sender, ts)
+                    .unwrap()
+                    .is_some(),
+                expected
+            );
+        }
+    }
+
     /// A pairwise resend may take the server id it carries only when this
     /// device asked that sender for the message at that sent_at, once.
     #[tokio::test]

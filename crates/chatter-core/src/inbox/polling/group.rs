@@ -613,6 +613,7 @@ async fn process_sealed_sender_group_message(
             tracing::warn!(group_id = %group_id, message_id = %message_id,
                 "Private-channel sender-key message in a group mailbox (unexpected); dropped");
         }
+        SealedSenderResult::DroppedChannelContent => {}
         SealedSenderResult::DroppedBlockedSender { sender_id } => {
             tracing::info!(
                 group_id = %group_id,

@@ -464,6 +464,7 @@ impl AndroidNotifications {
     }
 
     fn cancel_call_platform(&self, call_id: &str) -> Result<(), SystemError> {
+        super::activity::clear_incoming_call_window(call_id);
         let id = call_identity::request_code(call_id);
         with_jni_env(|env| {
             let context = get_app_context(env)?;

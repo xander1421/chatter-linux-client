@@ -208,23 +208,28 @@ pub async fn poll_dm_mailboxes(
             {
                 // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
                 let decrypted = if let Some((sender, _, content)) = cached {
-                    Ok((sender, content))
+                    // A block can be added while decrypted content awaits local persistence.
+                    crate::services::gateway::block_filter::admit_dm_mailbox_content(
+                        user_repo,
+                        settings_repo,
+                        &peer_id,
+                        &sender,
+                        || Ok(content),
+                    )
+                    .map(|content| (sender, content))
                 } else {
                     message_gateway
-                        .process_dm_message(&msg.encrypted_envelope, &secret, msg.server_timestamp)
+                        .process_dm_message(
+                            &peer_id,
+                            &msg.encrypted_envelope,
+                            &secret,
+                            msg.server_timestamp,
+                        )
                         .await
                 };
                 match decrypted {
-                    // Blocked sender: the gateway authenticated them
-                    // and refused before parsing, so there is nothing
-                    // to dispatch. Ack anyway — an unacked envelope is
-                    // re-fetched and re-decrypted on every poll.
-                    Ok((_, DmContent::DroppedBlockedSender)) => {
-                        crate::inbox::ack_policy::drop_and_ack(
-                            "blocked sender",
-                            &msg.message_id,
-                            retry_budget,
-                        )
+                    Ok((_, DmContent::DroppedMailboxContent { reason })) => {
+                        ack_policy::drop_and_ack(reason, &msg.message_id, retry_budget)
                     }
                     Ok((sender_id, dm_content)) => {
                         // Disappearing timer stated by this message

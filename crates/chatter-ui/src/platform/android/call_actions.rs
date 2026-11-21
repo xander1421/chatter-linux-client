@@ -124,21 +124,21 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCa
     call_id: JString,
     action: JString,
     capability: JString,
-) {
+) -> jni::sys::jboolean {
     env.with_env(|env| -> jni::errors::Result<_> {
         Ok((|| {
             let call_id: String = match (call_id).try_to_string(&env) {
                 Ok(s) => s.into(),
                 Err(e) => {
                     tracing::warn!(error = %e, "nativeShowIncomingCall: bad call_id");
-                    return;
+                    return jni::sys::JNI_FALSE;
                 }
             };
             let Ok(action) = (action).try_to_string(&env).map(String::from) else {
-                return;
+                return jni::sys::JNI_FALSE;
             };
             let Ok(capability) = (capability).try_to_string(&env).map(String::from) else {
-                return;
+                return jni::sys::JNI_FALSE;
             };
             if !matches!(
                 action.as_str(),
@@ -146,24 +146,24 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCa
                     | super::notifications::call_consent::FULL_SCREEN
             ) || !super::notifications::consume_call_consent(&call_id, &action, &capability)
             {
-                return;
+                return jni::sys::JNI_FALSE;
             }
-            let Some(weak) = main_window() else {
-                return;
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    if w.global::<crate::CallView>().get_incoming_call_visible()
-                        && w.global::<crate::CallView>()
-                            .get_incoming_call_data()
-                            .call_id
-                            == call_id.as_str()
-                    {
-                        w.global::<crate::CallView>()
-                            .set_incoming_call_minimized(false);
+            if let Some(weak) = main_window() {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if w.global::<crate::CallView>().get_incoming_call_visible()
+                            && w.global::<crate::CallView>()
+                                .get_incoming_call_data()
+                                .call_id
+                                == call_id.as_str()
+                        {
+                            w.global::<crate::CallView>()
+                                .set_incoming_call_minimized(false);
+                        }
                     }
-                }
-            });
+                });
+            }
+            jni::sys::JNI_TRUE
         })())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()

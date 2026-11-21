@@ -115,8 +115,8 @@ impl ChatterClient {
 
     /// Resolve someone's username link to their (decrypted username, account
     /// id). The decryption happens locally with the URL-fragment entropy —
-    /// the server never learns the username. The account id is the link
-    /// owner's, so a link reaches them even with username discovery off.
+    /// the server never learns the username. The decrypted handle must resolve
+    /// to the link owner through the discoverability-gated lookup.
     pub async fn resolve_username_link(
         &self,
         url: &str,

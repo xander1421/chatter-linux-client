@@ -613,7 +613,7 @@ pub(crate) fn dispatch_dm_content(
         // this match is exhaustive on purpose, and because "dispatch a blocked
         // sender's message" must have exactly one possible meaning if a future
         // caller does reach here: do nothing.
-        DmContent::DroppedBlockedSender => {}
+        DmContent::DroppedMailboxContent { .. } => {}
         // The peer reset its sessions with us; decrypting this moved us onto
         // the new one. Nothing to store, nothing for the UI — the poll loop acks.
         DmContent::NullMessage => {}

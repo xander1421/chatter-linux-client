@@ -335,6 +335,13 @@ pub(super) async fn process_identified_sender_message(
                 );
             }
         }
+        Ok(SealedSenderResult::DroppedChannelContent) => {
+            return crate::inbox::ack_policy::drop_and_ack(
+                "pairwise channel sender not admitted",
+                &msg.message_guid,
+                retry_budget,
+            );
+        }
         // Blocked. Drain the envelope and say nothing: no InboxEvent (an
         // event is how the message reaches the UI), no stats bump that would
         // put it in a badge count, no marker. `messages_processed` is not

@@ -254,14 +254,8 @@ pub enum DmContent {
     /// takes over now. Decrypting it already did that; dispatching it must do
     /// nothing, and the caller acks.
     NullMessage,
-    /// Not content at all: the authenticated sender is blocked, so the
-    /// envelope was never parsed. The DM-mailbox twin of
-    /// [`SealedSenderResult::DroppedBlockedSender`] — same decision, same
-    /// point in the pipeline, a different return shape because
-    /// `process_dm_message` hands back content rather than an outcome.
-    ///
-    /// Dispatching this must do nothing at all; the caller still acks.
-    DroppedBlockedSender,
+    /// An authenticated envelope denied before any DM content is dispatched.
+    DroppedMailboxContent { reason: &'static str },
 }
 
 // =============================================================================
@@ -447,6 +441,9 @@ pub enum SealedSenderResult {
         peer_device_id: u32,
         timestamp_ms: u64,
     },
+    /// Pairwise channel content denied by the verified membership or mute gate.
+    DroppedChannelContent,
+
     /// The sender is blocked. The envelope decrypted and the sender was
     /// authenticated — by the sealed sender certificate, or by holding the
     /// Double Ratchet session for the address it claimed — and the gateway

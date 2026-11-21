@@ -234,38 +234,23 @@ impl UserService {
         Ok(png_bytes)
     }
 
-    /// Resolve someone else's username link: parse the URL, fetch the
-    /// ciphertext blob and the link owner's id by link id, and decrypt the
-    /// blob locally with the fragment entropy. Returns the decrypted username
-    /// and the owner's account id.
-    ///
-    /// The owner id comes from the link row, NOT from `LookupUsername`: a link
-    /// is a capability like a friend code, so it must still reach an owner
-    /// who set "Who can find me by my username" to Nobody. Decryption still
-    /// runs first, so a URL with the wrong fragment fails as before.
+    /// Resolve a username link and verify its decrypted handle against the
+    /// same account binding used for a typed handle.
     pub async fn resolve_username_link(&self, url: &str) -> Result<(String, UserId), UserError> {
-        let link = crate::domain::UsernameLink::parse(url)
-            .map_err(|e| UserError::InvalidInput(format!("Invalid username link: {e}")))?;
+        let link =
+            crate::domain::UsernameLink::parse(url).map_err(|_| UserError::InvalidUsernameLink)?;
 
         let mut user_client = self.user_client();
         let (owner_id, blob) = user_client
             .get_username_link(&link.link_id)
             .await?
-            .ok_or_else(|| {
-                UserError::InvalidInput(
-                    "This username link is no longer active (deleted or reset)".to_string(),
-                )
-            })?;
-
-        let username = usernames::decrypt_username(&link.entropy, &blob).map_err(|_| {
-            UserError::InvalidInput(
-                "Could not decrypt this username link (corrupted or wrong key)".to_string(),
-            )
-        })?;
-
-        let user_id = owner_id.parse::<UserId>().map_err(|_| {
-            UserError::InvalidInput(format!("Invalid user ID in username link: {owner_id}"))
-        })?;
+            .ok_or(UserError::InvalidUsernameLink)?;
+        let user_id = owner_id
+            .parse::<UserId>()
+            .map_err(|_| UserError::InvalidUsernameLink)?;
+        let username = usernames::decrypt_username(&link.entropy, &blob)
+            .map_err(|_| UserError::InvalidUsernameLink)?;
+        verify_username_link_owner(user_id, self.resolve_username_binding(&username).await)?;
         if let Err(e) = self.user_repo.set_known_username(&user_id, &username) {
             tracing::warn!(error = %e, "Could not remember linked peer handle");
         }
@@ -315,9 +300,7 @@ impl UserService {
         code: &str,
         message: Option<&str>,
     ) -> Result<Friendship, UserError> {
-        // Username links (`chatter://u/…#…`) resolve to their owner via
-        // fetch-link → local decrypt; plain friend codes carry the user id
-        // directly. Neither goes through the discoverability-gated lookup.
+        // Username links verify the handle binding; friend codes carry the user ID directly.
         let friend_id = if crate::domain::UsernameLink::is_username_link(code) {
             self.resolve_username_link(code).await?.1
         } else {
@@ -345,5 +328,37 @@ impl UserService {
 
         // Send friend request
         self.send_friend_request(&friend_id, message).await
+    }
+}
+
+fn verify_username_link_owner(
+    owner: UserId,
+    binding: Result<Option<UserId>, UserError>,
+) -> Result<(), UserError> {
+    if binding.ok().flatten() == Some(owner) {
+        Ok(())
+    } else {
+        Err(UserError::InvalidUsernameLink)
+    }
+}
+
+#[cfg(test)]
+mod username_link_binding_tests {
+    use super::*;
+
+    #[test]
+    fn username_link_binding_requires_the_owner() {
+        let owner = UserId::new();
+        assert!(verify_username_link_owner(owner, Ok(Some(owner))).is_ok());
+        for binding in [
+            Ok(Some(UserId::new())),
+            Ok(None),
+            Err(UserError::NotLoggedIn),
+        ] {
+            assert!(matches!(
+                verify_username_link_owner(owner, binding),
+                Err(UserError::InvalidUsernameLink)
+            ));
+        }
     }
 }

@@ -68,7 +68,7 @@ impl ChatterClient {
 
     /// Set "Who can find me by my username" on the SERVER. With `false`,
     /// everyone else's username lookup for this account answers "no match";
-    /// friend codes and username links still reach it. Returns the value the
+    /// friend codes still reach it. Returns the value the
     /// server persisted.
     pub async fn set_username_discoverability(
         &self,

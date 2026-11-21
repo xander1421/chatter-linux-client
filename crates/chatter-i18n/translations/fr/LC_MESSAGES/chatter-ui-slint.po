@@ -5698,10 +5698,8 @@ msgstr ""
 "Toute personne qui saisit votre nom d'utilisateur exact peut vous trouver"
 
 #: ui/settings/privacy_settings.slint:263
-msgid "Only people with your friend code or username link can find you"
-msgstr ""
-"Seules les personnes qui ont votre code d'ami ou le lien de votre nom "
-"d'utilisateur peuvent vous trouver"
+msgid "Only people with your friend code can find you"
+msgstr "Seules les personnes qui ont votre code ami peuvent vous trouver"
 
 #: ui/settings/privacy_settings.slint:358
 msgid "Read receipts"

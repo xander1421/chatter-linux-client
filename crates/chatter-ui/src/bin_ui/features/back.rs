@@ -218,6 +218,10 @@ pub fn handle_back(window: &MainWindow) -> bool {
             .global::<crate::CallView>()
             .get_incoming_call_minimized()
     {
+        #[cfg(target_os = "android")]
+        crate::platform::android::activity::clear_incoming_call_window(
+            window.global::<crate::CallView>().get_incoming_call_data().call_id.as_str(),
+        );
         window
             .global::<crate::CallView>()
             .set_incoming_call_minimized(true);

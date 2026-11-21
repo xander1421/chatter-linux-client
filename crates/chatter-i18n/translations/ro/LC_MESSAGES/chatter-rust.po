@@ -3983,3 +3983,6 @@ msgstr "Operațiunea pe canal a eșuat: {}"
 #: crates/chatter-core/src/client/activity.rs
 msgid "Registered"
 msgstr "Înregistrat"
+
+msgid "This username link is invalid or expired."
+msgstr "Acest link de nume de utilizator este nevalid sau a expirat."

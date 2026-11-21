@@ -57,6 +57,25 @@ pub fn sender_is_blocked(
     Ok(user_repo.is_blocked(&me, sender_id)?)
 }
 
+/// Bind the sealed sender to the DM mailbox's peer before decoding fresh
+/// plaintext or replaying cached content. Both paths consult the current block list.
+pub(crate) fn admit_dm_mailbox_content(
+    users: &UserRepository,
+    settings: &SettingsRepository,
+    peer: &UserId,
+    sender: &UserId,
+    content: impl FnOnce() -> Result<super::DmContent, ServiceError>,
+) -> Result<super::DmContent, ServiceError> {
+    let reason = if peer != sender {
+        "authenticated sender does not own DM mailbox"
+    } else if sender_is_blocked(users, settings, peer)? {
+        "blocked sender"
+    } else {
+        return content();
+    };
+    Ok(super::DmContent::DroppedMailboxContent { reason })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +164,49 @@ mod tests {
             "the ack policy classifies NotLoggedIn transient, so the envelope is \
              retained rather than delivered or deleted; got {err:?}"
         );
+    }
+
+    #[test]
+    fn dm_mailbox_admission_binds_sender_and_blocks_control_content() {
+        use super::super::DmContent;
+
+        let (_dir, users, settings, me) = setup();
+        let peer = UserId::new();
+        users.ensure_user_exists(&peer).unwrap();
+        let offer = || {
+            Ok(DmContent::CallKeyOffer {
+                call_id: "call".into(),
+                ephemeral_public_key: [1; 32],
+                timestamp: 1,
+                call_type: "voice".into(),
+            })
+        };
+        assert!(matches!(
+            admit_dm_mailbox_content(&users, &settings, &peer, &UserId::new(), offer).unwrap(),
+            DmContent::DroppedMailboxContent { .. },
+        ));
+        assert!(matches!(
+            admit_dm_mailbox_content(&users, &settings, &peer, &peer, offer).unwrap(),
+            DmContent::CallKeyOffer { .. },
+        ));
+
+        users
+            .insert_friendship(&Friendship {
+                requester_id: me,
+                addressee_id: peer,
+                status: FriendshipStatus::Blocked,
+                created_at: Utc::now(),
+            })
+            .unwrap();
+
+        for control in [
+            offer().unwrap(),
+            DmContent::Typing { action: 1, timestamp: 1 },
+        ] {
+            assert!(matches!(
+                admit_dm_mailbox_content(&users, &settings, &peer, &peer, || Ok(control)).unwrap(),
+                DmContent::DroppedMailboxContent { reason: "blocked sender" },
+            ));
+        }
     }
 }

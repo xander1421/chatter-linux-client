@@ -12,6 +12,7 @@ impl MessageGateway {
     ///
     /// # Arguments
     ///
+    /// * `peer_id` - The peer bound to the mailbox
     /// * `mailbox_encrypted` - The doubly-encrypted envelope from the mailbox
     /// * `shared_secret` - The X25519 shared secret for mailbox layer decryption
     /// * `server_timestamp_ns` - The mailbox message's server timestamp (sender
@@ -20,8 +21,9 @@ impl MessageGateway {
     /// # Returns
     ///
     /// A tuple of (sender_user_id, content) on success.
-    pub async fn process_dm_message(
+    pub(crate) async fn process_dm_message(
         &self,
+        peer_id: &UserId,
         mailbox_encrypted: &[u8],
         shared_secret: &[u8; 32],
         server_timestamp_ns: u64,
@@ -47,22 +49,31 @@ impl MessageGateway {
             ServiceError::Validation(format!("Invalid sender ID in Signal address: {}", e))
         })?;
 
-        // Block check before any parse, as on the other two paths. The mailbox
-        // this envelope arrived in belongs to one peer, but the sealed sender
-        // certificate names who actually sent it — so the authenticated
-        // `sender_id` is what gets checked, not the mailbox owner.
-        if sender_is_blocked(&self.user_repo, &self.settings_repo, &sender_id)? {
-            plaintext.zeroize();
-            tracing::info!(
-                sender_id = %sender_id,
-                "DM_DECRYPT: dropping mailbox message from a blocked sender"
-            );
-            return Ok((sender_id, DmContent::DroppedBlockedSender));
-        }
+        let result = super::super::block_filter::admit_dm_mailbox_content(
+            &self.user_repo,
+            &self.settings_repo,
+            peer_id,
+            &sender_id,
+            || {
+                Self::parse_mailbox_content(
+                    &plaintext,
+                    &sender_id,
+                    u32::from(sender_address.device_id()),
+                )
+            },
+        );
+        plaintext.zeroize();
+        result.map(|content| (sender_id, content))
+    }
 
+    fn parse_mailbox_content(
+        plaintext: &[u8],
+        sender_id: &UserId,
+        device_id: u32,
+    ) -> Result<DmContent, ServiceError> {
         // Try to parse as Content proto first (preferred)
         if let Ok(content_proto) = chatter_proto::protovalidate::decode_inbound_content(
-            plaintext.as_slice(),
+            plaintext,
             "mailbox_dm",
         ) {
             // Log content type before parsing
@@ -79,17 +90,13 @@ impl MessageGateway {
                 sender_device_id, ..
             } = &mut dm_content
             {
-                *sender_device_id = u32::from(sender_address.device_id());
+                *sender_device_id = device_id;
             }
             tracing::info!(sender_id = %sender_id, dm_content_type = ?std::mem::discriminant(&dm_content), "DM_DECRYPT: Content parsed to DmContent");
-            // Zeroize plaintext before returning
-            plaintext.zeroize();
-            return Ok((sender_id, dm_content));
+            return Ok(dm_content);
         }
 
-        let len = plaintext.len();
-        plaintext.zeroize();
-        Err(not_content(len))
+        Err(not_content(plaintext.len()))
     }
 
     /// Parse Content proto into DmContent.

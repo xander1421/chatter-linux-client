@@ -3952,3 +3952,6 @@ msgstr "Operazione sul canale non riuscita: {}"
 #: crates/chatter-core/src/client/activity.rs
 msgid "Registered"
 msgstr "Registrato"
+
+msgid "This username link is invalid or expired."
+msgstr "Questo link al nome utente non è valido o è scaduto."
