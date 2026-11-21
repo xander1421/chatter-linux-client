@@ -94,6 +94,8 @@ impl SignalService {
         device_id: u32,
         dem_serialized: Vec<u8>,
     ) -> Result<Vec<u8>, ServiceError> {
+        self.refuse_pending_identity_change(recipient_id)?;
+        self.verify_existing_session_identity(auth_client, recipient_id).await?;
         let device_id_struct = DeviceId::try_from(device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
@@ -336,6 +338,7 @@ impl SignalService {
                 }
             }
         }
+        self.verify_existing_session_identity(auth_client, recipient_id).await?;
         let certificate = self.get_or_request_sender_certificate(auth_client).await?;
         let batch = self
             .actor
@@ -371,6 +374,7 @@ impl SignalService {
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
         self.refuse_pending_identity_change(recipient_id)?;
+        self.verify_existing_session_identity(auth_client, recipient_id).await?;
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         let mut ciphertexts = HashMap::with_capacity(device_ids.len());
@@ -441,6 +445,8 @@ impl SignalService {
                 },
             ));
         }
+
+        self.require_verified_session_identity(recipient_id)?;
 
         // Use cached sender certificate (must be pre-fetched during login)
         let sender_cert = self.get_cached_sender_certificate()?.ok_or_else(|| {

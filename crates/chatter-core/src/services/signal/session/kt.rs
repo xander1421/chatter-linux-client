@@ -90,6 +90,108 @@ impl SignalService {
         }
     }
 
+    pub(crate) async fn verify_outbound_identity(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        identity_key: &[u8],
+    ) -> Result<(), ServiceError> {
+        if !self.has_verified_identity(recipient_id, identity_key)? {
+            self.verify_identity_key_transparency(auth_client, recipient_id, identity_key).await?;
+        }
+        self.require_verified_identity(recipient_id, identity_key)
+    }
+
+    fn verified_identity_setting(recipient_id: &str) -> String {
+        format!("kt.verified_peer_identity.{recipient_id}")
+    }
+
+    fn has_verified_identity(
+        &self,
+        recipient_id: &str,
+        identity_key: &[u8],
+    ) -> Result<bool, ServiceError> {
+        Ok(self.settings_repo
+            .get_bytes(&Self::verified_identity_setting(recipient_id))
+            .map_err(ServiceError::Storage)?
+            .as_deref() == Some(identity_key))
+    }
+
+    fn require_verified_identity(
+        &self,
+        recipient_id: &str,
+        identity_key: &[u8],
+    ) -> Result<(), ServiceError> {
+        if self.has_verified_identity(recipient_id, identity_key)? {
+            return Ok(());
+        }
+        Err(ServiceError::Crypto(CryptoError::NotInTransparencyLog {
+            peer_id: recipient_id.to_string(),
+        }))
+    }
+
+    pub(super) fn session_identity_for_kt(&self, recipient_id: &str) -> Result<Vec<u8>, ServiceError> {
+        self.get_peer_identity(recipient_id)
+            .map_err(ServiceError::Storage)?
+            .ok_or_else(|| ServiceError::Crypto(CryptoError::NotInTransparencyLog {
+                peer_id: recipient_id.to_string(),
+            }))
+    }
+
+    pub(super) async fn verify_existing_session_identity(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+    ) -> Result<(), ServiceError> {
+        let identity = if self.settings_repo.get_string(keys::CURRENT_USER_ID)
+            .map_err(ServiceError::Storage)?.as_deref() == Some(recipient_id)
+        {
+            self.get_identity_public_key().await?.to_vec()
+        } else {
+            self.session_identity_for_kt(recipient_id)?
+        };
+        let result = self.verify_outbound_identity(auth_client, recipient_id, &identity).await;
+        self.park_mismatched_session(recipient_id, result).await
+    }
+
+    async fn park_mismatched_session(
+        &self,
+        recipient_id: &str,
+        result: Result<(), ServiceError>,
+    ) -> Result<(), ServiceError> {
+        // Transport failures stay retryable and must not park an identity change.
+        if let Err(error @ ServiceError::Crypto(CryptoError::UntrustedIdentity { .. })) = &result {
+            self.note_identity_change(error);
+            self.archive_peer_sessions(recipient_id).await?;
+        }
+        result
+    }
+
+    pub(crate) async fn verify_existing_session_identity_anon(
+        &self,
+        client: &mut crate::network::grpc::AnonymousKtClient,
+        recipient_id: &str,
+    ) -> Result<(), ServiceError> {
+        self.refuse_pending_identity_change(recipient_id)?;
+        let identity = self.session_identity_for_kt(recipient_id)?;
+        let result = self.verify_outbound_identity_anon(client, recipient_id, &identity).await;
+        self.park_mismatched_session(recipient_id, result).await
+    }
+
+    pub(super) fn require_verified_session_identity(&self, recipient_id: &str) -> Result<(), ServiceError> {
+        self.require_verified_identity(recipient_id, &self.session_identity_for_kt(recipient_id)?)
+    }
+
+    pub(crate) async fn verify_fetched_identity(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        identity_key: &[u8],
+    ) -> Result<(), ServiceError> {
+        self.verify_identity_key_transparency(auth_client, recipient_id, identity_key).await?;
+        self.require_verified_identity(recipient_id, identity_key)
+    }
+
     pub(super) async fn verify_peer_key_transparency(
         &self,
         auth_client: &mut AuthClient,
@@ -100,7 +202,7 @@ impl SignalService {
             .identity_key()
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
-        self.verify_identity_key_transparency(auth_client, recipient_id, &identity_key)
+        self.verify_fetched_identity(auth_client, recipient_id, &identity_key)
             .await
     }
 
@@ -222,7 +324,10 @@ impl SignalService {
                 // it cannot see a fork or a rollback. Pin the head across time
                 // as well.
                 self.check_tree_head_consistency(pin, fetch_consistency, recipient_id, &proof)
-                    .await
+                    .await?;
+                self.settings_repo
+                    .set_bytes(&Self::verified_identity_setting(recipient_id), identity_key)
+                    .map_err(ServiceError::Storage)
             }
             // `Malformed` means the proof doesn't even have the shape this
             // verifier expects (e.g. missing prefix_root) — that's a
@@ -242,6 +347,22 @@ impl SignalService {
                      outside a dev-trust-root build."
                 );
                 Ok(())
+            }
+            Err(KtError::IdentityKeyMismatch) => {
+                KtError::IdentityKeyMismatch.trace_rejection();
+                let candidate = proof.inclusion_proof.as_ref()
+                    .map(|leaf| leaf.value.clone())
+                    .ok_or_else(|| ServiceError::Validation("KT proof has no leaf".into()))?;
+                crate::crypto::verify_kt_proof(recipient_id, &candidate, &proof)
+                    .map_err(|error| ServiceError::Validation(error.to_string()))?;
+                self.check_tree_head_consistency(pin, fetch_consistency, recipient_id, &proof)
+                    .await?;
+                Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
+                    peer_id: recipient_id.to_string(),
+                    device_id: 0,
+                    new_identity_key: Some(candidate),
+                    attribution: crate::error::IdentityChangeSource::ServerClaimed,
+                }))
             }
             Err(e) => {
                 e.trace_rejection();
@@ -279,6 +400,18 @@ impl SignalService {
             .identity_key()
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
+        self.verify_outbound_identity_anon(anon_kt_client, recipient_id, &identity_key).await
+    }
+
+    pub(super) async fn verify_outbound_identity_anon(
+        &self,
+        anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
+        recipient_id: &str,
+        identity_key: &[u8],
+    ) -> Result<(), ServiceError> {
+        if self.has_verified_identity(recipient_id, identity_key)? {
+            return Ok(());
+        }
         // Same pin discipline as the identified path (`kt_anchor::lock_pin`).
         let pin = kt_anchor::lock_pin().await;
         let fetched = kt_anchor::pinned_rpc(anon_kt_client.get_proof(recipient_id)).await;
@@ -288,11 +421,12 @@ impl SignalService {
             &pin,
             "KT(anon)",
             recipient_id,
-            &identity_key,
+            identity_key,
             fetched,
             |old, new| anon_kt_client.get_consistency_proof(old, new),
         )
-        .await
+        .await?;
+        self.require_verified_identity(recipient_id, identity_key)
     }
 }
 
@@ -300,6 +434,42 @@ impl SignalService {
 mod kt_pin_tests {
     use super::*;
     use chatter_proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
+
+    #[tokio::test]
+    async fn kt_verified_identity_cache_survives_service_restart_and_matches_exact_key() {
+        let Some(manifest) = crate::mailbox::blind_signature::tests::kt_manifest_vector() else {
+            return;
+        };
+        let subject = format!("chatter/mailbox-manifest/v1/{}", manifest.key_id);
+        let proof = manifest.kt_proof.unwrap();
+        let committed = proof.inclusion_proof.as_ref().unwrap().value.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let make_service = || SignalService::new(
+            Arc::new(crate::storage::KeyStore::new(db.clone())),
+            Arc::new(crate::storage::repositories::SettingsRepository::new(db.clone())),
+        );
+        let service = make_service();
+        let pin = kt_anchor::lock_pin().await;
+        let no_fetch = |_: u64, _: u64| std::future::ready(Err(crate::error::NetworkError::Unavailable));
+
+        assert!(service.require_verified_identity(&subject, &committed).is_err());
+        let err = service.judge_kt_proof(&pin, "KT", &subject, &[5; 33], Ok(Some(proof.clone())), no_fetch)
+            .await.unwrap_err();
+        assert!(matches!(err, ServiceError::Crypto(CryptoError::UntrustedIdentity { .. })));
+        assert!(service.require_verified_identity(&subject, &[5; 33]).is_err());
+        assert!(service.require_verified_identity(&subject, &committed).is_err());
+
+        service.judge_kt_proof(&pin, "KT", &subject, &committed, Ok(Some(proof)), no_fetch)
+            .await.unwrap();
+        assert!(service.require_verified_identity(&subject, &committed).is_ok());
+        drop(service);
+        let service = make_service();
+        assert!(service.require_verified_identity(&subject, &committed).is_ok());
+        assert!(service.require_verified_identity(&subject, &[5; 33]).is_err());
+        assert!(service.require_verified_identity("other", &committed).is_err());
+    }
 
     /// The anchor both KT paths (identified and `verify_peer_key_transparency_anon`)
     /// run after the inclusion proof: a head that forks from the pin is refused

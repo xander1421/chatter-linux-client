@@ -444,6 +444,7 @@ mod tests {
     #[test]
     fn test_user_service_construction() {
         fn _verify_types(
+            signal: Arc<crate::services::signal::SignalService>,
             grpc_pool: Arc<crate::network::grpc::client_pool::GrpcClientPool>,
             settings_repo: Arc<SettingsRepository>,
             user_repo: Arc<UserRepository>,
@@ -453,6 +454,7 @@ mod tests {
             >,
         ) {
             let _service = UserService::new(
+                signal,
                 grpc_pool,
                 settings_repo,
                 user_repo,

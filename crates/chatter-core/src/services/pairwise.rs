@@ -136,10 +136,8 @@ impl PairwiseService {
 
     /// Encrypt to the session we already hold with `device_id` of `peer_id`.
     ///
-    /// Local only: the certificate refresh above is the only possible network
-    /// call. If the session vanished since the caller checked, this fails
-    /// (`SessionUnusable`) instead of re-establishing it — the caller decides
-    /// whether to go through [`Self::encrypt_anonymous`].
+    /// Peers first learned from inbound messages need one anonymous KT lookup.
+    /// A verified identity is reused without any recipient lookup.
     pub async fn encrypt_existing_session(
         &self,
         peer_id: &UserId,
@@ -147,6 +145,18 @@ impl PairwiseService {
         plaintext: &[u8],
     ) -> Result<Vec<u8>, PairwiseError> {
         self.ensure_sender_certificate().await?;
+        let mut kt = self.grpc_pool.secret_kt_client()?;
+        self.signal_service
+            .verify_existing_session_identity_anon(&mut kt, &peer_id.to_string())
+            .await
+            .map_err(|e| match e {
+                crate::error::ServiceError::Network(error) => PairwiseError::Network(error),
+                crate::error::ServiceError::Crypto(
+                    crate::error::CryptoError::NotInTransparencyLog { peer_id }
+                    | crate::error::CryptoError::UntrustedIdentity { peer_id, .. },
+                ) => PairwiseError::RecipientKeyUnverified { peer_id },
+                e => PairwiseError::SessionError(e.to_string()),
+            })?;
         self.signal_service
             .encrypt_message_anonymous(&peer_id.to_string(), device_id, plaintext)
             .await

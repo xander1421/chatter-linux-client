@@ -179,6 +179,7 @@ impl ServiceContainer {
 
         // 7. User service
         let user_service = Arc::new(UserService::new(
+            signal_service.clone(),
             infra.grpc_pool.clone(),
             infra.settings_repo.clone(),
             infra.user_repo.clone(),

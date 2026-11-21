@@ -12,7 +12,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::{SignalService, kt_anchor};
-#[cfg(feature = "dev-trust-root")]
 use crate::crypto::keytransparency::KtError;
 use crate::error::{CryptoError, ServiceError};
 use crate::network::grpc::auth_client::AuthClient;

@@ -433,14 +433,26 @@ async fn handle_bootstrap_request_async(
         "BOOTSTRAP[2/4] Processing REQUEST - initiating as lower UUID"
     );
 
-    // Create fresh gRPC channel
-    // Get channel and auth interceptor from pool
-    tracing::debug!(
-        peer = %peer_id,
-        "BOOTSTRAP[2/4] Getting gRPC channel for bootstrap initiation"
-    );
-    let channel = grpc_pool.channel();
-    let auth_interceptor = grpc_pool.auth_clone();
+    // Hold the response in the handler's owned task while KT is temporarily
+    // unreachable. Verify before allocating a mailbox or claiming a token.
+    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
+    let key_store = Arc::new(KeyStore::new(database.clone()));
+    let signal_service = SignalService::new(key_store, settings_repo);
+    let peer_id_str = peer_id.to_string();
+    let mut attempts = 0;
+    let mut auth_client = loop {
+        let mut auth = grpc_pool.auth_client();
+        match signal_service.ensure_session(&mut auth, &peer_id_str, peer_device_id).await {
+            Ok(()) => break auth,
+            Err(crate::error::ServiceError::Network(error))
+                if attempts < 2 && (error.is_retryable() || error.is_transport_error()) =>
+            {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_secs(5 * attempts)).await;
+            }
+            Err(error) => return Err(format!("Failed to verify bootstrap peer: {error}")),
+        }
+    };
 
     // Create DmBootstrap and initiate
     let dm_bootstrap = DmBootstrap::new(database.clone());
@@ -466,14 +478,6 @@ async fn handle_bootstrap_request_async(
         bootstrap_msg_len = bootstrap_result.bootstrap_message.len(),
         "BOOTSTRAP[2/4] Created mailbox, now encrypting announcement MESSAGE for peer"
     );
-
-    // Encrypt bootstrap message with Signal Protocol
-    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
-    let key_store = Arc::new(KeyStore::new(database.clone()));
-    let signal_service = SignalService::new(key_store, settings_repo);
-
-    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
-    let peer_id_str = peer_id.to_string();
 
     let sealed_ciphertext = signal_service
         .encrypt_message(
