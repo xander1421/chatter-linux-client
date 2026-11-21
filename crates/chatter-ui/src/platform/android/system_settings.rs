@@ -2,8 +2,17 @@
 
 use jni::objects::{JObject, JValue};
 use slint::ComponentHandle;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use super::activity::{activity, clear_exception, with_jni_env};
+
+static FULL_SCREEN_CALL_STATE: AtomicI32 = AtomicI32::new(0);
+
+pub fn apply_full_screen_call_state(window: &crate::MainWindow) {
+    window
+        .global::<crate::FullScreenCallPermission>()
+        .set_state(FULL_SCREEN_CALL_STATE.load(Ordering::Relaxed));
+}
 
 /// `Configuration.fontScale` — Settings › Display › Font size. 1.0 when it
 /// cannot be read.
@@ -160,10 +169,11 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeFullScreenCall
     state: jni::sys::jint,
 ) {
     env.with_env(|_| -> jni::errors::Result<()> {
+        FULL_SCREEN_CALL_STATE.store(state, Ordering::Relaxed);
         if let Some(weak) = super::call_actions::main_window() {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
-                    window.global::<crate::FullScreenCallPermission>().set_state(state);
+                    apply_full_screen_call_state(&window);
                 }
             });
         }

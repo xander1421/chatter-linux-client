@@ -208,6 +208,7 @@ export component NotificationsSettings inherits VerticalLayout {
                     font-size: Typography.xs;
                 }
                 if FullScreenCallPermission.state == 1: Button {
+                    touch: root.mobile-platform;
                     text: @tr("Allow");
                     clicked => { FullScreenCallPermission.open-settings(); }
                 }

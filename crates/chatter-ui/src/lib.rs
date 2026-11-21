@@ -834,7 +834,10 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
 
     // Let the notification "Accept" activity-intent drive the in-app accept flow.
     #[cfg(target_os = "android")]
-    crate::platform::android::call_actions::register_main_window(window.as_weak());
+    {
+        crate::platform::android::call_actions::register_main_window(window.as_weak());
+        crate::platform::android::system_settings::apply_full_screen_call_state(&window);
+    }
     #[cfg(target_os = "android")]
     crate::platform::android::notification_route::register_window(window.as_weak());
 
