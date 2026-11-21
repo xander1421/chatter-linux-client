@@ -337,41 +337,11 @@ impl MessageService {
         let content = Content::decode(entry.content.as_slice())
             .map_err(|_| invalid("Invalid outbox content"))?;
         if entry.mailbox_transport != 0 {
-            let delivery_unconfirmed = || MessageError::DmError(super::core::DELIVERY_UNCONFIRMED.into());
-            if entry.mailbox_started { return Err(delivery_unconfirmed()); }
-            let secret = if entry.mailbox_transport == 2 {
-                let service = anon_dms.ok_or_else(|| invalid("No secret-chat outbox handler"))?;
-                let row = self.message_repo.get(id)?.ok_or(MessageError::MessageNotFound(*id))?;
-                let conversation = crate::domain::AnonDmId::from_uuid(*row.conversation_id.as_uuid());
-                service.verify_queued_recipient(&conversation, &entry.peer).await?;
-                Some((service, conversation))
-            } else {
-                self.signal_service.verify_mailbox_identity(&self.grpc_pool, &entry.peer.to_string())
-                    .await.map_err(|e| MessageError::from_signal_send(e, "Mailbox verification"))?;
-                None
-            };
-            crate::state::send_session::check_send_session()?;
-            let changed = self.database.connection()?.execute(
-                "UPDATE dm_outbox SET mailbox_started=1 WHERE owner_id=?1 AND message_id=?2 AND generation=?3 AND mailbox_started=0",
-                params![owner, id.to_string(), generation],
-            )?;
-            if changed != 1 { return Err(delivery_unconfirmed()); }
-            if let Some((service, conversation)) = secret {
-                return match service.send_message(&conversation, content).await {
-                    Ok(()) => Ok(()),
-                    Err(crate::services::anon_dm::AnonDmError::DeliveryUnconfirmed) => {
-                        // The secret deposit journal already retains the exact
-                        // ciphertext and owns confirmation from here.
-                        Err(MessageError::BootstrapInitiated)
-                    }
-                    Err(_) => Err(delivery_unconfirmed()),
-                };
-            }
-            return match self.send_dm(&entry.peer, content, &self.mailbox_manager).await {
-                Ok(()) => Ok(()),
-                Err(MessageError::BootstrapInitiated) => Err(MessageError::BootstrapInitiated),
-                Err(_) => Err(delivery_unconfirmed()),
-            };
+            // Keep the distinct mailbox send future out of the sealed-send
+            // future. Their callers already hold request and crypto state.
+            return Box::pin(self.deliver_mailbox_key_wait(
+                id, generation, owner, &entry, content, anon_dms,
+            )).await;
         }
         // Past the certificate window the stored envelope can no longer be
         // replayed, and whether it landed is unknown: fail closed, never seal
@@ -475,6 +445,52 @@ impl MessageService {
         Ok(())
     }
 
+    async fn deliver_mailbox_key_wait(
+        &self,
+        id: &MessageId,
+        generation: &str,
+        owner: String,
+        entry: &Entry,
+        content: Content,
+        anon_dms: Option<&crate::services::anon_dm::AnonDmService>,
+    ) -> Result<(), MessageError> {
+        let delivery_unconfirmed = || MessageError::DmError(super::core::DELIVERY_UNCONFIRMED.into());
+        if entry.mailbox_started { return Err(delivery_unconfirmed()); }
+        let secret = if entry.mailbox_transport == 2 {
+            let service = anon_dms.ok_or_else(|| invalid("No secret-chat outbox handler"))?;
+            let row = self.message_repo.get(id)?.ok_or(MessageError::MessageNotFound(*id))?;
+            let conversation = crate::domain::AnonDmId::from_uuid(*row.conversation_id.as_uuid());
+            service.verify_queued_recipient(&conversation, &entry.peer).await?;
+            Some((service, conversation))
+        } else {
+            self.signal_service.verify_mailbox_identity(&self.grpc_pool, &entry.peer.to_string())
+                .await.map_err(|e| MessageError::from_signal_send(e, "Mailbox verification"))?;
+            None
+        };
+        crate::state::send_session::check_send_session()?;
+        let changed = self.database.connection()?.execute(
+            "UPDATE dm_outbox SET mailbox_started=1 WHERE owner_id=?1 AND message_id=?2 AND generation=?3 AND mailbox_started=0",
+            params![owner, id.to_string(), generation],
+        )?;
+        if changed != 1 { return Err(delivery_unconfirmed()); }
+        if let Some((service, conversation)) = secret {
+            return match service.send_message(&conversation, content).await {
+                Ok(()) => Ok(()),
+                Err(crate::services::anon_dm::AnonDmError::DeliveryUnconfirmed) => {
+                    // The secret deposit journal already retains the exact
+                    // ciphertext and owns confirmation from here.
+                    Err(MessageError::BootstrapInitiated)
+                }
+                Err(_) => Err(delivery_unconfirmed()),
+            };
+        }
+        return match self.send_dm(&entry.peer, content, &self.mailbox_manager).await {
+            Ok(()) => Ok(()),
+            Err(MessageError::BootstrapInitiated) => Err(MessageError::BootstrapInitiated),
+            Err(_) => Err(delivery_unconfirmed()),
+        };
+    }
+
     /// Record an attempt's outcome. Confirmed: the row becomes `sent` (which
     /// starts its disappearing clock) and the entry and any send journal
     /// bound to the row go in one transaction. Otherwise the entry waits with
@@ -551,7 +567,7 @@ impl MessageService {
         id: &MessageId,
         generation: &str,
     ) -> Result<FirstAttempt, MessageError> {
-        let result = self.deliver_sealed_dm(id, generation, None).await;
+        let result = Box::pin(self.deliver_sealed_dm(id, generation, None)).await;
         if crate::state::send_session::check_send_session().is_err() {
             // Another account or session: the entry keeps its owner and lease.
             return Ok(FirstAttempt::Queued);
