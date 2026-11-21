@@ -53,8 +53,8 @@
 
 use prost::Message;
 use prost::bytes::Buf;
-use rusqlite::Connection;
 use rusqlite::types::{Value as SqlValue, ValueRef};
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::StorageError;
 use crate::storage::repositories::settings_repo::keys;
@@ -65,7 +65,7 @@ use std::collections::{HashMap, HashSet};
 /// Bump this for every change to backup content, including exported tables,
 /// columns, row selection, or the meaning of stored values. Older builds must
 /// reject newer payloads rather than silently importing only familiar fields.
-pub const PAYLOAD_VERSION: u32 = 2;
+pub const PAYLOAD_VERSION: u32 = 3;
 
 /// Whitelisted tables, in FK-safe import order (parents before children:
 /// `profiles`/`friendships` reference `users`, `memberships` references
@@ -285,6 +285,26 @@ fn legacy_timer_unknown(
     }
 }
 
+const NO_MESSAGE_TOMBSTONE: &str =
+    "NOT EXISTS(SELECT 1 FROM deleted_messages WHERE id=m.id)
+     AND NOT (m.conversation_type='server_dm' AND EXISTS(SELECT 1 FROM dm_receive_tombstones
+         WHERE owner_id IN (:owner, (SELECT json_extract(value,'$') FROM settings WHERE key=:user_key))
+           AND conversation_id=m.conversation_id AND sender_id=m.sender_id AND sent_at=m.sent_at))
+     AND NOT EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind='delete'
+         AND (conversation_id IS NULL OR conversation_id=m.conversation_id)
+         AND ((body=m.conversation_type AND author_id=m.sender_id AND target_sent_at=m.sent_at)
+              OR (m.conversation_type='server_dm' AND body='call:server_dm' AND author_id=m.id AND target_sent_at=0)))";
+
+fn live_message_predicate() -> String {
+    format!(
+        "m.is_deleted=0 AND m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
+        AND NOT EXISTS(SELECT 1 FROM ephemeral_messages e WHERE e.message_id=m.id
+            AND e.countdown_started<>0
+            AND COALESCE(julianday(e.expires_at) > julianday(:now),0)=0)
+        AND {NO_MESSAGE_TOMBSTONE}"
+    )
+}
+
 fn message_tombstoned(
     conn: &Connection,
     columns: &[String],
@@ -292,20 +312,28 @@ fn message_tombstoned(
     archive_owner: &str,
 ) -> Result<bool, StorageError> {
     let message = |column| row_value(columns, values, column);
-    Ok(conn.prepare_cached(
-        "SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)
-             OR (?2='server_dm' AND EXISTS(SELECT 1 FROM dm_receive_tombstones
-                 WHERE owner_id IN (?6, (SELECT json_extract(value,'$') FROM settings WHERE key=?7))
-                 AND conversation_id=?3 AND sender_id=?4 AND sent_at=?5))
-             OR EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind='delete'
-                 AND (conversation_id IS NULL OR conversation_id=?3)
-                 AND ((body=?2 AND author_id=?4 AND target_sent_at=?5)
-                      OR (?2='server_dm' AND body='call:server_dm' AND author_id=?1 AND target_sent_at=0)))",
-    )?.query_row(
-        rusqlite::params![message("id"), message("conversation_type"), message("conversation_id"),
-            message("sender_id"), message("sent_at"), archive_owner, keys::CURRENT_USER_ID],
+    Ok(conn.prepare_cached(&format!(
+        "SELECT NOT ({NO_MESSAGE_TOMBSTONE}) FROM
+         (SELECT :id AS id,:kind AS conversation_type,:conv AS conversation_id,
+                 :sender AS sender_id,:sent AS sent_at) m"
+    ))?.query_row(
+        rusqlite::named_params! {
+            ":id": message("id"), ":kind": message("conversation_type"),
+            ":conv": message("conversation_id"), ":sender": message("sender_id"),
+            ":sent": message("sent_at"), ":owner": archive_owner, ":user_key": keys::CURRENT_USER_ID,
+        },
         |row| row.get(0),
     )?)
+}
+
+fn attachment_ids(blob: &[u8]) -> impl Iterator<Item = String> {
+    use crate::domain::ids::AttachmentId;
+    use crate::storage::serialization::db_deserialize;
+
+    db_deserialize::<Vec<AttachmentId>>(blob)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| id.to_string())
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, StorageError> {
@@ -331,7 +359,7 @@ fn dump_table(
     out: &mut Vec<u8>,
     table: &str,
     select_sql: &str,
-    params: &[&dyn rusqlite::ToSql],
+    params: impl rusqlite::Params,
     rows_out: &mut usize,
     keep: &dyn Fn(&rusqlite::Row<'_>) -> rusqlite::Result<bool>,
 ) -> Result<(), StorageError> {
@@ -363,53 +391,101 @@ fn dump_table(
 /// Serialize the whole backup payload (uncompressed frame stream). Returns
 /// `(payload_bytes, total_rows)`.
 pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize), StorageError> {
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        let result = dump_snapshot(&tx, user_id)?;
+        tx.commit()?;
+        return Ok(result);
+    }
+    dump_snapshot(conn, user_id)
+}
+
+fn dump_snapshot(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize), StorageError> {
     let mut out = Vec::new();
     let mut rows = 0usize;
+    let now = chrono::Utc::now();
+    let cutoff = now.to_rfc3339();
+    let predicate = live_message_predicate();
+    let retained = format!(
+        "WITH retained_messages AS NOT MATERIALIZED (SELECT m.* FROM messages m WHERE {predicate})"
+    );
+    let history_params: &[(&str, &dyn rusqlite::ToSql)] = &[
+        (":now", &cutoff),
+        (":owner", &user_id),
+        (":user_key", &keys::CURRENT_USER_ID),
+    ];
+    let owner_params: &[(&str, &dyn rusqlite::ToSql)] = &[(":owner", &user_id)];
     push_frame(
         &mut out,
         frame::Payload::Info(BackupInfo {
             payload_version: PAYLOAD_VERSION,
             user_id: user_id.to_string(),
-            created_at_ms: chrono::Utc::now().timestamp_millis(),
+            created_at_ms: now.timestamp_millis(),
         }),
     );
 
     for &table in BACKUP_TABLES {
         if table == "attachments" {
-            dump_attachments(conn, &mut out, &mut rows)?;
+            dump_attachments(conn, &mut out, &retained, history_params, &mut rows)?;
             continue;
         }
-        // SELECT * would also work, but naming the PRAGMA columns pins the
-        // value order to the emitted TableHeader.
-        let cols = table_columns(conn, table)?.join(", ");
-        // Reaction metadata must obey the same privacy boundary as history.
-        // A scope string alone is insufficient: require its retained target.
-        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
-        let ownership = match table {
-            "unified_reactions" => Some(format!(
-                "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
-                 AND m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
-                 AND m.sender_id={table}.sender_id AND m.sent_at={table}.sent_at_ns)")),
-            "pending_scoped_reactions" | "reaction_action_versions" | "reaction_actor_selections" | "pending_reaction_add_selections" => Some(format!(
-                "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
-                 AND m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
-                 AND m.sender_id={table}.author_id AND m.sent_at={table}.target_sent_at)")),
-            "messages" => Some(format!("conversation_type IN {MESSAGE_CONVERSATION_TYPES} AND is_deleted=0")),
-            "ephemeral_messages" => Some(format!(
-                "message_id IN (SELECT id FROM messages WHERE conversation_type IN {MESSAGE_CONVERSATION_TYPES} AND is_deleted=0)"
-            )),
-            "dm_receive_tombstones" => {
-                params.push(&user_id);
-                Some("owner_id=?1".to_owned())
+        let mut cols = table_columns(conn, table)?.join(", ");
+        let history = match table {
+            "unified_reactions" =>
+                "EXISTS (SELECT 1 FROM retained_messages m
+                   WHERE m.conversation_type=unified_reactions.conversation_type AND m.conversation_id=unified_reactions.conversation_id
+                   AND m.sender_id=unified_reactions.sender_id AND m.sent_at=unified_reactions.sent_at_ns)".to_owned(),
+            "pending_scoped_reactions" | "reaction_action_versions" | "reaction_actor_selections" | "pending_reaction_add_selections" =>
+                format!("EXISTS (SELECT 1 FROM retained_messages m
+                   WHERE m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
+                   AND m.sender_id={table}.author_id AND m.sent_at={table}.target_sent_at)"),
+            "ephemeral_messages" => "message_id IN (SELECT id FROM retained_messages)".to_owned(),
+            "threads" => "root_message_id IN (SELECT id FROM retained_messages)".to_owned(),
+            "messages" => {
+                const EXCLUDED_PARENT: &str = "EXISTS (SELECT 1 FROM messages WHERE id=m.reply_to) AND
+                    NOT EXISTS (SELECT 1 FROM retained_messages parent WHERE parent.id=m.reply_to)";
+                cols = table_columns(conn, table)?
+                    .iter()
+                    .map(|col| match col.as_str() {
+                        "reply_to_text" | "reply_to_thumbnail" | "reply_to_thumbnail_mime" =>
+                            format!("CASE WHEN {EXCLUDED_PARENT} THEN NULL ELSE m.{col} END"),
+                        "content_json" => format!("CASE WHEN {EXCLUDED_PARENT}
+                            AND json_valid(m.content_json) AND json_type(m.content_json,'$.quote')='object'
+                            THEN json_set(m.content_json,'$.quote.preview','') ELSE m.content_json END"),
+                        _ => format!("m.{col}"),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                "1".to_owned()
             }
-            "pending_message_modifiers" => Some(format!("kind='delete' AND body IN {BACKUP_DELETE_MODIFIERS}")),
-            _ => None,
+            _ => String::new(),
         };
-        let select = match ownership {
-            Some(predicate) => format!("SELECT {cols} FROM {table} WHERE {predicate}"),
-            None => format!("SELECT {cols} FROM {table}"),
+        let (select, params) = if !history.is_empty() {
+            let source = if table == "messages" {
+                "retained_messages m"
+            } else {
+                table
+            };
+            (
+                format!("{retained} SELECT {cols} FROM {source} WHERE {history}"),
+                history_params,
+            )
+        } else {
+            match table {
+                "dm_receive_tombstones" => (
+                    format!("SELECT {cols} FROM {table} WHERE owner_id=:owner"),
+                    owner_params,
+                ),
+                "pending_message_modifiers" => (
+                    format!(
+                        "SELECT {cols} FROM {table} WHERE kind='delete' AND body IN {BACKUP_DELETE_MODIFIERS}"
+                    ),
+                    &[][..],
+                ),
+                _ => (format!("SELECT {cols} FROM {table}"), &[][..]),
+            }
         };
-        dump_table(conn, &mut out, table, &select, &params, &mut rows, &|_| {
+        dump_table(conn, &mut out, table, &select, params, &mut rows, &|_| {
             Ok(true)
         })?;
     }
@@ -431,7 +507,7 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
         &mut out,
         "settings",
         &format!("SELECT {cols} FROM settings WHERE key IN ({placeholders})"),
-        &params,
+        params.as_slice(),
         &mut rows,
         &|_| Ok(true),
     )?;
@@ -451,23 +527,19 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
 fn dump_attachments(
     conn: &Connection,
     out: &mut Vec<u8>,
+    retained: &str,
+    params: &[(&str, &dyn rusqlite::ToSql)],
     rows_out: &mut usize,
 ) -> Result<(), StorageError> {
-    use crate::domain::ids::AttachmentId;
-    use crate::storage::serialization::db_deserialize;
-
-    let mut referenced = std::collections::HashSet::new();
+    let mut referenced = HashSet::new();
     {
         let mut stmt = conn.prepare(&format!(
-            "SELECT attachments_blob FROM messages \
-             WHERE conversation_type IN {MESSAGE_CONVERSATION_TYPES}"
+            "{retained} SELECT attachments_blob FROM retained_messages"
         ))?;
-        let mut rows = stmt.query([])?;
+        let mut rows = stmt.query(params)?;
         while let Some(row) = rows.next()? {
             let blob: Vec<u8> = row.get(0)?;
-            if let Ok(ids) = db_deserialize::<Vec<AttachmentId>>(&blob) {
-                referenced.extend(ids.iter().map(ToString::to_string));
-            }
+            referenced.extend(attachment_ids(&blob));
         }
     }
 
@@ -490,7 +562,7 @@ fn dump_attachments(
         out,
         "attachments",
         &format!("SELECT {select} FROM attachments"),
-        &[],
+        [],
         rows_out,
         &|row| Ok(referenced.contains(&row.get::<_, String>(id_index)?)),
     )
@@ -515,7 +587,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     let tx = conn.transaction()?;
     // A restore merges history, never overrides a locally retained actor. The
     // guard is per actor, not per emoji, including removed and held selections.
-    let local_actors: HashSet<(String, String, String, i64, String)> = tx
+    let local_actors: HashSet<((String, String, String, i64), String)> = tx
         .prepare(
             "SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM reaction_action_versions
             UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM reaction_actor_selections
@@ -523,10 +595,22 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
             UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM pending_scoped_reactions
             UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM pending_reaction_add_selections",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map([], |r| Ok(((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?), r.get(4)?)))?
         .collect::<Result<_, _>>()?;
     let mut ledgers = Vec::new();
     let mut scoped_votes = Vec::new();
+    let mut attachments_and_threads = Vec::new();
+    let mut retained_ids = HashSet::new();
+    let mut retained_attachments = HashSet::new();
+    let mut retained_scopes = HashSet::new();
+    let retained_duplicate = format!(
+        "SELECT m.id,m.attachments_blob FROM messages m WHERE {}
+         AND m.conversation_type=:kind AND m.conversation_id=:conv AND m.sender_id IS :sender
+         AND m.sent_at=:sent AND (m.id=:id OR (:sender IS NOT NULL AND :sent>0))
+         ORDER BY m.id=:id DESC LIMIT 1",
+        live_message_predicate()
+    );
+    let now = chrono::Utc::now().to_rfc3339();
     let mut current: Option<TableState> = None;
     let mut expiry_by_id = HashMap::new();
     let mut legacy_timed_channels = HashSet::new();
@@ -767,13 +851,20 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             legacy_timed_channels.insert(id.to_owned());
                         }
                     }
-                    "threads"
-                        if !tx.query_row(
-                            "SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1)",
-                            [get("root_message_id")],
-                            |row| row.get::<_, bool>(0),
-                        )? =>
-                    {
+                    "attachments" | "threads" => {
+                        let parent = if state.table == "attachments" {
+                            "id"
+                        } else {
+                            "root_message_id"
+                        };
+                        if let Some(id) = text_value(get(parent)) {
+                            attachments_and_threads.push((
+                                state.table == "attachments",
+                                id.to_owned(),
+                                state.insert_sql.clone(),
+                                params,
+                            ));
+                        }
                         continue;
                     }
                     "messages" => {
@@ -786,7 +877,8 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             )
                         })?;
                         let expiry = expiry_by_id.get(id);
-                        if get("is_deleted") == &SqlValue::Integer(1)
+                        if !matches!(kind, "channel" | "server_dm" | "saved_messages")
+                            || matches!(get("is_deleted"), SqlValue::Integer(value) if *value != 0)
                             || message_tombstoned(&tx, &state.columns, &params, &archive_owner)?
                             || expiry.is_some_and(MessageExpiry::expired)
                             || (version == Some(1)
@@ -811,6 +903,40 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                                 restored_replies.push((id.to_owned(), parent.to_owned()));
                             }
                         }
+                        let retained = if inserted != 0 {
+                            Some((
+                                id.to_owned(),
+                                match get("attachments_blob") {
+                                    SqlValue::Blob(blob) => blob.clone(),
+                                    _ => Vec::new(),
+                                },
+                            ))
+                        } else {
+                            tx.prepare_cached(&retained_duplicate)?.query_row(
+                                rusqlite::named_params! {
+                                    ":id": id, ":kind": kind, ":conv": get("conversation_id"),
+                                    ":sender": get("sender_id"), ":sent": get("sent_at"),
+                                    ":owner": &archive_owner, ":user_key": keys::CURRENT_USER_ID, ":now": &now,
+                                },
+                                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                            ).optional()?
+                        };
+                        if let Some((retained_id, blob)) = retained {
+                            retained_ids.insert(retained_id);
+                            retained_attachments.extend(attachment_ids(&blob));
+                            if let (Some(conv), Some(sender), SqlValue::Integer(sent_at)) = (
+                                text_value(get("conversation_id")),
+                                text_value(get("sender_id")),
+                                get("sent_at"),
+                            ) {
+                                retained_scopes.insert((
+                                    conv.to_owned(),
+                                    kind.to_owned(),
+                                    sender.to_owned(),
+                                    *sent_at,
+                                ));
+                            }
+                        }
                         continue;
                     }
                     _ => {}
@@ -830,15 +956,15 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             ));
                         }
                     };
-                    let actor = (
+                    let scope = (
                         text(indices[0])?,
                         text(indices[1])?,
                         text(indices[2])?,
                         timestamp,
-                        text(indices[4])?,
                     );
+                    let actor = (scope, text(indices[4])?);
                     let emoji = text(indices[5])?;
-                    if let Some(table) = &state.ledger_table {
+                    if state.ledger_table.is_some() {
                         let clock_index =
                             state.columns.iter().position(|n| n == "action_ts").unwrap();
                         if !matches!(params.get(clock_index),Some(SqlValue::Integer(value)) if *value>0)
@@ -855,7 +981,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             }
                         }
                         if !local_actors.contains(&actor) {
-                            ledgers.push((table.clone(), state.insert_sql.clone(), params));
+                            ledgers.push((actor.0, state.insert_sql.clone(), params));
                         }
                     } else if !local_actors.contains(&actor) {
                         scoped_votes.push((state.insert_sql.clone(), params, actor, emoji));
@@ -883,20 +1009,37 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
              WHERE id=?1 AND (?3 OR EXISTS(SELECT 1 FROM deleted_messages WHERE id=?2))",
         )?.execute(rusqlite::params![id, parent, omitted_messages.contains(&parent)])?;
     }
+    for (attachment, id, sql, values) in attachments_and_threads {
+        let retained = if attachment {
+            retained_attachments.contains(&id)
+        } else {
+            retained_ids.contains(&id)
+        };
+        if retained {
+            summary.rows_inserted += tx
+                .prepare_cached(&sql)?
+                .execute(rusqlite::params_from_iter(values))?;
+        }
+    }
     // All action evidence is installed before any vote, regardless of frame
     // order. LWW merge applies only to actors absent before this restore.
     // Receipt metadata and duplicate vote IDs are sorted for stable re-export.
     ledgers.sort_by_key(|row| format!("{:?}", row));
-    for (_, sql, values) in ledgers {
-        summary.rows_inserted += tx
-            .prepare_cached(&sql)?
-            .execute(rusqlite::params_from_iter(values))?;
+    for (scope, sql, values) in ledgers {
+        if retained_scopes.contains(&scope) {
+            summary.rows_inserted += tx
+                .prepare_cached(&sql)?
+                .execute(rusqlite::params_from_iter(values))?;
+        }
     }
     // A vote is admitted only when the restored selection names it and that
     // selection's action is an add: the ledger, not the projection, orders actions.
     scoped_votes.sort_by_key(|row| format!("{:?}", row));
-    for (sql, values, actor, emoji) in scoped_votes {
-        let selected: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM reaction_actor_selections s JOIN reaction_action_versions v ON v.conversation_id=s.conversation_id AND v.conversation_type=s.conversation_type AND v.author_id=s.author_id AND v.target_sent_at=s.target_sent_at AND v.actor_id=s.actor_id AND v.emoji=s.emoji WHERE s.conversation_id=?1 AND s.conversation_type=?2 AND s.author_id=?3 AND s.target_sent_at=?4 AND s.actor_id=?5 AND s.emoji=?6 AND v.remove=0 AND v.action_ts=s.action_ts)",rusqlite::params![actor.0,actor.1,actor.2,actor.3,actor.4,emoji],|r|r.get(0))?;
+    for (sql, values, (scope, actor), emoji) in scoped_votes {
+        if !retained_scopes.contains(&scope) {
+            continue;
+        }
+        let selected: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM reaction_actor_selections s JOIN reaction_action_versions v ON v.conversation_id=s.conversation_id AND v.conversation_type=s.conversation_type AND v.author_id=s.author_id AND v.target_sent_at=s.target_sent_at AND v.actor_id=s.actor_id AND v.emoji=s.emoji WHERE s.conversation_id=?1 AND s.conversation_type=?2 AND s.author_id=?3 AND s.target_sent_at=?4 AND s.actor_id=?5 AND s.emoji=?6 AND v.remove=0 AND v.action_ts=s.action_ts)",rusqlite::params![scope.0,scope.1,scope.2,scope.3,actor,emoji],|r|r.get(0))?;
         if selected {
             summary.rows_inserted += tx
                 .prepare_cached(&sql)?
@@ -1206,6 +1349,140 @@ mod tests {
             );
         }
         assert_eq!(counts.get("messages"), Some(&3));
+    }
+
+    #[test]
+    fn history_backup_related_rows_require_a_retained_message() {
+        use crate::domain::attachment::{Attachment, FileMetadata};
+        use crate::domain::ids::AttachmentId;
+        use crate::storage::repositories::attachment_repo::AttachmentRepository;
+        use crate::storage::serialization::db_serialize;
+        use std::sync::Arc;
+
+        let src_dir = tempfile::tempdir().unwrap();
+        let src = Arc::new(test_db(src_dir.path()));
+        let attachments = AttachmentRepository::new(src.clone());
+        let cases = [
+            "live",
+            "soft-deleted",
+            "expired",
+            "backup-deleted",
+            "locally-deleted",
+        ];
+        for id in cases {
+            attachments
+                .insert(&Attachment::new(
+                    AttachmentId::from_cdn_key(id),
+                    FileMetadata::new(id.into(), "image/png".into(), 1),
+                ))
+                .unwrap();
+        }
+        let conn = src.connection().unwrap();
+        for (index, id) in cases.into_iter().enumerate() {
+            let sent = index as i64 + 1;
+            insert_message(&conn, id, id, sent);
+            conn.execute(
+                "UPDATE messages SET attachments_blob=?2 WHERE id=?1",
+                rusqlite::params![
+                    id,
+                    db_serialize(&vec![AttachmentId::from_cdn_key(id)]).unwrap()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO threads(root_message_id,conversation_id) VALUES (?1,?1)",
+                [id],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO unified_reactions VALUES(?1,?1,'channel','user-a',?2,'actor','A','now')", rusqlite::params![id,sent]).unwrap();
+            conn.execute("INSERT INTO pending_scoped_reactions VALUES(?1,'channel','user-a',?2,'actor','A',0,1,1)", rusqlite::params![id,sent]).unwrap();
+            conn.execute("INSERT INTO reaction_action_versions VALUES(?1,'channel','user-a',?2,'actor','A',1,0)", rusqlite::params![id,sent]).unwrap();
+            conn.execute("INSERT INTO reaction_actor_selections VALUES(?1,'channel','user-a',?2,'actor','A',1)", rusqlite::params![id,sent]).unwrap();
+            conn.execute("INSERT INTO pending_reaction_add_selections VALUES(?1,'channel','user-a',?2,'actor','A',1)", rusqlite::params![id,sent]).unwrap();
+        }
+        conn.execute_batch(
+            "UPDATE messages SET is_deleted=1 WHERE id='soft-deleted';
+             INSERT INTO deleted_messages VALUES ('backup-deleted');
+             INSERT INTO ephemeral_messages VALUES ('expired',60,'2000-01-01T00:01:00+00:00','2000-01-01T00:00:00+00:00',1);",
+        ).unwrap();
+
+        let related_tables = [
+            ("messages", "id"),
+            ("attachments", "id"),
+            ("threads", "root_message_id"),
+            ("unified_reactions", "conversation_id"),
+            ("pending_scoped_reactions", "conversation_id"),
+            ("reaction_action_versions", "conversation_id"),
+            ("reaction_actor_selections", "conversation_id"),
+            ("pending_reaction_add_selections", "conversation_id"),
+        ];
+        let current = dump_frames(&conn, "owner").unwrap().0;
+        let mut counts = HashMap::<String, usize>::new();
+        let mut table = String::new();
+        let mut input = current.as_slice();
+        while input.has_remaining() {
+            match Frame::decode_length_delimited(&mut input).unwrap().payload {
+                Some(frame::Payload::Table(header)) => table = header.table,
+                Some(frame::Payload::Row(_)) => *counts.entry(table.clone()).or_default() += 1,
+                _ => {}
+            }
+        }
+        for (table, _) in related_tables {
+            assert_eq!(counts.get(table), Some(&2), "{table}");
+        }
+        assert!(!counts.contains_key("ephemeral_messages"));
+
+        // Older archives can still contain related rows for discarded history.
+        let mut old = Vec::new();
+        push_frame(
+            &mut old,
+            frame::Payload::Info(BackupInfo {
+                payload_version: 2,
+                user_id: "owner".into(),
+                created_at_ms: 0,
+            }),
+        );
+        for table in ["deleted_messages", "ephemeral_messages"]
+            .into_iter()
+            .chain(related_tables.map(|(table, _)| table))
+        {
+            let cols = table_columns(&conn, table).unwrap().join(", ");
+            dump_table(
+                &conn,
+                &mut old,
+                table,
+                &format!("SELECT {cols} FROM {table}"),
+                [],
+                &mut 0,
+                &|_| Ok(true),
+            )
+            .unwrap();
+        }
+        let dst_dir = tempfile::tempdir().unwrap();
+        let dst = test_db(dst_dir.path());
+        let mut dst_conn = dst.connection().unwrap();
+        dst_conn
+            .execute(
+                "INSERT INTO deleted_messages VALUES ('locally-deleted')",
+                [],
+            )
+            .unwrap();
+        import_frames(&mut dst_conn, &old).unwrap();
+        for (table, column) in related_tables {
+            let ids = dst_conn
+                .prepare(&format!("SELECT {column} FROM {table}"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let expected = if table == "attachments" {
+                AttachmentId::from_cdn_key("live").to_string()
+            } else {
+                "live".into()
+            };
+            assert_eq!(ids, [expected], "{table}");
+        }
     }
 
     /// Round-trip: rows dumped from one DB appear byte-exact in a fresh DB.
