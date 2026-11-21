@@ -634,6 +634,9 @@ impl BleRuntime {
                 .handle_typed_with_verdict(link, packet, claimed, verified_key)
                 .await;
         }
+        let Ok((header, _)) = chatter_mesh::fragment::FragmentHeader::parse(packet) else {
+            return false;
+        };
 
         let reassembled = self
             .state
@@ -644,10 +647,11 @@ impl BleRuntime {
         let Ok(mut inner) = codec::decode(&bytes) else {
             return true;
         };
-        if inner.message_type() == Some(MessageType::Fragment) {
-            // A fragment carrying a fragment is not something the fragmenter
-            // produces; it is someone trying to make us loop.
-            return true;
+        if inner.msg_type != header.original_type
+            || inner.sender_id != packet.sender_id
+            || inner.message_type() == Some(MessageType::Fragment)
+        {
+            return false;
         }
         if matches!(inner.message_type(), Some(MessageType::NoiseHandshake | MessageType::NoiseEncrypted)) {
             // A relay decrements the transport fragments' TTL. The enclosed

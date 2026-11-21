@@ -564,30 +564,19 @@ fn a_request_naming_no_stream_we_hold_gets_nothing() {
 }
 
 #[test]
-fn a_fragment_shorter_than_a_stream_id_belongs_to_no_stream() {
+fn malformed_and_link_local_fragments_are_not_shared() {
     let mut manager = manager();
     // Malformed, but it arrived over the radio and must not panic anything.
     manager.on_public_packet_seen(
         &packet_of(MessageType::Fragment, &[0x01, 0x02], NOW_MS),
         NOW,
     );
-    assert_eq!(manager.fragment_count(), 1);
-
-    let mut request = empty_request(SyncTypeFlags::FRAGMENT);
-    request.fragment_id_filter = encode_fragment_id_filter(&[[0x01; 8]]);
-    assert!(
-        manager
-            .handle_request_sync(&them(), &request, NOW)
-            .is_empty()
-    );
-
-    // Untargeted, it is served like any other fragment.
-    assert_eq!(
-        manager
-            .handle_request_sync(&them(), &empty_request(SyncTypeFlags::FRAGMENT), NOW)
-            .len(),
-        1
-    );
+    let sync_packet = packet_of(MessageType::RequestSync, &[], NOW_MS);
+    for fragment in chatter_mesh::fragment::plan_fragments(&sync_packet, 32, [2; 8]).unwrap() {
+        manager.on_public_packet_seen(&fragment, NOW);
+    }
+    assert_eq!(manager.fragment_count(), 0);
+    assert!(manager.handle_request_sync(&them(), &empty_request(SyncTypeFlags::FRAGMENT), NOW).is_empty());
 }
 
 #[test]

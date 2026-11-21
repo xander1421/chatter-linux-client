@@ -52,6 +52,9 @@ fn fragment(stream: [u8; 8], index: u16, timestamp_ms: u64) -> BitchatPacket {
     payload.extend_from_slice(&index.to_be_bytes());
     payload.extend_from_slice(&4u16.to_be_bytes());
     payload.push(MessageType::FileTransfer.as_u8());
+    if index == 0 {
+        payload.extend_from_slice(&[1, MessageType::FileTransfer.as_u8()]);
+    }
     payload.push(0xEE);
     packet_of(MessageType::Fragment, &payload, timestamp_ms)
 }

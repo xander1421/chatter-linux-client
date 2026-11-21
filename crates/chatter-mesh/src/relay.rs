@@ -13,6 +13,7 @@
 //! Jitter is injected as a closure rather than drawn from an RNG, so every branch
 //! is exactly testable. It is the only nondeterminism in this crate.
 
+use crate::fragment::FragmentHeader;
 use crate::packet::{BitchatPacket, MessageType};
 
 /// `TransportConfig.messageTTLDefault` — the ceiling every decision starts from.
@@ -62,7 +63,7 @@ pub struct RelayInput {
     pub is_directed_fragment: bool,
     pub is_handshake: bool,
     pub is_announce: bool,
-    pub is_request_sync: bool,
+    pub suppress_forwarding: bool,
     pub is_urgent_board_post: bool,
     pub is_voice_frame: bool,
     /// Number of directly connected neighbours.
@@ -118,7 +119,8 @@ impl RelayInput {
             is_directed_fragment: is_fragment && has_recipient,
             is_handshake: msg_type == MessageType::NoiseHandshake.as_u8(),
             is_announce: msg_type == MessageType::Announce.as_u8(),
-            is_request_sync: msg_type == MessageType::RequestSync.as_u8(),
+            suppress_forwarding: msg_type == MessageType::RequestSync.as_u8()
+                || (is_fragment && !FragmentHeader::may_forward(packet)),
             is_urgent_board_post: msg_type == MessageType::BoardPost.as_u8()
                 && board_post_is_urgent(&packet.payload),
             is_voice_frame: msg_type == MessageType::VoiceFrame.as_u8(),
@@ -137,8 +139,8 @@ pub fn decide(input: &RelayInput, jitter: &mut impl FnMut(u32, u32) -> u32) -> R
 
     // 1. REQUEST_SYNC is link-local: never relayed, even when a peer crafts one
     //    with TTL headroom to turn every reachable node into a full-store
-    //    responder. This check precedes everything, including the self checks.
-    if input.is_request_sync {
+    //    responder. Fragments carrying link-local traffic cannot be relayed either.
+    if input.suppress_forwarding {
         return RelayDecision {
             should_relay: false,
             new_ttl: ttl_cap,
@@ -293,7 +295,7 @@ mod tests {
             is_directed_fragment: false,
             is_handshake: false,
             is_announce: false,
-            is_request_sync: false,
+            suppress_forwarding: false,
             is_urgent_board_post: false,
             is_voice_frame: false,
             degree: 4,
@@ -308,11 +310,23 @@ mod tests {
     // --- branch 1: request sync -------------------------------------------
 
     #[test]
+    fn fragmented_link_local_requests_are_not_forwarded() {
+        for (kind, should_relay) in [(MessageType::RequestSync, false), (MessageType::Message, true)] {
+            let packet = BitchatPacket::new(kind, [0xAA; SENDER_ID_LEN], None, 1, vec![0; 60], 7);
+            let fragments = crate::fragment::plan_fragments(&packet, 32, [3; 8]).unwrap();
+            for fragment in fragments {
+                let input = RelayInput::from_packet(&fragment, false, false, 4, 6);
+                assert_eq!(decide(&input, &mut lo_jitter).should_relay, should_relay);
+            }
+        }
+    }
+
+    #[test]
     fn request_sync_never_relays_however_much_ttl_it_claims() {
         for ttl in [0u8, 1, 2, 7, 255] {
             let input = RelayInput {
                 ttl,
-                is_request_sync: true,
+                suppress_forwarding: true,
                 ..base_input()
             };
             let decision = decide(&input, &mut lo_jitter);
@@ -327,7 +341,7 @@ mod tests {
         // A crafted REQUEST_SYNC that also looks directed must still not relay.
         let input = RelayInput {
             ttl: 7,
-            is_request_sync: true,
+            suppress_forwarding: true,
             is_directed_encrypted: true,
             is_handshake: true,
             ..base_input()
@@ -725,7 +739,7 @@ mod tests {
             let flag = match which {
                 "handshake" => input.is_handshake,
                 "announce" => input.is_announce,
-                "request_sync" => input.is_request_sync,
+                "request_sync" => input.suppress_forwarding,
                 _ => input.is_voice_frame,
             };
             assert!(flag, "{which}");

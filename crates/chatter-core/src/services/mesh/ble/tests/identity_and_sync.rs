@@ -320,9 +320,7 @@ async fn a_sync_request_from_a_peer_that_never_announced_is_not_answered() {
     );
 
     let before = radio.write_count();
-    runtime
-        .on_request_sync(&LinkId::new("/mock/stranger"), &packet, &stranger)
-        .await;
+    runtime.on_request_sync(&link, &packet, &stranger).await;
     runtime.drain_writes().await;
 
     assert_eq!(
@@ -333,7 +331,7 @@ async fn a_sync_request_from_a_peer_that_never_announced_is_not_answered() {
 }
 
 #[tokio::test]
-async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
+async fn sync_requests_require_the_claimed_peers_own_link() {
     // The gate must not break sync itself: an honest peer announces on
     // connect and then asks, and that request has to be served or two
     // devices in a room never exchange history at all.
@@ -366,6 +364,7 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
     });
     runtime.on_packet(&link, announce).await;
     runtime.drain_writes().await;
+    assert!(runtime.gossip.has_announcement(&subject_peer));
 
     let mut request = RequestSyncPacket::new(19, 4096, Vec::new());
     request.types = Some(u64::MAX);
@@ -444,15 +443,41 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
         runtime.matching_signing_key(&author_id, &history, None),
         Some(author.signing_public())
     );
+    let unbound = LinkId::new("/mock/unbound-sync");
+    let other_bound = LinkId::new("/mock/other-sync");
+    state.with(|inner| {
+        for ingress in [&unbound, &other_bound] {
+            inner.links.link_up(ingress.clone(), LinkRole::Central);
+            inner.links.set_writable(ingress, true);
+            inner.max_write.insert(ingress.clone(), 512);
+        }
+        inner.links.bind_if_unbound(&other_bound, &PeerId::from_str("cccccccccccccccc"));
+    });
+
     let before = radio.write_count();
-    runtime.on_request_sync(&link, &packet, &subject_peer).await;
+    // The refusals leave the real peer's eight-response budget untouched.
+    for index in 0..8u8 {
+        let mut request = packet.clone();
+        request.timestamp += u64::from(index) + 1;
+        runtime.on_packet(&unbound, request.clone()).await;
+        for fragment in chatter_mesh::fragment::plan_fragments(&request, 24, [index; 8]).unwrap() {
+            runtime.on_packet(&other_bound, fragment).await;
+        }
+    }
+    runtime.drain_writes().await;
+    assert_eq!(radio.write_count(), before);
+
+    runtime.on_packet(&link, packet).await;
     runtime.drain_writes().await;
 
     let replies: Vec<_> = radio
         .writes()
         .iter()
         .skip(before)
-        .map(|(_, bytes)| codec::decode(bytes).unwrap())
+        .map(|(destination, bytes)| {
+            assert_eq!(destination, &link);
+            codec::decode(bytes).unwrap()
+        })
         .collect();
     assert_eq!(replies.len(), 2, "only public history and its author's key");
     assert_eq!(replies[0].message_type(), Some(MessageType::Announce));

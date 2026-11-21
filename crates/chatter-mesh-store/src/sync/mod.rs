@@ -441,7 +441,9 @@ impl GossipSyncManager {
                 self.mark_archive_changed(id);
             }
             MessageType::Fragment => {
-                if !is_broadcast_recipient(packet) {
+                if !is_broadcast_recipient(packet)
+                    || !chatter_mesh::fragment::FragmentHeader::may_forward(packet)
+                {
                     return;
                 }
                 // Once reassembled, group ciphertext is retained as a whole

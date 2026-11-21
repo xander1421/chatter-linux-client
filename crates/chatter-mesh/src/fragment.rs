@@ -82,6 +82,14 @@ pub struct FragmentHeader {
 }
 
 impl FragmentHeader {
+    pub fn may_forward(packet: &BitchatPacket) -> bool {
+        Self::parse(packet).is_ok_and(|(header, chunk)| {
+            !matches!(MessageType::from_u8(header.original_type), Some(MessageType::RequestSync | MessageType::Fragment))
+                // The encoded inner packet begins with its version and type.
+                && (header.index != 0 || chunk.get(1) == Some(&header.original_type))
+        })
+    }
+
     /// Reads the header from a fragment packet, returning it with the chunk that
     /// follows.
     ///
