@@ -137,18 +137,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let epoch = Instant::now();
     println!("soak start: {DURATION}s; Q quiet between +300s and +390s");
     let mut running = JoinSet::new();
+    let mut failures = 0;
     for second in (0..DURATION).step_by(5) {
         sleep_until(epoch + Duration::from_secs(second)).await;
         while let Some(joined) = running.try_join_next() {
-            joined?;
+            failures += usize::from(!joined?);
         }
         if !(301..390).contains(&second) {
             let count = if second % 30 == 0 { 9 } else { 1 };
             for request in 1..=count {
                 let handle = q.clone();
-                running.spawn(async move {
-                    handle.fetch(epoch, second, request).await;
-                });
+                running.spawn(async move { handle.fetch(epoch, second, request).await });
             }
         }
         if SPARSE.contains(&second) {
@@ -159,15 +158,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     if handle.name == "control" && second % 30 == 0 {
                         sleep_until(epoch + Duration::from_millis(second * 1000 + 750)).await;
                     }
-                    handle.fetch(epoch, second, 1).await;
+                    handle.fetch(epoch, second, 1).await
                 });
             }
         }
     }
     sleep_until(epoch + Duration::from_secs(DURATION)).await;
     while let Some(joined) = running.join_next().await {
-        joined?;
+        failures += usize::from(!joined?);
     }
-    println!("soak complete");
+    println!("soak complete: {failures} failed samples");
+    if failures != 0 {
+        return Err(format!("transport soak failed: {failures} RPC samples failed").into());
+    }
     Ok(())
 }

@@ -348,6 +348,40 @@ mod transport_switch_tests {
         assert!(!client.server_unreachable());
     }
 
+    #[tokio::test]
+    async fn monitor_first_contact_clears_stale_connected_state() {
+        use crate::network::connection::{ConnectionState, ServerStatus, set_server_status};
+
+        let _serial = AUTHORITY_TEST_LOCK.lock().await;
+        let (client, _dir) = build_test_client();
+        client
+            .offline_state()
+            .set_connection_state(ConnectionState::Connected);
+        set_server_status(ServerStatus::Unknown);
+        assert!(
+            !client
+                .startup_connect(std::time::Duration::from_secs(1))
+                .await
+        );
+
+        let mut notices = client.offline_state().subscribe();
+        let (started, finish) = pending_dial(&client.services.grpc_pool);
+        let (result, ()) = tokio::join!(client.connect(), async {
+            started.await.unwrap();
+            finish
+                .send(Err(NetworkError::ConnectionFailed(
+                    "first contact failed".into(),
+                )))
+                .unwrap();
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            notices.try_recv().unwrap().connection_state,
+            ConnectionState::Disconnected
+        );
+        assert!(client.server_unreachable());
+    }
+
     // Serialize these regressions because reachability is process-global.
     static AUTHORITY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -680,9 +714,22 @@ mod transport_switch_tests {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
 
-        let (started, _complete) = pending_dial(&pool);
+        let (started, old_probe) = pending_dial(&pool);
         set_server_status(ServerStatus::Unreachable);
         started.await.unwrap();
+        tokio::time::advance(confirmation - Duration::from_secs(1)).await;
+
+        // Both transitions can arrive before the monitor next reads the watch.
+        let (restarted, _new_probe) = pending_dial(&pool);
+        set_server_status(ServerStatus::Reachable);
+        set_server_status(ServerStatus::Unreachable);
+        tokio::time::timeout(Duration::from_millis(100), restarted)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(old_probe.is_closed());
+
+        // The old deadline passes without a false offline transition.
         tokio::time::advance(confirmation - Duration::from_secs(1)).await;
         assert_eq!(offline_state.connection_state(), ConnectionState::Connected);
         assert!(matches!(

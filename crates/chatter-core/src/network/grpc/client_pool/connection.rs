@@ -108,10 +108,10 @@ impl GrpcClientPool {
         {
             Self::note_onion_dial(mode, true);
         }
-        if channel.is_http3() {
+        if fresh && channel.is_http3() && !guard.as_ref().is_some_and(GrpcTransport::is_http3) {
             tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
         }
-        *guard = Some(channel);
+        *guard = Some(channel.for_pool(self.transport_mode.clone(), mode));
         Ok(crate::network::connection::server_status()
             == crate::network::connection::ServerStatus::Reachable)
     }
@@ -317,11 +317,15 @@ impl GrpcClientPool {
         #[cfg(feature = "quic")]
         {
             let quic = async {
-                super::super::transport::probe_quic(endpoint.uri())
-                    .await
-                    .map_err(|error| {
-                        NetworkError::ConnectionFailed(format!("QUIC probe failed: {error}"))
-                    })
+                tokio::time::timeout(
+                    QUIC_PROBE_TIMEOUT,
+                    super::super::transport::probe_quic(endpoint.uri()),
+                )
+                .await
+                .map_err(|_| NetworkError::Timeout)?
+                .map_err(|error| {
+                    NetworkError::ConnectionFailed(format!("QUIC probe failed: {error}"))
+                })
             };
             use futures::FutureExt;
             futures::future::select_ok([tcp.boxed(), quic.boxed()])

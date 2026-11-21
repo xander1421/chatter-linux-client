@@ -43,20 +43,24 @@ pub struct RecordingTransport<S, R = fn(ServerStatus)> {
 #[derive(Clone)]
 enum FailureScope {
     Unrestricted,
-    #[cfg(feature = "onion")]
-    Onion(std::sync::Arc<parking_lot::RwLock<super::client_pool::TransportMode>>),
+    Pool {
+        current_mode: std::sync::Arc<parking_lot::RwLock<super::client_pool::TransportMode>>,
+        route_mode: super::client_pool::TransportMode,
+    },
 }
 
 impl FailureScope {
     fn record(&self, record: impl FnOnce(ServerStatus)) {
         match self {
             Self::Unrestricted => record(ServerStatus::Unreachable),
-            #[cfg(feature = "onion")]
-            Self::Onion(mode) => {
+            Self::Pool {
+                current_mode,
+                route_mode,
+            } => {
                 // The handle can survive a route switch. Use the pool's
                 // current mode at publication, not the mode when it was built.
-                let mode = mode.read();
-                if *mode == super::client_pool::TransportMode::Onion {
+                let mode = current_mode.read();
+                if *mode == *route_mode {
                     record(ServerStatus::Unreachable);
                 }
             }
@@ -74,9 +78,21 @@ impl GrpcTransport {
     ) -> Self {
         Self {
             route: Route::Tor,
-            failure_scope: FailureScope::Onion(pool_mode),
             ..channel.into()
         }
+        .for_pool(pool_mode, super::client_pool::TransportMode::Onion)
+    }
+
+    pub(crate) fn for_pool(
+        mut self,
+        current_mode: std::sync::Arc<parking_lot::RwLock<super::client_pool::TransportMode>>,
+        route_mode: super::client_pool::TransportMode,
+    ) -> Self {
+        self.failure_scope = FailureScope::Pool {
+            current_mode,
+            route_mode,
+        };
+        self
     }
 
     /// The transport selected for this channel, not a reachability verdict.
@@ -601,43 +617,53 @@ pub(crate) mod outcome_tests {
 
     #[cfg(feature = "onion")]
     #[tokio::test]
-    async fn transport_route_outage_tor_failure_uses_current_pool_mode() {
+    async fn transport_route_outage_failure_uses_current_pool_mode() {
         use super::super::client_pool::TransportMode;
 
         let mode = Arc::new(parking_lot::RwLock::new(TransportMode::Direct));
-        let scope = FailureScope::Onion(mode.clone());
-        for active_mode in [TransportMode::Direct, TransportMode::Onion] {
-            // Reuse the scope across switches, as cached clients and response
-            // bodies hold onto clones after borrowing their channel.
-            *mode.write() = active_mode;
-            for transport_failure in [true, false] {
-                let observed = Arc::new(Mutex::new(Vec::new()));
-                let captured = observed.clone();
-                let transport = RecordingTransport {
-                    inner: Reply {
-                        code: None,
-                        transport_failure,
-                        body_failure: !transport_failure,
-                    },
-                    record: move |status| captured.lock().unwrap().push(status),
-                    route: Route::Tor,
-                    failure_scope: scope.clone(),
-                };
-                let mut client = MessageServiceClient::new(transport);
-                assert!(
-                    client
-                        .get_device_messages(GetDeviceMessagesRequest {
-                            after_id: 0,
-                            limit: 1
-                        })
-                        .await
-                        .is_err()
-                );
-                let saw_unreachable = observed
-                    .lock()
-                    .unwrap()
-                    .contains(&ServerStatus::Unreachable);
-                assert_eq!(saw_unreachable, active_mode == TransportMode::Onion);
+        for (route, route_mode) in [
+            (Route::H2, TransportMode::Direct),
+            #[cfg(feature = "quic")]
+            (Route::H3, TransportMode::Direct),
+            (Route::Tor, TransportMode::Onion),
+        ] {
+            let scope = FailureScope::Pool {
+                current_mode: mode.clone(),
+                route_mode,
+            };
+            for active_mode in [TransportMode::Direct, TransportMode::Onion] {
+                // Reuse the scope across switches, as cached clients and response
+                // bodies hold onto clones after borrowing their channel.
+                *mode.write() = active_mode;
+                for transport_failure in [true, false] {
+                    let observed = Arc::new(Mutex::new(Vec::new()));
+                    let captured = observed.clone();
+                    let transport = RecordingTransport {
+                        inner: Reply {
+                            code: None,
+                            transport_failure,
+                            body_failure: !transport_failure,
+                        },
+                        record: move |status| captured.lock().unwrap().push(status),
+                        route,
+                        failure_scope: scope.clone(),
+                    };
+                    let mut client = MessageServiceClient::new(transport);
+                    assert!(
+                        client
+                            .get_device_messages(GetDeviceMessagesRequest {
+                                after_id: 0,
+                                limit: 1
+                            })
+                            .await
+                            .is_err()
+                    );
+                    let saw_unreachable = observed
+                        .lock()
+                        .unwrap()
+                        .contains(&ServerStatus::Unreachable);
+                    assert_eq!(saw_unreachable, active_mode == route_mode);
+                }
             }
         }
     }

@@ -30,8 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::network::connection::{
-    ConnectionState, ServerStatus, monitor_evidence, server_status, server_status_age,
-    subscribe_server_status,
+    ConnectionState, ServerStatus, monitor_evidence, server_status_age, subscribe_server_status,
 };
 use crate::network::grpc::GrpcClientPool;
 use crate::state::OfflineState;
@@ -162,12 +161,15 @@ fn probe_is_worth_it(pool: &GrpcClientPool) -> bool {
 /// soon as the attempt returns. An already-connected store belongs to the
 /// monitor's confirmation path when the wire reports a failure.
 pub(crate) fn mirror_initial(offline_state: &OfflineState, first_contact: bool) {
-    match server_status() {
+    let status = subscribe_server_status();
+    // Hold the watch read while publishing so newer wire evidence cannot be
+    // published between reading this result and updating OfflineState.
+    match *status.borrow() {
         ServerStatus::Reachable => publish(offline_state, ConnectionState::Connected),
         ServerStatus::Unreachable if first_contact => {
-            // The store starts Disconnected. First contact lifted the
-            // signed-out guard, so notify without overwriting concurrent recovery.
-            offline_state.notify_current();
+            // A reused client may still display Connected. Always publish
+            // this first-contact result, even if already Disconnected.
+            offline_state.set_connection_state(ConnectionState::Disconnected);
         }
         ServerStatus::Unreachable
             if offline_state.connection_state() != ConnectionState::Connected =>

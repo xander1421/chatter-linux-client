@@ -109,6 +109,8 @@ impl GrpcClientPool {
                 if let Ok(uri) = server_url.parse::<http::Uri>() {
                     match super::super::transport::build_quic(uri) {
                         Ok(channel) => {
+                            let channel = channel
+                                .for_pool(self.transport_mode.clone(), TransportMode::Direct);
                             tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
                             *guard = Some(channel.clone());
                             return channel;
@@ -134,9 +136,11 @@ impl GrpcClientPool {
                 self.transport_mode.clone(),
             )
         } else {
-            endpoint
-                .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
-                .into()
+            GrpcTransport::from(
+                endpoint
+                    .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint)),
+            )
+            .for_pool(self.transport_mode.clone(), TransportMode::Direct)
         };
         #[cfg(not(feature = "onion"))]
         let channel: GrpcTransport = endpoint

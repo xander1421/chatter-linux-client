@@ -99,11 +99,6 @@ impl OfflineState {
         });
     }
 
-    /// Refresh subscribers when presentation changes outside the store.
-    pub(crate) fn notify_current(&self) {
-        self.store.update(|_| {});
-    }
-
     /// Get the current connection state.
     #[must_use]
     pub fn connection_state(&self) -> ConnectionState {
