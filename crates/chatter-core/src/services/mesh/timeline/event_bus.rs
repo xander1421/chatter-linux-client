@@ -21,20 +21,16 @@ impl MeshEvents {
     pub fn close_private_channel(&self, id: &str) {
         self.timeline.close_private_channel(id);
     }
-    /// Signal receive must know the row reached SQLCipher before committing its
-    /// ratchet and dedup marker. A failed insert leaves the receive journal for
-    /// rollback/replay and never emits a delivery receipt.
-    pub fn persist_signal_received(&self, message: &MeshMessage) -> Result<(), StorageError> {
+    /// Return whether the DM was new. Signal and courier delivery receipts
+    /// require a committed timeline row, including on duplicate deliveries.
+    pub fn persist_received_dm(&self, message: &MeshMessage) -> Result<bool, StorageError> {
         if self.peer_blocked(&message.sender) {
-            return Err(StorageError::InvalidData(
-                "blocked mesh Signal sender".into(),
-            ));
+            return Err(StorageError::InvalidData("blocked mesh DM sender".into()));
         }
-        self.timeline.record(message)?;
-        Ok(())
+        self.timeline.record(message)
     }
 
-    pub fn publish_signal_received(&self, message: MeshMessage) {
+    pub fn publish_received_dm(&self, message: MeshMessage) {
         let _ = self.events.send(MeshEvent::Message(Box::new(message)));
     }
     /// A fan-out buffering `capacity` events, storing through `timeline`.

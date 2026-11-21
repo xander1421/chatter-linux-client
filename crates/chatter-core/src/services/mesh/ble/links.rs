@@ -641,13 +641,18 @@ impl BleRuntime {
         let Ok(Some(bytes)) = reassembled else {
             return true;
         };
-        let Ok(inner) = codec::decode(&bytes) else {
+        let Ok(mut inner) = codec::decode(&bytes) else {
             return true;
         };
         if inner.message_type() == Some(MessageType::Fragment) {
             // A fragment carrying a fragment is not something the fragmenter
             // produces; it is someone trying to make us loop.
             return true;
+        }
+        if matches!(inner.message_type(), Some(MessageType::NoiseHandshake | MessageType::NoiseEncrypted)) {
+            // A relay decrements the transport fragments' TTL. The enclosed
+            // frame still carries the original sender's TTL.
+            inner.ttl = inner.ttl.min(packet.ttl);
         }
         self.handle_typed(link, &inner, claimed).await
     }

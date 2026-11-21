@@ -200,14 +200,11 @@ impl BleRuntime {
 
         // Hand over any mail we are carrying for them.
         //
-        // The ingress that releases it is deliberately strict: a *signature
-        // verified* direct announce arriving on a link that is Noise
-        // authenticated for this peer right now. A session outlives its link, so
-        // "we have a session with X" is not enough — a replayed announce could
-        // otherwise rebind X's ID to the replayer's link and drain their mail.
+        // A verified direct announce on an authenticated link can retry the
+        // handover. The courier retains each envelope until its recipient confirms it.
         let ingress = AnnounceIngress::new(direct, link_authenticated);
         if let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice()) {
-            if ingress.releases_mail() {
+            if ingress.permits_offer() {
                 self.hand_over_courier_mail(claimed, &key, now_s, ingress)
                     .await;
             } else if direct
@@ -218,8 +215,7 @@ impl BleRuntime {
             {
                 // We carry mail for a peer that is here, direct, but has not
                 // proved its key on this link. A handshake is that proof; once
-                // it completes, the link is marked and its next announce
-                // releases the mail.
+                // it completes, the direct link is marked and offered the mail.
                 self.start_handshake(claimed).await;
             }
         }

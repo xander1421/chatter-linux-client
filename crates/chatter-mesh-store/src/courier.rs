@@ -25,9 +25,8 @@
 //! for the claimed peer ID.** A peer-level session can outlive the physical link it
 //! was established on, and a replayed announce can rebind an attacker's link to the
 //! victim's ID — so "a session exists for this peer" hands the mail to the attacker.
-//! Only a *direct*, signature-verified announce arriving on a link that is still
-//! Noise-authenticated releases an envelope; see [`AnnounceIngress`]. A relayed
-//! announce releases nothing.
+//! A verified peer can receive an offer on its authenticated direct link. The
+//! courier retains the sealed bytes until a receipt from the recipient or expiry.
 //!
 //! **3. Copy budgets are capped.** The wire envelope's `copies` field is clamped to
 //! `MAX_COPIES` (8) on deposit and carried unchanged. Nothing here spends or grows
@@ -62,7 +61,7 @@ use std::collections::BTreeMap;
 
 use chatter_mesh::tlv::courier_envelope::{
     CourierEnvelope, MAX_CIPHERTEXT_BYTES, MAX_COPIES, MAX_LIFETIME_SECONDS, TAG_LEN,
-    candidate_tags,
+    candidate_tags, courier_receipt_id,
 };
 
 use crate::error::StoreError;
@@ -100,95 +99,39 @@ fn unix_millis(now_unix_secs: u64) -> u64 {
     now_unix_secs.saturating_mul(MILLIS_PER_SEC)
 }
 
-/// What the caller **asserts** about the announce that brought a peer's Noise
-/// static key to our attention, and about the link it arrived on.
-///
-/// Both facts are needed and neither can be checked here:
-///
-/// - `verified_direct_announce` — the announce's signature verified against the
-///   peer's announced signing key **and** it arrived without being relayed.
-/// - `link_is_noise_authenticated_now` — the physical link it arrived on is,
-///   *at this instant*, still Noise-authenticated for that same peer.
-///
-/// Only both together release an envelope. "A Noise session exists for this peer
-/// ID" is explicitly not enough: a session outlives the link it was established
-/// on, and a replayed announce can rebind an attacker's link to the victim's ID,
-/// so a session-level check hands the mail to the attacker.
+/// Direct ingress from a verified peer on its currently authenticated link.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnnounceIngress {
-    verified_direct_announce: bool,
+    verified_direct_ingress: bool,
     link_is_noise_authenticated_now: bool,
 }
 
 impl AnnounceIngress {
-    /// Both facts stated explicitly. The named constructors below are clearer at a
-    /// call site; this exists for callers computing the facts from predicates.
-    pub const fn new(
-        verified_direct_announce: bool,
-        link_is_noise_authenticated_now: bool,
-    ) -> Self {
+    pub const fn new(verified_direct_ingress: bool, link_is_noise_authenticated_now: bool) -> Self {
         Self {
-            verified_direct_announce,
+            verified_direct_ingress,
             link_is_noise_authenticated_now,
         }
     }
 
-    /// The only ingress that releases mail.
     pub const fn verified_direct_on_authenticated_link() -> Self {
         Self::new(true, true)
     }
 
-    /// A verified announce that reached us through at least one relay. Speculative
-    /// copies only — the original stays carried.
     pub const fn relayed() -> Self {
         Self::new(false, false)
     }
 
-    /// A direct-looking announce whose link has not (yet) proved possession of the
-    /// peer's Noise key. Treated exactly like a relayed one: this is the case the
-    /// replayed-announce attack produces.
     pub const fn direct_but_link_not_authenticated() -> Self {
         Self::new(true, false)
     }
 
-    pub const fn verified_direct_announce(self) -> bool {
-        self.verified_direct_announce
-    }
-
-    pub const fn link_is_noise_authenticated_now(self) -> bool {
-        self.link_is_noise_authenticated_now
-    }
-
-    /// Whether this ingress is strong enough to hand an envelope over and forget it.
-    pub const fn releases_mail(self) -> bool {
-        self.verified_direct_announce && self.link_is_noise_authenticated_now
+    pub const fn permits_offer(self) -> bool {
+        self.verified_direct_ingress && self.link_is_noise_authenticated_now
     }
 }
 
-/// Outcome of an attempted direct handover.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Handover {
-    /// The ingress link was authenticated. `offered` envelopes were presented to the
-    /// transport and `accepted` of them left the device and were removed from the
-    /// mailbag. A rejected offer stays carried for the next authenticated encounter.
-    Released { offered: usize, accepted: usize },
-    /// The announce was relayed, or its link is not Noise-authenticated right now.
-    /// Nothing was offered and nothing left the mailbag.
-    RefusedUnauthenticatedIngress,
-}
-
-impl Handover {
-    pub const fn accepted(self) -> usize {
-        match self {
-            Handover::Released { accepted, .. } => accepted,
-            Handover::RefusedUnauthenticatedIngress => 0,
-        }
-    }
-
-    pub const fn is_refused(self) -> bool {
-        matches!(self, Handover::RefusedUnauthenticatedIngress)
-    }
-}
+const OFFER_RETRY_SECS: u64 = 30;
 
 /// One envelope in the bag, plus the bookkeeping the wire format does not carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +145,7 @@ struct StoredEnvelope {
     /// The wire copy budget, clamped and carried unchanged.
     copies: u8,
     prekey_id: Option<u32>,
+    last_offer_at: Option<u64>,
 }
 
 impl StoredEnvelope {
@@ -391,95 +335,60 @@ impl<S: Storage> CourierStore<S> {
             stored_at_unix_secs: now_unix_secs,
             copies,
             prekey_id: envelope.prekey_id,
+            last_offer_at: None,
         });
         self.persist()
     }
 
     // MARK: - Handover (on encountering a peer)
 
-    /// Remove and return every envelope addressed to this peer, accepting every
-    /// offer. Convenience over [`CourierStore::handover_envelopes`]; transport
-    /// callers should use that one so a failed send leaves the mail durable.
-    ///
-    /// Carries the same ingress requirement, so it cannot be used to sidestep it.
-    pub fn take_envelopes(
+    /// Offer eligible envelopes without retiring the durable copy.
+    pub fn offer_envelopes(
         &mut self,
         recipient_noise_static_key: &[u8],
         now_unix_secs: u64,
         ingress: AnnounceIngress,
     ) -> Result<Vec<CourierEnvelope>, StoreError> {
-        let mut taken = Vec::new();
-        self.handover_envelopes(
-            recipient_noise_static_key,
-            now_unix_secs,
-            ingress,
-            |envelope| {
-                taken.push(envelope.clone());
-                true
-            },
-        )?;
-        Ok(taken)
+        if !ingress.permits_offer() {
+            return Ok(Vec::new());
+        }
+        self.prune_expired(now_unix_secs)?;
+        let tags = candidate_tags(recipient_noise_static_key, now_unix_secs);
+        let mut offered = Vec::new();
+        for stored in &mut self.envelopes {
+            if tags.contains(&stored.recipient_tag)
+                && stored.last_offer_at.is_none_or(|at| {
+                    now_unix_secs.saturating_sub(at) >= OFFER_RETRY_SECS
+                })
+            {
+                offered.push(stored.envelope());
+                stored.last_offer_at = Some(now_unix_secs);
+            }
+        }
+        Ok(offered)
     }
 
-    /// Hand carried mail to the peer it is addressed to.
-    ///
-    /// **This is the destructive path and it is gated.** `ingress` is the caller's
-    /// assertion that the announce was signature-verified, *direct*, and arrived on
-    /// a link that is still Noise-authenticated for that peer. Anything weaker
-    /// returns [`Handover::RefusedUnauthenticatedIngress`] having touched nothing.
-    ///
-    /// The durable copy is retired only once `accept` confirms the transport put it
-    /// on the intended peer's physical link. A failed encode, a stale binding, or
-    /// backpressure leaves the envelope unchanged for the next authenticated
-    /// encounter.
-    pub fn handover_envelopes<F>(
+    /// Retire sealed mail acknowledged inside the recipient's Noise session.
+    /// The caller supplies the authenticated session's remote static key.
+    pub fn acknowledge_delivery(
         &mut self,
         recipient_noise_static_key: &[u8],
+        receipt_id: &[u8; 32],
         now_unix_secs: u64,
-        ingress: AnnounceIngress,
-        mut accept: F,
-    ) -> Result<Handover, StoreError>
-    where
-        F: FnMut(&CourierEnvelope) -> bool,
-    {
-        if !ingress.releases_mail() {
-            return Ok(Handover::RefusedUnauthenticatedIngress);
-        }
-
-        if self.prune_locked(now_unix_secs) > 0 {
-            self.persist()?;
-        }
-
+    ) -> Result<bool, StoreError> {
         let tags = candidate_tags(recipient_noise_static_key, now_unix_secs);
-        let offered: Vec<CourierEnvelope> = self
-            .envelopes
-            .iter()
-            .filter(|stored| tags.contains(&stored.recipient_tag))
-            .map(StoredEnvelope::envelope)
-            .collect();
-
-        let mut accepted = 0usize;
-        for envelope in &offered {
-            if !accept(envelope) {
-                continue;
-            }
-            let carried = self
-                .envelopes
-                .iter()
-                .position(|stored| stored.ciphertext == envelope.ciphertext);
-            if let Some(index) = carried {
-                self.envelopes.remove(index);
-                accepted += 1;
-            }
+        let Some(index) = self.envelopes.iter().position(|stored| {
+            tags.contains(&stored.recipient_tag)
+                && &courier_receipt_id(&stored.ciphertext) == receipt_id
+        }) else {
+            return Ok(false);
+        };
+        let envelope = self.envelopes.remove(index);
+        if let Err(error) = self.persist() {
+            self.envelopes.insert(index, envelope);
+            return Err(error);
         }
-        if accepted > 0 {
-            self.persist()?;
-        }
-
-        Ok(Handover::Released {
-            offered: offered.len(),
-            accepted,
-        })
+        Ok(true)
     }
 
     // MARK: - Maintenance
@@ -631,6 +540,7 @@ fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
             stored_at_unix_secs,
             copies,
             prekey_id,
+            last_offer_at: None,
         });
     }
 
@@ -730,25 +640,24 @@ mod tests {
     // MARK: - Deposit and handover
 
     #[test]
-    fn deposit_then_hand_over_to_the_recipient() {
+    fn courier_offers_stay_durable_until_the_recipient_acknowledges() {
         let mut store = store();
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
-
+        let receipt = courier_receipt_id(&mail.ciphertext);
         store.deposit(&mail, &key(0xA1), NOW).expect("deposit");
 
-        let taken = store
-            .take_envelopes(&recipient, NOW, direct())
-            .expect("take");
-        assert_eq!(taken, vec![mail]);
-        // Delivery removes the envelope.
+        let offered = store.offer_envelopes(&recipient, NOW, direct()).expect("offer");
+        assert_eq!(offered, vec![mail]);
+        assert!(store.offer_envelopes(&recipient, NOW, direct()).unwrap().is_empty());
+        let mut store = CourierStore::new(store.into_storage());
+        assert_eq!(store.restore(NOW).expect("durable copy"), 1);
+        assert!(!store.acknowledge_delivery(&key(0xCC), &receipt, NOW).unwrap());
+        assert!(!store.acknowledge_delivery(&recipient, &[0; 32], NOW).unwrap());
+        assert_eq!(store.carried_count(), 1);
+        assert!(store.acknowledge_delivery(&recipient, &receipt, NOW).unwrap());
         assert!(store.is_empty());
-        assert!(
-            store
-                .take_envelopes(&recipient, NOW, direct())
-                .expect("take")
-                .is_empty()
-        );
+        assert!(store.storage().is_empty());
     }
 
     #[test]
@@ -772,13 +681,13 @@ mod tests {
 
         assert!(
             store
-                .take_envelopes(&key(0xCC), NOW, direct())
+                .offer_envelopes(&key(0xCC), NOW, direct())
                 .expect("take")
                 .is_empty()
         );
         assert_eq!(
             store
-                .take_envelopes(&key(0xB0), NOW, direct())
+                .offer_envelopes(&key(0xB0), NOW, direct())
                 .expect("take")
                 .len(),
             1
@@ -786,34 +695,14 @@ mod tests {
     }
 
     #[test]
-    fn a_rejected_handover_retains_the_envelope_until_an_accepted_retry() {
+    fn an_unacknowledged_offer_can_retry() {
         let mut store = store();
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
-        store.deposit(&mail, &key(0xA1), NOW).expect("deposit");
-
-        let mut offers = Vec::new();
-        let outcome = store
-            .handover_envelopes(&recipient, NOW, direct(), |offered| {
-                offers.push(offered.clone());
-                false
-            })
-            .expect("handover");
-        assert_eq!(
-            outcome,
-            Handover::Released {
-                offered: 1,
-                accepted: 0
-            }
-        );
-        assert_eq!(offers, vec![mail.clone()]);
-        assert!(!store.is_empty());
-
-        let outcome = store
-            .handover_envelopes(&recipient, NOW, direct(), |_| true)
-            .expect("handover");
-        assert_eq!(outcome.accepted(), 1);
-        assert!(store.is_empty());
+        store.deposit(&mail, &key(0xA1), NOW).unwrap();
+        assert_eq!(store.offer_envelopes(&recipient, NOW, direct()).unwrap(), vec![mail.clone()]);
+        assert_eq!(store.offer_envelopes(&recipient, NOW + OFFER_RETRY_SECS, direct()).unwrap(), vec![mail]);
+        assert_eq!(store.carried_count(), 1);
     }
 
     #[test]
@@ -836,72 +725,25 @@ mod tests {
     fn handover_is_refused_without_an_authenticated_direct_ingress() {
         let mut store = store();
         let recipient = key(0xB0);
-        store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), NOW)
-            .expect("deposit");
-
-        // A relayed announce proves nothing about who owns the link.
-        let mut offers = 0;
-        let outcome = store
-            .handover_envelopes(&recipient, NOW, AnnounceIngress::relayed(), |_| {
-                offers += 1;
-                true
-            })
-            .expect("handover");
-        assert_eq!(outcome, Handover::RefusedUnauthenticatedIngress);
-        assert_eq!(offers, 0, "nothing may even be offered on a weak ingress");
+        let mail = envelope(&recipient, 1);
+        store.deposit(&mail, &key(0xA1), NOW).unwrap();
+        for ingress in [
+            AnnounceIngress::relayed(),
+            AnnounceIngress::direct_but_link_not_authenticated(),
+            AnnounceIngress::new(false, true),
+        ] {
+            assert!(store.offer_envelopes(&recipient, NOW, ingress).unwrap().is_empty());
+        }
+        assert_eq!(store.offer_envelopes(&recipient, NOW, direct()).unwrap(), vec![mail]);
         assert_eq!(store.carried_count(), 1);
-
-        // A direct-looking announce whose link has not proved possession of the
-        // Noise key is exactly the replayed-announce attack. Also refused.
-        let outcome = store
-            .handover_envelopes(
-                &recipient,
-                NOW,
-                AnnounceIngress::direct_but_link_not_authenticated(),
-                |_| true,
-            )
-            .expect("handover");
-        assert!(outcome.is_refused());
-        assert_eq!(store.carried_count(), 1);
-
-        // A session that exists but is not bound to *this* link: the caller states
-        // the link fact separately, and only both together release.
-        let outcome = store
-            .handover_envelopes(&recipient, NOW, AnnounceIngress::new(false, true), |_| true)
-            .expect("handover");
-        assert!(outcome.is_refused());
-        assert_eq!(store.carried_count(), 1);
-    }
-
-    #[test]
-    fn handover_is_permitted_with_an_authenticated_direct_ingress() {
-        let mut store = store();
-        let recipient = key(0xB0);
-        store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), NOW)
-            .expect("deposit");
-
-        assert!(direct().releases_mail());
-        let outcome = store
-            .handover_envelopes(&recipient, NOW, direct(), |_| true)
-            .expect("handover");
-        assert_eq!(
-            outcome,
-            Handover::Released {
-                offered: 1,
-                accepted: 1
-            }
-        );
-        assert!(store.is_empty());
     }
 
     #[test]
     fn only_both_ingress_facts_together_release_mail() {
-        assert!(!AnnounceIngress::relayed().releases_mail());
-        assert!(!AnnounceIngress::direct_but_link_not_authenticated().releases_mail());
-        assert!(!AnnounceIngress::new(false, true).releases_mail());
-        assert!(AnnounceIngress::verified_direct_on_authenticated_link().releases_mail());
+        assert!(!AnnounceIngress::relayed().permits_offer());
+        assert!(!AnnounceIngress::direct_but_link_not_authenticated().permits_offer());
+        assert!(!AnnounceIngress::new(false, true).permits_offer());
+        assert!(AnnounceIngress::verified_direct_on_authenticated_link().permits_offer());
     }
 
     // MARK: - Non-negotiable 1: quotas
@@ -959,7 +801,7 @@ mod tests {
         // The oldest mail is still carried: a stranger cannot push it out.
         assert_eq!(
             store
-                .take_envelopes(&first_recipient, NOW, direct())
+                .offer_envelopes(&first_recipient, NOW, direct())
                 .expect("take")
                 .len(),
             1
@@ -981,7 +823,7 @@ mod tests {
 
         assert_eq!(MAX_COPIES, 8);
         let taken = store
-            .take_envelopes(&recipient, NOW, direct())
+            .offer_envelopes(&recipient, NOW, direct())
             .expect("take");
         assert_eq!(
             taken.iter().map(|e| e.copies).collect::<Vec<_>>(),
@@ -1003,7 +845,7 @@ mod tests {
         assert_eq!(store.carried_count(), 1);
 
         let taken = store
-            .take_envelopes(&recipient, NOW, direct())
+            .offer_envelopes(&recipient, NOW, direct())
             .expect("take");
         assert_eq!(taken.iter().map(|e| e.copies).collect::<Vec<_>>(), vec![4]);
     }
@@ -1109,7 +951,7 @@ mod tests {
 
         assert!(
             store
-                .take_envelopes(&recipient, NOW + 13 * HOUR, direct())
+                .offer_envelopes(&recipient, NOW + 13 * HOUR, direct())
                 .expect("take")
                 .is_empty(),
             "expired mail is never handed over"
@@ -1152,6 +994,7 @@ mod tests {
             stored_at_unix_secs: NOW + u64::from(index),
             copies: 1,
             prekey_id: None,
+            last_offer_at: None,
         }
     }
 
@@ -1234,27 +1077,9 @@ mod tests {
         );
         assert!(
             store
-                .take_envelopes(&recipient, NOW, direct())
+                .offer_envelopes(&recipient, NOW, direct())
                 .expect("take")
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn emptying_the_pool_removes_the_durable_blob() {
-        let mut store = store();
-        let recipient = key(0xB0);
-        store
-            .deposit(&envelope(&recipient, 1), &key(0xA1), NOW)
-            .expect("deposit");
-        assert!(!store.storage().is_empty());
-
-        store
-            .take_envelopes(&recipient, NOW, direct())
-            .expect("take");
-        assert!(
-            store.storage().is_empty(),
-            "the last envelope leaving must not leave a stale blob behind"
         );
     }
 
@@ -1270,6 +1095,7 @@ mod tests {
             stored_at_unix_secs: NOW,
             copies: 4,
             prekey_id: Some(0xDEAD_BEEF),
+            last_offer_at: None,
         };
         let encoded = encode_pool(core::slice::from_ref(&stored));
         assert_eq!(decode_pool(&encoded).expect("decode"), vec![stored]);
