@@ -25,11 +25,24 @@ impl BleRuntime {
         let sends = self
             .gossip
             .handle_request_sync(claimed, &request, now_secs());
+        let public_authors: std::collections::HashSet<_> = sends
+            .iter()
+            .filter(|send| send.packet.message_type() == Some(MessageType::Message))
+            .map(|send| send.packet.sender_id)
+            .collect();
+        let requester = claimed.to_routing_bytes();
         for send in sends {
             let kind = send.packet.message_type();
-            // An announce-only peer can synchronize the public room. The
-            // contact archive and private epochs require a live Noise link.
-            if !authenticated && kind != Some(MessageType::Message) {
+            // Public history sometimes needs the author's signing key. Only
+            // include a matching author announce when it carries no neighbor
+            // list or rendezvous location, and never dump the contact archive.
+            let public_author_key = kind == Some(MessageType::Announce)
+                && requester != Some(send.packet.sender_id)
+                && public_authors.contains(&send.packet.sender_id)
+                && AnnouncementPacket::decode(&send.packet.payload).is_ok_and(|announce| {
+                    announce.direct_neighbors.is_none() && announce.bridge_geohash.is_none()
+                });
+            if !authenticated && kind != Some(MessageType::Message) && !public_author_key {
                 continue;
             }
             if kind == Some(MessageType::GroupMessage) {

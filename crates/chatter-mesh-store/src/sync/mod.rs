@@ -451,9 +451,8 @@ impl GossipSyncManager {
 
     /// Keyed by the bundle's owner, never by the packet's sender.
     fn insert_prekey_bundle(&mut self, packet: &BitchatPacket) {
-        // Callers feed only verified bundles here (our own at send time, peers'
-        // after signature verification), so gossip never spreads a bundle this node
-        // could not attribute.
+        // Gossip retains candidate bundles for forwarding. A consumer must
+        // authenticate an owner's signing key before using its prekeys.
         let Ok(bundle) = PrekeyBundle::decode(&packet.payload) else {
             return;
         };

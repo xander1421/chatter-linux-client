@@ -395,9 +395,30 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
         chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
     );
 
+    let author = MeshIdentity::generate(&mut os_rng());
+    let author_id = author.peer_id();
+    let author_announce = signed(
+        &author_id,
+        &author,
+        MessageType::Announce,
+        AnnouncementPacket::new(
+            "public author".into(),
+            author.static_public().to_vec(),
+            author.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        )
+        .encode()
+        .unwrap(),
+        true,
+    );
+    runtime
+        .gossip
+        .on_public_packet_seen(&author_announce, now_secs());
     let history = signed(
-        &subject_peer,
-        &subject,
+        &author_id,
+        &author,
         MessageType::Message,
         b"public history".to_vec(),
         true,
@@ -407,13 +428,17 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
     runtime.on_request_sync(&link, &packet, &subject_peer).await;
     runtime.drain_writes().await;
 
-    assert!(
-        radio.write_count() > before,
-        "an announced peer must still get its diff"
-    );
-    assert!(radio.writes().iter().skip(before).all(|(_, bytes)| {
-        codec::decode(bytes).is_ok_and(|packet| packet.message_type() == Some(MessageType::Message))
-    }));
+    let replies: Vec<_> = radio
+        .writes()
+        .iter()
+        .skip(before)
+        .map(|(_, bytes)| codec::decode(bytes).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 2, "only public history and its author's key");
+    assert_eq!(replies[0].message_type(), Some(MessageType::Announce));
+    assert_eq!(replies[0].sender_id, author_announce.sender_id);
+    assert_eq!(replies[1].message_type(), Some(MessageType::Message));
+    assert_eq!(replies[1].sender_id, author_announce.sender_id);
 }
 
 #[tokio::test]
