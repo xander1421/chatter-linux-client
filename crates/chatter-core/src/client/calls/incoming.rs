@@ -54,6 +54,9 @@ impl ChatterClient {
         if !self.call_session_is_current(revision) {
             return Err(ClientError::Validation("call session changed".into()));
         }
+        self.require_shield_call_confirmation(
+            self.call_completion_attempt(call_id).is_some_and(|attempt| attempt.shield_confirmed),
+        )?;
         let call_worker = self
             .call_service()
             .get()
@@ -86,12 +89,14 @@ impl ChatterClient {
         call_id: &str,
         caller_id: &crate::domain::ids::UserId,
         user_id: crate::domain::ids::UserId,
+        shield_confirmed: bool,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        self.require_shield_call_confirmation(shield_confirmed)?;
         let call_worker = self
             .call_service()
             .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .clone();
+            .with_media_confirmation(shield_confirmed);
         self.call_signaling()
             .accept_dm_call(
                 caller_ephemeral_pk,
@@ -121,11 +126,13 @@ impl ChatterClient {
         &self,
         call_id: &str,
         replaces_active: bool,
+        shield_confirmed: bool,
     ) -> Result<AcceptedIncomingCall, ClientError> {
         self.accept_presented_incoming_call_in_session(
             call_id,
             replaces_active,
             self.auth_state().get().session_revision,
+            shield_confirmed,
         )
         .await
     }
@@ -136,6 +143,7 @@ impl ChatterClient {
         call_id: &str,
         replaces_active: bool,
         revision: u64,
+        shield_confirmed: bool,
     ) -> Result<AcceptedIncomingCall, ClientError> {
         tracing::info!(target: "call_setup::accept_core_begin", "Call setup diagnostic");
         let _lifecycle = self.auth_lifecycle_lock.lock().await;
@@ -143,13 +151,15 @@ impl ChatterClient {
         if !self.call_session_is_current(revision) {
             return Err(ClientError::Inbox("Call session expired".into()));
         }
+        self.require_shield_call_confirmation(shield_confirmed)?;
         use crate::services::call_worker::{CallEndReason, CallHandle, OrchestratedCallKind};
 
         let worker = self
             .call_service()
             .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .for_presentation_session(revision);
+            .for_presentation_session(revision)
+            .with_media_confirmation(shield_confirmed);
 
         let handle = CallHandle::from(call_id);
         let snapshot = crate::calls::setup_diagnostics::observe(
@@ -198,7 +208,7 @@ impl ChatterClient {
                         .session_current_user_id()
                         .ok_or_else(|| ClientError::Inbox("Not logged in".into()))?;
                     let setup = self
-                        .accept_dm_call(ephemeral, call_id, &peer_id, user_id)
+                        .accept_dm_call(ephemeral, call_id, &peer_id, user_id, shield_confirmed)
                         .await?;
                     worker
                         .orch_mark_connected_reliably(

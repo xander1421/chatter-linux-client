@@ -12,6 +12,7 @@ pub struct RoomSeniority {
 
 /// Internal state for active call.
 pub(super) struct ActiveCallState {
+    pub shield_confirmed: bool,
     pub(super) call: Call,
     /// Key state for Signal-based key derivation and ratcheting.
     pub(super) key_state: CallKeyState,

@@ -3945,3 +3945,11 @@ msgstr "Проверка ключа"
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
 msgstr "Не удалось проверить историю журнала прозрачности ключей."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Аудио и видео звонка передаются напрямую и могут раскрыть ваш IP-адрес."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield недоступен"

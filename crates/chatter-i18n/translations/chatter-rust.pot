@@ -3422,3 +3422,11 @@ msgstr ""
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
 msgstr ""
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr ""
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr ""

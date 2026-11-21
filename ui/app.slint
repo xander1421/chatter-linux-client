@@ -1,3 +1,4 @@
+import { CallConfirm } from "chat/call_confirm.slint";
 import { DesktopChrome } from "theme/desktop_chrome.slint";
 import { InputPolicy } from "theme/input_policy.slint";
 import { AppViewTransition } from "app_view_transition.slint";
@@ -1054,6 +1055,12 @@ export component MainWindow inherits Window {
                 replaces-active: CallView.incoming-call-replaces-active;
                 accept-call => { CallView.accept-incoming-call(CallView.keyguard-call-id); }
                 decline-call => { CallView.decline-incoming-call(CallView.keyguard-call-id); }
+            }
+            if CallView.shield-confirmation-open: CallConfirm {
+                shield: true;
+                answering: CallView.shield-confirmation-answering;
+                cancelled => { CallView.shield-confirmation-answer(false); }
+                confirmed => { CallView.shield-confirmation-answer(true); }
             }
         }
 

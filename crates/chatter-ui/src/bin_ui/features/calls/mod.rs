@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use crate::MainWindow;
+use slint::ComponentHandle;
 use chatter_core::client::ChatterClient;
 
 mod active;
@@ -27,6 +28,53 @@ pub mod key_exchange;
 mod outgoing;
 mod room_events;
 pub mod timers;
+
+struct ConfirmedCall {
+    incoming: Option<(u64, String)>,
+    run: Box<dyn FnOnce(bool)>,
+}
+
+fn reconcile_shield_confirmation(window: &MainWindow, revision: u64, ringing: Option<&str>) {
+    let cleared = SHIELD_CONFIRM.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().and_then(|call| call.incoming.as_ref())
+            .is_some_and(|(owner, call)| *owner != revision || ringing != Some(call.as_str()))
+        {
+            slot.take();
+            true
+        } else {
+            false
+        }
+    });
+    if cleared {
+        window.global::<crate::CallView>().set_shield_confirmation_open(false);
+    }
+}
+
+thread_local! {
+    static SHIELD_CONFIRM: std::cell::RefCell<Option<ConfirmedCall>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+fn with_shield_confirmation(
+    window: &MainWindow,
+    client: &ChatterClient,
+    incoming: Option<(u64, String)>,
+    call: impl FnOnce(bool) + 'static,
+) {
+    if client.call_needs_shield_confirmation() {
+        let answering = incoming.is_some();
+        SHIELD_CONFIRM.with(|slot| *slot.borrow_mut() = Some(ConfirmedCall {
+            incoming, run: Box::new(call),
+        }));
+        let view = window.global::<crate::CallView>();
+        view.set_shield_confirmation_answering(answering);
+        view.set_shield_confirmation_open(true);
+    } else {
+        call(false);
+    }
+}
 
 /// Wire all call-related callbacks.
 ///
@@ -48,7 +96,19 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             crate::platform::android::activity::clear_incoming_call_window(id.as_str());
         });
     }
-    use slint::{ComponentHandle, Model, ModelRc, VecModel};
+    use slint::{Model, ModelRc, VecModel};
+    let weak = window.as_weak();
+    window.global::<crate::CallView>().on_shield_confirmation_answer(move |confirmed| {
+        if let Some(window) = weak.upgrade() {
+            window.global::<crate::CallView>().set_shield_confirmation_open(false);
+        }
+        let call = SHIELD_CONFIRM.with(|slot| slot.borrow_mut().take());
+        if confirmed {
+            if let Some(call) = call {
+                (call.run)(true);
+            }
+        }
+    });
     window.global::<crate::CallView>().on_select_call_tile_indices(|participants, pinned_id| {
         let tiles: Vec<crate::CallParticipantData> = participants.iter().collect();
         let indices = chatter_core::calls::tiles::select_visible_tiles(

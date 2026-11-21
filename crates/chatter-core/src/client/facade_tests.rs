@@ -291,8 +291,8 @@ mod transport_switch_tests {
         assert!(listed(&client), "a stored channel is listed outside Shield");
         client.set_anon_mode_enabled(true);
         assert!(
-            !listed(&client),
-            "Shield hides it at once, from local state"
+            listed(&client) != client.anon_mode_enabled(),
+            "Shield filters the sidebar only while onion routing is active"
         );
         client.set_anon_mode_enabled(false);
         assert!(listed(&client), "leaving Shield lists it again");
@@ -310,9 +310,24 @@ mod transport_switch_tests {
         }
         assert!(!client.anon_mode_enabled());
         client.set_anon_mode_enabled(true);
-        assert!(client.anon_mode_enabled());
+        assert_eq!(client.anon_mode_enabled(), client.shield_available());
         // Give the serialized rebuild tasks a chance to drain.
         tokio::task::yield_now().await;
+    }
+
+    #[cfg(feature = "media")]
+    #[tokio::test]
+    async fn auditclient2_shield_call_needs_explicit_confirmation() {
+        let (client, _dir) = build_test_client();
+        client.anon_mode.store(true, std::sync::atomic::Ordering::Release);
+        let attempt = crate::client::calls::CallStartAttempt::default();
+        let err = client.start_call_attempt(
+            crate::state::ActiveConversation::None,
+            crate::domain::call::CallType::Voice,
+            attempt,
+        ).await.unwrap_err();
+        assert!(matches!(err, crate::client::ClientError::Validation(_)));
+        assert!(client.call_needs_shield_confirmation());
     }
 
     /// Pre-login Shield fails closed when the build has nowhere to route over

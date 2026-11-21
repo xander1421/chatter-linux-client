@@ -111,6 +111,7 @@ impl GrpcClientPool {
                         Ok(channel) => {
                             let channel = channel
                                 .for_pool(self.transport_mode.clone(), TransportMode::Direct);
+                            let channel = channel.in_generation(self.transport_token.read().clone());
                             tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
                             *guard = Some(channel.clone());
                             return channel;
@@ -146,6 +147,7 @@ impl GrpcClientPool {
         let channel: GrpcTransport = endpoint
             .connect_with_connector_lazy(crate::network::pq_tls::grpc_connector(&endpoint))
             .into();
+        let channel = channel.in_generation(self.transport_token.read().clone());
         tracing::warn!(
             "GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)"
         );

@@ -62,6 +62,7 @@ impl GrpcClientPool {
             direct_url: Arc::new(RwLock::new(server_url.to_string())),
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
+            transport_token: Arc::new(RwLock::new(tokio_util::sync::CancellationToken::new())),
             transport_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             unidentified_channel: Arc::new(RwLock::new(None)),
             #[cfg(feature = "onion")]
@@ -210,6 +211,15 @@ impl GrpcClientPool {
         *self.transport_mode.read()
     }
 
+    #[cfg(feature = "media")]
+    pub(crate) fn media_transport_snapshot(
+        &self,
+    ) -> (TransportMode, tokio_util::sync::CancellationToken) {
+        // The endpoint swap holds the channel write lock across both fields.
+        let _channel = self.channel.read();
+        (self.transport_mode(), self.transport_token.read().clone())
+    }
+
     /// Shared handle to the pool's lazily-bootstrapped Tor client, for carrying
     /// direct HTTP (CDN content) over the same circuit substrate in anon mode.
     #[cfg(feature = "onion")]
@@ -244,10 +254,16 @@ impl GrpcClientPool {
         }
         *self.endpoint.write() = endpoint;
         *self.transport_mode.write() = mode;
+        {
+            let mut token = self.transport_token.write();
+            token.cancel();
+            *token = tokio_util::sync::CancellationToken::new();
+        }
         self.transport_gen
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *channel = None;
         *self.unidentified_channel.write() = None;
+        *self.secret_channel.write() = None;
         #[cfg(feature = "onion")]
         {
             *self.unidentified_health.write() = None;

@@ -3964,3 +3964,11 @@ msgstr "Verificando la clave"
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
 msgstr "No se pudo verificar el historial del registro de transparencia de claves."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "El audio y el vídeo de la llamada se conectan directamente y pueden revelar tu dirección IP."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield no está disponible"

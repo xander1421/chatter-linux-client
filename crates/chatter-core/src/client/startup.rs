@@ -361,6 +361,19 @@ impl ChatterClient {
             provider.set_app_visible(self.chat_state().is_app_visible());
         }
         self.ctx.init_group_fanout();
+        // Sign-in may follow a direct endpoint change. These providers survive
+        // logout, so reacquire their route before resuming their work.
+        if let Some(provider) = self.ctx.get_device_inbox_provider() {
+            provider.refresh_clients(&self.services.grpc_pool).await;
+        }
+        if let Some(fanout) = self.ctx.get_group_fanout() {
+            fanout.refresh_client(&self.services.grpc_pool).await;
+        }
+        #[cfg(feature = "media")]
+        if let Some(worker) = self.ctx.get_call_service() {
+            worker.swap_call_client(self.services.grpc_pool.call_client()).await;
+        }
+
         // ── Event handling ──────────────────────────────────────────
         let mut listeners = StartupListeners {
             handles: Vec::new(),

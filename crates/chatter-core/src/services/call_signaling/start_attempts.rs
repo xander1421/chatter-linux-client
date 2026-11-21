@@ -4,11 +4,16 @@ use super::*;
 #[cfg(feature = "media")]
 #[derive(Clone, Default)]
 pub struct CallStartAttempt {
+    pub(crate) shield_confirmed: bool,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     notify: std::sync::Arc<tokio::sync::Notify>,
 }
 #[cfg(feature = "media")]
 impl CallStartAttempt {
+    pub fn new(shield_confirmed: bool) -> Self {
+        Self { shield_confirmed, ..Self::default() }
+    }
+
     pub fn cancel(&self) {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);

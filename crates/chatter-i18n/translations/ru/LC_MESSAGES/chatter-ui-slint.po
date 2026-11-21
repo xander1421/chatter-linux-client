@@ -6003,3 +6003,11 @@ msgstr "Ключ не проверен"
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr "Ключ идентификации изменился"
+
+#: ui/chat/call_confirm.slint
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Аудио и видео звонка передаются напрямую и могут раскрыть ваш IP-адрес."
+
+#: ui/anon_mode/shield_network_banner.slint
+msgid "Couldn't reach the server over Tor. Shield is still on."
+msgstr "Не удалось подключиться к серверу через Tor. Shield всё ещё включён."

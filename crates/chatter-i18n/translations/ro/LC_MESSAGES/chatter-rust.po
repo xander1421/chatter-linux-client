@@ -3981,3 +3981,11 @@ msgstr "Se verifică cheia"
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
 msgstr "Istoricul jurnalului de transparență a cheilor nu a putut fi verificat."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Fluxul audio și video al apelului folosește o conexiune directă și poate dezvălui adresa ta IP."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield indisponibil"
