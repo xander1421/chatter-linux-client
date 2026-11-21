@@ -519,15 +519,24 @@ async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_s
     theirs.refresh(now_millis(), &mut os_rng());
     let genuine = theirs.bundle(&owner).expect("bundle");
     let bundle_packet = |bundle: &PrekeyBundle| {
-        BitchatPacket::new(
+        let mut packet = BitchatPacket::new(
             MessageType::PrekeyBundle,
             owner.peer_id().to_routing_bytes().expect("routing bytes"),
             None,
             now_millis(),
             bundle.encode().expect("encodes"),
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-        )
+        );
+        packet.signature = Some(sign_packet(&owner, &packet).unwrap());
+        packet
     };
+
+    // A signature-shaped packet alone is insufficient without the owner's announce.
+    state.with(|inner| inner.peers.remove(&owner.peer_id()));
+    assert!(!runtime.on_prekey_bundle(&bundle_packet(&genuine)));
+    state.with(|inner| {
+        inner.peers.upsert_verified_announce(&owner.peer_id(), &announcement, true, now_millis());
+    });
 
     // Signed by someone else over the owner's static key: refused.
     let forger = MeshIdentity::generate(&mut os_rng());
@@ -546,6 +555,13 @@ async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_s
                 .take(&owner.static_public(), now_millis()))
             .is_none()
     );
+
+    let mut spoofed = bundle_packet(&genuine);
+    spoofed.timestamp += 2 * 24 * 60 * 60 * 1000;
+    assert!(!runtime.on_prekey_bundle(&spoofed), "the outer timestamp must be signed");
+    spoofed.signature = Some(sign_packet(&owner, &spoofed).unwrap());
+    runtime.gossip.on_public_packet_seen(&spoofed, now_secs());
+    assert!(!runtime.gossip.has_prekey_bundle(&owner.peer_id()));
 
     // Announce-only relays can propagate it, but cannot use it for sealing.
     assert!(runtime.on_prekey_bundle(&bundle_packet(&genuine)));
@@ -671,8 +687,8 @@ async fn a_file_from_a_verified_peer_is_stored_and_reachable_from_its_row() {
     // and "its bytes are somewhere the user can open" are two claims, and
     // the second is the one that makes the feature exist.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let mut events = runtime.events.subscribe();
 
     let file = sample_file();
@@ -730,8 +746,8 @@ async fn the_same_file_arriving_again_does_not_store_a_second_copy() {
     // and letting the row be ignored leaves an encrypted megabyte nothing
     // references, and shows the user an attachment the stored row never had.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let packet = file_packet(&sender, &identity, &sample_file(), None, true);
 
     runtime.on_file_transfer(&packet, &sender);
@@ -770,8 +786,8 @@ async fn an_unsigned_file_transfer_is_dropped() {
     // voice burst spoofing a broadcast note under the talker's ID to
     // overwrite their signature-verified bubble with attacker audio.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let mut events = runtime.events.subscribe();
 
     let packet = file_packet(&sender, &identity, &sample_file(), None, false);
@@ -878,8 +894,8 @@ async fn a_file_addressed_to_us_alone_is_not_accepted_in_the_clear() {
     // can arrive in the clear. `on_public_message` refuses the legacy
     // directed `Message` for the same reason.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let local = runtime.identity.peer_id();
     let mut events = runtime.events.subscribe();
 

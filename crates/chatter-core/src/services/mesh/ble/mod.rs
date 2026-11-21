@@ -195,7 +195,7 @@ pub struct BleRuntime {
     /// Per-ingress budget for open channels, independent of outbound pacing.
     channel_ingress: std::collections::HashMap<String, (u64, u32)>,
     announce_ingress: std::collections::HashMap<(String, bool), (u64, u32)>,
-    signing_pin_intent: std::collections::HashMap<PeerId, u64>,
+    signing_pin_intent: std::collections::HashMap<PeerId, (u64, Option<u64>)>,
     private_ingress: std::collections::HashMap<String, (u64, u32)>,
     /// Authenticated private authors share one budget across relay links.
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
@@ -403,11 +403,11 @@ impl BleRuntime {
             let signing_key = pin
                 .map(|pin| pin.signing_public_key.as_slice())
                 .or_else(|| state.peers.info(&owner)?.signing_public_key.as_deref());
-            let Some(key) = signing_key else {
-                // A relay may see the bundle before the owner's announce.
-                return packet.signature.is_some();
+            let Some(key) = signing_key.and_then(|key| <[u8; 32]>::try_from(key).ok()) else {
+                // A later announce and sync round can supply the signing key.
+                return false;
             };
-            if !<[u8; 32]>::try_from(key).is_ok_and(|key| bundle.verify(&key)) {
+            if !verify_packet(packet, &key) || !bundle.verify(&key) {
                 return false;
             }
             if pin.is_some_and(|pin| pin.noise_public_key.as_slice() == bundle.owner_static) {

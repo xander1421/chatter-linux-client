@@ -8,16 +8,24 @@ impl BleRuntime {
             return;
         };
         use super::secure_ingress::{SIGNING_BINDING_REQUEST, SIGNING_PIN_INTENT_MS};
+
+        const BINDING_REQUEST_INTERVAL_MS: u64 = 10_000;
         let now = now_millis();
-        self.signing_pin_intent.retain(|_, at| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS);
-        let (pinned, supports_binding) = self.state.with(|state| {
-            (state.peers.pinned(peer).is_some(), state.chatter_hello.get(peer).is_some_and(|hello| {
+        self.signing_pin_intent
+            .retain(|_, (at, _)| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS);
+        let (pinned, can_request) = self.state.with(|state| {
+            let supported = state.chatter_hello.get(peer).is_some_and(|hello| {
                 hello.capabilities & super::super::chatter_hello::NOISE_SIGNING_BINDING != 0
-            }))
+            });
+            (state.peers.pinned(peer).is_some(), supported && state.sessions.has_session(peer))
         });
-        if !pinned && (self.signing_pin_intent.contains_key(peer) || self.signing_pin_intent.len() < 512) {
-            self.signing_pin_intent.insert(peer.clone(), now);
-            if supports_binding {
+        if !pinned && (self.signing_pin_intent.contains_key(peer) || self.signing_pin_intent.len() < 512)
+        {
+            let (intent, request) = self.signing_pin_intent.entry(peer.clone()).or_default();
+            *intent = now;
+            if can_request && request.is_none_or(|last| now.saturating_sub(last) >= BINDING_REQUEST_INTERVAL_MS)
+            {
+                *request = Some(now);
                 self.send_private_control(peer, SIGNING_BINDING_REQUEST).await;
             }
         }

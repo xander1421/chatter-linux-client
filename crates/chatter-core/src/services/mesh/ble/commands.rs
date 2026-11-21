@@ -39,9 +39,10 @@ impl BleRuntime {
             let public_author_key = kind == Some(MessageType::Announce)
                 && requester != Some(send.packet.sender_id)
                 && public_authors.contains(&send.packet.sender_id)
-                && AnnouncementPacket::decode(&send.packet.payload).is_ok_and(|announce| {
-                    announce.direct_neighbors.is_none() && announce.bridge_geohash.is_none()
-                });
+                && matches!(
+                    AnnouncementPacket::carries_contact_metadata(&send.packet.payload),
+                    Ok(false)
+                );
             if !authenticated && kind != Some(MessageType::Message) && !public_author_key {
                 continue;
             }

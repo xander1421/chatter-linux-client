@@ -870,6 +870,29 @@ fn five_thousand_announces_cannot_fill_durable_pins() {
 }
 
 #[test]
+fn noise_pins_and_restore_refuse_newcomers_after_capacity() {
+    let mut registry = PeerRegistry::new();
+    for index in 0..MAX_PINNED_IDENTITIES {
+        let mut noise = [0u8; 32];
+        noise[..8].copy_from_slice(&(index as u64).to_be_bytes());
+        assert!(registry.pin_noise_identity(&PeerId::from_noise_key(&noise), &noise, &[1; 32], 1));
+    }
+
+    let noise = [0xff; 32];
+    let newcomer = PeerId::from_noise_key(&noise);
+    assert!(!registry.can_pin(&newcomer));
+    assert!(!registry.pin_noise_identity(&newcomer, &noise, &[2; 32], 2));
+    let mut restored = PeerRegistry::new();
+    restored.restore_pins(&registry.pins_to_bytes()).unwrap();
+    assert!(!restored.can_pin(&newcomer));
+
+    let mut other = PeerRegistry::new();
+    assert!(other.pin_noise_identity(&newcomer, &noise, &[2; 32], 2));
+    restored.restore_pins(&other.pins_to_bytes()).unwrap();
+    assert!(restored.pinned(&newcomer).is_none());
+}
+
+#[test]
 fn announce_only_peer_expires_even_when_it_claims_presence() {
     let mut registry = PeerRegistry::new();
     let (alice, announcement) = derived(1, 2, "alice");

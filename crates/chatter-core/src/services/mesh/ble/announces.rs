@@ -30,28 +30,6 @@ impl BleRuntime {
                     .is_none_or(|bound| bound == claimed);
             (tracked, direct)
         });
-        if !tracked {
-            let key = (link.to_string(), direct);
-            self.announce_ingress
-                .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
-            if self.announce_ingress.len() >= 128 && !self.announce_ingress.contains_key(&key) {
-                let oldest_relay = self
-                    .announce_ingress
-                    .iter()
-                    .filter(|((_, direct), _)| !direct)
-                    .min_by_key(|(_, (start, _))| *start)
-                    .map(|(key, _)| key.clone());
-                let Some(oldest_relay) = oldest_relay.filter(|_| direct) else {
-                    return false;
-                };
-                self.announce_ingress.remove(&oldest_relay);
-            }
-            let budget = self.announce_ingress.entry(key).or_insert((now_ms, 0));
-            if budget.1 >= 60 {
-                return false;
-            }
-            budget.1 += 1;
-        }
         let now_s = now_secs();
 
         // What the trust decision needs from our own tables, read before it runs.
@@ -63,14 +41,17 @@ impl BleRuntime {
         let (presence, link_bound_elsewhere, existing_noise_key, existing_signing_key) =
             self.state.with(|state| {
                 let pin = state.peers.pinned(claimed);
+                let record = state.peers.info(claimed);
                 (
                     state.links.presence(claimed),
                     state
                         .links
                         .peer_for(link)
                         .is_some_and(|bound| bound != claimed),
-                    pin.map(|p| p.noise_public_key.clone()),
-                    pin.map(|p| p.signing_public_key.clone()),
+                    pin.map(|p| p.noise_public_key.clone())
+                        .or_else(|| record.and_then(|p| p.noise_public_key.clone())),
+                    pin.map(|p| p.signing_public_key.clone())
+                        .or_else(|| record.and_then(|p| p.signing_public_key.clone())),
                 )
             });
 
@@ -148,6 +129,30 @@ impl BleRuntime {
                 "unverified announce ignored"
             );
             return false;
+        }
+
+        // Only accepted new candidates consume introduction capacity.
+        if !tracked {
+            let key = (link.to_string(), direct);
+            self.announce_ingress
+                .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
+            if self.announce_ingress.len() >= 128 && !self.announce_ingress.contains_key(&key) {
+                let oldest_relay = self
+                    .announce_ingress
+                    .iter()
+                    .filter(|((_, direct), _)| !direct)
+                    .min_by_key(|(_, (start, _))| *start)
+                    .map(|(key, _)| key.clone());
+                let Some(oldest_relay) = oldest_relay.filter(|_| direct) else {
+                    return false;
+                };
+                self.announce_ingress.remove(&oldest_relay);
+            }
+            let budget = self.announce_ingress.entry(key).or_insert((now_ms, 0));
+            if budget.1 >= 60 {
+                return false;
+            }
+            budget.1 += 1;
         }
 
         let announcement = accepted.announcement.clone();

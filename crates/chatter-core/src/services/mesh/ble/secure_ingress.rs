@@ -278,7 +278,7 @@ impl BleRuntime {
             // An unsolicited handshake proves possession but does not give
             // a radio stranger a slot in the durable contact table.
             if !self.signing_pin_intent.get(claimed)
-                .is_some_and(|at| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS)
+                .is_some_and(|(at, _)| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS)
             {
                 return;
             }
@@ -302,6 +302,7 @@ impl BleRuntime {
                 true
             });
             if saved {
+                self.gossip.retain_prekey_bundle_signed_by(claimed, key);
                 self.signing_pin_intent.remove(claimed);
                 self.emit_peers();
             }

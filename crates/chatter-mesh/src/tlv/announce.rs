@@ -112,6 +112,22 @@ impl AnnouncementPacket {
         Ok(out)
     }
 
+    /// Whether the encoded announce contains any contact or rendezvous fields.
+    /// A malformed value can be ignored by the regular decoder, but still
+    /// carries bytes that must stay out of a public history response.
+    pub fn carries_contact_metadata(bytes: &[u8]) -> Result<bool, MeshError> {
+        let mut reader = Reader::new(bytes);
+        while reader.remaining() > 0 {
+            let kind = reader.u8()?;
+            let length = reader.u8()?;
+            if matches!(kind, TLV_DIRECT_NEIGHBORS | TLV_BRIDGE_GEOHASH) {
+                return Ok(true);
+            }
+            reader.take(usize::from(length))?;
+        }
+        Ok(false)
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self, MeshError> {
         let mut reader = Reader::new(bytes);
 

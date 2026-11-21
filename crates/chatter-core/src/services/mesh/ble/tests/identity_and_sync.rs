@@ -152,9 +152,10 @@ async fn auditclient2_announce_squat_cannot_take_over_a_proven_peer() {
     });
 
     assert!(
-        runtime
+        !runtime
             .on_announce(&attacker_link, &forged_packet, &victim)
-            .await
+            .await,
+        "the first candidate keeps its signing key until Noise proves a binding"
     );
     assert!(state.with(|inner| inner.peers.pinned(&victim).is_none()));
     assert!(state.with(|inner| !inner.peers.info(&victim).unwrap().verified_nickname));
@@ -439,6 +440,37 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
     assert_eq!(replies[0].sender_id, author_announce.sender_id);
     assert_eq!(replies[1].message_type(), Some(MessageType::Message));
     assert_eq!(replies[1].sender_id, author_announce.sender_id);
+
+    let mut announce = author_announce;
+    announce.payload.extend_from_slice(&[0x04, 0x01, 0xa5]);
+    announce.signature = Some(sign_packet(&author, &announce).unwrap());
+    assert!(AnnouncementPacket::decode(&announce.payload).unwrap().direct_neighbors.is_none());
+    runtime.gossip.on_public_packet_seen(&announce, now_secs());
+    let before = radio.write_count();
+    runtime.on_request_sync(&link, &packet, &subject_peer).await;
+    runtime.drain_writes().await;
+    let replies = radio.writes();
+    assert_eq!(replies.len(), before + 1);
+    assert_eq!(codec::decode(&replies[before].1).unwrap().message_type(), Some(MessageType::Message));
+}
+
+#[tokio::test]
+async fn rejected_announces_do_not_use_the_new_candidate_budget() {
+    let (mut runtime, radio, state) = runtime();
+    let link = writable_link_on(&state, &radio, "/mock/announce-quota", 512);
+    let owner = MeshIdentity::generate(&mut os_rng());
+    let peer = owner.peer_id();
+    let announce = AnnouncementPacket::new(
+        "owner".into(), owner.static_public().to_vec(), owner.signing_public().to_vec(),
+        None, None, None,
+    );
+    let mut packet = signed(&peer, &owner, MessageType::Announce, announce.encode().unwrap(), true);
+    let signature = packet.signature.take();
+    for _ in 0..61 {
+        assert!(!runtime.on_announce(&link, &packet, &peer).await);
+    }
+    packet.signature = signature;
+    assert!(runtime.on_announce(&link, &packet, &peer).await);
 }
 
 #[tokio::test]
@@ -489,14 +521,8 @@ async fn a_refused_announce_is_not_kept_or_re_served_by_the_gossip_store() {
 }
 
 #[tokio::test]
-async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
-    // Defence in depth behind the derivation check: the sender ID is only
-    // eight bytes of the digest, so a second key hashing into the same ID is
-    // 2^64 work rather than impossible. Once we have recorded a Noise key
-    // for a peer, an announce carrying a *different* one is a key
-    // substitution attempt and is refused before the signature is even
-    // checked — a valid signature over a swapped key is exactly what the
-    // attack looks like (`BLEAnnounceTrustPolicy`, `MessageHandler.kt:252`).
+async fn an_announce_may_not_swap_the_signing_key_of_an_unpinned_candidate() {
+    // A later announce does not replace the first candidate's signing key.
     let (mut runtime, _radio, state) = runtime();
 
     let honest = MeshIdentity::generate(&mut os_rng());
@@ -515,11 +541,11 @@ async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
             .upsert_verified_announce(&peer, &first, true, now_millis());
     });
 
-    // Same peer ID, attacker's keys, signed by the attacker.
+    // The Noise key stays the same. Only the signing key is replaced.
     let attacker = MeshIdentity::generate(&mut os_rng());
     let swapped = AnnouncementPacket::new(
         "honest".to_string(),
-        attacker.static_public().to_vec(),
+        honest.static_public().to_vec(),
         attacker.signing_public().to_vec(),
         None,
         None,
@@ -542,26 +568,18 @@ async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
         inner.max_write.insert(link.clone(), 512);
     });
 
-    runtime.on_announce(&link, &packet, &peer).await;
-
+    assert!(!runtime.on_announce(&link, &packet, &peer).await);
     assert_eq!(
-        state.with(|inner| inner
-            .peers
-            .info(&peer)
-            .expect("still known")
-            .noise_public_key
-            .clone()),
-        Some(honest.static_public().to_vec()),
-        "the recorded Noise key must survive an announce that tries to \
-             replace it — that key is what courier mail is sealed to"
+        state.with(|inner| inner.peers.info(&peer).unwrap().signing_public_key.clone()),
+        Some(honest.signing_public().to_vec()),
     );
 }
 
 #[tokio::test]
 async fn stale_verdict_is_reused_only_for_the_current_signing_key() {
     let (mut runtime, _radio, state) = runtime();
-    let sender = PeerId::from_str("eeeeeeeeeeeeeeee");
-    let identity = register_verified_peer(&state, &sender, "peer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "peer");
     let attacker = MeshIdentity::generate(&mut os_rng());
     let mut events = runtime.events.subscribe();
     let forged = signed(
@@ -598,8 +616,8 @@ async fn an_empty_public_message_is_not_stored_as_a_blank_row() {
     // bitchat refuses on its send path too (`MeshCore.kt:415`). Neither checks
     // on receive, which is the gap.
     let (mut runtime, _radio, state) = runtime();
-    let sender = PeerId::from_str("eeeeeeeeeeeeeeee");
-    let identity = register_verified_peer(&state, &sender, "quiet");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "quiet");
     let mut events = runtime.events.subscribe();
 
     for payload in [b"".to_vec(), b"   ".to_vec(), b"\n\t".to_vec()] {

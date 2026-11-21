@@ -66,10 +66,10 @@ fn runtime_parts() -> (
     (runtime, radio, state, timeline)
 }
 
-/// A fixture for a verified live record. Some tests use fixed routing IDs
-/// independently of this signing key, so they do not create a durable pin.
-fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> MeshIdentity {
-    let identity = MeshIdentity::generate(&mut os_rng());
+/// Registers the same derived peer ID and Noise-bound signing key used by
+/// production verified records. Reopen fixtures can reuse the same identity.
+fn register_verified_peer(state: &MeshState, identity: &MeshIdentity, nickname: &str) -> PeerId {
+    let peer = identity.peer_id();
     let announcement = AnnouncementPacket::new(
         nickname.to_string(),
         identity.static_public().to_vec(),
@@ -79,14 +79,15 @@ fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> M
         None,
     );
     state.with(|inner| {
-        inner
-            .peers
-            .upsert_verified_announce(peer, &announcement, true, now_millis());
-        let mut record = inner.peers.info(peer).unwrap().clone();
-        record.verified_nickname = true;
-        inner.peers.upsert(record);
+        assert!(inner.peers.pin_noise_identity(
+            &peer,
+            &identity.static_public(),
+            &identity.signing_public(),
+            now_millis(),
+        ));
+        inner.peers.upsert_verified_announce(&peer, &announcement, true, now_millis());
     });
-    identity
+    peer
 }
 
 #[tokio::test]

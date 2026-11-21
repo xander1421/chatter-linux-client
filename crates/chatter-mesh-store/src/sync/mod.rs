@@ -203,6 +203,8 @@ fn packet_is_fresh(config: &SyncConfig, packet: &BitchatPacket, now_unix_secs: u
     let now_ms = now_unix_secs.saturating_mul(1000);
     let window_ms = max_age_secs(config, packet.msg_type).saturating_mul(1000);
     packet.timestamp >= now_ms.saturating_sub(window_ms)
+        && (packet.message_type() != Some(MessageType::PrekeyBundle)
+            || packet.timestamp <= now_ms.saturating_add(120_000))
 }
 
 /// Whether an announce still counts its peer as present.
@@ -746,6 +748,16 @@ impl GossipSyncManager {
 
     pub fn has_announcement(&self, peer: &PeerId) -> bool {
         self.latest_announce_by_peer.contains_key(peer)
+    }
+
+    /// When a Noise binding authenticates an owner, stop serving candidates
+    /// signed by any other key, regardless of their advertised timestamps.
+    pub fn retain_prekey_bundle_signed_by(&mut self, owner: &PeerId, key: &[u8; 32]) {
+        if self.latest_prekey_bundle_by_owner.get(owner)
+            .is_some_and(|packet| !chatter_mesh_noise::sign::verify_packet(packet, key))
+        {
+            self.latest_prekey_bundle_by_owner.remove(owner);
+        }
     }
 
     pub fn has_prekey_bundle(&self, owner: &PeerId) -> bool {
