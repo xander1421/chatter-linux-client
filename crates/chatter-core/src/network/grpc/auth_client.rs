@@ -197,8 +197,15 @@ impl AuthClient {
     /// # Arguments
     ///
     /// * `device_id` - The device ID to log out (0 for current device)
-    pub async fn logout(&mut self, device_id: u32) -> Result<(), NetworkError> {
-        let request = LogoutRequest { device_id };
+    pub async fn logout(
+        &mut self,
+        device_id: u32,
+        password_proof: Option<PasswordProof>,
+    ) -> Result<(), NetworkError> {
+        let request = LogoutRequest {
+            device_id,
+            password_proof,
+        };
 
         self.inner
             .logout(request)
@@ -526,8 +533,13 @@ impl AuthClient {
     /// # Arguments
     ///
     /// * `device_id` - Signal device ID to invalidate
-    pub async fn revoke_session(&mut self, device_id: u32) -> Result<(), NetworkError> {
+    pub async fn revoke_session(
+        &mut self,
+        device_id: u32,
+        password_proof: Option<PasswordProof>,
+    ) -> Result<(), NetworkError> {
         let request = InvalidateSessionRequest {
+            password_proof,
             device_id,
             request_id: uuid::Uuid::new_v4().to_string(),
         };
@@ -539,9 +551,13 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Revoke all sessions except current.
-    pub async fn revoke_all_sessions(&mut self) -> Result<(), NetworkError> {
+    /// Revoke every session, including the caller.
+    pub async fn revoke_all_sessions(
+        &mut self,
+        password_proof: PasswordProof,
+    ) -> Result<(), NetworkError> {
         let request = InvalidateAllSessionsRequest {
+            password_proof: Some(password_proof),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 
@@ -696,13 +712,14 @@ impl AuthClient {
         bundle: SignalPreKeyBundle,
         one_time_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
         kyber_one_time_prekeys: Vec<signal_pre_key_bundle::KyberPreKeyRecord>,
+        password_proof: PasswordProof,
     ) -> Result<RepublishIdentityKeyResponse, NetworkError> {
-        let request = RepublishIdentityKeyRequest {
-            bundle: Some(bundle),
+        let request = republish_identity_request(
+            bundle,
             one_time_prekeys,
             kyber_one_time_prekeys,
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
+            password_proof,
+        );
 
         self.inner
             .republish_identity_key(request)
@@ -949,12 +966,47 @@ impl AuthClient {
     }
 }
 
+fn republish_identity_request(
+    bundle: SignalPreKeyBundle,
+    one_time_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
+    kyber_one_time_prekeys: Vec<signal_pre_key_bundle::KyberPreKeyRecord>,
+    password_proof: PasswordProof,
+) -> RepublishIdentityKeyRequest {
+    RepublishIdentityKeyRequest {
+        bundle: Some(bundle),
+        one_time_prekeys,
+        kyber_one_time_prekeys,
+        request_id: uuid::Uuid::new_v4().to_string(),
+        password_proof: Some(password_proof),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // Note: Full integration tests require a running server.
     // These tests verify compilation and basic structure.
+
+    #[test]
+    fn republish_identity_request_carries_password_proof_on_wire() {
+        use prost::Message;
+
+        let proof = PasswordProof {
+            proof_id: "proof-id".into(),
+            ke3: vec![7; 64],
+        };
+        let bundle = SignalPreKeyBundle {
+            device_id: 4,
+            ..Default::default()
+        };
+        let request = republish_identity_request(bundle, vec![], vec![], proof.clone());
+        let decoded = RepublishIdentityKeyRequest::decode(request.encode_to_vec().as_slice())
+            .expect("republish request is valid protobuf");
+
+        assert_eq!(decoded.bundle.unwrap().device_id, 4);
+        assert_eq!(decoded.password_proof, Some(proof));
+    }
 
     #[test]
     fn test_auth_client_construction_types() {

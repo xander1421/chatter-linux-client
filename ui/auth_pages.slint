@@ -47,7 +47,7 @@ export component AuthPages inherits Rectangle {
         error: AuthFlow.login-error;
         verifying: AuthFlow.login-verifying;
         identity-reset-available: AuthFlow.login-identity-reset-available;
-        accept-new-identity => { AuthFlow.accept-new-identity(); }
+        accept-new-identity(password) => { AuthFlow.accept-new-identity(password); }
 
         server-unreachable: root.server-unreachable;
         account-free-surfaces: root.account-free-surfaces;

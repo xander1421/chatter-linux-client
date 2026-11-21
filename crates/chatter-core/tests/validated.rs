@@ -12110,7 +12110,7 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         );
         println!("  wrong PIN: login refused with {need:?} — {err}");
 
-        let refused = c.accept_new_identity(need).await;
+        let refused = c.accept_new_identity(need, PASSWORD).await;
         assert!(
             refused.is_err(),
             "minting a new identity on a wrong PIN would destroy a recoverable account"
@@ -12181,7 +12181,7 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     // (`crypto/logtree.go`), where a rotation is just another append, so the
     // rotation runs concurrently with everything else.
     client_fresh
-        .accept_new_identity(need)
+        .accept_new_identity(need, PASSWORD)
         .await
         .expect("identity reset failed — there is still no way to publish a rotated key");
 

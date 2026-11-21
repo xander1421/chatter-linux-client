@@ -27,19 +27,25 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window
         .global::<crate::AuthFlow>()
-        .on_accept_new_identity(move || {
+        .on_accept_new_identity(move |password| {
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
 
-            let Some(need) = weak
-                .upgrade()
-                .and_then(|_| PENDING_RECOVERY.lock().ok().and_then(|g| *g))
-            else {
+            let Some(window) = weak.upgrade() else {
                 return;
             };
+            let auth = window.global::<crate::AuthFlow>();
+            if auth.get_login_loading() {
+                return;
+            }
+            let Some(need) = PENDING_RECOVERY.lock().ok().and_then(|g| *g) else {
+                return;
+            };
+            auth.set_login_loading(true);
+            auth.set_login_error("".into());
 
             tokio::spawn(async move {
-                let outcome = ui_ctx.accept_new_identity(need).await;
+                let outcome = ui_ctx.accept_new_identity(need, password.as_str()).await;
                 let message = match &outcome {
                     Ok(()) => String::new(),
                     Err(e) => e.user_message(),

@@ -31,7 +31,7 @@ impl AuthService {
             .unwrap_or(0);
 
         // Notify server of logout (ignore errors - we logout locally regardless)
-        let _ = auth_client.logout(device_id).await;
+        let _ = auth_client.logout(device_id, None).await;
 
         // Clear auth interceptor state
         self.auth_interceptor.clear();

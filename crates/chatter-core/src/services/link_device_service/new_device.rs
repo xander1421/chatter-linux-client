@@ -453,7 +453,7 @@ impl LinkDeviceService {
                 linked_credentials.auth_token_base64(),
             );
             let mut cleanup_client = AuthClient::new(self.grpc_pool.channel(), cleanup_auth);
-            match cleanup_client.logout(device_id).await {
+            match cleanup_client.logout(device_id, None).await {
                 Ok(()) => {
                     tracing::info!(device_id, "Retired linked device after local commit failed")
                 }
