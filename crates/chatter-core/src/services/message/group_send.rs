@@ -155,9 +155,25 @@ impl MessageService {
             Some(chat_v1::message::content::Type::Encrypted(e)) => e.ciphertext.clone(),
             _ => return Err(invalid("a private-channel send must carry sender-key content")),
         };
-        let token = self.group_send_token(&channel_id, &verified).await?;
         let members = active_members(&verified);
         let mut auth_client = self.auth_client();
+        let onion = self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
+        let kt = if onion { self.grpc_pool.secret_kt_client().ok() }
+            else { Some(self.grpc_pool.anonymous_kt_client()) };
+        // This server's full group token cannot remove an active member
+        // from SSv2. Queue the post until every addressed key is usable.
+        for member in &members {
+            if let Some(kt) = kt.clone() {
+                self.signal_service.schedule_session_verification(kt, member, onion)
+                    .map_err(|e| MessageError::from_signal_send(e, "Group recipient verification"))?;
+            }
+            if !self.signal_service.session_devices(member).await
+                .map_err(|e| MessageError::from_signal_send(e, "Group session discovery"))?.is_empty() {
+                self.signal_service.require_sendable_session_identity(member)
+                    .map_err(|e| MessageError::from_signal_send(e, "Group recipient verification"))?;
+            }
+        }
+        let token = self.group_send_token(&channel_id, &verified).await?;
         for round in 0..=MAX_RECONCILE_ROUNDS {
             let sealed = self
                 .signal_service
@@ -186,9 +202,9 @@ impl MessageService {
             }
             for account in &resp.mismatched {
                 let d = account.devices.clone().unwrap_or_default();
-                self.signal_service
-                    .reconcile_devices(&mut auth_client, &account.user_id, &d.missing_devices, &d.extra_devices, &d.stale_devices)
-                    .await
+                crate::services::signal::SignalService::without_inline_kt(
+                    self.signal_service.reconcile_devices(&mut auth_client, &account.user_id, &d.missing_devices, &d.extra_devices, &d.stale_devices),
+                ).await
                     .map_err(|e| MessageError::from_signal_send(e, "device reconciliation"))?;
             }
         }

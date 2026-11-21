@@ -39,7 +39,7 @@ use crate::services::SignalService;
 use crate::services::message::{MessageService, PendingFlush};
 use crate::storage::repositories::pending_dm_repo::queued_bubble_timestamp;
 use crate::storage::repositories::PendingDmRepository;
-use crate::storage::{Database, KeyStore, SettingsRepository};
+use crate::storage::{Database, SettingsRepository};
 use crate::util::time::TimestampNanos;
 
 /// Spawn the DM bootstrap event handler from EventBus.
@@ -433,14 +433,24 @@ async fn handle_bootstrap_request_async(
         "BOOTSTRAP[2/4] Processing REQUEST - initiating as lower UUID"
     );
 
-    // Create fresh gRPC channel
-    // Get channel and auth interceptor from pool
-    tracing::debug!(
-        peer = %peer_id,
-        "BOOTSTRAP[2/4] Getting gRPC channel for bootstrap initiation"
-    );
-    let channel = grpc_pool.channel();
-    let auth_interceptor = grpc_pool.auth_clone();
+    // Hold the response in the handler's owned task while KT is temporarily
+    // unreachable. Verify before allocating a mailbox or claiming a token.
+    let signal_service = &message_service.signal_service;
+    let peer_id_str = peer_id.to_string();
+    let mut attempts = 0;
+    let mut auth_client = grpc_pool.auth_client();
+    loop {
+        match signal_service.verify_mailbox_identity(&grpc_pool, &peer_id_str).await {
+            Ok(()) => break,
+            Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::KeyVerificationPending(_)))
+                if attempts < 2 =>
+            {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_secs(5 * attempts)).await;
+            }
+            Err(error) => return Err(format!("Failed to verify bootstrap peer: {error}")),
+        }
+    }
 
     // Create DmBootstrap and initiate
     let dm_bootstrap = DmBootstrap::new(database.clone());
@@ -467,23 +477,12 @@ async fn handle_bootstrap_request_async(
         "BOOTSTRAP[2/4] Created mailbox, now encrypting announcement MESSAGE for peer"
     );
 
-    // Encrypt bootstrap message with Signal Protocol
-    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
-    let key_store = Arc::new(KeyStore::new(database.clone()));
-    let signal_service = SignalService::new(key_store, settings_repo);
-
-    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
-    let peer_id_str = peer_id.to_string();
-
     let sealed_ciphertext = signal_service
-        .encrypt_message(
-            &mut auth_client,
-            &peer_id_str,
-            peer_device_id,
-            &bootstrap_result.bootstrap_message,
-        )
+        .encrypt_mailbox_session_devices(&mut auth_client, &peer_id_str, vec![peer_device_id], &bootstrap_result.bootstrap_message)
         .await
-        .map_err(|e| format!("Failed to encrypt bootstrap: {}", e))?;
+        .map_err(|e| format!("Failed to encrypt bootstrap: {e}"))?
+        .remove(&peer_device_id)
+        .ok_or_else(|| "No session for the bootstrap sender".to_owned())?;
 
     // Spend a pre-fetched token; never request-then-spend (NDSS'21 §VI-F).
     let token = TokenManager::new(database.clone())
@@ -587,6 +586,9 @@ async fn handle_bootstrap_async(
     // MESSAGE over it beats `handle_incoming_bootstrap` dropping it.
     release_bootstrap_lock(&peer_id);
 
+    message_service.signal_service.verify_mailbox_identity(&grpc_pool, &peer_id.to_string())
+        .await.map_err(|error| format!("Could not verify bootstrap recipient: {error}"))?;
+
     // Process the incoming bootstrap
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");
     let response = match dm_bootstrap
@@ -615,8 +617,7 @@ async fn handle_bootstrap_async(
     // Create a SINGLE SignalService instance for all encryptions in this bootstrap flow.
     // This is critical - using separate instances can cause session counter desync.
     let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
-    let key_store = Arc::new(KeyStore::new(database.clone()));
-    let signal_service = SignalService::new(key_store.clone(), settings_repo.clone());
+    let signal_service = &message_service.signal_service;
     let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
 
     // Send bootstrap response with two-layer encryption
@@ -629,7 +630,6 @@ async fn handle_bootstrap_async(
         peer_device_id,
         our_device_id,
         &signal_service,
-        &mut auth_client,
         &mut anon_mailbox_client,
     )
     .await?;
@@ -685,6 +685,10 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     use crate::storage::repositories::PendingDmRepository;
     use prost::Message as ProstMessage;
 
+    if message_service.signal_service.verify_mailbox_identity(&message_service.grpc_pool, &peer_id.to_string()).await.is_err() {
+        // Leave the durable queue intact until the key can be verified.
+        return None;
+    }
     let pending = match PendingDmRepository::new(database.clone()).drain(&peer_id) {
         Ok(msgs) => msgs,
         Err(e) => {
@@ -908,7 +912,7 @@ pub async fn seal_for_peer_mailbox(
     send_key: &[u8; 32],
 ) -> Result<Vec<Vec<u8>>, String> {
     signal_service
-        .encrypt_message_session_devices(
+        .encrypt_mailbox_session_devices(
             auth_client,
             &peer_id.to_string(),
             vec![peer_device_id],
@@ -937,7 +941,6 @@ async fn send_bootstrap_response_with_envelope(
     peer_device_id: u32,
     our_device_id: u32,
     signal_service: &SignalService,
-    auth_client: &mut AuthClient,
     anon_client: &mut AnonymousMailboxClient,
 ) -> Result<(), String> {
     let peer_id = response.peer_id;
@@ -951,7 +954,7 @@ async fn send_bootstrap_response_with_envelope(
     let peer_id_str = peer_id.to_string();
 
     let (signal_ciphertext, msg_type) = signal_service
-        .encrypt_message_identified(auth_client, &peer_id_str, peer_device_id, &response_message)
+        .encrypt_mailbox_bootstrap_response(&peer_id_str, peer_device_id, &response_message)
         .await
         .map_err(|e| format!("Failed to encrypt with Signal: {}", e))?;
 

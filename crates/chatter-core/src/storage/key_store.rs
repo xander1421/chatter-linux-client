@@ -6,8 +6,22 @@
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PeerVerification {
+    Legacy,
+    LegacyUnlisted,
+    UnverifiedInbound,
+    Verified,
+}
+
+impl PeerVerification {
+    pub(crate) fn permits_encryption(self) -> bool {
+        self != Self::UnverifiedInbound
+    }
+}
 
 /// Signal key store.
 ///
@@ -147,6 +161,7 @@ impl KeyStore {
         conn.execute("DELETE FROM signed_prekeys", [])?;
         conn.execute("DELETE FROM prekeys", [])?;
         conn.execute("DELETE FROM remote_identities", [])?;
+        conn.execute("DELETE FROM peer_key_transparency", [])?;
         conn.execute("DELETE FROM local_identity", [])?;
 
         Ok(())
@@ -155,6 +170,47 @@ impl KeyStore {
     // ========================================================================
     // Remote Identities
     // ========================================================================
+
+    pub(crate) fn peer_verification(&self, peer: &str, key: &[u8]) -> Result<PeerVerification, StorageError> {
+        let conn = self.db.read_connection()?;
+        let value: Option<String> = conn.query_row(
+            "SELECT state FROM peer_key_transparency WHERE account=?1 AND identity_key=?2",
+            params![peer, key], |row| row.get(0),
+        ).optional()?;
+        Ok(match value.as_deref() {
+            Some("legacy") => PeerVerification::Legacy,
+            Some("legacy-unlisted") => PeerVerification::LegacyUnlisted,
+            Some("verified") => PeerVerification::Verified,
+            _ => PeerVerification::UnverifiedInbound,
+        })
+    }
+
+    pub(crate) fn mark_peer_verified(&self, peer: &str, key: &[u8]) -> Result<(), StorageError> {
+        self.db.connection()?.execute(
+            "INSERT INTO peer_key_transparency VALUES (?1,?2,'verified')
+             ON CONFLICT(account,identity_key) DO UPDATE SET state='verified'",
+            params![peer, key],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn mark_legacy_unlisted(&self, peer: &str, key: &[u8]) -> Result<(), StorageError> {
+        self.db.connection()?.execute(
+            "UPDATE peer_key_transparency SET state='legacy-unlisted'
+             WHERE account=?1 AND identity_key=?2 AND state='legacy'",
+            params![peer, key],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_test_identity_legacy(&self, peer: &str) -> Result<(), StorageError> {
+        self.db.connection()?.execute(
+            "UPDATE peer_key_transparency SET state='legacy' WHERE account=?1 AND state='unverified-inbound'",
+            [peer],
+        )?;
+        Ok(())
+    }
 
     /// Get a remote identity key by address.
     ///

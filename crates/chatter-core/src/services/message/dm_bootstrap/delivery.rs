@@ -47,15 +47,18 @@ impl MessageService {
             } else {
                 grpc_pool.anonymous_message_client()
             };
+            self.signal_service.verify_mailbox_identity(grpc_pool, &peer_id_str).await
+                .map_err(|e| MessageError::from_signal_send(e, "Bootstrap recipient verification"))?;
             let mut messages = Vec::with_capacity(devices.len());
             for &peer_device_id in &devices {
-                crate::services::gateway::submission::mark_submission_started()?;
                 match self
                     .signal_service
-                    .encrypt_message(auth_client, &peer_id_str, peer_device_id, payload)
+                    .encrypt_mailbox_session_devices(auth_client, &peer_id_str, vec![peer_device_id], payload)
                     .await
                 {
-                    Ok(sealed_body) => messages.push(SealedDeviceMessage {
+                    Ok(mut ciphertexts) => {
+                        let Some(sealed_body) = ciphertexts.remove(&peer_device_id) else { continue };
+                        messages.push(SealedDeviceMessage {
                         device_id: peer_device_id,
                         registration_id: self
                             .signal_service
@@ -66,7 +69,8 @@ impl MessageService {
                             server_key_id: self.signal_service.get_server_key_id(),
                             timestamp: TimestampNanos::now_anonymized().as_u64(),
                         }),
-                    }),
+                    });
+                    }
                     Err(e) => {
                         tracing::warn!(peer_id = %peer_id, peer_device_id, error = %e, "DM bootstrap: encrypt failed for device");
                         last_error = Some(MessageError::EncryptionFailed(format!(
@@ -76,10 +80,11 @@ impl MessageService {
                     }
                 }
             }
-            if messages.is_empty() && delivery == SealedDelivery::NamedDevices {
+            if messages.is_empty() {
                 break;
             }
 
+            crate::services::gateway::submission::mark_submission_started()?;
             let credential_token = match self.token_manager.claim_prefetched_token() {
                 Ok(token) => token,
                 Err(e) => {
@@ -143,10 +148,10 @@ impl MessageService {
                                 retired.remove(&(*peer_id, d));
                             }
                         }
-                        if let Err(e) = self
-                            .signal_service
-                            .reconcile_devices(auth_client, &peer_id_str, &missing, &[], &stale)
-                            .await
+                        if let Err(e) = crate::services::signal::SignalService::with_mailbox_kt(
+                            grpc_pool,
+                            self.signal_service.reconcile_devices(auth_client, &peer_id_str, &missing, &[], &stale),
+                        ).await
                         {
                             last_error = Some(MessageError::from_signal_send(
                                 e,

@@ -19,13 +19,20 @@ impl MessageService {
     ) -> Result<Vec<u32>, MessageError> {
         let peer_id_str = peer_id.to_string();
         let shield = self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
-        if !shield {
-            if let Err(e) = self
-                .signal_service
-                .ensure_sessions_all_devices(auth_client, &peer_id_str)
-                .await
+        let cached = self.live_session_devices(peer_id).await?;
+        if !shield && cached.is_empty() {
+            if let Err(e) = crate::services::signal::SignalService::with_mailbox_kt(
+                &self.grpc_pool,
+                self.signal_service.ensure_sessions_all_devices(auth_client, &peer_id_str),
+            ).await
             {
-                tracing::warn!(peer_id = %peer_id, error = %e, "Bootstrap: device refresh failed; using cached sessions");
+                let error = MessageError::from_signal_send(e, "Bootstrap: device refresh");
+                if crate::services::message::dm_outbox::key_wait_reason(&error).is_some()
+                    || matches!(error, MessageError::RecipientIdentityChanged { .. })
+                {
+                    return Err(error);
+                }
+                tracing::warn!(peer_id = %peer_id, %error, "Bootstrap: device refresh failed");
             }
         }
         let devices = bootstrap_device_order(self.live_session_devices(peer_id).await?);
@@ -38,6 +45,8 @@ impl MessageService {
                 ))
             });
         }
+        self.signal_service.verify_mailbox_identity(&self.grpc_pool, &peer_id_str).await
+            .map_err(|e| MessageError::from_signal_send(e, "Bootstrap recipient verification"))?;
         Ok(devices)
     }
 

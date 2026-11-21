@@ -89,6 +89,9 @@ impl SignalService {
             .into_iter()
             .filter(|d| Some(*d) != this_device)
             .collect();
+        if !with_session.is_empty() {
+            self.verify_existing_session_identity(auth_client, recipient_id).await?;
+        }
         let known_policy = self.unrestricted_access(recipient_id);
         if !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
             return Ok((with_session, known_policy.unwrap_or(false)));
@@ -153,6 +156,7 @@ impl SignalService {
 
                     // Check if a usable session already exists
                     if self.actor.has_session(address.clone()).await? {
+                        self.verify_existing_session_identity(auth_client, recipient_id).await?;
                         established_device_ids.push(device_id);
                         continue;
                     }

@@ -14,7 +14,7 @@ use libsignal_protocol::{
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::error::StorageError;
+use crate::error::{CryptoError, StorageError};
 use crate::storage::KeyStore;
 #[cfg(feature = "mesh")]
 use crate::storage::mesh_binding_store::MeshBindingStore;
@@ -47,6 +47,7 @@ impl std::error::Error for StorageCallbackError {}
 #[derive(Clone)]
 pub struct SignalStore {
     key_store: Arc<KeyStore>,
+    enforce_outbound_kt: bool,
     /// Mesh ratchets have a device-local address space per signed-in account.
     /// Identity keys remain keyed by the ordinary account ID.
     mesh_owner: Option<String>,
@@ -59,6 +60,7 @@ impl SignalStore {
     pub fn new(key_store: Arc<KeyStore>) -> Self {
         Self {
             key_store,
+            enforce_outbound_kt: false,
             mesh_owner: None,
             #[cfg(feature = "mesh")]
             mesh_binding: None,
@@ -76,6 +78,7 @@ impl SignalStore {
     ) -> Self {
         Self {
             key_store,
+            enforce_outbound_kt: false,
             mesh_owner: Some(owner),
             mesh_binding: Some((binding_store, peer)),
         }
@@ -126,6 +129,40 @@ impl SignalStore {
             .receive_read("settings", "auth.current_user_id", "CAST(value AS BLOB)")
             .map_err(storage_to_signal_error)?;
         local_account_matches(owner.as_deref(), account)
+    }
+
+    pub(crate) fn for_verified_send(&self) -> Self {
+        let mut store = self.clone();
+        store.enforce_outbound_kt = true;
+        store
+    }
+
+    // Test the actual identity bytes read by libsignal. A certificate fetch or
+    // a queued inbound operation can happen after the service-side KT check.
+    fn outbound_key_allowed(&self, account: &str, key: &[u8]) -> Result<bool> {
+        let verified = self.key_store.peer_verification(account, key)
+            .map_err(storage_to_signal_error)?;
+        let change = self.key_store.get_pending_identity_change(account)
+            .map_err(storage_to_signal_error)?;
+        Ok(verified.permits_encryption() && change.is_none())
+    }
+
+    pub(crate) fn require_sendable_peer(&self, account: &str) -> std::result::Result<(), CryptoError> {
+        if self.is_local_account(account).map_err(|error| CryptoError::Protocol(error.to_string()))? {
+            return Ok(());
+        }
+        if let Some((key, attribution, device_id)) = self.key_store.get_pending_identity_change(account)? {
+            return Err(CryptoError::UntrustedIdentity {
+                peer_id: account.to_owned(), device_id, new_identity_key: Some(key),
+                attribution: crate::error::IdentityChangeSource::from_db_str(&attribution),
+            });
+        }
+        if let Some(key) = self.key_store.get_identity(account)? {
+            if self.key_store.peer_verification(account, &key)?.permits_encryption() {
+                return Ok(());
+            }
+        }
+        Err(CryptoError::NotInTransparencyLog { peer_id: account.to_owned() })
     }
 
     /// Get the underlying KeyStore.
@@ -259,7 +296,7 @@ impl IdentityKeyStore for SignalStore {
         &self,
         address: &ProtocolAddress,
         identity: &IdentityKey,
-        _direction: Direction,
+        direction: Direction,
     ) -> Result<bool> {
         #[cfg(feature = "mesh")]
         if self.mesh_owner.is_some() {
@@ -279,6 +316,11 @@ impl IdentityKeyStore for SignalStore {
         // legacy remote self row was poisoned. Never trust a device's TOFU key.
         if self.is_local_account(address.name())? {
             return Ok(self.get_identity_key_pair().await?.identity_key() == identity);
+        }
+        if self.enforce_outbound_kt && matches!(direction, Direction::Sending)
+            && !self.outbound_key_allowed(address.name(), &identity.serialize())?
+        {
+            return Ok(false);
         }
         let stored_key = self
             .key_store
@@ -308,6 +350,13 @@ impl IdentityKeyStore for SignalStore {
             .get_identity(address.name())
             .map_err(storage_to_signal_error)?;
 
+        if self.enforce_outbound_kt {
+            if let Some(bytes) = &stored_key {
+                if !self.outbound_key_allowed(address.name(), bytes)? {
+                    return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+                }
+            }
+        }
         match stored_key {
             None => Ok(None),
             Some(bytes) => {

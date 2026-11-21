@@ -18,9 +18,9 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use chatter_proto::chat_v1::{
     AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordFinishRequest,
     ChangePasswordStartRequest, ChangePasswordStartResponse, DeleteAccountRequest,
-    GetActiveSessionsRequest, GetActiveSessionsResponse, GetConsistencyProofRequest,
+    GetActiveSessionsRequest, GetActiveSessionsResponse,
     GetConsistencyProofResponse, GetPreKeyBundleRequest, GetPreKeyBundleResponse,
-    GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest, GetProofResponse,
+    GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofResponse,
     GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse, InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginFinishRequest,
     LoginStartRequest, LoginStartResponse, LogoutRequest, PasswordProof, PasswordProofStartRequest,
@@ -33,7 +33,7 @@ use chatter_proto::chat_v1::{
     UploadPreKeyBundleRequest, UseRecoveryCodeFinishRequest, UseRecoveryCodeFinishResponse,
     UseRecoveryCodeStartRequest, UseRecoveryCodeStartResponse, auth_event,
     auth_service_client::AuthServiceClient,
-    key_transparency_service_client::KeyTransparencyServiceClient, signal_pre_key_bundle,
+    signal_pre_key_bundle,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
@@ -53,10 +53,10 @@ use chatter_proto::chat_v1::{
 /// ```
 pub struct AuthClient {
     inner: AuthServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
-    /// Key Transparency client, built on the same channel + auth interceptor.
+    /// Public KT calls on the same transport, without account credentials.
     /// Used to fetch a peer's signed inclusion proof before trusting the
     /// identity key in their prekey bundle (Phase 2 KT verification).
-    kt: KeyTransparencyServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
+    kt: super::AnonymousKtClient,
 }
 
 impl AuthClient {
@@ -69,8 +69,12 @@ impl AuthClient {
     pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: AuthServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
-            kt: KeyTransparencyServiceClient::with_interceptor(channel, interceptor),
+            kt: super::AnonymousKtClient::new(channel),
         }
+    }
+
+    pub(crate) fn public_kt_client(&self) -> super::AnonymousKtClient {
+        self.kt.clone()
     }
 
     /// Fetch the Key Transparency inclusion proof for `user_id`.
@@ -84,14 +88,7 @@ impl AuthClient {
         &mut self,
         user_id: &str,
     ) -> Result<Option<GetProofResponse>, NetworkError> {
-        let request = GetProofRequest {
-            user_id: user_id.to_string(),
-        };
-        match self.kt.get_proof(request).await {
-            Ok(resp) => Ok(Some(resp.into_inner())),
-            Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
-            Err(status) => Err(NetworkError::from_status(&status)),
-        }
+        self.kt.get_proof(user_id).await
     }
 
     /// Fetch a consistency proof between two tree-head epochs.
@@ -104,14 +101,7 @@ impl AuthClient {
         old_epoch: u64,
         new_epoch: u64,
     ) -> Result<GetConsistencyProofResponse, NetworkError> {
-        let request = GetConsistencyProofRequest {
-            old_epoch,
-            new_epoch,
-        };
-        match self.kt.get_consistency_proof(request).await {
-            Ok(resp) => Ok(resp.into_inner()),
-            Err(status) => Err(NetworkError::from_status(&status)),
-        }
+        self.kt.get_consistency_proof(old_epoch, new_epoch).await
     }
 
     /// OPAQUE login, first round trip: KE1 for the login identifier. The

@@ -53,21 +53,23 @@ impl MessageService {
 
             // Sender keys are per (user, device), so every device gets its own
             // ciphertext. Our own current device already holds the sender key.
-            let outcome = self
+            let outcome = crate::services::signal::SignalService::without_inline_kt(self
                 .deposit_sealed_to_all_devices(
                     auth_client,
                     message_client,
                     member_id,
                     &plaintext,
                     Some(channel_id.as_bytes()),
-                )
+                ))
                 .await;
             success_count += outcome.delivered;
             self.record_sender_key_holders(channel_id, member_id, &outcome);
             if outcome.delivered == 0 && !is_self {
                 error_count += 1;
                 if let Some(error) = outcome.error {
-                    super::super::server_dm::record_deposit_error(&mut failure, error);
+                    if !matches!(error, MessageError::RecipientKeyVerifying(_) | MessageError::RecipientKeyUnverified { .. } | MessageError::RecipientIdentityChanged { .. }) {
+                        super::super::server_dm::record_deposit_error(&mut failure, error);
+                    }
                 }
             }
         }
@@ -87,6 +89,9 @@ impl MessageService {
             .iter()
             .filter(|u| *u != &our_user_id)
             .count();
+        if failure.is_none() && success_count == 0 && error_count > 0 {
+            return Ok(());
+        }
         sender_key_distribution_result(success_count, non_self_members, failure)
     }
 
@@ -442,9 +447,9 @@ impl MessageService {
                     .filter(|(old, _, _)| old == &fingerprint)
                     .map_or(0, |(_, _, attempts)| *attempts)
             };
-            let result = self
-                .send_skdm_to_member(channel_id, &member_id, &skdm)
-                .await;
+            let result = crate::services::signal::SignalService::without_inline_kt(
+                self.send_skdm_to_member(channel_id, &member_id, &skdm),
+            ).await;
             // A partial deposit is success for availability, but the devices
             // still lacking the key must also observe cooldown.
             let current_devices = self

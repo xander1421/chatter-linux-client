@@ -154,7 +154,6 @@ impl MessageService {
         &self,
         channel: ChannelId,
         sent_at: u64,
-        auth: &mut crate::network::grpc::auth_client::AuthClient,
         channels: &mut crate::network::grpc::channel_client::ChannelClient,
     ) -> Result<(), MessageError> {
         let author = self.current_user_id()?;
@@ -180,14 +179,8 @@ impl MessageService {
                 author_is_member = true;
                 continue;
             }
-            let devices = self
-                .signal_service
-                .ensure_sessions_all_devices(auth, &peer.to_string())
-                .await
-                .map_err(|error| match error {
-                    crate::error::ServiceError::Network(error) => MessageError::Network(error),
-                    other => MessageError::EncryptionFailed(other.to_string()),
-                })?;
+            let devices = self.signal_service.session_devices(&peer.to_string()).await
+                .map_err(|error| MessageError::from_signal_send(error, "Receipt target lookup"))?;
             targets.extend(devices.into_iter().map(|device| (peer, DeviceId(device))));
         }
         let receipts = MessageReceiptRepository::new(self.database.clone());

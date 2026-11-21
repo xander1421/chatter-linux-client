@@ -95,7 +95,7 @@ impl SignalService {
                 device_id,
                 "Usable session already exists, skipping prekey fetch"
             );
-            return Ok(());
+            return self.verify_existing_session_identity(auth_client, recipient_id).await;
         }
 
         // No usable session — either doesn't exist or is corrupted
@@ -199,6 +199,8 @@ impl SignalService {
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
+        self.refuse_pending_identity_change(recipient_id)?;
+
         // Check if we already have a usable session
         if self.actor.has_session(address.clone()).await? {
             tracing::debug!(
@@ -206,7 +208,7 @@ impl SignalService {
                 device_id,
                 "Usable session already exists, skipping bundle processing"
             );
-            return Ok(());
+            return self.verify_existing_session_identity_anon(anon_kt_client, recipient_id).await;
         }
 
         let result = bundle_response

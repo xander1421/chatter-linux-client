@@ -316,3 +316,34 @@ async fn shield_parked_post_waits_for_independent_retry_after_refill() {
         "tick does not request or claim tokens; the transport owner spends them"
     );
 }
+
+#[tokio::test]
+async fn secret_kt_timeout_precedes_admission_and_token_claim() {
+    use chatter_proto::content_v1::{AnonDmMessage, Content, content};
+    use crate::domain::AnonDm;
+    use crate::error::NetworkError;
+    use crate::services::anon_dm::AnonDmError;
+    use crate::services::pairwise::TEST_SECRET_KT_FAILURE;
+
+    let (client, _dir) = shield_client(UserId::new());
+    let ms = client.messages();
+    let peer = UserId::new();
+    cache_device(ms, &peer, 2, &mut StdRng::seed_from_u64(7)).await;
+    let mut dm = AnonDm::new_initiated(peer);
+    dm.peer_device_id = Some(2);
+    let content = Content {
+        content: Some(content::Content::AnonDmMessage(Box::new(AnonDmMessage {
+            conversation_id: dm.id.to_vec(),
+            inner_content: Some(Box::new(crate::services::gateway::builders::build_text_content("queued", 1))),
+        }))),
+        ..Default::default()
+    };
+    assert!(crate::services::gateway::submission::user_post(&content));
+    seed_tokens(ms, 3);
+    let result = TEST_SECRET_KT_FAILURE.scope((), client.anon_dms().send_to_anon_mailbox(&dm, &[7; 32], content)).await;
+    assert!(matches!(result, Err(AnonDmError::RecipientKeyVerifying(NetworkError::Timeout))));
+    let conn = ms.database.read_connection().unwrap();
+    let claims: u32 = conn.query_row("SELECT COUNT(*) FROM settings WHERE key LIKE 'send.anonymous.v1:%'", [], |row| row.get(0)).unwrap();
+    assert_eq!(claims, 0);
+    assert_eq!(ms.token_manager.available_token_count().unwrap(), 3);
+}

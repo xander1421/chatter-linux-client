@@ -227,8 +227,21 @@ impl AnonDmService {
                 .await;
         }
 
-        // Send to peer
-        self.send_message(conversation_id, inner_content).await?;
+        // A key lookup can wait without starting a mailbox deposit. Retain the
+        // original content and route under the same message identity.
+        if let Err(error) = self.send_message(conversation_id, inner_content.clone()).await {
+            let error = match error {
+                AnonDmError::RecipientKeyVerifying(error) => crate::services::message::MessageError::RecipientKeyVerifying(error),
+                AnonDmError::RecipientKeyUnverified { peer_id } => crate::services::message::MessageError::RecipientKeyUnverified { peer_id },
+                error => return Err(error),
+            };
+            let device = self.settings_repo.get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)?.unwrap_or_default();
+            crate::services::message::dm_outbox::enqueue_mailbox_key_wait(
+                self.settings_repo.database(), current_user, device, &message_id, &dm.peer_id,
+                &inner_content, &error, 2,
+            ).map_err(|error| AnonDmError::MessageError(error.to_string()))?;
+            return Ok((message_id, sent_at));
+        }
 
         // Mark as "sent" for delivery status indicator
         let channel_id_for_status: ChannelId = (*conversation_id).into();
@@ -240,6 +253,30 @@ impl AnonDmService {
         );
 
         Ok((message_id, sent_at))
+    }
+
+    pub(crate) async fn verify_queued_recipient(
+        &self, conversation: &AnonDmId, peer: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::message::MessageError> {
+        use crate::services::{message::MessageError, pairwise::PairwiseError};
+        self.check_conversation_not_blocked(conversation).map_err(|error| MessageError::DmError(error.to_string()))?;
+        let dm = self.anon_dm_repo.get_conversation(conversation)?
+            .filter(|dm| dm.is_ready() && dm.peer_id == *peer)
+            .ok_or_else(|| MessageError::DmError("Secret chat is no longer available".into()))?;
+        let device = dm.peer_device_id.ok_or_else(|| MessageError::DmError("Secret chat no longer has a device".into()))?;
+        let key_error = |error: PairwiseError| match error {
+            PairwiseError::RecipientKeyVerifying(error) => MessageError::RecipientKeyVerifying(error),
+            PairwiseError::RecipientKeyUnverified { peer_id } => MessageError::RecipientKeyUnverified { peer_id },
+            PairwiseError::RecipientIdentityChanged { peer_id } => MessageError::RecipientIdentityChanged { peer_id },
+            PairwiseError::Network(error) => MessageError::Network(error),
+            error => MessageError::DmError(error.to_string()),
+        };
+        if self.pairwise_service.has_session(peer, device).await.map_err(key_error)? {
+            self.pairwise_service.verify_existing_recipient(peer).await.map_err(key_error)?;
+        } else {
+            self.pairwise_service.verify_anonymous_prekey_recipient(peer).await.map_err(key_error)?;
+        }
+        Ok(())
     }
 
     /// Resubmit a proven failed outgoing row with its original receiver identity.

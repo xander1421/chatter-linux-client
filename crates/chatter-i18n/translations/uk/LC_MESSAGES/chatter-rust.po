@@ -3972,3 +3972,6 @@ msgstr "Зареєстровано"
 
 msgid "This username link is invalid or expired."
 msgstr "Це посилання на ім’я користувача недійсне або прострочене."
+
+msgid "Verifying key"
+msgstr "Перевірка ключа"

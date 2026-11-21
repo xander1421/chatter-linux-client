@@ -45,6 +45,7 @@ pub struct SignalService {
     /// device registrations, never mutable ratchet records.
     pub(crate) skdm_retry:
         Arc<std::sync::Mutex<HashMap<(ChannelId, String), (String, std::time::Instant, u32)>>>,
+    kt_background: Arc<session::KtBackground>,
     pub(crate) sender_cert_cache: Arc<std::sync::Mutex<Option<VerifiedSenderCert>>>,
 }
 
@@ -64,6 +65,7 @@ impl Clone for SignalService {
             encrypt_locks: self.encrypt_locks.clone(),
             encrypt_lock_lru: self.encrypt_lock_lru.clone(),
             unrestricted_access: self.unrestricted_access.clone(),
+            kt_background: self.kt_background.clone(),
             sender_cert_cache: self.sender_cert_cache.clone(),
             skdm_retry: self.skdm_retry.clone(),
         }
@@ -95,6 +97,7 @@ impl SignalService {
             encrypt_locks: Arc::new(Mutex::new(HashMap::new())),
             encrypt_lock_lru: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             unrestricted_access: Arc::default(),
+            kt_background: Arc::default(),
             sender_cert_cache: Arc::default(),
             skdm_retry: Arc::default(),
         }

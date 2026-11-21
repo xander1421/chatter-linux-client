@@ -151,15 +151,26 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptSealed { plaintext, sender_cert, recipient_address, response } => {
-                            let mut store2 = store.clone();
-                            let res = SealedSenderManager::encrypt(&plaintext, &sender_cert, &recipient_address, &mut store, &mut store2)
+                            if let Err(error) = store.require_sendable_peer(recipient_address.name()) {
+                                let _ = response.send(Err(ServiceError::Crypto(error)));
+                                continue;
+                            }
+                            let mut gated = store.for_verified_send();
+                            let mut store2 = gated.clone();
+                            let res = SealedSenderManager::encrypt(&plaintext, &sender_cert, &recipient_address, &mut gated, &mut store2)
                                 .await
                                 .map_err(ServiceError::Crypto);
                             let _ = response.send(res);
                         }
 
                         SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, permit, response } => {
-                            let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), &store, &permit).await;
+                            let res = async {
+                                for destination in &destinations {
+                                    store.require_sendable_peer(destination.name()).map_err(ServiceError::Crypto)?;
+                                }
+                                let gated = store.for_verified_send();
+                                SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), &gated, &permit).await
+                            }.await;
                             let _ = response.send(res);
                         }
 
@@ -169,6 +180,10 @@ impl SignalActorHandle {
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
                             };
                             let res = async {
+                                for destination in &destinations {
+                                    store.require_sendable_peer(destination.name())?;
+                                }
+                                let gated = store.for_verified_send();
                                 let usmc = SealedSenderManager::create_content(
                                     libsignal_protocol::CiphertextMessageType::SenderKey,
                                     sender_cert,
@@ -176,7 +191,7 @@ impl SignalActorHandle {
                                     libsignal_protocol::ContentHint::Resendable,
                                     Some(group_id),
                                 )?;
-                                SealedSenderManager::encrypt_multi_recipient(&usmc, &destinations, &local_address, &store).await
+                                SealedSenderManager::encrypt_multi_recipient(&usmc, &destinations, &local_address, &gated).await
                             }
                             .await
                             .map_err(ServiceError::Crypto);
@@ -189,8 +204,13 @@ impl SignalActorHandle {
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
                             };
                             let mut rng = rand::rngs::OsRng.unwrap_err();
-                            let mut store2 = store.clone();
-                            let res = match libsignal_protocol::message_encrypt(&plaintext, &recipient_address, &local_address, &mut store, &mut store2, std::time::SystemTime::now(), &mut rng).await {
+                            if let Err(error) = store.require_sendable_peer(recipient_address.name()) {
+                                let _ = response.send(Err(ServiceError::Crypto(error)));
+                                continue;
+                            }
+                            let mut gated = store.for_verified_send();
+                            let mut store2 = gated.clone();
+                            let res = match libsignal_protocol::message_encrypt(&plaintext, &recipient_address, &local_address, &mut gated, &mut store2, std::time::SystemTime::now(), &mut rng).await {
                                 Ok(ciphertext) => {
                                     let msg_type = match ciphertext.message_type() {
                                         CiphertextMessageType::PreKey => 2u8,
@@ -403,6 +423,8 @@ impl SignalActorHandle {
                         SignalCommand::EncryptDecryptionErrorSealed { dem_serialized, sender_cert, recipient_address, response } => {
                             use libsignal_protocol::{ContentHint, DecryptionErrorMessage, PlaintextContent, UnidentifiedSenderMessageContent};
                             let res = async {
+                                store.require_sendable_peer(recipient_address.name()).map_err(ServiceError::Crypto)?;
+                                let gated = store.for_verified_send();
                                 let dem = DecryptionErrorMessage::try_from(dem_serialized.as_slice())
                                     .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
                                 let plaintext_content = PlaintextContent::from(dem);
@@ -416,7 +438,7 @@ impl SignalActorHandle {
                                     None,
                                 )
                                 .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
-                                SealedSenderManager::encrypt_from_content(&usmc, &recipient_address, &store)
+                                SealedSenderManager::encrypt_from_content(&usmc, &recipient_address, &gated)
                                     .await
                                     .map_err(ServiceError::Crypto)
                             }.await;

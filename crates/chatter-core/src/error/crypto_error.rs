@@ -139,6 +139,9 @@ pub enum CryptoError {
         peer_id: String,
     },
 
+    #[error("waiting for the recipient's Key Transparency proof: {0}")]
+    KeyVerificationPending(#[source] crate::error::NetworkError),
+
     /// Session not found for the given address.
     #[error("session not found for {0}")]
     SessionNotFound(String),

@@ -3986,3 +3986,6 @@ msgstr "Înregistrat"
 
 msgid "This username link is invalid or expired."
 msgstr "Acest link de nume de utilizator este nevalid sau a expirat."
+
+msgid "Verifying key"
+msgstr "Se verifică cheia"

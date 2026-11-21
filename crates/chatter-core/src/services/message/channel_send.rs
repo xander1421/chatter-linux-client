@@ -537,8 +537,6 @@ impl MessageService {
         }
         crate::services::gateway::submission::mark_submission_started()?;
         let proto = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            // Only a private channel goes out anonymously; an encrypted
-            // public channel also carries a state hash but posts to the server.
             if self.is_private_channel(&row.conversation_id) {
                 self.submit_group_request(&request).await
             } else {
@@ -788,6 +786,7 @@ impl MessageService {
                         !first_attempt
                     } else {
                         matches!(&error, MessageError::Network(e) if e.is_retryable() || e.is_transport_error())
+                            || matches!(&error, MessageError::RecipientKeyVerifying(_) | MessageError::RecipientKeyUnverified { .. })
                     };
                 let changed = {
                     let conn = self.database.connection()?;
@@ -807,7 +806,11 @@ impl MessageService {
                     |r| r.get(0),
                 )?;
                 let (status, reason) = match phase.as_str() {
-                    "queued" => ("sending", Some("Waiting for connection")),
+                    "queued" => ("sending", Some(match &error {
+                        MessageError::RecipientKeyVerifying(_) => "Verifying key",
+                        MessageError::RecipientKeyUnverified { .. } => "Key not verified",
+                        _ => "Waiting for connection",
+                    })),
                     "submitted" => ("sending", Some("Delivery unconfirmed")),
                     _ => ("failed", error.permanent_send_failure_reason()),
                 };

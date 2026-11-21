@@ -110,6 +110,15 @@ pub enum AnonDmError {
     #[error("user is blocked: {0}")]
     UserBlocked(UserId),
 
+    #[error("waiting for the recipient's Key Transparency proof: {0}")]
+    RecipientKeyVerifying(#[source] crate::error::NetworkError),
+
+    #[error("recipient's identity is not verified")]
+    RecipientKeyUnverified { peer_id: String },
+
+    #[error("recipient's identity changed")]
+    RecipientIdentityChanged { peer_id: String },
+
     /// Invalid private friend code.
     #[error("invalid private friend code: {0}")]
     InvalidFriendCode(String),
@@ -120,6 +129,9 @@ impl From<crate::services::pairwise::PairwiseError> for AnonDmError {
         use crate::services::pairwise::PairwiseError;
         match e {
             PairwiseError::Network(e) => Self::MessageError(e.to_string()),
+            PairwiseError::RecipientKeyVerifying(error) => Self::RecipientKeyVerifying(error),
+            PairwiseError::RecipientKeyUnverified { peer_id } => Self::RecipientKeyUnverified { peer_id },
+            PairwiseError::RecipientIdentityChanged { peer_id } => Self::RecipientIdentityChanged { peer_id },
             PairwiseError::Storage(e) => Self::Storage(e),
             PairwiseError::Token(crate::error::MailboxError::NoTokensAvailable) => {
                 Self::TokensPending

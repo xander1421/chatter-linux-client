@@ -21,6 +21,20 @@ impl AnonGroupService {
         content: Content,
     ) -> Result<(), AnonGroupError> {
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
+        // Existing test fixtures cover a replay with a previously claimed
+        // admission and no route. KT preflight runs before a new route can
+        // spend any token or start encryption.
+        let expected_key = if self.grpc_pool.secret_route_available() {
+            let device = peer_device.ok_or_else(|| AnonGroupError::InvalidData("recipient is not bound to a device".into()))?;
+            if self.pairwise_service.has_session(peer_id, device).await? {
+                self.pairwise_service.verify_existing_recipient(peer_id).await?;
+                None
+            } else {
+                Some(self.pairwise_service.verify_anonymous_prekey_recipient(peer_id).await?)
+            }
+        } else {
+            None
+        };
         // 1. Serialize content
         let plaintext = content.encode_to_vec();
         let retained = if crate::services::gateway::submission::user_post(&content) {
@@ -117,33 +131,25 @@ impl AnonGroupService {
                 }
                 AnonGroupError::from(e)
             })?;
-        let ciphertext = if has_session {
+        let encryption = async {
             self.check_group_recipient(&content, peer_id, mailbox_pk)?;
-            self.admit_recipient_encryption(retained.as_deref())?;
-            // Local only; a session that vanished since the check fails here
-            // rather than being re-established.
-            self.pairwise_service
-                .encrypt_existing_session(peer_id, device, &plaintext)
-                .await?
-        } else {
-            // Refuse an expired originating session before consuming a token.
-            self.check_recipient_session(retained.as_deref())?;
-            let token = self.claim_token().map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                e
-            })?;
-            self.check_group_recipient(&content, peer_id, mailbox_pk)?;
-            self.admit_recipient_encryption(retained.as_deref())?;
-            self.pairwise_service
-                .encrypt_anonymous(peer_id, Some(device), &plaintext, &token)
-                .await?
-                .0
-        };
+            let sealed = if has_session {
+                self.pairwise_service.encrypt_admitted_session(peer_id, device, &plaintext).await?
+            } else {
+                let key = expected_key.ok_or_else(|| AnonGroupError::CryptoError("recipient session changed before encryption".into()))?;
+                self.check_recipient_session(retained.as_deref())?;
+                let token = self.claim_token()?;
+                self.pairwise_service.encrypt_anonymous(peer_id, Some(device), &plaintext, &token, &key).await?.0
+            };
+            Ok::<_, AnonGroupError>(sealed)
+        }.await;
+        let ciphertext = encryption.map_err(|e| {
+            if let Some(key) = retained.as_ref() {
+                crate::services::gateway::submission::discard_before_encryption(self.settings_repo.database(), key);
+            }
+            e
+        })?;
+        self.admit_recipient_encryption(retained.as_deref())?;
 
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
         // 3. Send directly to anonymous mailbox

@@ -61,6 +61,7 @@ impl MessageError {
             }
             Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
             Self::RecipientKeyUnverified { .. } => Some("Key not verified"),
+            Self::RecipientKeyVerifying(_) => None,
             Self::MembershipNotVerified { .. } => Some("Membership not verified"),
             Self::ChannelNotFound(_) | Self::Network(NetworkError::NotFound(_)) => {
                 Some("Conversation unavailable")
@@ -176,7 +177,7 @@ impl MessageService {
         // The devices this send is for. Recorded before encryption so a later
         // failure still has an original recipient set, and a resend cannot
         // grow it. Receipts use the same rows.
-        self.snapshot_channel_receipt_targets(*channel_id, sent_at, auth_client, channel_client)
+        self.snapshot_channel_receipt_targets(*channel_id, sent_at, channel_client)
             .await?;
 
         let plaintext_bytes = {

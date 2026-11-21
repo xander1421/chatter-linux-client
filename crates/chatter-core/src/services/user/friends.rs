@@ -79,14 +79,17 @@ impl UserService {
         // All-devices fetch: the identity key is account-wide, but a peer's
         // live device ids are unknown here (device 1 may be a retired
         // install), so never name one.
-        let resp = self
-            .grpc_pool
-            .auth_client()
-            .get_pre_key_bundles_all_devices(&recipient.to_string())
-            .await?;
+        let mut auth = self.grpc_pool.auth_client();
+        let recipient_id = recipient.to_string();
+        let resp = auth.get_pre_key_bundles_all_devices(&recipient_id).await?;
         let identity_key =
             libsignal_protocol::IdentityKey::decode(&friend_request_identity_key(resp)?)
                 .map_err(|e| UserError::InvalidInput(format!("identity key decode failed: {e}")))?;
+
+        self.signal
+            .verify_fetched_identity(&mut auth, &recipient_id, &identity_key.serialize())
+            .await
+            .map_err(|e| UserError::InvalidInput(e.to_string()))?;
 
         let mut plaintext = Vec::with_capacity(1 + 32 + note.len());
         plaintext.push(u8::from(profile_key.is_some()));

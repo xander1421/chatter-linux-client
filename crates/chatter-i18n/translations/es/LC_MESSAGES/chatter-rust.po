@@ -3969,3 +3969,6 @@ msgstr "Registrado"
 
 msgid "This username link is invalid or expired."
 msgstr "Este enlace de nombre de usuario no es válido o ha caducado."
+
+msgid "Verifying key"
+msgstr "Verificando la clave"

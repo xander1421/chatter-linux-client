@@ -103,6 +103,7 @@ async fn cache_device(
         .establish_session(ProtocolAddress::new(peer.to_string(), device_id), bundle)
         .await
         .expect("session");
+    ms.signal_service.key_store.mark_test_identity_legacy(&peer.to_string()).unwrap();
     remote
 }
 

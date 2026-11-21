@@ -133,6 +133,7 @@ mod v140_activity_actor_names;
 mod v141_user_block_intervals;
 mod v142_channel_delivery_outbox;
 mod v143_verified_member_mutes;
+mod v144_peer_key_transparency;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -493,4 +494,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v141_user_block_intervals::V141UserBlockIntervals)
         .register(v142_channel_delivery_outbox::V142ChannelDeliveryOutbox)
         .register(v143_verified_member_mutes::V143VerifiedMemberMutes)
+        .register(v144_peer_key_transparency::V144PeerKeyTransparency)
 }

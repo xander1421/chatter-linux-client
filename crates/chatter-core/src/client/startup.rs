@@ -678,4 +678,7 @@ impl crate::services::message::SendRecoveryClient for ChatterClient {
     fn messages(&self) -> &Arc<crate::services::MessageService> {
         ChatterClient::messages(self)
     }
+    fn anon_dms(&self) -> &std::sync::Arc<crate::services::anon_dm::AnonDmService> {
+        ChatterClient::anon_dms(self)
+    }
 }

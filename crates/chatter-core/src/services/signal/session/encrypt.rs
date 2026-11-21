@@ -80,6 +80,14 @@ impl SignalService {
             .await
     }
 
+    pub(crate) async fn encrypt_mailbox_bootstrap_response(
+        &self, recipient: &str, device: u32, plaintext: &[u8],
+    ) -> Result<(Vec<u8>, u8), ServiceError> {
+        let device = DeviceId::try_from(device)
+            .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+        self.actor.encrypt_identified(plaintext.to_vec(), ProtocolAddress::new(recipient.to_owned(), device)).await
+    }
+
     /// Seal a serialized `DecryptionErrorMessage` for one recipient device.
     ///
     /// The DEM rides as session-LESS `PlaintextContent` inside sealed sender —
@@ -94,6 +102,8 @@ impl SignalService {
         device_id: u32,
         dem_serialized: Vec<u8>,
     ) -> Result<Vec<u8>, ServiceError> {
+        self.refuse_pending_identity_change(recipient_id)?;
+        self.verify_existing_session_identity(auth_client, recipient_id).await?;
         let device_id_struct = DeviceId::try_from(device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
@@ -336,6 +346,7 @@ impl SignalService {
                 }
             }
         }
+        self.verify_existing_session_identity(auth_client, recipient_id).await?;
         let certificate = self.get_or_request_sender_certificate(auth_client).await?;
         let batch = self
             .actor
@@ -370,7 +381,20 @@ impl SignalService {
         device_ids: Vec<u32>,
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
-        self.refuse_pending_identity_change(recipient_id)?;
+        self.verify_existing_session_identity(auth_client, recipient_id).await?;
+        self.encrypt_mailbox_session_devices(auth_client, recipient_id, device_ids, plaintext).await
+    }
+
+    /// The caller has checked the recipient over its anonymous route. The
+    /// authenticated client is only used to refresh our own certificate.
+    pub(crate) async fn encrypt_mailbox_session_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        device_ids: Vec<u32>,
+        plaintext: &[u8],
+    ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
+        self.require_sendable_session_identity(recipient_id)?;
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         let mut ciphertexts = HashMap::with_capacity(device_ids.len());
@@ -391,6 +415,7 @@ impl SignalService {
                 Ok(ciphertext) => {
                     ciphertexts.insert(device_id, ciphertext);
                 }
+                Err(e @ ServiceError::Crypto(CryptoError::NotInTransparencyLog { .. } | CryptoError::UntrustedIdentity { .. })) => return Err(e),
                 Err(e) => tracing::warn!(
                     recipient = %recipient_id,
                     device_id,
@@ -441,6 +466,8 @@ impl SignalService {
                 },
             ));
         }
+
+        self.require_sendable_session_identity(recipient_id)?;
 
         // Use cached sender certificate (must be pre-fetched during login)
         let sender_cert = self.get_cached_sender_certificate()?.ok_or_else(|| {

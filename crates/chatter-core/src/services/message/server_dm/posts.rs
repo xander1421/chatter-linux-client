@@ -106,12 +106,16 @@ impl MessageService {
             .shield_mode
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            match self.send_dm(peer_id, content, &self.mailbox_manager).await {
+            match self.send_dm(peer_id, content.clone(), &self.mailbox_manager).await {
                 Ok(()) => {
                     self.finish_retry_row(&message.id, "sent", None)?;
                     (false, None)
                 }
                 Err(MessageError::BootstrapInitiated) => (true, None),
+                Err(e) if super::super::dm_outbox::key_wait_reason(&e).is_some() => {
+                    self.enqueue_shield_key_wait(&message.id, peer_id, &content, &e)?;
+                    (false, None)
+                }
                 Err(e) => {
                     tracing::warn!(peer_id = %peer_id, error = %e, sent_at, "Friend DM not sent; stored as failed");
                     self.finish_retry_row(

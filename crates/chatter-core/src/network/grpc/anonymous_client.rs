@@ -302,6 +302,7 @@ impl AnonymousAuthClient {
 /// The lookup key is still the plaintext `user_id`, so the server sees WHICH
 /// peer is queried. Hiding that (VRF-indexed lookup) is the remaining
 /// query-privacy work.
+#[derive(Clone)]
 pub struct AnonymousKtClient {
     inner: KeyTransparencyServiceClient<GrpcTransport>,
 }

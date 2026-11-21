@@ -47,6 +47,7 @@ pub(crate) trait SendRecoveryClient: Send + Sync + 'static {
     fn offline_state(&self) -> &crate::state::OfflineState;
     fn event_bus(&self) -> &crate::events::EventBus;
     fn messages(&self) -> &std::sync::Arc<MessageService>;
+    fn anon_dms(&self) -> &std::sync::Arc<crate::services::anon_dm::AnonDmService>;
 }
 mod server_dm;
 pub(crate) mod shield_retry;
@@ -146,6 +147,9 @@ pub enum MessageError {
         peer_id: String,
     },
 
+    #[error("waiting for the recipient's Key Transparency proof: {0}")]
+    RecipientKeyVerifying(#[source] crate::error::NetworkError),
+
     /// DM conversation error.
     #[error("dm error: {0}")]
     DmError(String),
@@ -215,6 +219,8 @@ impl MessageError {
             crate::error::ServiceError::Crypto(
                 crate::error::CryptoError::NotInTransparencyLog { peer_id },
             ) => Self::RecipientKeyUnverified { peer_id },
+            crate::error::ServiceError::Crypto(crate::error::CryptoError::KeyVerificationPending(error)) =>
+                Self::RecipientKeyVerifying(error),
             error => Self::EncryptionFailed(format!("{context}: {error}")),
         }
     }

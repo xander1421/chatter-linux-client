@@ -21,8 +21,9 @@
 //! land, the receiver's only guard is its live (sender, sent_at) row, which a
 //! delete-for-me or an expiry hard-deletes, so the message would come back.
 //!
-//! Shield (mailbox) DMs do not enter: their bootstrap queue owns them, and
-//! the worker waits while Shield is on rather than leak the recipient.
+//! Mailbox DMs can also wait here for KT, with their original transport
+//! recorded. Once submission starts, only their existing mailbox owner may
+//! retry an ambiguous deposit.
 use super::{MessageError, MessageService};
 use crate::domain::{
     ids::{ChannelId, MessageId, UserId},
@@ -42,7 +43,7 @@ const MAX_PENDING: i64 = 256;
 /// envelope 46 days, so a manual retry (same sent_at) still deduplicates.
 const RETENTION_SECONDS: i64 = 30 * 24 * 3600;
 /// How long one attempt owns an entry before another may take it over.
-const LEASE_SECONDS: i64 = 60;
+const LEASE_SECONDS: i64 = 150;
 /// Attempts per worker tick.
 const BATCH: i64 = 4;
 /// How long after sealing a stored envelope may still be replayed. A sender
@@ -149,6 +150,8 @@ struct Entry {
     uak: Option<Vec<u8>>,
     devices: Option<Vec<u32>>,
     sealed_at: Option<i64>,
+    mailbox_transport: u8,
+    mailbox_started: bool,
 }
 
 /// Outcome of the attempt made inside the composing send.
@@ -160,9 +163,17 @@ pub(super) enum FirstAttempt {
     Refused(MessageError),
 }
 
+pub(super) fn key_wait_reason(error: &MessageError) -> Option<&'static str> {
+    match error {
+        MessageError::RecipientKeyVerifying(_) => Some("Verifying key"),
+        MessageError::RecipientKeyUnverified { .. } => Some("Key not verified"),
+        _ => None,
+    }
+}
+
 /// What an attempt's failure means for the entry.
 fn transient(error: &MessageError) -> bool {
-    matches!(error, MessageError::Network(NetworkError::RequestNotSent(_)))
+    matches!(error, MessageError::Network(NetworkError::RequestNotSent(_)) | MessageError::RecipientKeyUnverified { .. })
         || error.permanent_send_failure_reason().is_none()
         || matches!(error, MessageError::Storage(_))
 }
@@ -170,6 +181,29 @@ fn transient(error: &MessageError) -> bool {
 fn refused_before_submission(error: &MessageError, submission_started: bool) -> bool {
     !transient(error) && !submission_started
 }
+
+pub(crate) fn enqueue_mailbox_key_wait(
+    db: &Database, owner: UserId, device: u32, id: &MessageId, peer: &UserId, content: &Content,
+    error: &MessageError, route: u8,
+) -> Result<(), MessageError> {
+        let reason = key_wait_reason(error).ok_or_else(|| invalid("Not a verification wait"))?;
+        if device == 0 { return Err(MessageError::NotLoggedIn); }
+        let mut conn = db.connection()?;
+        let tx = conn.transaction()?;
+        let inserted = tx.execute(
+            "INSERT INTO dm_outbox(owner_id,message_id,peer_id,device_id,request_id,content,generation,next_attempt_at,created_at,mailbox_transport)
+             SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10
+             WHERE (SELECT COUNT(*) FROM dm_outbox WHERE owner_id=?1) < ?11",
+            params![owner.to_string(), id.to_string(), peer.to_string(), device,
+                uuid::Uuid::new_v4().to_string(), content.encode_to_vec(), uuid::Uuid::new_v4().to_string(),
+                now() + 5, now(), route, MAX_PENDING],
+        )?;
+        if inserted != 1 { return Err(invalid("too many unsent messages").into()); }
+        tx.execute("UPDATE messages SET failure_reason=?2 WHERE id=?1 AND delivery_status='sending'",
+            params![id.to_string(), reason])?;
+        tx.commit()?;
+        Ok(())
+    }
 
 impl MessageService {
     /// Take ownership of a stored `sending` row before anything is encrypted.
@@ -222,6 +256,13 @@ impl MessageService {
         Ok(generation)
     }
 
+    pub(super) fn enqueue_shield_key_wait(
+        &self, id: &MessageId, peer: &UserId, content: &Content, error: &MessageError,
+    ) -> Result<(), MessageError> {
+        enqueue_mailbox_key_wait(&self.database, self.current_user_id()?, self.current_device_id_or_zero(),
+            id, peer, content, error, 1)
+    }
+
     fn load_outbox_entry(
         &self,
         owner: &str,
@@ -231,7 +272,7 @@ impl MessageService {
         let conn = self.database.read_connection()?;
         let row = conn
             .query_row(
-                "SELECT peer_id,device_id,request_id,content,request,uak,devices,sealed_at FROM dm_outbox
+                "SELECT peer_id,device_id,request_id,content,request,uak,devices,sealed_at,mailbox_transport,mailbox_started FROM dm_outbox
                  WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
                 params![owner, id, generation],
                 |r| {
@@ -244,11 +285,13 @@ impl MessageService {
                         r.get::<_, Option<Vec<u8>>>(5)?,
                         r.get::<_, Option<String>>(6)?,
                         r.get::<_, Option<i64>>(7)?,
+                        r.get::<_, u8>(8)?,
+                        r.get::<_, bool>(9)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((peer, device, request_id, content, request, uak, devices, sealed_at)) = row
+        let Some((peer, device, request_id, content, request, uak, devices, sealed_at, mailbox_transport, mailbox_started)) = row
         else {
             return Ok(None);
         };
@@ -263,6 +306,8 @@ impl MessageService {
                 .map(|d| serde_json::from_str(&d).map_err(|_| invalid("Invalid outbox devices")))
                 .transpose()?,
             sealed_at,
+            mailbox_transport,
+            mailbox_started,
         }))
     }
 
@@ -272,13 +317,16 @@ impl MessageService {
         &self,
         id: &MessageId,
         generation: &str,
+        anon_dms: Option<&crate::services::anon_dm::AnonDmService>,
     ) -> Result<(), MessageError> {
         let owner = self.current_user_id()?.to_string();
         let entry = self
             .load_outbox_entry(&owner, &id.to_string(), generation)?
             .ok_or_else(|| MessageError::Storage(invalid("Sealed DM send was taken over")))?;
-        // Waiting, not failing: this transport names the recipient.
-        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+        // A queued mailbox post remains on its original private transport.
+        if entry.mailbox_transport != 2
+            && self.shield_mode.load(std::sync::atomic::Ordering::Acquire) != (entry.mailbox_transport == 1)
+        {
             return Err(MessageError::Network(NetworkError::Unavailable));
         }
         if entry.device != self.current_device_id_or_zero() {
@@ -288,6 +336,43 @@ impl MessageService {
         }
         let content = Content::decode(entry.content.as_slice())
             .map_err(|_| invalid("Invalid outbox content"))?;
+        if entry.mailbox_transport != 0 {
+            let delivery_unconfirmed = || MessageError::DmError(super::core::DELIVERY_UNCONFIRMED.into());
+            if entry.mailbox_started { return Err(delivery_unconfirmed()); }
+            let secret = if entry.mailbox_transport == 2 {
+                let service = anon_dms.ok_or_else(|| invalid("No secret-chat outbox handler"))?;
+                let row = self.message_repo.get(id)?.ok_or(MessageError::MessageNotFound(*id))?;
+                let conversation = crate::domain::AnonDmId::from_uuid(*row.conversation_id.as_uuid());
+                service.verify_queued_recipient(&conversation, &entry.peer).await?;
+                Some((service, conversation))
+            } else {
+                self.signal_service.verify_mailbox_identity(&self.grpc_pool, &entry.peer.to_string())
+                    .await.map_err(|e| MessageError::from_signal_send(e, "Mailbox verification"))?;
+                None
+            };
+            crate::state::send_session::check_send_session()?;
+            let changed = self.database.connection()?.execute(
+                "UPDATE dm_outbox SET mailbox_started=1 WHERE owner_id=?1 AND message_id=?2 AND generation=?3 AND mailbox_started=0",
+                params![owner, id.to_string(), generation],
+            )?;
+            if changed != 1 { return Err(delivery_unconfirmed()); }
+            if let Some((service, conversation)) = secret {
+                return match service.send_message(&conversation, content).await {
+                    Ok(()) => Ok(()),
+                    Err(crate::services::anon_dm::AnonDmError::DeliveryUnconfirmed) => {
+                        // The secret deposit journal already retains the exact
+                        // ciphertext and owns confirmation from here.
+                        Err(MessageError::BootstrapInitiated)
+                    }
+                    Err(_) => Err(delivery_unconfirmed()),
+                };
+            }
+            return match self.send_dm(&entry.peer, content, &self.mailbox_manager).await {
+                Ok(()) => Ok(()),
+                Err(MessageError::BootstrapInitiated) => Err(MessageError::BootstrapInitiated),
+                Err(_) => Err(delivery_unconfirmed()),
+            };
+        }
         // Past the certificate window the stored envelope can no longer be
         // replayed, and whether it landed is unknown: fail closed, never seal
         // again behind the user's back (module doc). Settling drops the entry.
@@ -430,6 +515,7 @@ impl MessageService {
         };
         let recorded = match result {
             Ok(()) => finish("sent", None)?,
+            Err(MessageError::BootstrapInitiated) => finish("sending", None)?,
             Err(error) if final_failure || !transient(error) => finish(
                 "failed",
                 Some(
@@ -438,14 +524,15 @@ impl MessageService {
                         .unwrap_or("Not delivered"),
                 ),
             )?,
-            Err(_) => {
+            Err(error) => {
                 let waiting = tx.execute(
                     "UPDATE dm_outbox SET attempts=MIN(attempts+1,6), next_attempt_at=?4+(5 << MIN(attempts,6))
                      WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
                     params![owner, id.to_string(), generation, now()],
                 )? == 1;
                 if waiting {
-                    tx.execute("UPDATE messages SET failure_reason='Waiting for connection' WHERE id=?1 AND delivery_status='sending'", params![id.to_string()])?;
+                    let reason = key_wait_reason(error).unwrap_or("Waiting for connection");
+                    tx.execute("UPDATE messages SET failure_reason=?2 WHERE id=?1 AND delivery_status='sending'", params![id.to_string(), reason])?;
                 }
                 waiting
             }
@@ -464,7 +551,7 @@ impl MessageService {
         id: &MessageId,
         generation: &str,
     ) -> Result<FirstAttempt, MessageError> {
-        let result = self.deliver_sealed_dm(id, generation).await;
+        let result = self.deliver_sealed_dm(id, generation, None).await;
         if crate::state::send_session::check_send_session().is_err() {
             // Another account or session: the entry keeps its owner and lease.
             return Ok(FirstAttempt::Queued);
@@ -540,26 +627,28 @@ fn claim_due(
     }
     let mut conn = service.database.connection()?;
     let tx = conn.transaction()?;
-    let rows: Vec<(String, i64, u32, bool)> = {
+    let rows: Vec<(String, i64, u32, bool, u8)> = {
         let mut stmt = tx.prepare(
-            "SELECT message_id,created_at,device_id,request IS NOT NULL FROM dm_outbox
-             WHERE owner_id=?1 AND next_attempt_at<=?2
+            "SELECT message_id,created_at,device_id,request IS NOT NULL OR mailbox_started,mailbox_transport FROM dm_outbox
+             WHERE owner_id=?1 AND next_attempt_at<=?2 AND mailbox_transport IN (?4, 2)
              ORDER BY created_at,message_id LIMIT ?3",
         )?;
-        let mapped = stmt.query_map(params![owner_s, now(), BATCH], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        let shield = service.shield_mode.load(std::sync::atomic::Ordering::Acquire);
+        let mapped = stmt.query_map(params![owner_s, now(), BATCH, shield], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })?;
         mapped.collect::<Result<_, _>>()?
     };
     let (mut due, mut expired) = (Vec::new(), Vec::new());
-    for (id, created, entry_device, envelope_stored) in rows {
-        // Only the account's own live friend-DM row is ever sent.
+    for (id, created, entry_device, envelope_stored, route) in rows {
+        let conversation_type = if route == 2 { ConversationType::AnonDm } else { ConversationType::ServerDm };
+        // The account's own live message must still match the route.
         let stored: Option<(String, i64)> = tx
             .query_row(
                 "SELECT conversation_id,sent_at FROM messages
                  WHERE id=?1 AND is_deleted=0 AND conversation_type=?2 AND sender_id=?3
                  AND NOT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)",
-                params![id, ConversationType::ServerDm.as_str(), owner_s],
+                params![id, conversation_type.as_str(), owner_s],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
@@ -626,12 +715,6 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
                 continue;
             };
             let messages = client.messages();
-            if messages
-                .shield_mode
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                continue;
-            }
             let (due, expired) = match claim_due(&messages, &owner) {
                 Ok(claimed) => claimed,
                 Err(error) => {
@@ -686,8 +769,8 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
                     .scope(
                         session.clone(),
                         tokio::time::timeout(
-                            std::time::Duration::from_secs(30),
-                            messages.deliver_sealed_dm(&id, &generation),
+                            std::time::Duration::from_secs(120),
+                            messages.deliver_sealed_dm(&id, &generation, Some(client.anon_dms())),
                         ),
                     )
                     .await
@@ -701,6 +784,9 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
                 // A previous attempt deferred its terminal verdict here.
                 let final_failure = matches!(&result, Err(e) if !transient(e));
                 match result {
+                    Err(MessageError::BootstrapInitiated) => {
+                        let _ = messages.settle_sealed_dm(&id, &generation, &result, false);
+                    }
                     Ok(()) => match messages.settle_sealed_dm(&id, &generation, &Ok(()), false) {
                         Ok(true) => {
                             client.event_bus().emit_domain(

@@ -28,6 +28,12 @@ pub enum PairwiseError {
     #[error("can't verify this contact's security key ({peer_id})")]
     RecipientKeyUnverified { peer_id: String },
 
+    #[error("waiting for the recipient's Key Transparency proof: {0}")]
+    RecipientKeyVerifying(#[source] NetworkError),
+
+    #[error("recipient's identity changed")]
+    RecipientIdentityChanged { peer_id: String },
+
     /// Encryption failed.
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
@@ -53,6 +59,22 @@ pub enum PairwiseError {
     /// Local state the caller records around a send could not be written.
     #[error("storage error: {0}")]
     Storage(#[from] crate::error::StorageError),
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static TEST_SECRET_KT_FAILURE: ();
+}
+
+fn key_error(error: crate::error::ServiceError) -> PairwiseError {
+    use crate::error::{CryptoError, ServiceError};
+    match error {
+        ServiceError::Network(error) => PairwiseError::Network(error),
+        ServiceError::Crypto(CryptoError::KeyVerificationPending(error)) => PairwiseError::RecipientKeyVerifying(error),
+        ServiceError::Crypto(CryptoError::NotInTransparencyLog { peer_id }) => PairwiseError::RecipientKeyUnverified { peer_id },
+        ServiceError::Crypto(CryptoError::UntrustedIdentity { peer_id, .. }) => PairwiseError::RecipientIdentityChanged { peer_id },
+        error => PairwiseError::SessionError(error.to_string()),
+    }
 }
 
 /// Reusable pairwise encryption service using Signal Protocol.
@@ -136,10 +158,8 @@ impl PairwiseService {
 
     /// Encrypt to the session we already hold with `device_id` of `peer_id`.
     ///
-    /// Local only: the certificate refresh above is the only possible network
-    /// call. If the session vanished since the caller checked, this fails
-    /// (`SessionUnusable`) instead of re-establishing it — the caller decides
-    /// whether to go through [`Self::encrypt_anonymous`].
+    /// Peers first learned from inbound messages need one anonymous KT lookup.
+    /// A verified identity is reused without any recipient lookup.
     pub async fn encrypt_existing_session(
         &self,
         peer_id: &UserId,
@@ -147,6 +167,28 @@ impl PairwiseService {
         plaintext: &[u8],
     ) -> Result<Vec<u8>, PairwiseError> {
         self.ensure_sender_certificate().await?;
+        self.verify_existing_recipient(peer_id).await?;
+        self.encrypt_admitted_session(peer_id, device_id, plaintext).await
+    }
+
+    pub(crate) async fn verify_existing_recipient(&self, peer: &UserId) -> Result<(), PairwiseError> {
+        #[cfg(test)]
+        if TEST_SECRET_KT_FAILURE.try_with(|_| ()).is_ok() {
+            return Err(PairwiseError::RecipientKeyVerifying(NetworkError::Timeout));
+        }
+        self.signal_service.verify_mailbox_identity(&self.grpc_pool, &peer.to_string())
+            .await.map_err(key_error)
+    }
+
+    pub(crate) async fn verify_anonymous_prekey_recipient(&self, peer: &UserId) -> Result<Vec<u8>, PairwiseError> {
+        let kt = self.grpc_pool.secret_kt_client().map_err(PairwiseError::RecipientKeyVerifying)?;
+        self.signal_service.verify_peer_before_anonymous_fetch(kt, &peer.to_string())
+            .await.map_err(key_error)
+    }
+
+    pub(crate) async fn encrypt_admitted_session(
+        &self, peer_id: &UserId, device_id: u32, plaintext: &[u8],
+    ) -> Result<Vec<u8>, PairwiseError> {
         self.signal_service
             .encrypt_message_anonymous(&peer_id.to_string(), device_id, plaintext)
             .await
@@ -172,6 +214,7 @@ impl PairwiseService {
         device_id: Option<u32>,
         plaintext: &[u8],
         token: &MailboxToken,
+        expected_key: &[u8],
     ) -> Result<(Vec<u8>, u32), PairwiseError> {
         self.ensure_sender_certificate().await?;
         let peer_id_str = peer_id.to_string();
@@ -187,9 +230,12 @@ impl PairwiseService {
             .await
             .map_err(|e| match (device_id, &e) {
                 (Some(_), NetworkError::NotFound(_)) => PairwiseError::PeerDeviceGone,
-                _ => PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e)),
+                _ => PairwiseError::Network(e),
             })?;
         let bundle = single_device_bundle(bundle_response.result, device_id)?;
+        if bundle.identity_key != expected_key {
+            return Err(PairwiseError::RecipientKeyUnverified { peer_id: peer_id_str });
+        }
         let bundle_device = bundle.device_id;
         let bundle_response = chatter_proto::chat_v1::GetPreKeyBundleResponse {
             result: Some(
@@ -210,12 +256,7 @@ impl PairwiseService {
                 bundle_response,
             )
             .await
-            .map_err(|e| match e {
-                crate::error::ServiceError::Crypto(
-                    crate::error::CryptoError::NotInTransparencyLog { peer_id },
-                ) => PairwiseError::RecipientKeyUnverified { peer_id },
-                e => PairwiseError::SessionError(e.to_string()),
-            })?;
+            .map_err(key_error)?;
 
         let ciphertext = self
             .signal_service
@@ -256,8 +297,9 @@ impl PairwiseService {
                 .claim_prefetched_token()
                 .map_err(PairwiseError::Token)
         };
+        let key = self.verify_anonymous_prekey_recipient(peer_id).await?;
         let (sealed_body, device) = self
-            .encrypt_anonymous(peer_id, device_id, plaintext, &claim()?)
+            .encrypt_anonymous(peer_id, device_id, plaintext, &claim()?, &key)
             .await?;
         let send_token = claim()?;
         before_send(device)?;
@@ -426,7 +468,7 @@ mod tests {
             .unwrap_err();
         assert!(no_tor(&e), "{e}");
         let e = pairwise
-            .encrypt_anonymous(&peer, Some(2), b"x", &token)
+            .encrypt_anonymous(&peer, Some(2), b"x", &token, &[])
             .await
             .unwrap_err();
         assert!(no_tor(&e), "{e}");

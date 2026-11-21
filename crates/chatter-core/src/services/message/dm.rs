@@ -95,6 +95,8 @@ impl MessageService {
 
         // Conversation is ready - proceed with sending
         let conversation = conversation.unwrap();
+        self.signal_service.verify_mailbox_identity(&self.grpc_pool, &peer_id.to_string())
+            .await.map_err(|e| MessageError::from_signal_send(e, "Mailbox recipient verification"))?;
         self.snapshot_dm_content_targets(
             *peer_id,
             &content,
@@ -348,7 +350,7 @@ impl MessageService {
         let device_id = mailbox.device_id;
         let peer_ciphertexts = self
             .signal_service
-            .encrypt_message_session_devices(
+            .encrypt_mailbox_session_devices(
                 auth_client,
                 &peer_id.to_string(),
                 vec![device_id],
@@ -500,6 +502,8 @@ impl MessageService {
                 "no original device of this message still has a mailbox".into(),
             ));
         }
+        self.signal_service.verify_mailbox_identity(&self.grpc_pool, &peer_id.to_string())
+            .await.map_err(|e| MessageError::from_signal_send(e, "Mailbox recipient verification"))?;
         let mut auth_client = self.auth_client();
         let plaintext = content.encode_to_vec();
         let mut delivered = 0usize;
@@ -571,6 +575,9 @@ impl MessageService {
         mailbox_manager: &MailboxManager,
     ) -> PendingFlush {
         let mut flush = PendingFlush::default();
+        if self.signal_service.verify_mailbox_identity(&self.grpc_pool, &peer_id.to_string()).await.is_err() {
+            return flush;
+        }
         let pending = match self.pending_dms.drain(peer_id) {
             Ok(pending) => pending,
             Err(e) => {

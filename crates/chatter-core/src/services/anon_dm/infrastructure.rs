@@ -152,11 +152,23 @@ impl AnonDmService {
         content: Content,
     ) -> Result<(), AnonDmError> {
         let peer_id = &dm.peer_id;
+        let device = dm.peer_device_id.ok_or_else(|| {
+            AnonDmError::InvalidData("secret chat is not bound to a peer device".into())
+        })?;
+        let has_session = self.pairwise_service.has_session(peer_id, device).await?;
+        let expected_key = if has_session {
+            self.pairwise_service.verify_existing_recipient(peer_id).await?;
+            None
+        } else {
+            Some(self.pairwise_service.verify_anonymous_prekey_recipient(peer_id).await?)
+        };
         // Secret-chat traffic goes over Tor or not at all; refuse before any
         // submission is recorded or token spent.
         self.grpc_pool
             .secret_channel()
             .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
+        self.pairwise_service.ensure_sender_certificate().await?;
+        crate::state::send_session::check_send_session()?;
         // Serialize content
         let plaintext = content.encode_to_vec();
         let retained = if crate::services::gateway::submission::user_post(&content) {
@@ -193,37 +205,15 @@ impl AnonDmService {
             }
             e
         };
-        let device = dm.peer_device_id.ok_or_else(|| {
-            discard(AnonDmError::InvalidData(
-                "secret chat is not bound to a peer device".into(),
-            ))
-        })?;
-        let has_session = self
-            .pairwise_service
-            .has_session(peer_id, device)
-            .await
-            .map_err(|e| discard(e.into()))?;
-        // Our certificate first (over Tor if it must be fetched), so a missing
-        // one fails before any token is spent or submission started.
-        self.pairwise_service
-            .ensure_sender_certificate()
-            .await
-            .map_err(|e| discard(e.into()))?;
-        let ciphertext = if has_session {
-            crate::services::gateway::submission::mark_submission_started()
-                .map_err(|e| discard(e.into()))?;
-            self.pairwise_service
-                .encrypt_existing_session(peer_id, device, &plaintext)
-                .await?
-        } else {
+        let ciphertext = if let Some(key) = expected_key {
             let token = self.claim_token().map_err(discard)?;
-            crate::services::gateway::submission::mark_submission_started()
-                .map_err(|e| discard(e.into()))?;
-            self.pairwise_service
-                .encrypt_anonymous(peer_id, Some(device), &plaintext, &token)
-                .await?
-                .0
-        };
+            self.pairwise_service.encrypt_anonymous(peer_id, Some(device), &plaintext, &token, &key)
+                .await.map(|result| result.0)
+        } else {
+            self.pairwise_service.encrypt_admitted_session(peer_id, device, &plaintext).await
+        }.map_err(|e| discard(e.into()))?;
+        crate::services::gateway::submission::mark_submission_started()
+            .map_err(|e| discard(e.into()))?;
 
         if let Some(key) = retained.as_ref() {
             crate::services::gateway::submission::retain_deposit(

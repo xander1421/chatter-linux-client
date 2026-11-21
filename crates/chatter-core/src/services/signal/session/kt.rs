@@ -1,298 +1,579 @@
 use super::*;
+use crate::error::NetworkError;
+use crate::network::grpc::AnonymousKtClient;
+use crate::storage::PeerVerification;
+use std::collections::HashSet;
+use std::time::Duration;
+
+const ONION_KT_DEADLINE: Duration = Duration::from_secs(95);
+const MAX_BACKGROUND_LOOKUPS: usize = 256;
+tokio::task_local! {
+    static DEFER_KT: ();
+    static MAILBOX_KT: Option<AnonymousKtClient>;
+}
+
+pub(in crate::services::signal) struct KtBackground {
+    queued: parking_lot::Mutex<HashSet<(String, Vec<u8>)>>,
+    turn: tokio::sync::Mutex<()>,
+}
+
+impl Default for KtBackground {
+    fn default() -> Self {
+        Self {
+            queued: parking_lot::Mutex::default(),
+            turn: tokio::sync::Mutex::new(()),
+        }
+    }
+}
+
+fn unverified(peer_id: &str) -> ServiceError {
+    ServiceError::Crypto(CryptoError::NotInTransparencyLog {
+        peer_id: peer_id.to_owned(),
+    })
+}
+
+fn pending(error: ServiceError) -> ServiceError {
+    match error {
+        ServiceError::Network(error) => {
+            ServiceError::Crypto(CryptoError::KeyVerificationPending(error))
+        }
+        error => error,
+    }
+}
+
+fn anchor_error(error: KtError) -> ServiceError {
+    error.trace_rejection();
+    ServiceError::Validation(format!(
+        "Key Transparency consistency check failed: {error}"
+    ))
+}
 
 impl SignalService {
-    /// Key Transparency gate (Phase 2).
-    ///
-    /// Before trusting the identity key inside a peer's prekey bundle, fetch the
-    /// server's signed KT inclusion proof for that peer and verify that the
-    /// bundle's identity key is exactly the one committed in the append-only KT
-    /// log, under the client-pinned tree-head public key
-    /// (`config::KT_TREE_HEAD_PUBLIC_KEY_BYTES`).
-    ///
-    /// No-proof policy (deliberate, LOUD, not silent):
-    /// * peer HAS a leaf, key matches  -> Ok (verified).
-    /// * peer HAS a leaf, key differs   -> REJECT (F9 forged/MITM identity key).
-    /// * peer has NO leaf (NotFound)    -> REJECT with
-    ///   [`CryptoError::NotInTransparencyLog`]. The server logs every identity
-    ///   key in the transaction that stores it, so "no leaf" is never honest
-    ///   for a peer with a bundle; accepting it would let a server skip KT for
-    ///   any peer it wants to MITM.
-    /// * any other transport/server error -> REJECT (an error is not evidence of
-    ///   an absent leaf; a malicious server must not be able to error its way
-    ///   past the check).
-    /// Hold the KT log to one history over time.
-    ///
-    /// `verify_kt_proof` verifies a peer's key against the head in the SAME
-    /// response, so a server that signs heads can serve a different tree per
-    /// user or per request and every proof still verifies. This compares the
-    /// offered head against the highest one this device ever accepted and, when
-    /// it is newer, requires a consistency proof from the pinned head to it.
-    ///
-    /// Failures REJECT the session rather than warn. The server can rebuild
-    /// state at any epoch by replaying its log (`Service.replay`), so it has no honest
-    /// reason to fail — and a server able to suppress this check by erroring
-    /// could fork the log undetectably, which is the same reasoning that
-    /// already makes a transport error on `GetProof` a reject rather than a
-    /// "no leaf".
-    ///
-    /// `fetch_consistency` is the channel's own consistency-proof RPC, so the
-    /// anonymous path never falls back to an identified request.
+    pub(crate) async fn without_inline_kt<T>(future: impl std::future::Future<Output = T>) -> T {
+        DEFER_KT.scope((), future).await
+    }
+
+    pub(crate) async fn with_mailbox_kt<T>(
+        pool: &crate::network::grpc::GrpcClientPool,
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        MAILBOX_KT.scope(pool.secret_kt_client().ok(), future).await
+    }
+
     async fn check_tree_head_consistency<F, Fut>(
         &self,
-        pin: &kt_anchor::PinGuard,
-        fetch_consistency: F,
-        recipient_id: &str,
+        initial_pin: Option<kt_anchor::PinnedTreeHead>,
+        mut fetch_consistency: F,
+        _recipient_id: &str,
         proof: &chatter_proto::chat_v1::GetProofResponse,
     ) -> Result<(), ServiceError>
     where
-        F: FnOnce(u64, u64) -> Fut,
+        F: FnMut(u64, u64) -> Fut,
         Fut: std::future::Future<
-                Output = Result<
-                    chatter_proto::chat_v1::GetConsistencyProofResponse,
-                    crate::error::NetworkError,
-                >,
+                Output = Result<chatter_proto::chat_v1::GetConsistencyProofResponse, NetworkError>,
             >,
     {
-        let Some(sth) = proof.signed_tree_head.as_ref() else {
-            return Err(ServiceError::Validation(
-                "KT proof has no signed tree head".to_string(),
-            ));
-        };
-
-        match kt_anchor::hold_head_locked(pin, &self.settings_repo, sth, fetch_consistency).await {
-            Ok(kt_anchor::AnchorOutcome::FirstPin) => {
-                tracing::info!(
-                    epoch = sth.epoch,
-                    "KT: pinned the transparency log's tree head for the first time"
-                );
-                Ok(())
-            }
-            Ok(kt_anchor::AnchorOutcome::Advanced) => {
-                tracing::info!(
-                    new_epoch = sth.epoch,
-                    "KT: advanced the pinned tree head; log verified append-only"
-                );
-                Ok(())
-            }
-            Ok(kt_anchor::AnchorOutcome::Unchanged) => Ok(()),
-            Err(e) => {
-                e.trace_rejection();
-                tracing::error!(
-                    recipient = %recipient_id,
-                    offered_epoch = sth.epoch,
-                    error = %e,
-                    "KT REJECT: could not establish continuity with the pinned tree head"
-                );
-                Err(ServiceError::Validation(format!(
-                    "Key Transparency consistency check failed for {recipient_id}: {e}"
-                )))
+        let sth = proof
+            .signed_tree_head
+            .as_ref()
+            .ok_or_else(|| anchor_error(KtError::Malformed("proof has no signed tree head")))?;
+        loop {
+            let (pin, old_epoch, new_epoch) = {
+                let _guard = kt_anchor::lock_pin().await;
+                let pin = kt_anchor::pinned_head(&self.settings_repo).map_err(anchor_error)?;
+                // Another lookup advancing during the fetch can make this
+                // proof stale. Retry with a fresh inclusion proof; an already
+                // stale head at the time we started remains a rollback error.
+                if pin.is_some_and(|head| head.epoch > sth.epoch)
+                    && initial_pin.is_none_or(|head| head.epoch <= sth.epoch)
+                    && pin != initial_pin
+                {
+                    return Err(ServiceError::Network(NetworkError::Unavailable));
+                }
+                match kt_anchor::classify_head(&self.settings_repo, sth).map_err(anchor_error)? {
+                    kt_anchor::AnchorAction::Settled(_) => return Ok(()),
+                    kt_anchor::AnchorAction::NeedsProof {
+                        old_epoch,
+                        new_epoch,
+                    } => (pin, old_epoch, new_epoch),
+                }
+            };
+            let response = kt_anchor::pinned_rpc(fetch_consistency(old_epoch, new_epoch))
+                .await
+                .map_err(|error| {
+                    // A proof that could not be fetched is a retryable check.
+                    // Keep transport causes and never accept an invalid proof.
+                    let error = if error.is_retryable() || error.is_transport_error() {
+                        error
+                    } else {
+                        NetworkError::Unavailable
+                    };
+                    ServiceError::Network(error)
+                })?;
+            let _guard = kt_anchor::lock_pin().await;
+            if kt_anchor::pinned_head(&self.settings_repo).map_err(anchor_error)? == pin {
+                return kt_anchor::accept_advance(&self.settings_repo, sth, &response)
+                    .map(|_| ())
+                    .map_err(anchor_error);
             }
         }
+    }
+
+    fn has_verified_identity(&self, peer: &str, key: &[u8]) -> Result<bool, ServiceError> {
+        Ok(self.key_store.peer_verification(peer, key)? == PeerVerification::Verified)
+    }
+
+    fn require_verified_identity(&self, peer: &str, key: &[u8]) -> Result<(), ServiceError> {
+        self.has_verified_identity(peer, key)?
+            .then_some(())
+            .ok_or_else(|| {
+                ServiceError::Validation("KT proof could not authenticate the key".into())
+            })
+    }
+
+    pub(super) fn session_identity_for_kt(&self, peer: &str) -> Result<Vec<u8>, ServiceError> {
+        self.get_peer_identity(peer)?
+            .ok_or_else(|| unverified(peer))
+    }
+
+    fn local_account(&self, peer: &str) -> Result<bool, ServiceError> {
+        Ok(self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)?
+            .as_deref()
+            == Some(peer))
+    }
+
+    pub(crate) fn require_sendable_session_identity(&self, peer: &str) -> Result<(), ServiceError> {
+        self.refuse_pending_identity_change(peer)?;
+        if self.local_account(peer)? {
+            return Ok(());
+        }
+        let key = self.session_identity_for_kt(peer)?;
+        self.key_store
+            .peer_verification(peer, &key)?
+            .permits_encryption()
+            .then_some(())
+            .ok_or_else(|| unverified(peer))
+    }
+
+    pub(crate) async fn verify_existing_session_identity(
+        &self,
+        auth: &mut AuthClient,
+        peer: &str,
+    ) -> Result<(), ServiceError> {
+        if let Ok(client) = MAILBOX_KT.try_with(Clone::clone) {
+            self.refuse_pending_identity_change(peer)?;
+            if self.local_account(peer)? {
+                return Ok(());
+            }
+            let key = self.session_identity_for_kt(peer)?;
+            return self.check_mailbox_key(client, peer, &key).await;
+        }
+        self.check_existing_identity(auth.public_kt_client(), peer, kt_anchor::PIN_RPC_DEADLINE)
+            .await
+    }
+
+    pub(crate) async fn verify_existing_session_identity_anon(
+        &self,
+        client: &mut AnonymousKtClient,
+        peer: &str,
+    ) -> Result<(), ServiceError> {
+        self.check_existing_identity(client.clone(), peer, ONION_KT_DEADLINE)
+            .await
+    }
+
+    async fn check_existing_identity(
+        &self,
+        client: AnonymousKtClient,
+        peer: &str,
+        deadline: Duration,
+    ) -> Result<(), ServiceError> {
+        self.refuse_pending_identity_change(peer)?;
+        if self.local_account(peer)? {
+            return Ok(());
+        }
+        let key = self.session_identity_for_kt(peer)?;
+        self.check_outbound_key(client, peer, &key, deadline).await
+    }
+
+    async fn check_outbound_key(
+        &self,
+        client: AnonymousKtClient,
+        peer: &str,
+        key: &[u8],
+        deadline: Duration,
+    ) -> Result<(), ServiceError> {
+        let state = self.key_store.peer_verification(peer, key)?;
+        match state {
+            PeerVerification::Verified | PeerVerification::LegacyUnlisted => Ok(()),
+            PeerVerification::Legacy => {
+                self.schedule_key_verification(client, peer, key, deadline);
+                Ok(())
+            }
+            PeerVerification::UnverifiedInbound => {
+                if DEFER_KT.try_with(|_| ()).is_ok() {
+                    self.schedule_key_verification(client, peer, key, deadline);
+                    return Err(pending(ServiceError::Network(NetworkError::Unavailable)));
+                }
+                let result = self.verify_exact_key(client, peer, key, deadline).await;
+                self.park_contradiction(peer, key, &result).await?;
+                result.map_err(pending)
+            }
+        }
+    }
+
+    /// Mailbox peers must never be named on the identified transport. A
+    /// verified or legacy key remains usable even if the proof route is down.
+    pub(crate) async fn verify_mailbox_identity(
+        &self,
+        pool: &crate::network::grpc::GrpcClientPool,
+        peer: &str,
+    ) -> Result<(), ServiceError> {
+        self.refuse_pending_identity_change(peer)?;
+        if self.local_account(peer)? {
+            return Ok(());
+        }
+        let key = self.session_identity_for_kt(peer)?;
+        self.check_mailbox_key(pool.secret_kt_client().ok(), peer, &key)
+            .await
+    }
+
+    async fn check_mailbox_key(
+        &self,
+        client: Option<AnonymousKtClient>,
+        peer: &str,
+        key: &[u8],
+    ) -> Result<(), ServiceError> {
+        let state = self.key_store.peer_verification(peer, key)?;
+        if matches!(
+            state,
+            PeerVerification::Verified | PeerVerification::LegacyUnlisted
+        ) {
+            return Ok(());
+        }
+        match client {
+            Some(client) => {
+                self.check_outbound_key(client, peer, key, ONION_KT_DEADLINE)
+                    .await
+            }
+            None if state == PeerVerification::Legacy => Ok(()),
+            None => Err(pending(ServiceError::Network(
+                NetworkError::SecretChatNeedsTor(
+                    "mailbox key verification requires an onion route",
+                ),
+            ))),
+        }
+    }
+
+    pub(crate) fn schedule_session_verification(
+        &self,
+        client: AnonymousKtClient,
+        peer: &str,
+        onion: bool,
+    ) -> Result<(), ServiceError> {
+        if self.local_account(peer)? {
+            return Ok(());
+        }
+        if let Some(key) = self.get_peer_identity(peer)? {
+            if matches!(
+                self.key_store.peer_verification(peer, &key)?,
+                PeerVerification::Legacy | PeerVerification::UnverifiedInbound
+            ) {
+                let deadline = if onion {
+                    ONION_KT_DEADLINE
+                } else {
+                    kt_anchor::PIN_RPC_DEADLINE
+                };
+                self.schedule_key_verification(client, peer, &key, deadline);
+            }
+        }
+        Ok(())
+    }
+
+    fn schedule_key_verification(
+        &self,
+        client: AnonymousKtClient,
+        peer: &str,
+        key: &[u8],
+        deadline: Duration,
+    ) {
+        let entry = (peer.to_owned(), key.to_vec());
+        {
+            let mut queued = self.kt_background.queued.lock();
+            if queued.len() >= MAX_BACKGROUND_LOOKUPS || !queued.insert(entry.clone()) {
+                return;
+            }
+        }
+        let svc = self.clone();
+        let owner = self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)
+            .ok()
+            .flatten();
+        tokio::spawn(async move {
+            let (peer, key) = &entry;
+            for delay in [0, 5, 20, 60] {
+                if delay != 0 {
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                }
+                let _turn = svc.kt_background.turn.lock().await;
+                if owner
+                    != svc
+                        .settings_repo
+                        .get_string(keys::CURRENT_USER_ID)
+                        .ok()
+                        .flatten()
+                    || !svc.get_peer_identity(peer).is_ok_and(|current| {
+                        current.as_deref().is_none_or(|current| current == key)
+                    })
+                    || svc.refuse_pending_identity_change(peer).is_err()
+                {
+                    break;
+                }
+                // Pace successful and failed checks below the server's two
+                // consistency RPCs per second. The queue is off the send path.
+                tokio::time::sleep(Duration::from_millis(550)).await;
+                let result = svc
+                    .verify_exact_key(client.clone(), peer, key, deadline)
+                    .await;
+                if matches!(
+                    result,
+                    Err(ServiceError::Crypto(
+                        CryptoError::NotInTransparencyLog { .. }
+                    ))
+                ) && svc.key_store.mark_legacy_unlisted(peer, key).is_ok()
+                {
+                    if svc.key_store.peer_verification(peer, key).ok()
+                        == Some(PeerVerification::LegacyUnlisted)
+                    {
+                        tracing::info!(target: "kt_peer", "legacy peer has no transparency entry");
+                    }
+                    break;
+                }
+                if !matches!(result, Err(ServiceError::Network(_))) {
+                    let _ = svc.park_contradiction(peer, key, &result).await;
+                    break;
+                }
+            }
+            svc.kt_background.queued.lock().remove(&entry);
+        });
+    }
+
+    async fn park_contradiction(
+        &self,
+        peer: &str,
+        key: &[u8],
+        result: &Result<(), ServiceError>,
+    ) -> Result<(), ServiceError> {
+        if let Err(error @ ServiceError::Crypto(CryptoError::UntrustedIdentity { .. })) = result {
+            if self.get_peer_identity(peer)?.as_deref() == Some(key) {
+                self.note_identity_change(error);
+                self.archive_peer_sessions(peer).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn verify_fetched_identity(
+        &self,
+        auth: &mut AuthClient,
+        peer: &str,
+        key: &[u8],
+    ) -> Result<(), ServiceError> {
+        if self.local_account(peer)? && self.get_identity_public_key().await?.as_slice() == key {
+            return Ok(());
+        }
+        if let Ok(client) = MAILBOX_KT.try_with(Clone::clone) {
+            return self.check_mailbox_key(client, peer, key).await;
+        }
+        self.check_outbound_key(
+            auth.public_kt_client(),
+            peer,
+            key,
+            kt_anchor::PIN_RPC_DEADLINE,
+        )
+        .await
     }
 
     pub(super) async fn verify_peer_key_transparency(
         &self,
-        auth_client: &mut AuthClient,
-        recipient_id: &str,
+        auth: &mut AuthClient,
+        peer: &str,
         bundle: &libsignal_protocol::PreKeyBundle,
     ) -> Result<(), ServiceError> {
-        let identity_key = bundle
+        let key = bundle
             .identity_key()
-            .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
+            .map_err(|e| ServiceError::Validation(e.to_string()))?
             .serialize();
-        self.verify_identity_key_transparency(auth_client, recipient_id, &identity_key)
+        self.verify_fetched_identity(auth, peer, &key).await
+    }
+
+    pub(super) async fn verify_peer_key_transparency_anon(
+        &self,
+        client: &mut AnonymousKtClient,
+        peer: &str,
+        bundle: &libsignal_protocol::PreKeyBundle,
+    ) -> Result<(), ServiceError> {
+        let key = bundle
+            .identity_key()
+            .map_err(|e| ServiceError::Validation(e.to_string()))?
+            .serialize();
+        self.check_outbound_key(client.clone(), peer, &key, ONION_KT_DEADLINE)
             .await
     }
 
-    /// The KT gate on a bare identity key: `Ok(())` iff `identity_key` is
-    /// `user_id`'s key in the pinned, append-only transparency log. Used for
-    /// prekey bundles and for the authors of signed channel membership changes.
+    async fn verify_exact_key(
+        &self,
+        client: AnonymousKtClient,
+        peer: &str,
+        key: &[u8],
+        deadline: Duration,
+    ) -> Result<(), ServiceError> {
+        let lock = self
+            .get_encrypt_lock(&format!("kt:{peer}:{}", hex::encode(key)))
+            .await;
+        let _turn = lock.lock().await;
+        self.refuse_pending_identity_change(peer)?;
+        if self.has_verified_identity(peer, key)? {
+            return Ok(());
+        }
+        self.fetch_and_judge(client, peer, Some(key), deadline)
+            .await?;
+        self.require_verified_identity(peer, key)
+    }
+
+    /// Membership proofs check the current signed head even if the key had
+    /// been verified before. Existing sessions use the exact-key cache.
     pub async fn verify_identity_key_transparency(
         &self,
-        auth_client: &mut AuthClient,
-        recipient_id: &str,
+        auth: &mut AuthClient,
+        peer: &str,
         identity_key: &[u8],
     ) -> Result<(), ServiceError> {
-        // Held from the proof fetch through the pin update, so this head is
-        // never older than a pin a concurrent check just advanced
-        // (`kt_anchor::lock_pin`).
-        let pin = kt_anchor::lock_pin().await;
-        let fetched =
-            kt_anchor::pinned_rpc(auth_client.get_key_transparency_proof(recipient_id)).await;
-        self.judge_kt_proof(
-            &pin,
-            "KT",
-            recipient_id,
-            identity_key,
-            fetched,
-            |old, new| auth_client.get_consistency_proof(old, new),
+        self.fetch_and_judge(
+            auth.public_kt_client(),
+            peer,
+            Some(identity_key),
+            kt_anchor::PIN_RPC_DEADLINE,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn verified_identity_key_from_kt(
+        &self,
+        auth: &mut AuthClient,
+        peer: &str,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.fetch_and_judge(
+            auth.public_kt_client(),
+            peer,
+            None,
+            kt_anchor::PIN_RPC_DEADLINE,
         )
         .await
     }
 
-    /// Return the identity key from one proof only after the same inclusion
-    /// and pinned-head checks used for prekey bundles have accepted it.
-    pub async fn verified_identity_key_from_kt(
+    /// Check the authenticated key before spending a blind token for a
+    /// first-contact prekey fetch. That bundle must still match this exact key.
+    pub(crate) async fn verify_peer_before_anonymous_fetch(
         &self,
-        auth_client: &mut AuthClient,
-        recipient_id: &str,
+        client: AnonymousKtClient,
+        peer: &str,
     ) -> Result<Vec<u8>, ServiceError> {
-        let pin = kt_anchor::lock_pin().await;
-        let fetched =
-            kt_anchor::pinned_rpc(auth_client.get_key_transparency_proof(recipient_id)).await;
-        let identity_key = fetched
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .map(|proof| proof.identity_key.clone())
-            .unwrap_or_default();
-        self.judge_kt_proof(
-            &pin,
-            "KT",
-            recipient_id,
-            &identity_key,
-            fetched,
-            |old, new| auth_client.get_consistency_proof(old, new),
-        )
-        .await?;
-        Ok(identity_key)
+        if let Some(key) = self.get_peer_identity(peer)? {
+            self.verify_existing_session_identity_anon(&mut client.clone(), peer)
+                .await?;
+            return Ok(key);
+        }
+        let key = self
+            .fetch_and_judge(client, peer, None, ONION_KT_DEADLINE)
+            .await
+            .map_err(pending)?;
+        self.require_verified_identity(peer, &key)?;
+        Ok(key)
     }
 
-    /// The verdict both KT gates (identified and anonymous) reach once the
-    /// proof fetch has returned. `path` labels the log lines.
+    async fn fetch_and_judge(
+        &self,
+        mut client: AnonymousKtClient,
+        peer: &str,
+        expected: Option<&[u8]>,
+        deadline: Duration,
+    ) -> Result<Vec<u8>, ServiceError> {
+        let pin = kt_anchor::pinned_head(&self.settings_repo).map_err(anchor_error)?;
+        let fetched = tokio::time::timeout(deadline, client.get_proof(peer))
+            .await
+            .unwrap_or(Err(NetworkError::Timeout));
+        let key = expected
+            .map(<[u8]>::to_vec)
+            .or_else(|| {
+                fetched
+                    .as_ref()
+                    .ok()?
+                    .as_ref()
+                    .map(|proof| proof.identity_key.clone())
+            })
+            .unwrap_or_default();
+        self.judge_kt_proof(pin, "KT", peer, &key, fetched, move |old, new| {
+            let mut client = client.clone();
+            async move { client.get_consistency_proof(old, new).await }
+        })
+        .await?;
+        Ok(key)
+    }
+
     async fn judge_kt_proof<F, Fut>(
         &self,
-        pin: &kt_anchor::PinGuard,
-        path: &'static str,
-        recipient_id: &str,
-        identity_key: &[u8],
-        fetched: Result<
-            Option<chatter_proto::chat_v1::GetProofResponse>,
-            crate::error::NetworkError,
-        >,
+        pin: Option<kt_anchor::PinnedTreeHead>,
+        _path: &'static str,
+        peer: &str,
+        key: &[u8],
+        fetched: Result<Option<chatter_proto::chat_v1::GetProofResponse>, NetworkError>,
         fetch_consistency: F,
     ) -> Result<(), ServiceError>
     where
-        F: FnOnce(u64, u64) -> Fut,
+        F: FnMut(u64, u64) -> Fut,
         Fut: std::future::Future<
-                Output = Result<
-                    chatter_proto::chat_v1::GetConsistencyProofResponse,
-                    crate::error::NetworkError,
-                >,
+                Output = Result<chatter_proto::chat_v1::GetConsistencyProofResponse, NetworkError>,
             >,
     {
-        let proof = match fetched {
-            Ok(Some(proof)) => proof,
-            Ok(None) => {
-                tracing::error!(
-                    recipient = %recipient_id,
-                    "{path} REJECT: server says the peer has no Key Transparency entry — every \
-                     stored identity key is logged, so this is the server skipping KT; refusing \
-                     session"
-                );
-                return Err(ServiceError::Crypto(CryptoError::NotInTransparencyLog {
-                    peer_id: recipient_id.to_string(),
-                }));
-            }
-            Err(e) => {
-                tracing::error!(
-                    recipient = %recipient_id,
-                    error = %e,
-                    "{path}: proof fetch failed (transport/server error or deadline) — refusing \
-                     session (an error is not evidence of an absent leaf)"
-                );
-                return Err(ServiceError::Network(e));
-            }
-        };
-
-        match crate::crypto::verify_kt_proof(recipient_id, identity_key, &proof) {
+        let proof = fetched?.ok_or_else(|| unverified(peer))?;
+        match crate::crypto::verify_kt_proof(peer, key, &proof) {
             Ok(()) => {
-                let epoch = proof
-                    .signed_tree_head
-                    .as_ref()
-                    .map(|s| s.epoch)
-                    .unwrap_or_default();
-                tracing::debug!(
-                    recipient = %recipient_id,
-                    epoch,
-                    "{path}: peer identity key verified against the signed transparency log"
-                );
-                // The inclusion proof says the key is in the tree the server
-                // just signed. It says nothing about WHICH tree, so on its own
-                // it cannot see a fork or a rollback. Pin the head across time
-                // as well.
-                self.check_tree_head_consistency(pin, fetch_consistency, recipient_id, &proof)
-                    .await
+                self.check_tree_head_consistency(pin, fetch_consistency, peer, &proof)
+                    .await?;
+                self.key_store.mark_peer_verified(peer, key)?;
+                Ok(())
             }
-            // `Malformed` means the proof doesn't even have the shape this
-            // verifier expects (e.g. missing prefix_root) — that's a
-            // protocol-version mismatch (client speaks KT v2, two-tree/log-sealed;
-            // this server still speaks v1, single-tree), not evidence of a forged
-            // key. Every OTHER variant is a real cryptographic verification
-            // failure against a structurally-valid v2 proof and must keep
-            // hard-rejecting even here.
             #[cfg(feature = "dev-trust-root")]
             Err(KtError::Malformed(reason)) => {
                 tracing::warn!(
-                    recipient = %recipient_id,
                     reason,
-                    "{path} DOWNGRADE (dev-trust-root, protocol version mismatch): server's KT \
-                     proof doesn't match the v2 shape this client verifies (server is still on \
-                     v1) — trusting the bundle identity key WITHOUT a KT proof. NEVER hit \
-                     outside a dev-trust-root build."
+                    _path,
+                    "KT proof does not match this dev build's protocol"
                 );
                 Ok(())
             }
-            Err(e) => {
-                e.trace_rejection();
-                tracing::error!(
-                    recipient = %recipient_id,
-                    error = %e,
-                    "{path} REJECT: refusing session — bundle identity key is NOT the key \
-                     committed in the Key Transparency log (possible forged/MITM key, F9)"
-                );
-                Err(ServiceError::Validation(format!(
-                    "Key Transparency verification failed for {recipient_id}: {e}"
-                )))
+            Err(KtError::IdentityKeyMismatch) => {
+                let candidate = proof
+                    .inclusion_proof
+                    .as_ref()
+                    .map(|leaf| leaf.value.clone())
+                    .ok_or_else(|| anchor_error(KtError::Malformed("proof has no leaf")))?;
+                crate::crypto::verify_kt_proof(peer, &candidate, &proof).map_err(anchor_error)?;
+                self.check_tree_head_consistency(pin, fetch_consistency, peer, &proof)
+                    .await?;
+                Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
+                    peer_id: peer.to_owned(),
+                    device_id: 0,
+                    new_identity_key: Some(candidate),
+                    attribution: crate::error::IdentityChangeSource::ServerClaimed,
+                }))
             }
+            Err(error) => Err(anchor_error(error)),
         }
-    }
-    /// Key Transparency gate for the ANONYMOUS-DM path (Phase 3a).
-    ///
-    /// The anonymous analog of `verify_peer_key_transparency`. Same semantics
-    /// (verify the bundle's identity key is the one committed in the signed KT
-    /// log under the pinned tree-head key; REJECT a mismatch; REJECT a
-    /// transport/server error and `NotFound`), but it fetches the
-    /// proof over the isolated ANONYMOUS channel via `AnonymousKtClient` — no
-    /// authenticated identity — because the anon path has none.
-    ///
-    /// This closes the anon-path MITM hole: before Phase 3a the anon path
-    /// trusted peer identity keys blindly (no KT call at all). Its tree head
-    /// is held to this device's pin exactly like the identified path's.
-    pub(super) async fn verify_peer_key_transparency_anon(
-        &self,
-        anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
-        recipient_id: &str,
-        bundle: &libsignal_protocol::PreKeyBundle,
-    ) -> Result<(), ServiceError> {
-        let identity_key = bundle
-            .identity_key()
-            .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
-            .serialize();
-        // Same pin discipline as the identified path (`kt_anchor::lock_pin`).
-        let pin = kt_anchor::lock_pin().await;
-        let fetched = kt_anchor::pinned_rpc(anon_kt_client.get_proof(recipient_id)).await;
-        // The consistency proof comes over the same anonymous channel: without
-        // it a server could fork the log for anonymous lookups alone.
-        self.judge_kt_proof(
-            &pin,
-            "KT(anon)",
-            recipient_id,
-            &identity_key,
-            fetched,
-            |old, new| anon_kt_client.get_consistency_proof(old, new),
-        )
-        .await
     }
 }
 
@@ -300,6 +581,91 @@ impl SignalService {
 mod kt_pin_tests {
     use super::*;
     use chatter_proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
+
+    #[tokio::test]
+    async fn kt_verified_identity_cache_survives_service_restart_and_matches_exact_key() {
+        let Some(manifest) = crate::mailbox::blind_signature::tests::kt_manifest_vector() else {
+            return;
+        };
+        let subject = format!("chatter/mailbox-manifest/v1/{}", manifest.key_id);
+        let proof = manifest.kt_proof.unwrap();
+        let committed = proof.inclusion_proof.as_ref().unwrap().value.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let make_service = || {
+            SignalService::new(
+                Arc::new(crate::storage::KeyStore::new(db.clone())),
+                Arc::new(crate::storage::repositories::SettingsRepository::new(
+                    db.clone(),
+                )),
+            )
+        };
+        let service = make_service();
+        let pin = kt_anchor::pinned_head(&service.settings_repo).unwrap();
+        let no_fetch =
+            |_: u64, _: u64| std::future::ready(Err(crate::error::NetworkError::Unavailable));
+
+        assert!(
+            service
+                .require_verified_identity(&subject, &committed)
+                .is_err()
+        );
+        let err = service
+            .judge_kt_proof(
+                pin,
+                "KT",
+                &subject,
+                &[5; 33],
+                Ok(Some(proof.clone())),
+                no_fetch,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ServiceError::Crypto(CryptoError::UntrustedIdentity { .. })
+        ));
+        assert!(
+            service
+                .require_verified_identity(&subject, &[5; 33])
+                .is_err()
+        );
+        assert!(
+            service
+                .require_verified_identity(&subject, &committed)
+                .is_err()
+        );
+
+        service
+            .judge_kt_proof(pin, "KT", &subject, &committed, Ok(Some(proof)), no_fetch)
+            .await
+            .unwrap();
+        assert!(
+            service
+                .require_verified_identity(&subject, &committed)
+                .is_ok()
+        );
+        drop(service);
+        let service = make_service();
+        assert!(
+            service
+                .require_verified_identity(&subject, &committed)
+                .is_ok()
+        );
+        assert!(
+            service
+                .require_verified_identity(&subject, &[5; 33])
+                .is_err()
+        );
+        assert!(
+            service
+                .require_verified_identity("other", &committed)
+                .is_err()
+        );
+    }
 
     /// The anchor both KT paths (identified and `verify_peer_key_transparency_anon`)
     /// run after the inclusion proof: a head that forks from the pin is refused
@@ -335,12 +701,12 @@ mod kt_pin_tests {
         {
             panic!("a fork needs no consistency proof")
         }
-        let pin = kt_anchor::lock_pin().await;
-        svc.check_tree_head_consistency(&pin, no_fetch, "bob", &head(1))
+        let pin = None;
+        svc.check_tree_head_consistency(pin, no_fetch, "bob", &head(1))
             .await
             .unwrap();
         let err = svc
-            .check_tree_head_consistency(&pin, no_fetch, "bob", &head(2))
+            .check_tree_head_consistency(pin, no_fetch, "bob", &head(2))
             .await
             .unwrap_err();
         assert!(
@@ -377,10 +743,10 @@ mod kt_pin_tests {
             panic!("no proof, nothing to hold")
         }
 
-        let pin = kt_anchor::lock_pin().await;
+        let pin = None;
         for path in ["KT", "KT(anon)"] {
             let err = svc
-                .judge_kt_proof(&pin, path, "bob", &[5u8; 33], Ok(None), no_fetch)
+                .judge_kt_proof(pin, path, "bob", &[5u8; 33], Ok(None), no_fetch)
                 .await
                 .unwrap_err();
             assert!(

@@ -20,6 +20,7 @@ pub mod unlink;
 
 pub use database::Database;
 pub use key_store::KeyStore;
+pub(crate) use key_store::PeerVerification;
 #[cfg(feature = "mesh")]
 pub use mesh_identity_store::MeshIdentityStore;
 pub use repositories::AttachmentRepository;
