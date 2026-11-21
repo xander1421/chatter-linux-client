@@ -3,9 +3,9 @@
 //! Follows Signal-Android's screen lock for UX and timing
 //! (`service/KeyCachingService.java` `startTimeoutIfAppropriate`): the app
 //! locks on launch, and again once it has been in the background for the
-//! chosen timeout. Signal arms an `ELAPSED_REALTIME` alarm on backgrounding;
-//! this computes the same thing lazily from the moment the app was hidden, so
-//! no timer has to survive Doze. While locked, notifications carry no sender
+//! chosen timeout. The lock computes the deadline from when the app was
+//! hidden. The notification service also watches the deadline while the app
+//! is in the background. While locked, notifications carry no sender
 //! and no content (`notifications/v2/NotificationItem.kt` `getPrimaryTextActual`
 //! returns "Locked message" while `KeyCachingService.isLocked`).
 //!
@@ -44,6 +44,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
+use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 use crate::error::StorageError;
@@ -171,6 +172,7 @@ struct StoredLock {
 /// In-memory lock state; never persisted (a fresh process starts locked).
 struct Runtime {
     locked: bool,
+    lock_generation: u64,
     /// When the app left the screen, while it is off screen.
     hidden_since: Option<SystemTime>,
     /// In-process backoff floor, immune to wall-clock changes.
@@ -183,6 +185,7 @@ struct Runtime {
 pub struct AppLock {
     settings: Arc<SettingsRepository>,
     runtime: Mutex<Runtime>,
+    changes: watch::Sender<()>,
     /// Serialises attempts so two taps cannot both pass a backoff check.
     attempt: Mutex<()>,
 }
@@ -271,15 +274,19 @@ impl AppLock {
             settings,
             runtime: Mutex::new(Runtime {
                 locked: false,
+                lock_generation: 0,
                 hidden_since: None,
                 throttled_until: None,
                 wiping: false,
             }),
+            changes: watch::channel(()).0,
             attempt: Mutex::new(()),
         };
         // A row that cannot be read fails closed: locked.
         let locked = !matches!(lock.stored(), Ok(None));
-        lock.runtime.lock().locked = locked;
+        if locked {
+            lock.engage(&mut lock.runtime.lock());
+        }
         lock
     }
 
@@ -313,26 +320,48 @@ impl AppLock {
     }
 
     pub(crate) fn is_locked_at(&self, now: SystemTime) -> bool {
+        self.notification_lock_state_at(now).0
+    }
+
+    pub(crate) fn notification_lock_state(&self) -> (bool, u64, Option<Duration>) {
+        self.notification_lock_state_at(SystemTime::now())
+    }
+
+    pub(crate) fn subscribe_to_changes(&self) -> watch::Receiver<()> {
+        self.changes.subscribe()
+    }
+
+    fn notification_lock_state_at(&self, now: SystemTime) -> (bool, u64, Option<Duration>) {
         let mut runtime = self.runtime.lock();
-        if runtime.locked || runtime.wiping {
-            return true;
+        let remaining = self.update_timeout(&mut runtime, now);
+        (runtime.locked || runtime.wiping, runtime.lock_generation, remaining)
+    }
+
+    fn engage(&self, runtime: &mut Runtime) {
+        if !runtime.locked {
+            runtime.locked = true;
+            runtime.lock_generation += 1;
+            self.changes.send_replace(());
         }
-        let Some(hidden) = runtime.hidden_since else {
-            return false;
-        };
+    }
+
+    fn update_timeout(&self, runtime: &mut Runtime, now: SystemTime) -> Option<Duration> {
+        if runtime.locked || runtime.wiping {
+            return None;
+        }
+        let hidden = runtime.hidden_since?;
         let timeout = match self.stored() {
             Ok(Some(s)) => s.timeout.duration(),
-            Ok(None) => return false,
+            Ok(None) => return None,
             Err(_) => Duration::ZERO,
         };
-        let expired = match now.duration_since(hidden) {
-            Ok(elapsed) => elapsed >= timeout,
-            Err(_) => true,
-        };
-        if expired {
-            runtime.locked = true;
+        if let Ok(elapsed) = now.duration_since(hidden)
+            && let Some(remaining) = timeout.checked_sub(elapsed).filter(|d| !d.is_zero())
+        {
+            return Some(remaining);
         }
-        expired
+        self.engage(runtime);
+        None
     }
 
     /// Platform lifecycle: the app left or returned to the screen.
@@ -341,16 +370,23 @@ impl AppLock {
     }
 
     pub(crate) fn set_visible_at(&self, visible: bool, now: SystemTime) {
+        let mut runtime = self.runtime.lock();
         if visible {
             // Fold an expired timeout into `locked` before forgetting when the
             // app was hidden.
-            let _ = self.is_locked_at(now);
-            self.runtime.lock().hidden_since = None;
-        } else {
-            let mut runtime = self.runtime.lock();
-            if runtime.hidden_since.is_none() {
-                runtime.hidden_since = Some(now);
-            }
+            self.update_timeout(&mut runtime, now);
+            runtime.hidden_since = None;
+        } else if runtime.hidden_since.is_none() {
+            runtime.hidden_since = Some(now);
+            self.update_timeout(&mut runtime, now);
+        }
+        self.changes.send_replace(());
+    }
+
+    pub fn lock_now(&self) {
+        let mut runtime = self.runtime.lock();
+        if !matches!(self.stored(), Ok(None)) {
+            self.engage(&mut runtime);
         }
     }
 
@@ -372,6 +408,7 @@ impl AppLock {
         }
         let Some(mut stored) = self.stored()? else {
             self.runtime.lock().locked = false;
+            self.changes.send_replace(());
             return Ok(UnlockAttempt::Unlocked);
         };
         if let Some(wait) = self.throttle(&stored, now) {
@@ -396,10 +433,13 @@ impl AppLock {
                 runtime.locked = false;
                 runtime.hidden_since = None;
                 runtime.throttled_until = None;
+                self.changes.send_replace(());
                 Ok(UnlockAttempt::Unlocked)
             }
             PinMatch::Duress => {
-                self.runtime.lock().wiping = true;
+                let mut runtime = self.runtime.lock();
+                runtime.wiping = true;
+                self.engage(&mut runtime);
                 Ok(UnlockAttempt::Duress)
             }
             PinMatch::None => {
@@ -486,6 +526,7 @@ impl AppLock {
             failed_attempts: 0,
             last_failure: 0,
         })?;
+        self.changes.send_replace(());
         Ok(())
     }
 
@@ -496,6 +537,7 @@ impl AppLock {
         let mut runtime = self.runtime.lock();
         runtime.locked = false;
         runtime.hidden_since = None;
+        self.changes.send_replace(());
         Ok(())
     }
 
@@ -503,6 +545,7 @@ impl AppLock {
         let mut stored = self.stored()?.ok_or(AppLockError::NotEnabled)?;
         stored.timeout = timeout;
         self.store(&stored)?;
+        self.changes.send_replace(());
         Ok(())
     }
 

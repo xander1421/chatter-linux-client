@@ -545,8 +545,8 @@ fn test_detail_level_roundtrip() {
     }
 }
 
-#[test]
-fn locked_app_hides_sender_and_content() {
+#[tokio::test]
+async fn locked_app_hides_sender_and_content() {
     use crate::services::app_lock::{AppLock, LockTimeout};
     let dir = tempfile::tempdir().unwrap();
     let db = crate::storage::Database::open(&dir.path().join("n.db"), "p").unwrap();
@@ -558,27 +558,150 @@ fn locked_app_hides_sender_and_content() {
         .enable(None, "482916", "482916", LockTimeout::Immediate)
         .unwrap();
     let lock = Arc::new(AppLock::new(settings));
-    let service = NotificationService::noop();
+    let service = Arc::new(NotificationService::noop());
     service.set_detail_level(NotificationDetailLevel::NameAndMessage);
     service.set_app_lock(lock.clone());
+    let message_text = || {
+        NotificationService::message_text(
+            service.effective_detail_level(),
+            Some("Alice"),
+            Some("meet at 6"),
+            false,
+        )
+    };
 
     // A fresh process with the lock on is locked.
-    assert_eq!(service.effective_detail_level(), NotificationDetailLevel::None);
     assert_eq!(
-        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        service.effective_detail_level(),
+        NotificationDetailLevel::None
+    );
+    assert_eq!(
+        message_text(),
         ("Chatter".to_string(), "New message".to_string())
     );
     lock.attempt_unlock("482916").unwrap();
     assert_eq!(
-        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        message_text(),
         ("Alice".to_string(), "meet at 6".to_string())
     );
     // Backgrounded past the (immediate) timeout: generic again.
     lock.set_visible(false);
     assert_eq!(
-        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        message_text(),
         ("Chatter".to_string(), "New message".to_string())
     );
     // The stored setting itself is untouched.
-    assert_eq!(service.detail_level(), NotificationDetailLevel::NameAndMessage);
+    assert_eq!(
+        service.detail_level(),
+        NotificationDetailLevel::NameAndMessage
+    );
+}
+
+#[tokio::test]
+async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
+    use crate::services::app_lock::{AppLock, LockTimeout};
+    use std::time::SystemTime;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Action {
+        Message(String, String),
+        Call(String),
+        CancelMessages,
+    }
+
+    struct Capture(tokio::sync::mpsc::UnboundedSender<Action>);
+    impl NotificationSink for Capture {
+        fn show(&self, _: &str, _: &str, _: NotificationPriority) -> Result<(), SystemError> {
+            unreachable!()
+        }
+        fn show_conversation(
+            &self,
+            _: &str,
+            title: &str,
+            body: &str,
+            _: NotificationPriority,
+        ) -> Result<(), SystemError> {
+            self.0
+                .send(Action::Message(title.into(), body.into()))
+                .unwrap();
+            Ok(())
+        }
+        fn show_incoming_call(&self, id: &str, _: &str, _: &str) -> Result<(), SystemError> {
+            self.0.send(Action::Call(id.into())).unwrap();
+            Ok(())
+        }
+        fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+            self.0.send(Action::CancelMessages).unwrap();
+            Ok(true)
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::storage::Database::open(&dir.path().join("n.db"), "p").unwrap();
+    db.run_migrations().unwrap();
+    let settings = Arc::new(
+        crate::storage::repositories::settings_repo::SettingsRepository::new(Arc::new(db)),
+    );
+    let lock = Arc::new(AppLock::new(settings));
+    lock.enable(None, "482916", "482916", LockTimeout::OneMinute)
+        .unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let service = Arc::new(NotificationService::new(Arc::new(Capture(tx))));
+    service.set_detail_level(NotificationDetailLevel::NameAndMessage);
+    service.set_app_lock(lock.clone());
+
+    let channel = crate::domain::ids::ChannelId::new();
+    let post = || {
+        service
+            .show_tracked_message_notification(
+                crate::domain::ids::MessageId::new(),
+                &channel,
+                Some("Alice"),
+                Some("private text"),
+                false,
+                NotificationPriority::Normal,
+            )
+            .unwrap()
+    };
+    post();
+    assert_eq!(
+        rx.recv().await,
+        Some(Action::Message("Alice".into(), "private text".into()))
+    );
+    service
+        .show_incoming_call("ringing", "Alice", "Call")
+        .unwrap();
+    assert_eq!(rx.recv().await, Some(Action::Call("ringing".into())));
+
+    lock.set_visible_at(false, SystemTime::now() - Duration::from_secs(59));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap(),
+        Some(Action::CancelMessages)
+    );
+    post();
+    assert_eq!(
+        rx.recv().await,
+        Some(Action::Message("Chatter".into(), "New message".into()))
+    );
+    service
+        .show_incoming_call("locked", "Alice", "Call")
+        .unwrap();
+    assert_eq!(rx.recv().await, Some(Action::Call("locked".into())));
+
+    lock.set_visible(true);
+    lock.attempt_unlock("482916").unwrap();
+    post();
+    assert_eq!(
+        rx.recv().await,
+        Some(Action::Message("Alice".into(), "private text".into()))
+    );
+    lock.lock_now();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap(),
+        Some(Action::CancelMessages)
+    );
 }

@@ -29,7 +29,8 @@ use crate::error::SystemError;
 use crate::system::notification_sink::{NoopNotificationSink, NotificationSink};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 /// How much detail to show in OS notifications.
 ///
@@ -75,9 +76,15 @@ pub struct NotificationService {
     sink: Arc<dyn NotificationSink>,
     detail_level: std::sync::RwLock<NotificationDetailLevel>,
     account_keys: Option<AccountNotificationKeys>,
-    message_notifications: Mutex<HashMap<String, Vec<MessageNotification>>>,
+    message_notifications: Mutex<MessageNotifications>,
     /// While it reports locked, every notification is the generic one.
     app_lock: std::sync::OnceLock<Arc<crate::services::app_lock::AppLock>>,
+}
+
+#[derive(Default)]
+struct MessageNotifications {
+    entries: HashMap<String, Vec<MessageNotification>>,
+    lock_generation: u64,
 }
 
 struct MessageNotification {
@@ -101,7 +108,7 @@ impl NotificationService {
             sink,
             detail_level: std::sync::RwLock::new(NotificationDetailLevel::None),
             account_keys: None,
-            message_notifications: Mutex::new(HashMap::new()),
+            message_notifications: Mutex::default(),
             app_lock: std::sync::OnceLock::new(),
         }
     }
@@ -141,8 +148,66 @@ impl NotificationService {
     }
 
     /// Gate notifications on the app lock.
-    pub fn set_app_lock(&self, lock: Arc<crate::services::app_lock::AppLock>) {
-        let _ = self.app_lock.set(lock);
+    pub fn set_app_lock(self: &Arc<Self>, lock: Arc<crate::services::app_lock::AppLock>) {
+        let mut changes = lock.subscribe_to_changes();
+        if self.app_lock.set(lock).is_err() {
+            return;
+        }
+        let service = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let Some(service) = service.upgrade() else {
+                    break;
+                };
+                let (_, remaining) = service.sync_message_privacy(&mut service.message_posts());
+                drop(service);
+                if let Some(remaining) = remaining {
+                    tokio::select! {
+                        _ = wait_for_lock_check(remaining) => {}
+                        result = changes.changed() => if result.is_err() { break; },
+                    }
+                } else if changes.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    fn message_posts(&self) -> MutexGuard<'_, MessageNotifications> {
+        self.message_notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn sync_message_privacy(
+        &self,
+        posts: &mut MessageNotifications,
+    ) -> (NotificationDetailLevel, Option<Duration>) {
+        let Some(lock) = self.app_lock.get() else {
+            return (self.detail_level(), None);
+        };
+        let (locked, generation, mut remaining) = lock.notification_lock_state();
+        if posts.lock_generation != generation {
+            match self.deliver(|sink| sink.cancel_message_notifications()) {
+                Ok(cancelled) => {
+                    if cancelled {
+                        posts.entries.clear();
+                    }
+                    posts.lock_generation = generation;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Could not clear message notifications on app lock");
+                    let retry = Duration::from_secs(5);
+                    remaining = Some(remaining.map_or(retry, |deadline| deadline.min(retry)));
+                }
+            }
+        }
+        let level = if locked {
+            NotificationDetailLevel::None
+        } else {
+            self.detail_level()
+        };
+        (level, remaining)
     }
 
     /// Whether the app lock is engaged right now.
@@ -174,27 +239,23 @@ impl NotificationService {
         private: bool,
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
-        let (title, body) = self.message_text(sender_name, message_preview, private);
         let key = self.current_key(conversation_id)?;
-        let mut notifications = self
-            .message_notifications
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut notifications = self.message_posts();
+        let (level, _) = self.sync_message_privacy(&mut notifications);
+        let (title, body) = Self::message_text(level, sender_name, message_preview, private);
         self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
         // Requests and reactions replace this conversation's OS notification.
         // Its earlier message entries can no longer be restored.
-        notifications.remove(&key);
+        notifications.entries.remove(&key);
         Ok(())
     }
 
     fn message_text(
-        &self,
+        level: NotificationDetailLevel,
         sender_name: Option<&str>,
         message_preview: Option<&str>,
         private: bool,
     ) -> (String, String) {
-        let level = self.effective_detail_level();
-
         let new_message = chatter_i18n::tr("New message");
         let someone = || chatter_i18n::tr("Someone");
         match (level, private) {
@@ -229,13 +290,11 @@ impl NotificationService {
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        let mut notifications = self
-            .message_notifications
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (title, body) = self.message_text(sender_name, message_preview, private);
+        let mut notifications = self.message_posts();
+        let (level, _) = self.sync_message_privacy(&mut notifications);
+        let (title, body) = Self::message_text(level, sender_name, message_preview, private);
         self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
-        let entries = notifications.entry(key).or_default();
+        let entries = notifications.entries.entry(key).or_default();
         entries.retain(|entry| entry.id != message_id);
         entries.push(MessageNotification {
             id: message_id,
@@ -250,11 +309,9 @@ impl NotificationService {
     /// Remove deleted or expired messages from whichever conversations posted
     /// them. A prior message remains visible when the newest one is removed.
     pub fn remove_message_notifications(&self, message_ids: &[crate::domain::ids::MessageId]) {
-        let mut notifications = self
-            .message_notifications
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        for (key, entries) in notifications.iter_mut() {
+        let mut notifications = self.message_posts();
+        let (level, _) = self.sync_message_privacy(&mut notifications);
+        for (key, entries) in &mut notifications.entries {
             let was_latest = entries
                 .last()
                 .is_some_and(|entry| message_ids.contains(&entry.id));
@@ -264,7 +321,8 @@ impl NotificationService {
                 continue;
             }
             let result = if let Some(entry) = entries.last() {
-                let (title, body) = self.message_text(
+                let (title, body) = Self::message_text(
+                    level,
                     entry.sender_name.as_deref(),
                     entry.message_preview.as_deref(),
                     entry.private,
@@ -277,7 +335,9 @@ impl NotificationService {
                 tracing::warn!(%error, "Could not update notification for removed message");
             }
         }
-        notifications.retain(|_, entries| !entries.is_empty());
+        notifications
+            .entries
+            .retain(|_, entries| !entries.is_empty());
     }
 
     /// Dismiss `conversation_id`'s notification (it was read).
@@ -286,12 +346,9 @@ impl NotificationService {
         conversation_id: &crate::domain::ids::ChannelId,
     ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        let mut notifications = self
-            .message_notifications
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut notifications = self.message_posts();
         self.deliver(|sink| sink.cancel_conversation(&key))?;
-        notifications.remove(&key);
+        notifications.entries.remove(&key);
         Ok(())
     }
 
@@ -351,10 +408,10 @@ impl NotificationService {
     /// there used to end the loop: one call whose id overflowed a request-code
     /// multiply killed the ring-notification bridge, so every later call rang
     /// silently. A panic is one failed notification, reported as an error.
-    fn deliver(
+    fn deliver<T>(
         &self,
-        f: impl FnOnce(&dyn NotificationSink) -> Result<(), SystemError>,
-    ) -> Result<(), SystemError> {
+        f: impl FnOnce(&dyn NotificationSink) -> Result<T, SystemError>,
+    ) -> Result<T, SystemError> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self.sink.as_ref())))
             .unwrap_or_else(|_| {
                 Err(SystemError::NotificationSend(
@@ -368,6 +425,45 @@ impl Default for NotificationService {
     fn default() -> Self {
         Self::noop()
     }
+}
+
+async fn wait_for_lock_check(delay: Duration) {
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    if wait_including_suspend(delay).await.is_ok() {
+        return;
+    }
+    tokio::time::sleep(delay).await;
+}
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+async fn wait_including_suspend(delay: Duration) -> std::io::Result<()> {
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    // A Tokio timer pauses during suspend. CLOCK_BOOTTIME includes that time,
+    // so an elapsed lock deadline is ready as soon as the device wakes.
+    let fd = unsafe {
+        libc::timerfd_create(libc::CLOCK_BOOTTIME, libc::TFD_CLOEXEC | libc::TFD_NONBLOCK)
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: timerfd_create returned a new, valid file descriptor.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let timer = libc::itimerspec {
+        it_interval: libc::timespec { tv_sec: 0, tv_nsec: 0 },
+        it_value: libc::timespec {
+            tv_sec: delay.as_secs() as libc::time_t,
+            tv_nsec: delay.subsec_nanos() as _,
+        },
+    };
+    // SAFETY: fd is open, timer is a valid input and the old value is unused.
+    if unsafe { libc::timerfd_settime(fd.as_raw_fd(), 0, &timer, std::ptr::null_mut()) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let timer = tokio::io::unix::AsyncFd::new(fd)?;
+    let _ready = timer.readable().await?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ export global AppLockPane {
     callback enable(string, string);             // pin, confirm
     callback disable(string);                    // current
     callback timeout-selected(string);
+    callback lock-now();
     callback set-duress(string, string, string); // current, duress, confirm
     callback clear-duress(string);               // current
 }
@@ -164,6 +165,12 @@ export component AppLockSettings inherits Card {
 
         if AppLockPane.enabled: VerticalLayout {
             spacing: Spacing.sm;
+
+            Button {
+                text: @tr("Lock now");
+                disabled: AppLockPane.busy;
+                clicked => { AppLockPane.lock-now(); }
+            }
 
             Text {
                 text: @tr("Lock after leaving Chatter");

@@ -279,6 +279,9 @@ msgstr "Conferma PIN"
 msgid "Turn on app lock"
 msgstr "Attiva il blocco app"
 
+msgid "Lock now"
+msgstr "Blocca ora"
+
 #: ui/app_lock.slint:169
 msgid "Lock after leaving Chatter"
 msgstr "Blocca dopo aver lasciato Chatter"

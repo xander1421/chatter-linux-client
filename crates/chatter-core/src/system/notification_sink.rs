@@ -45,6 +45,12 @@ pub trait NotificationSink: Send + Sync {
         Ok(())
     }
 
+    /// Dismiss the platform's outstanding conversation notifications. Returns
+    /// whether the sink supports dismissal, so core can discard tracked posts.
+    fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+        Ok(false)
+    }
+
     /// Show an incoming-call notification with Accept/Decline actions.
     ///
     /// Platforms that support actionable call notifications (Android) override

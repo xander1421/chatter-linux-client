@@ -20,7 +20,7 @@ use chatter_core::domain::notification::NotificationPriority;
 use chatter_core::error::SystemError;
 use chatter_core::system::notification_sink::NotificationSink;
 use jni::Env;
-use jni::objects::{JObject, JString, JValue};
+use jni::objects::{JObject, JObjectArray, JString, JValue};
 
 #[path = "call_notification_consent.rs"]
 pub(crate) mod call_consent;
@@ -702,6 +702,79 @@ impl NotificationSink for AndroidNotifications {
 
     fn cancel_conversation(&self, conversation: &str) -> Result<(), SystemError> {
         self.cancel_conversation_raw(conversation)
+    }
+
+    fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+        with_jni_env(|env| {
+            let context = get_app_context(env)?;
+            let manager = get_notification_manager(env, &context)?;
+            let active = env
+                .call_method(
+                    &manager,
+                    jni::jni_str!("getActiveNotifications"),
+                    jni::jni_sig!("()[Landroid/service/notification/StatusBarNotification;"),
+                    &[],
+                )
+                .map_err(nerr)?
+                .l()
+                .map_err(nerr)?;
+            let active = env.cast_local::<JObjectArray>(active).map_err(nerr)?;
+            for i in 0..active.len(env).map_err(nerr)? {
+                let status = active.get_element(env, i).map_err(nerr)?;
+                let id = env
+                    .call_method(&status, jni::jni_str!("getId"), jni::jni_sig!("()I"), &[])
+                    .map_err(nerr)?
+                    .i()
+                    .map_err(nerr)?;
+                if id != CONVERSATION_NOTIFICATION_ID {
+                    continue;
+                }
+                let tag = env
+                    .call_method(
+                        &status,
+                        jni::jni_str!("getTag"),
+                        jni::jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )
+                    .map_err(nerr)?
+                    .l()
+                    .map_err(nerr)?;
+                if tag.is_null() {
+                    continue;
+                }
+                let notification = env
+                    .call_method(
+                        &status,
+                        jni::jni_str!("getNotification"),
+                        jni::jni_sig!("()Landroid/app/Notification;"),
+                        &[],
+                    )
+                    .map_err(nerr)?
+                    .l()
+                    .map_err(nerr)?;
+                let channel = env
+                    .call_method(
+                        &notification,
+                        jni::jni_str!("getChannelId"),
+                        jni::jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )
+                    .map_err(nerr)?
+                    .l()
+                    .map_err(nerr)?;
+                let channel = env.cast_local::<JString>(channel).map_err(nerr)?;
+                if channel.try_to_string(env).map_err(nerr)? == CHANNEL_ID {
+                    env.call_method(
+                        &manager,
+                        jni::jni_str!("cancel"),
+                        jni::jni_sig!("(Ljava/lang/String;I)V"),
+                        &[JValue::Object(&tag), JValue::Int(id)],
+                    )
+                    .map_err(nerr)?;
+                }
+            }
+            Ok(true)
+        })
     }
 
     fn show_incoming_call(
