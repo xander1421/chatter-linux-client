@@ -20,64 +20,28 @@ impl BleRuntime {
     ) -> bool {
         let local = self.identity.peer_id();
         let now_ms = now_millis();
-        let (tracked, direct) = self.state.with(|state| {
-            let tracked =
-                state.peers.pinned(claimed).is_some() || state.peers.info(claimed).is_some();
-            let direct = packet.ttl == DIRECT_ANNOUNCE_TTL
-                && state
+        let now_s = now_secs();
+        let (presence, link_bound_elsewhere, pin) = self.state.with(|state| {
+            (
+                state.links.presence(claimed),
+                state
                     .links
                     .peer_for(link)
-                    .is_none_or(|bound| bound == claimed);
-            (tracked, direct)
+                    .is_some_and(|bound| bound != claimed),
+                state.peers.pinned(claimed).cloned(),
+            )
         });
-        let now_s = now_secs();
 
-        // What the trust decision needs from our own tables, read before it runs.
-        //
-        // `presence` and `peer_for` are facts about *our* connection state and so
-        // are not forgeable; the recorded Noise key is what a key substitution
-        // would be trying to overwrite, which is why the policy wants it before
-        // it looks at the signature.
-        let (presence, link_bound_elsewhere, existing_noise_key, existing_signing_key) =
-            self.state.with(|state| {
-                let pin = state.peers.pinned(claimed);
-                let record = state.peers.info(claimed);
-                (
-                    state.links.presence(claimed),
-                    state
-                        .links
-                        .peer_for(link)
-                        .is_some_and(|bound| bound != claimed),
-                    pin.map(|p| p.noise_public_key.clone())
-                        .or_else(|| record.and_then(|p| p.noise_public_key.clone())),
-                    pin.map(|p| p.signing_public_key.clone())
-                        .or_else(|| record.and_then(|p| p.signing_public_key.clone())),
-                )
-            });
-
-        // The whole inbound announce policy, in one call: decode, derive the peer
-        // ID from the announced Noise key and refuse a sender that does not match
-        // it, refuse our own announce coming back, refuse a stale one, refuse a
-        // swapped key, and only then spend a signature verification.
-        //
-        // The derivation check is the load-bearing one and it was missing. A
-        // packet signature verified against the signing key the announcement
-        // itself carries proves only that whoever wrote the announce holds that
-        // key — which every attacker does. The mesh ID *is*
-        // `SHA256(noise static key)[..8]` (`MeshIdentity::peer_id`), so binding
-        // the sender ID to the key is free and is what stops a device in radio
-        // range announcing any identity it likes.
+        // The signature proves control of the announced signing key. The
+        // public Noise key alone provides no proof of identity. Only a
+        // Noise-bound pin can veto a later announce for this peer.
         let context = AnnounceLinkContext {
             direct_announce_ttl: DIRECT_ANNOUNCE_TTL,
             has_peripheral_link: presence.as_peripheral,
             has_central_link: presence.as_central,
             link_bound_to_other_peer: link_bound_elsewhere,
-            existing_noise_public_key: existing_noise_key.as_deref(),
-            // §98: the signing key is pinned the same way. The registry has
-            // recorded it since the first announce; nothing compared it, so
-            // "Verified" meant only "signed by the key this packet carries",
-            // which every attacker in radio range also holds.
-            existing_signing_public_key: existing_signing_key.as_deref(),
+            existing_noise_public_key: pin.as_ref().map(|pin| pin.noise_public_key.as_slice()),
+            existing_signing_public_key: pin.as_ref().map(|pin| pin.signing_public_key.as_slice()),
         };
         let accepted = match evaluate_announce(
             packet,
@@ -131,8 +95,19 @@ impl BleRuntime {
             return false;
         }
 
-        // Only accepted new candidates consume introduction capacity.
-        if !tracked {
+        // Renewals are free. A different unproven key pair for the same peer
+        // is a new candidate and consumes the ingress budget.
+        let announcement = &accepted.announcement;
+        let renewal = pin.is_some()
+            || self.state.with(|state| {
+                state.peers.info(claimed).is_some_and(|record| {
+                    record.noise_public_key.as_deref() == Some(announcement.noise_public_key.as_slice())
+                        && record.signing_public_key.as_deref()
+                            == Some(announcement.signing_public_key.as_slice())
+                })
+            });
+        if !renewal {
+            let direct = packet.ttl == DIRECT_ANNOUNCE_TTL && !link_bound_elsewhere;
             let key = (link.to_string(), direct);
             self.announce_ingress
                 .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
@@ -155,7 +130,6 @@ impl BleRuntime {
             budget.1 += 1;
         }
 
-        let announcement = accepted.announcement.clone();
         let direct = VerifiedDirectAnnounce::from_packet(
             claimed.clone(),
             packet,
@@ -186,7 +160,7 @@ impl BleRuntime {
 
                 let update = state.peers.upsert_verified_announce_preserving(
                     claimed,
-                    &announcement,
+                    announcement,
                     connected,
                     now_ms,
                     |peer| state.links.presence(peer).any(),

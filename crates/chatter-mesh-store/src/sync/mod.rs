@@ -192,13 +192,8 @@ fn max_age_secs(config: &SyncConfig, msg_type: u8) -> u64 {
 
 /// Whether a packet is still inside its type's retention window.
 ///
-/// The boundary is inclusive: a packet exactly `max_age` old is still fresh, which
-/// is Swift's `packet.timestamp >= cutoffMs`.
-///
-/// A device whose clock says the epoch has barely started cannot compute a cutoff,
-/// so everything is accepted rather than everything being purged — Swift's explicit
-/// `guard nowMs >= ageThresholdMs else { return true }`, reproduced here by the
-/// saturating subtraction (the cutoff floors at zero and every timestamp clears it).
+/// The age cutoff is inclusive and floors at zero near the Unix epoch.
+/// Prekey bundles must also be at most 120 seconds ahead of the local clock.
 fn packet_is_fresh(config: &SyncConfig, packet: &BitchatPacket, now_unix_secs: u64) -> bool {
     let now_ms = now_unix_secs.saturating_mul(1000);
     let window_ms = max_age_secs(config, packet.msg_type).saturating_mul(1000);
@@ -495,7 +490,7 @@ impl GossipSyncManager {
     }
 
     /// Whether `packet` is inside the retention window this store keeps for its
-    /// type. One-sided, like the store: a future timestamp is inside.
+    /// type. Prekey bundles also have a 120-second future timestamp limit.
     pub fn within_retention(&self, packet: &BitchatPacket, now_unix_secs: u64) -> bool {
         packet_is_fresh(&self.config, packet, now_unix_secs)
     }

@@ -117,7 +117,8 @@ impl AnnouncementPacket {
     /// carries bytes that must stay out of a public history response.
     pub fn carries_contact_metadata(bytes: &[u8]) -> Result<bool, MeshError> {
         let mut reader = Reader::new(bytes);
-        while reader.remaining() > 0 {
+        // A lone trailing byte has no TLV header, just as in decode.
+        while reader.remaining() >= 2 {
             let kind = reader.u8()?;
             let length = reader.u8()?;
             if matches!(kind, TLV_DIRECT_NEIGHBORS | TLV_BRIDGE_GEOHASH) {

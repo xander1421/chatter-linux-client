@@ -54,27 +54,13 @@ async fn a_peer_heard_only_by_relay_is_not_marked_connected() {
     );
 }
 
-/// §98 — the other half of the same attack, once the derivation check closed
-/// the first half.
-///
-/// A peer's Noise public key travels in the clear in every announce it sends,
-/// and the peer ID derives from it, so an attacker who has simply HEARD a
-/// victim announce can replay that Noise key and the derived ID will match.
-/// Everything then hinges on the signing key — which was pinned by nothing.
-/// The attacker signs with their own key, the signature verifies against the
-/// key the packet supplies, and the victim's identity is taken over in our
-/// registry.
-///
-/// The registry had recorded the victim's signing key since first contact.
-/// Nothing compared it.
 #[tokio::test]
-async fn auditclient2_announce_squat_cannot_take_over_a_proven_peer() {
+async fn an_announce_only_claim_cannot_lock_out_the_noise_key_owner() {
     let (mut runtime, _radio, state) = runtime();
 
     let victim_identity = MeshIdentity::generate(&mut os_rng());
     let victim = victim_identity.peer_id();
 
-    // First contact: the victim announces itself, honestly.
     let honest = AnnouncementPacket::new(
         "victim".to_string(),
         victim_identity.static_public().to_vec(),
@@ -99,21 +85,6 @@ async fn auditclient2_announce_squat_cannot_take_over_a_proven_peer() {
         inner.links.set_writable(&victim_link, true);
         inner.max_write.insert(victim_link.clone(), 512);
     });
-    assert!(
-        runtime
-            .on_announce(&victim_link, &honest_packet, &victim)
-            .await,
-        "the honest announce creates a candidate"
-    );
-    let pinned_signing_key = state
-        .with(|inner| {
-            inner
-                .peers
-                .info(&victim)
-                .and_then(|r| r.signing_public_key.clone())
-        })
-        .expect("the registry records the signing key on first contact");
-
     // The attacker replays the victim's Noise key — so the peer ID still
     // derives correctly — under its own signing key, and self-signs.
     let attacker = MeshIdentity::generate(&mut os_rng());
@@ -146,24 +117,28 @@ async fn auditclient2_announce_squat_cannot_take_over_a_proven_peer() {
     state.with(|inner| {
         inner
             .links
-            .link_up(attacker_link.clone(), LinkRole::Central);
+            .link_up(attacker_link.clone(), LinkRole::Peripheral);
         inner.links.set_writable(&attacker_link, true);
         inner.max_write.insert(attacker_link.clone(), 512);
     });
 
-    assert!(
-        !runtime
-            .on_announce(&attacker_link, &forged_packet, &victim)
-            .await,
-        "the first candidate keeps its signing key until Noise proves a binding"
-    );
+    for _ in 0..2 {
+        assert!(runtime.on_announce(&attacker_link, &forged_packet, &victim).await);
+    }
     assert!(state.with(|inner| inner.peers.pinned(&victim).is_none()));
-    assert!(state.with(|inner| !inner.peers.info(&victim).unwrap().verified_nickname));
-    assert!(
-        runtime
-            .on_announce(&victim_link, &honest_packet, &victim)
-            .await
-    );
+    assert!(state.with(|inner| {
+        let record = inner.peers.info(&victim).unwrap();
+        record.signing_public_key.as_deref() == Some(attacker.signing_public().as_slice())
+            && !record.verified_nickname
+    }));
+
+    assert!(runtime.on_announce(&victim_link, &honest_packet, &victim).await);
+    let pinned_signing_key = victim_identity.signing_public().to_vec();
+    assert!(state.with(|inner| {
+        let record = inner.peers.info(&victim).unwrap();
+        record.signing_public_key.as_ref() == Some(&pinned_signing_key)
+            && !record.verified_nickname
+    }));
     assert!(state.with(|inner| inner.peers.pin_noise_identity(
         &victim,
         &victim_identity.static_public(),
@@ -398,20 +373,23 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
 
     let author = MeshIdentity::generate(&mut os_rng());
     let author_id = author.peer_id();
+    let mut author_payload = AnnouncementPacket::new(
+        "public author".into(),
+        author.static_public().to_vec(),
+        author.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    )
+    .encode()
+    .unwrap();
+    // The announce decoder ignores an incomplete TLV header.
+    author_payload.push(0x04);
     let author_announce = signed(
         &author_id,
         &author,
         MessageType::Announce,
-        AnnouncementPacket::new(
-            "public author".into(),
-            author.static_public().to_vec(),
-            author.signing_public().to_vec(),
-            None,
-            None,
-            None,
-        )
-        .encode()
-        .unwrap(),
+        author_payload,
         true,
     );
     runtime
@@ -438,10 +416,12 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
     assert_eq!(replies.len(), 2, "only public history and its author's key");
     assert_eq!(replies[0].message_type(), Some(MessageType::Announce));
     assert_eq!(replies[0].sender_id, author_announce.sender_id);
+    assert_eq!(replies[0].payload, author_announce.payload);
     assert_eq!(replies[1].message_type(), Some(MessageType::Message));
     assert_eq!(replies[1].sender_id, author_announce.sender_id);
 
     let mut announce = author_announce;
+    assert_eq!(announce.payload.pop(), Some(0x04));
     announce.payload.extend_from_slice(&[0x04, 0x01, 0xa5]);
     announce.signature = Some(sign_packet(&author, &announce).unwrap());
     assert!(AnnouncementPacket::decode(&announce.payload).unwrap().direct_neighbors.is_none());
@@ -521,8 +501,7 @@ async fn a_refused_announce_is_not_kept_or_re_served_by_the_gossip_store() {
 }
 
 #[tokio::test]
-async fn an_announce_may_not_swap_the_signing_key_of_an_unpinned_candidate() {
-    // A later announce does not replace the first candidate's signing key.
+async fn a_new_candidate_key_uses_the_ingress_budget_but_a_renewal_does_not() {
     let (mut runtime, _radio, state) = runtime();
 
     let honest = MeshIdentity::generate(&mut os_rng());
@@ -568,11 +547,18 @@ async fn an_announce_may_not_swap_the_signing_key_of_an_unpinned_candidate() {
         inner.max_write.insert(link.clone(), 512);
     });
 
+    packet.ttl = DIRECT_ANNOUNCE_TTL;
+    runtime
+        .announce_ingress
+        .insert((link.to_string(), true), (now_millis(), 60));
     assert!(!runtime.on_announce(&link, &packet, &peer).await);
     assert_eq!(
         state.with(|inner| inner.peers.info(&peer).unwrap().signing_public_key.clone()),
         Some(honest.signing_public().to_vec()),
     );
+    packet.payload = first.encode().unwrap();
+    packet.signature = Some(sign_packet(&honest, &packet).unwrap());
+    assert!(runtime.on_announce(&link, &packet, &peer).await);
 }
 
 #[tokio::test]
