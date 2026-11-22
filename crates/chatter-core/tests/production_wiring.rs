@@ -74,44 +74,37 @@ const TABLE: &[Entry] = &[
         symbol: "verify_kt_proof",
         defined_in: "chatter-core/src/crypto/mod.rs",
         expect: Expect::Wired,
-        why: "Inclusion-proof verification on the send path (services/signal/session.rs). \
-              Lose this caller and Key Transparency is decorative again — a server-forged \
-              identity key is accepted silently. That was finding F9; V14/V24/V37 all \
-              call the verifier DIRECTLY, so none of them would notice.",
+        why: "The background peer verifier and the signed membership lookup verify inclusion proofs.",
     },
     Entry {
         symbol: "verify_consistency_proof",
         defined_in: "chatter-core/src/crypto/keytransparency.rs",
         expect: Expect::Wired,
-        why: "The append-only/fork check. Called from services/signal/kt_anchor.rs, which \
-              services/signal/session.rs invokes on every KT-verified send. Lose this \
-              caller and inclusion proofs are verified against whatever head the server \
-              supplied in the same response — each one valid, all of them possibly from \
-              different trees — so a fork, a rollback and a per-user split view all become \
-              undetectable again. Dead until 2026-08-03; that is why this file exists.",
+        why: "The pinned tree-head continuity check rejects rollback and inconsistent log views.",
     },
     Entry {
         symbol: "hold_head_locked",
         defined_in: "chatter-core/src/services/signal/kt_anchor.rs",
         expect: Expect::Wired,
-        why: "Holds a served tree head to the device's pinned head under the pin lock \
-              (classify -> consistency proof -> accept). Called from session.rs for the \
-              identified AND anonymous KT paths (the anon gate is session.rs-internal, so its \
-              wiring is pinned by anon_kt_gate_is_anchored_to_the_device_pin) and from mailbox/blind_signature.rs for \
-              blind-key manifests. Lose it and inclusion proofs verify against whatever \
-              head the server sent, so a forked log goes undetected; before 2026-10-03 the \
-              anonymous path never anchored at all.",
+        why: "Signed channel membership and mailbox token manifests hold their proof to the device pin.",
     },
     Entry {
         symbol: "ensure_session_with_bundle",
-        defined_in: "chatter-core/src/services/signal/session.rs",
+        defined_in: "chatter-core/src/services/signal/session/establish.rs",
         expect: Expect::Wired,
-        why: "The anonymous-path session establishment (services/pairwise.rs), and the \
-              only entry to its KT gate: verify_peer_key_transparency_anon -> judge_kt_proof \
-              -> check_tree_head_consistency -> hold_head_locked. That chain is \
-              session.rs-internal, so `anon_kt_gate_is_anchored_to_the_device_pin` pins it; \
-              this entry pins that the chain is reachable at all. Lose it and pairwise \
-              sessions either stop working or establish over an ungated bundle path.",
+        why: "Anonymous prekey bundles go through the sending trust callback with a Tor verification route.",
+    },
+    Entry {
+        symbol: "spawn_peer_verifier",
+        defined_in: "chatter-core/src/services/signal/session/kt.rs",
+        expect: Expect::Wired,
+        why: "Client startup runs the durable verification worker that releases exact-key sends.",
+    },
+    Entry {
+        symbol: "require_sendable_peer",
+        defined_in: "chatter-core/src/crypto/signal/store.rs",
+        expect: Expect::Wired,
+        why: "SSv2 and sealed plaintext consult the sending trust rule before sealing.",
     },
     // ---- Reactions -------------------------------------------------------
     Entry {
@@ -822,30 +815,19 @@ fn fn_body(lines: &[String], name: &str) -> Option<String> {
     None
 }
 
-/// The anonymous KT gate is held to the device's pinned tree head.
-///
-/// Every link of this chain lives in `services/signal/session.rs`, so the table
-/// (which ignores the defining file) cannot see it; `ensure_session_with_bundle`
-/// in the table pins only the outside entry. Before client 4ce51ad3 the anon gate
-/// verified inclusion against whatever head the server sent with the proof.
-///
-/// MUTATION: delete the `verify_peer_key_transparency_anon(` call from
-/// `ensure_session_with_bundle`, or replace its `judge_kt_proof(` with an
-/// unanchored check. This test goes red naming the broken link.
+/// The background verifier keeps anonymous inclusion and consistency lookups
+/// on the Tor client and anchors the result before returning a trust verdict.
 #[test]
-fn anon_kt_gate_is_anchored_to_the_device_pin() {
-    // The session module is split across files (establish.rs, kt.rs, ...).
+fn anonymous_peer_verification_is_anchored_to_the_device_pin() {
     const SESSION: &str = "chatter-core/src/services/signal/session/";
-    // (caller, callee): each caller's production body must call the callee.
     const CHAIN: &[(&str, &str)] = &[
-        (
-            "ensure_session_with_bundle",
-            "verify_peer_key_transparency_anon",
-        ),
-        ("verify_peer_key_transparency_anon", "lock_pin"),
-        ("verify_peer_key_transparency_anon", "judge_kt_proof"),
-        ("judge_kt_proof", "check_tree_head_consistency"),
-        ("check_tree_head_consistency", "hold_head_locked"),
+        ("run_peer_verifier", "verify_peer_key"),
+        ("verify_peer_key", "job_client"),
+        ("job_client", "secret_kt_client"),
+        ("verify_peer_key", "verify_kt_proof"),
+        ("verify_peer_key", "hold_peer_head"),
+        ("hold_peer_head", "get_consistency_proof"),
+        ("hold_peer_head", "accept_advance"),
     ];
 
     let files: Vec<_> = rust_sources()
@@ -871,14 +853,33 @@ fn anon_kt_gate_is_anchored_to_the_device_pin() {
 
     assert!(
         broken.is_empty(),
-        "The anonymous KT gate (pairwise.rs -> ensure_session_with_bundle) is no longer \
-         provably held to this device's pinned tree head:{}\n\nWithout the anchor, an \
-         anonymous lookup verifies inclusion against whatever head the server sent, so a \
-         log forked for anonymous lookups alone goes undetected. If the chain was \
-         refactored, update CHAIN — after confirming the anon path still reaches \
-         hold_head_locked.",
+        "The background peer verifier no longer proves anonymous lookups on the device's pinned log.{}",
         broken.join("")
     );
+}
+
+#[test]
+fn delivery_paths_do_not_call_key_transparency_network_methods() {
+    const DELIVERY_MODULES: &[&str] = &[
+        "/services/message/", "/services/anon_dm/", "/services/anon_group/",
+        "/services/pairwise.rs", "/services/gateway/", "/services/user/friends.rs",
+        "/services/signal/session/encrypt.rs", "/services/signal/session/establish.rs",
+        "/services/signal/session/devices.rs", "/inbox/", "/client/outgoing.rs",
+    ];
+    const NETWORK_METHODS: &[&str] = &[
+        "verify_peer_key", "get_proof", "get_key_transparency_proof", "get_consistency_proof",
+    ];
+    for path in rust_sources() {
+        let filename = path.to_string_lossy().replace('\\', "/");
+        if !DELIVERY_MODULES.iter().any(|entry| filename.contains(entry)) {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read delivery module");
+        for method in NETWORK_METHODS {
+            assert!(!strip_cfg_test(&source).iter().any(|line| is_call_site(line, method)),
+                "{filename} calls the KT network method {method}");
+        }
+    }
 }
 
 /// The scanner itself must be able to fail.
