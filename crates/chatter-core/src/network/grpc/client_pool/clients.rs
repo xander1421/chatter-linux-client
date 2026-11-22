@@ -116,12 +116,7 @@ impl GrpcClientPool {
         super::super::AnonymousAuthClient::new(self.unidentified_channel())
     }
 
-    /// Create an anonymous Key Transparency client (no auth headers).
-    ///
-    /// Fetches a peer's signed KT inclusion proof over the isolated anonymous
-    /// channel so the anon-DM path can KT-gate session establishment without an
-    /// authenticated identity (Phase 3a). `GetProof` is a public method
-    /// server-side; the proof is public, auditable transparency data.
+    /// Create a public key transparency client on the unidentified route.
     pub fn anonymous_kt_client(&self) -> super::super::AnonymousKtClient {
         super::super::AnonymousKtClient::new(self.unidentified_channel())
     }

@@ -628,7 +628,7 @@ pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = match option_env!("CHATTER_KT_VRF_
     None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_VRF_BYTES,
     None => panic!(
         "no key-transparency VRF public key is baked into this build.\n\n\
-             Every GetProof response carries a VRF proof binding the queried user_id\n\
+             Each key transparency search includes a VRF proof binding the queried user ID\n\
              to the leaf index served. Pinned against the development key, that proof\n\
              either verifies nothing (dev server) or fails outright (real server), and\n\
              the log's user_id -> leaf-index mapping is public to anyone with this\n\
