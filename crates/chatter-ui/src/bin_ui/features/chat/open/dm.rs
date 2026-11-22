@@ -318,11 +318,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.global::<crate::ChatPane>().set_pinned_message_preview("".into());
             w.global::<crate::ChatPane>().set_pinned_total_count(0);
 
-            // Clear the identity-change prompt up front. It is re-evaluated
-            // below for a server DM; every other branch (anon DM, or a failed
-            // load) must not inherit the previous conversation's prompt, which
-            // would offer to pin a key belonging to somebody else.
-            crate::bin_ui::features::chat::identity_change::clear(&w);
+            use crate::bin_ui::features::chat::identity_change;
+            if let Some(peer) = identity_change::active_peer(&ui_ctx_for_ui) {
+                identity_change::refresh(&w, &ui_ctx_for_ui, &peer);
+            } else {
+                identity_change::clear(&w);
+            }
         });
 
         tokio::spawn(async move {

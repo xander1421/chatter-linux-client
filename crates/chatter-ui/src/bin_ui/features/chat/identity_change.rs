@@ -22,9 +22,17 @@ use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
 
+pub(crate) fn active_peer(client: &ChatterClient) -> Option<UserId> {
+    match client.active_conversation() {
+        ActiveConversation::ServerDm { peer_id } => Some(peer_id),
+        ActiveConversation::AnonDm(id) => client.get_anon_dm_conversation(&id).map(|dm| dm.peer_id),
+        _ => None,
+    }
+}
+
 /// Show or hide the prompt for `peer`, reading the pending change from core.
 ///
-/// Called on every ServerDm open (so a change parked while the app was closed
+/// Called on every DM open (so a change parked while the app was closed
 /// is visible on the next look) and whenever the inbox reports a fresh one.
 /// Always writes all four properties, including the cleared case — a prompt
 /// left over from a previous conversation would offer to pin the wrong key.
@@ -56,8 +64,7 @@ pub fn refresh(w: &MainWindow, ui_ctx: &ChatterClient, peer: &UserId) {
     }
 }
 
-/// Hide the prompt. Used on open paths that are not a server DM, and after a
-/// successful accept.
+/// Hide the prompt after acceptance and while changing conversations.
 pub fn clear(w: &MainWindow) {
     w.global::<crate::ChatPane>()
         .set_identity_change_visible(false);
@@ -85,8 +92,8 @@ pub fn wire_accept(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .on_identity_change_accept_clicked(move || {
             let Some(w) = weak.upgrade() else { return };
 
-            let ActiveConversation::ServerDm { peer_id } = ui_ctx.active_conversation() else {
-                tracing::warn!("[IDENTITY] accept fired with no server DM open; ignoring");
+            let Some(peer_id) = active_peer(&ui_ctx) else {
+                tracing::warn!("[IDENTITY] accept fired without a peer conversation");
                 return;
             };
 
