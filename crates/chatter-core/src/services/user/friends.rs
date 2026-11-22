@@ -88,6 +88,9 @@ impl UserService {
             libsignal_protocol::IdentityKey::decode(&friend_request_identity_key(resp)?)
                 .map_err(|e| UserError::InvalidInput(format!("identity key decode failed: {e}")))?;
 
+        self.signal.require_sendable_key(&recipient.to_string(), &identity_key.serialize())
+            .map_err(UserError::Crypto)?;
+
         let mut plaintext = Vec::with_capacity(1 + 32 + note.len());
         plaintext.push(u8::from(profile_key.is_some()));
         if let Some(key) = profile_key.as_ref() {

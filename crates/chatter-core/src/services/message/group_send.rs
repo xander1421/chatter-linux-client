@@ -139,6 +139,7 @@ impl MessageService {
     pub(super) async fn submit_group_request(
         &self,
         request: &chat_v1::SendMessageRequest,
+        distribution: &chatter_proto::content_v1::SenderKeyDistribution,
     ) -> Result<chat_v1::Message, MessageError> {
         let channel_id: ChannelId = request.channel_id.parse().map_err(invalid)?;
         let verified = self.group_gate().for_distribution(&channel_id)?;
@@ -155,11 +156,69 @@ impl MessageService {
             Some(chat_v1::message::content::Type::Encrypted(e)) => e.ciphertext.clone(),
             _ => return Err(invalid("a private-channel send must carry sender-key content")),
         };
-        let token = self.group_send_token(&channel_id, &verified).await?;
+        check_distribution(distribution, &contents)?;
         let members = active_members(&verified);
         let mut auth_client = self.auth_client();
+        // The server requires the complete active roster. Discover every
+        // member's sessions, but a pending key never waits on a KT RPC here.
+        let mut blocked = None;
+        for member in &members {
+            match self.signal_service.require_group_device_sessions(&mut auth_client, member).await
+                .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
+            {
+                Ok(devices) if devices.is_empty() && member != &me => {
+                    return Err(MessageError::Network(NetworkError::Unavailable));
+                }
+                Ok(_) => {}
+                Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
+                Err(error) => return Err(error),
+            }
+        }
+        if let Some(error) = blocked {
+            return Err(error);
+        }
+        let token = self.group_send_token(&channel_id, &verified).await?;
+        let current = self.create_sender_key_for_channel(&channel_id).await?;
+        let same_next = sender_key_precedes(distribution, &current);
+        let holders = if same_next {
+            self.signal_service.sender_key_holders(&channel_id)
+                .map_err(|e| MessageError::from_signal_send(e, "sender key holders"))?
+        } else {
+            Default::default()
+        };
+        let own_device = self.current_device_id_or_zero();
+        let mut message_client = self.message_client();
+        let mut distributed = std::collections::HashSet::new();
         for round in 0..=MAX_RECONCILE_ROUNDS {
-            let sealed = self
+            for member in &members {
+                let devices = self.signal_service.session_device_registrations(member).await
+                    .map_err(|e| MessageError::from_signal_send(e, "group sessions"))?;
+                let missing: Vec<_> = devices.into_iter().filter(|(device, registration)| {
+                    (member != &me || *device != own_device)
+                        && !distributed.contains(&(member.clone(), *device))
+                        && !registration.is_some_and(|r| holders.contains(&(member.clone(), *device, r)))
+                }).collect();
+                if missing.is_empty() {
+                    continue;
+                }
+                let plaintext = self.skdm_plaintext(&channel_id, &verified, distribution, member);
+                let outcome = self.deposit_sealed_to_all_devices(
+                    &mut auth_client, &mut message_client, member, &plaintext, Some(channel_id.as_bytes()),
+                ).await;
+                if let Some(error) = outcome.error {
+                    return Err(error);
+                }
+                if same_next {
+                    self.record_sender_key_holders(&channel_id, member, &outcome);
+                }
+                for (device, _) in outcome.deposits {
+                    distributed.insert((member.clone(), device));
+                }
+                if missing.iter().any(|(device, _)| !distributed.contains(&(member.clone(), *device))) {
+                    return Err(MessageError::Network(NetworkError::Unavailable));
+                }
+            }
+            let (sealed, destinations) = self
                 .signal_service
                 .seal_group_message(&mut auth_client, &channel_id, contents.clone(), &members)
                 .await
@@ -179,12 +238,17 @@ impl MessageService {
             }
             let resp = resp?;
             if resp.success {
-                return Ok(self.sent_group_message(request, resp.server_timestamp)?);
+                use prost::Message as _;
+                let original = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())
+                    .map_err(invalid)?;
+                self.snapshot_private_receipt_targets(channel_id, original.timestamp, &destinations)?;
+                return self.sent_group_message(request, resp.server_timestamp);
             }
             if resp.mismatched.is_empty() || round == MAX_RECONCILE_ROUNDS {
                 return Err(invalid("members' devices still mismatched after reconciling"));
             }
             for account in &resp.mismatched {
+                distributed.retain(|(member, _)| member != &account.user_id);
                 let d = account.devices.clone().unwrap_or_default();
                 self.signal_service
                     .reconcile_devices(&mut auth_client, &account.user_id, &d.missing_devices, &d.extra_devices, &d.stale_devices)
@@ -211,6 +275,42 @@ impl MessageService {
             updated_at: server_timestamp,
             ..Default::default()
         })
+    }
+}
+
+fn distribution_position(
+    distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+) -> Option<(u32, u32)> {
+    let key = libsignal_protocol::SenderKeyDistributionMessage::try_from(
+        distribution.distribution_message.as_slice()).ok()?;
+    Some((key.chain_id().ok()?, key.iteration().ok()?))
+}
+
+fn sender_key_precedes(
+    distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+    current: &chatter_proto::content_v1::SenderKeyDistribution,
+) -> bool {
+    match (distribution_position(distribution), distribution_position(current)) {
+        (Some((id, before)), Some((next_id, after))) =>
+            id == next_id && before.checked_add(1) == Some(after),
+        _ => false,
+    }
+}
+
+fn check_distribution(
+    distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+    contents: &[u8],
+) -> Result<(), MessageError> {
+    use prost::Message as _;
+    let envelope = chatter_proto::content_v1::GroupEncrypted::decode(contents).map_err(invalid)?;
+    let post = libsignal_protocol::SenderKeyMessage::try_from(envelope.ciphertext.as_slice())
+        .map_err(invalid)?;
+    if distribution_position(distribution).is_some_and(|(chain, iteration)|
+        chain == post.chain_id() && iteration <= post.iteration())
+    {
+        Ok(())
+    } else {
+        Err(MessageError::InvalidContent("Private post sender key changed during preparation".into()))
     }
 }
 

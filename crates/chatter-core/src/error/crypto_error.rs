@@ -125,6 +125,13 @@ pub enum CryptoError {
         attribution: IdentityChangeSource,
     },
 
+    /// An exact peer identity is waiting for its background KT verdict.
+    #[error("Key verification pending for {peer_id}")]
+    KeyVerificationPending {
+        /// Account whose key is awaiting verification.
+        peer_id: String,
+    },
+
     /// The server answered the peer's Key Transparency lookup with "no entry".
     ///
     /// Every identity key is logged in the same transaction that stores it

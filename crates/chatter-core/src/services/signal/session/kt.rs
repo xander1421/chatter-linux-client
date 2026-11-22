@@ -1,6 +1,228 @@
 use super::*;
+use crate::crypto::keytransparency::KtError;
+use crate::error::NetworkError;
+use crate::events::{DomainEvent, EventBus};
+use crate::network::grpc::{AnonymousKtClient, client_pool::GrpcClientPool};
+use crate::state::AuthState;
+use crate::storage::peer_verification::{KtJob, KtRoute, KtUpdate, KtVerdict};
+use futures::StreamExt;
+use std::time::Duration;
+
+const ANONYMOUS_DEADLINE: Duration = Duration::from_secs(95);
+
+pub(crate) fn spawn_peer_verifier(
+    service: Arc<SignalService>,
+    pool: Arc<GrpcClientPool>,
+    events: EventBus,
+    auth: AuthState,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::join!(
+            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::Normal),
+            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::AnonymousTor),
+        );
+    })
+}
+
+async fn run_peer_verifier(
+    service: &SignalService,
+    pool: &GrpcClientPool,
+    events: &EventBus,
+    auth: &AuthState,
+    route: KtRoute,
+) {
+    let mut recovered_session = None;
+    let mut ticks = tokio::time::interval(Duration::from_secs(3));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = ticks.tick() => {}
+            _ = service.key_store.kt_work().notified() => {}
+        }
+        let state = auth.get();
+        let Some(owner) = state.current_user_id.filter(|_| !state.session_ended) else {
+            continue;
+        };
+        let revision = state.session_revision;
+        let owner_key = owner.to_string();
+        if route == KtRoute::AnonymousTor && recovered_session != Some((owner, revision)) {
+            if let Err(error) = service.key_store.recover_kt_jobs(&owner_key) {
+                tracing::warn!(%error, "Could not recover pending key verification");
+                continue;
+            }
+            recovered_session = Some((owner, revision));
+        }
+        if route == KtRoute::Normal && service.actor.kt_route() == KtRoute::AnonymousTor {
+            continue;
+        }
+        let jobs = match service
+            .key_store
+            .due_kt_jobs(route, chrono::Utc::now().timestamp())
+        {
+            Ok(jobs) => jobs,
+            Err(error) => {
+                tracing::warn!(%error, "Could not load pending key verification");
+                continue;
+            }
+        };
+        let owner_key = &owner_key;
+        futures::stream::iter(jobs)
+            .for_each_concurrent(4, |job| async move {
+                let current = || {
+                    let state = auth.get();
+                    state.current_user_id == Some(owner)
+                        && !state.session_ended
+                        && state.session_revision == revision
+                };
+                if !current() {
+                    return;
+                }
+                let verdict = service
+                    .verify_peer_key(pool, &job.peer, &job.key, job.route)
+                    .await;
+                if !current() {
+                    return;
+                }
+                match verdict {
+                    Ok(verdict) => {
+                        match settle_peer_verification(service, events, owner_key, job, verdict)
+                            .await
+                        {
+                            Ok(()) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "Could not store peer verification")
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, ?route, "Peer key verification will retry");
+                        if let Err(error) = service
+                            .key_store
+                            .delay_kt_job(&job, chrono::Utc::now().timestamp())
+                        {
+                            tracing::warn!(%error, "Could not reschedule peer verification");
+                        }
+                    }
+                }
+            })
+            .await;
+    }
+}
+
+async fn settle_peer_verification(
+    service: &SignalService,
+    events: &EventBus,
+    owner: &str,
+    job: KtJob,
+    verdict: KtVerdict,
+) -> Result<(), ServiceError> {
+    let peer = job.peer.parse();
+    let update = service
+        .actor
+        .complete_kt_job(owner.to_owned(), job, verdict)
+        .await?;
+    if let Ok(peer_user_id) = peer {
+        if update == KtUpdate::Changed {
+            events.emit_domain(DomainEvent::PeerIdentityChanged {
+                peer_user_id,
+                attributed: false,
+            });
+        }
+        if update != KtUpdate::Stale {
+            events.emit_domain(DomainEvent::PeerKeyVerificationUpdated { peer_user_id });
+        }
+    }
+    Ok(())
+}
+
+fn job_client(pool: &GrpcClientPool, route: KtRoute) -> Result<AnonymousKtClient, NetworkError> {
+    match route {
+        KtRoute::Normal => Ok(AnonymousKtClient::new(pool.channel())),
+        KtRoute::AnonymousTor => pool.secret_kt_client(),
+    }
+}
 
 impl SignalService {
+    /// Network verification boundary. Delivery paths enqueue these inputs in
+    /// the store. The lookup implementation may change independently of admission.
+    async fn verify_peer_key(
+        &self,
+        pool: &GrpcClientPool,
+        peer: &str,
+        key: &[u8],
+        route: KtRoute,
+    ) -> Result<KtVerdict, ServiceError> {
+        if route == KtRoute::Normal && self.actor.kt_route() == KtRoute::AnonymousTor {
+            return Err(NetworkError::Unavailable.into());
+        }
+        let mut client = job_client(pool, route)?;
+        let deadline = match route {
+            KtRoute::Normal => kt_anchor::PIN_RPC_DEADLINE,
+            KtRoute::AnonymousTor => ANONYMOUS_DEADLINE,
+        };
+        tokio::time::timeout(deadline, async {
+            let initial_pin = kt_anchor::pinned_head(&self.settings_repo).map_err(anchor_error)?;
+            let Some(proof) = client.get_proof(peer).await? else {
+                return Ok(KtVerdict::NotInLog);
+            };
+            let actual = proof
+                .inclusion_proof
+                .as_ref()
+                .ok_or_else(|| anchor_error(KtError::Malformed("proof has no leaf")))?
+                .value
+                .as_slice();
+            crate::crypto::verify_kt_proof(peer, actual, &proof).map_err(anchor_error)?;
+            libsignal_protocol::IdentityKey::try_from(actual)
+                .map_err(|_| ServiceError::Crypto(CryptoError::InvalidKeyFormat))?;
+            self.hold_peer_head(initial_pin, &proof, &mut client)
+                .await?;
+            Ok(if actual == key {
+                KtVerdict::Verified
+            } else {
+                KtVerdict::Mismatch(actual.to_vec())
+            })
+        })
+        .await
+        .unwrap_or_else(|_| Err(NetworkError::Timeout.into()))
+    }
+
+    async fn hold_peer_head(
+        &self,
+        initial_pin: Option<kt_anchor::PinnedTreeHead>,
+        proof: &chatter_proto::chat_v1::GetProofResponse,
+        client: &mut AnonymousKtClient,
+    ) -> Result<(), ServiceError> {
+        let head = proof
+            .signed_tree_head
+            .as_ref()
+            .ok_or_else(|| anchor_error(KtError::Malformed("proof has no signed tree head")))?;
+        loop {
+            let (pin, old, new) = {
+                let _guard = kt_anchor::lock_pin().await;
+                let pin = kt_anchor::pinned_head(&self.settings_repo).map_err(anchor_error)?;
+                if pin.is_some_and(|p| p.epoch > head.epoch)
+                    && initial_pin.is_none_or(|p| p.epoch <= head.epoch)
+                {
+                    return Err(NetworkError::Unavailable.into());
+                }
+                match kt_anchor::classify_head(&self.settings_repo, head).map_err(anchor_error)? {
+                    kt_anchor::AnchorAction::Settled(_) => return Ok(()),
+                    kt_anchor::AnchorAction::NeedsProof {
+                        old_epoch,
+                        new_epoch,
+                    } => (pin, old_epoch, new_epoch),
+                }
+            };
+            let consistency = client.get_consistency_proof(old, new).await?;
+            let _guard = kt_anchor::lock_pin().await;
+            if kt_anchor::pinned_head(&self.settings_repo).map_err(anchor_error)? == pin {
+                kt_anchor::accept_advance(&self.settings_repo, head, &consistency)
+                    .map_err(anchor_error)?;
+                return Ok(());
+            }
+        }
+    }
+
     /// Key Transparency gate (Phase 2).
     ///
     /// Before trusting the identity key inside a peer's prekey bundle, fetch the
@@ -90,23 +312,9 @@ impl SignalService {
         }
     }
 
-    pub(super) async fn verify_peer_key_transparency(
-        &self,
-        auth_client: &mut AuthClient,
-        recipient_id: &str,
-        bundle: &libsignal_protocol::PreKeyBundle,
-    ) -> Result<(), ServiceError> {
-        let identity_key = bundle
-            .identity_key()
-            .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
-            .serialize();
-        self.verify_identity_key_transparency(auth_client, recipient_id, &identity_key)
-            .await
-    }
-
     /// The KT gate on a bare identity key: `Ok(())` iff `identity_key` is
     /// `user_id`'s key in the pinned, append-only transparency log. Used for
-    /// prekey bundles and for the authors of signed channel membership changes.
+    /// the authors of signed channel membership changes.
     pub async fn verify_identity_key_transparency(
         &self,
         auth_client: &mut AuthClient,
@@ -257,43 +465,11 @@ impl SignalService {
             }
         }
     }
-    /// Key Transparency gate for the ANONYMOUS-DM path (Phase 3a).
-    ///
-    /// The anonymous analog of `verify_peer_key_transparency`. Same semantics
-    /// (verify the bundle's identity key is the one committed in the signed KT
-    /// log under the pinned tree-head key; REJECT a mismatch; REJECT a
-    /// transport/server error and `NotFound`), but it fetches the
-    /// proof over the isolated ANONYMOUS channel via `AnonymousKtClient` — no
-    /// authenticated identity — because the anon path has none.
-    ///
-    /// This closes the anon-path MITM hole: before Phase 3a the anon path
-    /// trusted peer identity keys blindly (no KT call at all). Its tree head
-    /// is held to this device's pin exactly like the identified path's.
-    pub(super) async fn verify_peer_key_transparency_anon(
-        &self,
-        anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
-        recipient_id: &str,
-        bundle: &libsignal_protocol::PreKeyBundle,
-    ) -> Result<(), ServiceError> {
-        let identity_key = bundle
-            .identity_key()
-            .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
-            .serialize();
-        // Same pin discipline as the identified path (`kt_anchor::lock_pin`).
-        let pin = kt_anchor::lock_pin().await;
-        let fetched = kt_anchor::pinned_rpc(anon_kt_client.get_proof(recipient_id)).await;
-        // The consistency proof comes over the same anonymous channel: without
-        // it a server could fork the log for anonymous lookups alone.
-        self.judge_kt_proof(
-            &pin,
-            "KT(anon)",
-            recipient_id,
-            &identity_key,
-            fetched,
-            |old, new| anon_kt_client.get_consistency_proof(old, new),
-        )
-        .await
-    }
+}
+
+fn anchor_error(error: KtError) -> ServiceError {
+    error.trace_rejection();
+    ServiceError::Validation(format!("Key Transparency verification failed: {error}"))
 }
 
 #[cfg(test)]
@@ -301,8 +477,171 @@ mod kt_pin_tests {
     use super::*;
     use chatter_proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
 
-    /// The anchor both KT paths (identified and `verify_peer_key_transparency_anon`)
-    /// run after the inclusion proof: a head that forks from the pin is refused
+    fn fixture() -> (tempfile::TempDir, Arc<SignalService>, crate::domain::UserId) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("keys.db"), "fixture").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let owner = crate::domain::UserId::new();
+        let settings = Arc::new(crate::storage::SettingsRepository::new(db.clone()));
+        settings
+            .set_string(keys::CURRENT_USER_ID, &owner.to_string())
+            .unwrap();
+        let service = Arc::new(SignalService::new(
+            Arc::new(crate::storage::KeyStore::new(db)),
+            settings,
+        ));
+        (dir, service, owner)
+    }
+
+    #[tokio::test]
+    async fn shield_and_secret_verification_never_fall_back_when_onion_is_missing() {
+        use std::sync::atomic::Ordering;
+        let (_dir, service, _) = fixture();
+        let pool = GrpcClientPool::new("http://127.0.0.1:1").unwrap();
+        assert!(job_client(&pool, KtRoute::Normal).is_ok());
+        let peer = crate::domain::UserId::new().to_string();
+        let shield = service.actor.shield_mode();
+        shield.store(true, Ordering::Release);
+        let shield_route = service.actor.kt_route();
+        shield.store(false, Ordering::Release);
+        let secret_route = service.actor.for_anonymous_route().kt_route();
+        for route in [shield_route, secret_route] {
+            assert_eq!(route, KtRoute::AnonymousTor);
+            assert!(matches!(
+                service.verify_peer_key(&pool, &peer, &[5; 33], route).await,
+                Err(ServiceError::Network(NetworkError::SecretChatNeedsTor(_)))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_exact_keys_and_their_routes_survive_restart() {
+        let (dir, service, owner) = fixture();
+        let peer = crate::domain::UserId::new().to_string();
+        let key = [5; 33];
+        for route in [
+            KtRoute::AnonymousTor,
+            KtRoute::Normal,
+            KtRoute::AnonymousTor,
+        ] {
+            service.key_store.enqueue_kt(&peer, &key, route).unwrap();
+        }
+        drop(service);
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("keys.db"), "fixture").unwrap(),
+        );
+        let keys = crate::storage::KeyStore::new(db);
+        keys.recover_kt_jobs(&owner.to_string()).unwrap();
+        for route in [KtRoute::Normal, KtRoute::AnonymousTor] {
+            let jobs = keys.due_kt_jobs(route, i64::MAX).unwrap();
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(jobs[0].peer, peer);
+            assert_eq!(jobs[0].key, key);
+            assert_eq!(jobs[0].route, route);
+        }
+    }
+
+    #[tokio::test]
+    async fn proven_mismatch_parks_the_candidate_and_emits_the_existing_prompt() {
+        let (_dir, service, owner) = fixture();
+        let peer = crate::domain::UserId::new();
+        let old = [5; 33];
+        let new = [6; 33];
+        service
+            .key_store
+            .save_identity(&peer.to_string(), &old)
+            .unwrap();
+        service
+            .key_store
+            .enqueue_kt(&peer.to_string(), &old, KtRoute::Normal)
+            .unwrap();
+        let mut jobs = service
+            .key_store
+            .due_kt_jobs(KtRoute::Normal, i64::MAX)
+            .unwrap();
+        let events = EventBus::new();
+        let mut rx = events.subscribe_domain();
+        settle_peer_verification(
+            &service,
+            &events,
+            &owner.to_string(),
+            jobs.remove(0),
+            KtVerdict::Mismatch(new.to_vec()),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(rx.try_recv().unwrap(), DomainEvent::PeerIdentityChanged {
+            peer_user_id, attributed: false,
+        } if peer_user_id == peer)
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), DomainEvent::PeerKeyVerificationUpdated {
+            peer_user_id,
+        } if peer_user_id == peer)
+        );
+        assert_eq!(
+            service
+                .get_peer_identity(&peer.to_string())
+                .unwrap()
+                .unwrap(),
+            old
+        );
+        assert_eq!(
+            service
+                .pending_identity_change(&peer.to_string())
+                .unwrap()
+                .unwrap()
+                .0,
+            new
+        );
+    }
+
+    #[tokio::test]
+    async fn a_late_archived_message_does_not_prompt_to_restore_its_old_key() {
+        let (_dir, service, owner) = fixture();
+        let peer = crate::domain::UserId::new().to_string();
+        let archived = [5; 33];
+        let pinned = [6; 33];
+        service.key_store.save_identity(&peer, &pinned).unwrap();
+        service
+            .key_store
+            .enqueue_archived_kt(&peer, &pinned, &archived, KtRoute::AnonymousTor)
+            .unwrap();
+        let mut jobs = service
+            .key_store
+            .due_kt_jobs(KtRoute::AnonymousTor, i64::MAX)
+            .unwrap();
+        let events = EventBus::new();
+        let mut rx = events.subscribe_domain();
+        settle_peer_verification(
+            &service,
+            &events,
+            &owner.to_string(),
+            jobs.remove(0),
+            KtVerdict::Mismatch(pinned.to_vec()),
+        )
+        .await
+        .unwrap();
+        assert!(rx.try_recv().is_err());
+        assert!(service.pending_identity_change(&peer).unwrap().is_none());
+        service
+            .key_store
+            .enqueue_archived_kt(&peer, &pinned, &archived, KtRoute::AnonymousTor)
+            .unwrap();
+        assert!(
+            service
+                .key_store
+                .due_kt_jobs(KtRoute::AnonymousTor, i64::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The anchor signed membership checks run after the inclusion proof: a head that forks from the pin is refused
     /// without asking the server anything.
     #[tokio::test]
     async fn a_head_forked_from_the_pin_is_rejected() {

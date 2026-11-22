@@ -146,6 +146,10 @@ pub enum MessageError {
         peer_id: String,
     },
 
+    /// Delivery is queued until the identity store has the exact key's verdict.
+    #[error("waiting for key verification for {peer_id}")]
+    RecipientKeyVerifying { peer_id: String },
+
     /// DM conversation error.
     #[error("dm error: {0}")]
     DmError(String),
@@ -208,6 +212,13 @@ impl MessageError {
             crate::error::ServiceError::Network(error) => Self::Network(error),
             crate::error::ServiceError::NotLoggedIn => Self::NotLoggedIn,
             crate::error::ServiceError::Validation(reason) => Self::InvalidContent(reason),
+            crate::error::ServiceError::Crypto(crate::error::CryptoError::KeyVerificationPending { peer_id }) =>
+                Self::RecipientKeyVerifying { peer_id },
+            crate::error::ServiceError::Crypto(crate::error::CryptoError::UntrustedIdentity {
+                peer_id,
+                new_identity_key: None,
+                ..
+            }) => Self::RecipientKeyUnverified { peer_id },
             crate::error::ServiceError::Crypto(crate::error::CryptoError::UntrustedIdentity {
                 peer_id,
                 ..

@@ -118,10 +118,6 @@ impl SignalService {
         };
 
         let bundle = Self::convert_prekey_bundle(proto_bundle)?;
-        // KT gate: verify the peer's identity key against the transparency log
-        // before establishing (rejects a server-forged identity key).
-        self.verify_peer_key_transparency(auth_client, recipient_id, &bundle)
-            .await?;
         self.actor
             .establish_session(address, bundle)
             .await
@@ -182,15 +178,8 @@ impl SignalService {
     /// This allows establishing sessions without making an authenticated
     /// prekey fetch request (the bundle was fetched anonymously).
     ///
-    /// KT gate (Phase 3a): before trusting the bundle's identity key, verify it
-    /// against the peer's signed Key Transparency proof, fetched over the
-    /// anonymous channel (`anon_kt_client`). A server-forged identity key is
-    /// REJECTED here, exactly as the identified path rejects it in
-    /// `ensure_session`. Without this the anon path was the last KT-ungated
-    /// session-establishment path — a MITM hole on the metadata-private path.
     pub async fn ensure_session_with_bundle(
         &self,
-        anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
         recipient_id: &str,
         device_id: u32,
         bundle_response: chatter_proto::chat_v1::GetPreKeyBundleResponse,
@@ -218,10 +207,6 @@ impl SignalService {
         };
 
         let bundle = Self::convert_prekey_bundle(proto_bundle)?;
-        // KT gate (anon path): reject a forged peer identity key before it is
-        // ever trusted. Mirrors the identified path's verify_peer_key_transparency.
-        self.verify_peer_key_transparency_anon(anon_kt_client, recipient_id, &bundle)
-            .await?;
-        self.actor.establish_session(address, bundle).await
+        self.actor.for_anonymous_route().establish_session(address, bundle).await
     }
 }

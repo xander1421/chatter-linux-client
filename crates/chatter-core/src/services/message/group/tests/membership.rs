@@ -8,7 +8,7 @@
     ) {
         use libsignal_protocol::{
             DeviceId, IdentityKeyPair, InMemSignalProtocolStore, KeyPair, PreKeyBundle,
-            ProtocolAddress, SessionStore, kem, process_prekey_bundle,
+            ProtocolAddress, SessionStore, kem, initiate_session,
         };
         use rand::SeedableRng;
         let mut rng =
@@ -42,7 +42,7 @@
         let address = ProtocolAddress::new(user.to_string(), device_id);
         let local = ProtocolAddress::new("me".into(), DeviceId::try_from(1u32).unwrap());
         let mut identities = ours.clone();
-        process_prekey_bundle(
+        initiate_session(
             &address,
             &local,
             &mut ours,

@@ -41,3 +41,5 @@ pub(crate) fn untrusted_identity(
         attribution,
     }
 }
+
+pub(crate) use store::outbound_identity_error;

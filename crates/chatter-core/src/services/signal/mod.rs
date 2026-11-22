@@ -14,6 +14,7 @@ mod identity;
 pub mod kt_anchor;
 mod sender_key;
 mod session;
+pub(crate) use session::kt::spawn_peer_verifier;
 
 use crate::domain::ids::ChannelId;
 use libsignal_protocol::PublicKey;
@@ -71,6 +72,16 @@ impl Clone for SignalService {
 }
 
 impl SignalService {
+    pub(crate) fn for_anonymous_route(&self) -> Self {
+        Self { actor: self.actor.for_anonymous_route(), ..self.clone() }
+    }
+
+    pub(crate) fn require_sendable_key(&self, peer: &str, key: &[u8]) -> Result<(), crate::error::CryptoError> {
+        let mut store = crate::crypto::SignalStore::new(self.key_store.clone());
+        store.set_kt_route(self.actor.kt_route());
+        store.require_sendable_key(peer, key)
+    }
+
     /// Raw key store access, for integration tests that must observe Signal
     /// state directly (e.g. asserting the Double Ratchet advances per message).
     ///
@@ -201,6 +212,7 @@ mod tests {
                 .unwrap()
         );
         store.save_identity(&dev1, &real).await.unwrap();
+        store.key_store().mark_peer_verified(dev1.name(), &real.serialize()).unwrap();
 
         // A second legitimate device shares the SAME identity key -> trusted,
         // even though its (user:device) address was never seen before.
@@ -213,10 +225,9 @@ mod tests {
 
         // A server-injected ghost device presents a DIFFERENT key -> rejected.
         assert!(
-            !store
+            !matches!(store
                 .is_trusted_identity(&dev3, &attacker, Direction::Sending)
-                .await
-                .unwrap()
+                .await, Ok(true))
         );
     }
 
@@ -315,10 +326,9 @@ mod tests {
             "the reinstalled key must be untrusted, or the pin means nothing"
         );
         assert!(
-            !store
+            !matches!(store
                 .is_trusted_identity(&dev1, &reinstalled, Direction::Sending)
-                .await
-                .unwrap()
+                .await, Ok(true))
         );
 
         // A malformed key must never reach the pin — it would fail to parse on

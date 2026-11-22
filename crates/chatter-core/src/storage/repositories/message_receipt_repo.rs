@@ -6,6 +6,10 @@ use crate::storage::Database;
 use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
 
+/// A public roster names accounts without their devices. This local marker
+/// fits the existing SQLite constraint and is outside libsignal's device range.
+pub(crate) const ACCOUNT_RECEIPT_TARGET: DeviceId = DeviceId(u32::MAX);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceReceipt {
     pub recipient_id: UserId,
@@ -34,14 +38,15 @@ impl MessageReceiptRepository {
         let mut stmt = conn.prepare(
             "SELECT recipient_id, device_id FROM message_receipt_targets
             WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND sent_at=?4
-            ORDER BY recipient_id, device_id",
+            AND device_id != ?5 ORDER BY recipient_id, device_id",
         )?;
         let rows = stmt.query_map(
             params![
                 conversation.to_string(),
                 kind.as_str(),
                 author.to_string(),
-                sent_at as i64
+                sent_at as i64,
+                ACCOUNT_RECEIPT_TARGET.0,
             ],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)),
         )?;
@@ -150,7 +155,8 @@ impl MessageReceiptRepository {
     ) -> Result<(), StorageError> {
         if targets
             .iter()
-            .any(|(user, device)| *user == author || device.0 == 0)
+            .any(|(user, device)| *user == author || device.0 == 0
+                || (*device == ACCOUNT_RECEIPT_TARGET && kind != ConversationType::Channel))
         {
             return Err(StorageError::InvalidData(
                 "invalid receipt recipient".into(),
@@ -201,6 +207,19 @@ impl MessageReceiptRepository {
             params![conversation.to_string(), kind.as_str(), author.to_string(), provisional as i64, actual as i64])?;
         tx.execute("UPDATE OR IGNORE own_device_send_targets SET sent_at=?5 WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND sent_at=?4",
             params![conversation.to_string(), kind.as_str(), author.to_string(), provisional as i64, actual as i64])?;
+        // Match early authenticated receipts to roster accounts with unknown
+        // devices. The placeholder still counts in the account aggregate.
+        tx.execute("INSERT OR IGNORE INTO message_receipt_targets
+            (message_id,conversation_id,conversation_type,author_id,sent_at,recipient_id,device_id,delivered_at,read_at)
+            SELECT r.message_id,p.conversation_id,p.conversation_type,p.author_id,p.sent_at,
+                   p.recipient_id,p.device_id,p.delivered_at,p.read_at
+            FROM pending_message_receipts p JOIN message_receipt_targets r
+            ON r.conversation_id=p.conversation_id AND r.conversation_type=p.conversation_type
+               AND r.author_id=p.author_id AND r.sent_at=p.sent_at AND r.recipient_id=p.recipient_id
+               AND r.device_id=?5
+            WHERE p.conversation_id=?1 AND p.conversation_type=?2 AND p.author_id=?3 AND p.sent_at=?4",
+            params![conversation.to_string(), kind.as_str(), author.to_string(), actual as i64,
+                ACCOUNT_RECEIPT_TARGET.0])?;
         tx.execute("UPDATE message_receipt_targets AS r SET
             delivered_at=COALESCE(r.delivered_at, (SELECT p.delivered_at FROM pending_message_receipts p WHERE p.conversation_id=r.conversation_id AND p.conversation_type=r.conversation_type AND p.author_id=r.author_id AND p.sent_at=r.sent_at AND p.recipient_id=r.recipient_id AND p.device_id=r.device_id)),
             read_at=COALESCE(r.read_at, (SELECT p.read_at FROM pending_message_receipts p WHERE p.conversation_id=r.conversation_id AND p.conversation_type=r.conversation_type AND p.author_id=r.author_id AND p.sent_at=r.sent_at AND p.recipient_id=r.recipient_id AND p.device_id=r.device_id))
@@ -235,7 +254,7 @@ impl MessageReceiptRepository {
         read: bool,
         received_at: u64,
     ) -> Result<Vec<MessageId>, StorageError> {
-        if recipient == author || device.0 == 0 {
+        if recipient == author || device.0 == 0 || device == ACCOUNT_RECEIPT_TARGET {
             return Ok(Vec::new());
         }
         let received_at = i64::try_from(received_at)
@@ -247,6 +266,15 @@ impl MessageReceiptRepository {
             let Ok(timestamp) = i64::try_from(*timestamp) else {
                 continue;
             };
+            if kind == ConversationType::Channel {
+                tx.execute("INSERT OR IGNORE INTO message_receipt_targets
+                    (message_id,conversation_id,conversation_type,author_id,sent_at,recipient_id,device_id)
+                    SELECT message_id,conversation_id,conversation_type,author_id,sent_at,recipient_id,?6
+                    FROM message_receipt_targets WHERE conversation_id=?1 AND conversation_type=?2
+                       AND author_id=?3 AND sent_at=?4 AND recipient_id=?5 AND device_id=?7",
+                       params![conversation.to_string(), kind.as_str(), author.to_string(),
+                           timestamp, recipient.to_string(), device.0, ACCOUNT_RECEIPT_TARGET.0])?;
+            }
             let rows = tx.execute(
                 "UPDATE message_receipt_targets SET delivered_at=COALESCE(delivered_at, ?7),
                  read_at=CASE WHEN ?8 THEN COALESCE(read_at, ?7) ELSE read_at END
@@ -314,8 +342,8 @@ impl MessageReceiptRepository {
     /// Message-info rows, including devices which have not acknowledged yet.
     pub fn for_message(&self, message_id: MessageId) -> Result<Vec<DeviceReceipt>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare("SELECT recipient_id, device_id, delivered_at, read_at FROM message_receipt_targets WHERE message_id = ?1 ORDER BY recipient_id, device_id")?;
-        let rows = stmt.query_map([message_id.to_string()], |r| {
+        let mut stmt = conn.prepare("SELECT recipient_id, device_id, delivered_at, read_at FROM message_receipt_targets WHERE message_id = ?1 AND device_id != ?2 ORDER BY recipient_id, device_id")?;
+        let rows = stmt.query_map(params![message_id.to_string(), ACCOUNT_RECEIPT_TARGET.0], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, u32>(1)?,
@@ -335,5 +363,43 @@ impl MessageReceiptRepository {
             })
         })
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod roster_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn a_cold_roster_account_keeps_public_receipts_from_prematurely_marking_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("receipts.db"), "test").unwrap());
+        db.run_migrations().unwrap();
+        let repo = MessageReceiptRepository::new(db.clone());
+        let author = UserId::new();
+        let warm = UserId::new();
+        let cold = UserId::new();
+        let channel = ChannelId::new();
+        let kind = ConversationType::Channel;
+        let mut message = crate::domain::message::Message::new_text(
+            channel,
+            kind.clone(),
+            Some(author),
+            "post".into(),
+            12,
+        );
+        message.delivery_status = "sent".into();
+        let messages = crate::storage::MessageRepository::new(db);
+        messages.insert_outgoing(&message).unwrap();
+
+        repo.snapshot_for_send(
+            channel, kind.clone(), author, 12,
+            &[(warm, ACCOUNT_RECEIPT_TARGET), (cold, ACCOUNT_RECEIPT_TARGET)],
+        ).unwrap();
+        repo.apply(channel, kind.clone(), author, warm, DeviceId(3), &[12], true, 13).unwrap();
+        assert_eq!(messages.get(&message.id).unwrap().unwrap().delivery_status, "sent");
+        repo.apply(channel, kind, author, cold, DeviceId(7), &[12], true, 14).unwrap();
+        assert_eq!(messages.get(&message.id).unwrap().unwrap().delivery_status, "read");
+        assert_eq!(repo.for_message(message.id).unwrap().len(), 2);
     }
 }

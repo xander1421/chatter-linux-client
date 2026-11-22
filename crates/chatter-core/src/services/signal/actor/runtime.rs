@@ -10,7 +10,8 @@ impl SignalActorHandle {
                 .unwrap();
             let mut store = SignalStore::new(key_store);
             runtime.block_on(async {
-                while let Some(cmd) = receiver.recv().await {
+                while let Some((route, cmd)) = receiver.recv().await {
+                    store.set_kt_route(route);
                     match cmd {
                         SignalCommand::Barrier { response } => { let _ = response.send(()); }
                         #[cfg(test)]
@@ -137,6 +138,12 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::CompleteKtJob { owner, job, verdict, response } => {
+                            let result = store.key_store().complete_kt_job(&owner, &job, verdict)
+                                .map_err(ServiceError::Storage);
+                            let _ = response.send(result);
+                        }
+
                         SignalCommand::EstablishSession { address, bundle, response } => {
                             let local_address = match local_protocol_address(&settings_repo) {
                                 Ok(a) => a,
@@ -169,6 +176,9 @@ impl SignalActorHandle {
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
                             };
                             let res = async {
+                                for destination in &destinations {
+                                    store.require_sendable_peer(destination)?;
+                                }
                                 let usmc = SealedSenderManager::create_content(
                                     libsignal_protocol::CiphertextMessageType::SenderKey,
                                     sender_cert,
@@ -200,12 +210,16 @@ impl SignalActorHandle {
                                     };
                                     Ok((ciphertext.serialize().to_vec(), msg_type))
                                 }
-                                Err(e) => Err(ServiceError::Crypto(CryptoError::Protocol(e.to_string()))),
+                                Err(e) => Err(ServiceError::Crypto(
+                                    crate::crypto::signal::outbound_identity_error(&e)
+                                        .unwrap_or_else(|| CryptoError::Protocol(e.to_string())),
+                                )),
                             };
                             let _ = response.send(res);
                         }
 
                         SignalCommand::DecryptSealed { ciphertext, trust_root, validation_time, local_uuid, local_device_id, response } => {
+                            store.defer_inbound_kt_route();
                             let mut store2 = store.clone();
                             let mut store3 = store.clone();
                             let mut store4 = store.clone();
@@ -214,8 +228,20 @@ impl SignalActorHandle {
                                 &ciphertext, &trust_root, validation_time,
                                 None, local_uuid, local_device_id,
                                 &mut store, &mut store2, &mut store3, &store6, &mut store4,
+                                SignalStore::allow_archived_whisper_receive,
                             ).await {
-                                Ok((result, msg_type)) => Ok((ProtocolAddress::new(result.sender_uuid, result.device_id), result.message, msg_type)),
+                                Ok((result, msg_type)) => {
+                                    let address = ProtocolAddress::new(result.sender_uuid, result.device_id);
+                                    if let Some(identity) = result.prekey_identity {
+                                        if let Err(error) = store.key_store().enqueue_inbound_kt(
+                                            address.name(), &identity.serialize(),
+                                            receive_kt_route(route, &result.message),
+                                        ) {
+                                            tracing::warn!(%error, "Could not schedule verification of a received key");
+                                        }
+                                    }
+                                    Ok((address, result.message, msg_type))
+                                },
                                 // Preserve the STRUCTURED CryptoError (notably
                                 // SessionDesync, which carries the failed inner
                                 // ciphertext for the DecryptionErrorMessage
@@ -242,11 +268,20 @@ impl SignalActorHandle {
                             let store6 = store.clone();
 
                             let res = if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(ciphertext.as_slice()) {
+                                store2.defer_inbound_kt_route();
                                 let new_key = prekey_msg.identity_key().serialize().to_vec();
                                 libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &local_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await
-                                    .map(|result| result.plaintext)
                                     .map_err(|e| map_identified_decrypt_err(e, Some(new_key)))
+                                    .map(|result| {
+                                        if let Err(error) = store.key_store().enqueue_inbound_kt(
+                                            result.sender.name(), &result.sender_identity_key.serialize(), route,
+                                        ) {
+                                            tracing::warn!(%error, "Could not schedule verification of a received key");
+                                        }
+                                        result.plaintext
+                                    })
                             } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(ciphertext.as_slice()) {
+                                store2.allow_archived_whisper_receive();
                                 libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &local_address, &mut store, &mut store2, &mut rng).await
                                     .map_err(|e| map_identified_decrypt_err(e, None))
                             } else {
@@ -404,6 +439,7 @@ impl SignalActorHandle {
                         SignalCommand::EncryptDecryptionErrorSealed { dem_serialized, sender_cert, recipient_address, response } => {
                             use libsignal_protocol::{ContentHint, DecryptionErrorMessage, PlaintextContent, UnidentifiedSenderMessageContent};
                             let res = async {
+                                store.require_sendable_peer(&recipient_address).map_err(ServiceError::Crypto)?;
                                 let dem = DecryptionErrorMessage::try_from(dem_serialized.as_slice())
                                     .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
                                 let plaintext_content = PlaintextContent::from(dem);
@@ -617,6 +653,6 @@ impl SignalActorHandle {
                 }
             });
         });
-        Self { sender }
+        Self { sender, shield_mode: Arc::default(), force_anonymous: false }
     }
 }

@@ -39,6 +39,14 @@ fn sender_key_distribution_result(
     Ok(())
 }
 
+#[test]
+fn public_sender_key_post_can_skip_blocked_members_only_when_a_recipient_has_the_key() {
+    let wait = || MessageError::RecipientKeyVerifying { peer_id: "pending".into() };
+    assert!(sender_key_distribution_result(1, 2, Some(wait())).is_ok());
+    assert!(matches!(sender_key_distribution_result(0, 2, Some(wait())),
+        Err(MessageError::RecipientKeyVerifying { .. })));
+}
+
 /// Original recipient devices whose user is still a member.
 ///
 /// An empty `original` stays empty. A missing send-time record is not

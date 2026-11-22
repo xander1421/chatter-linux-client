@@ -4,7 +4,7 @@
 
 use libsignal_protocol::{
     Fingerprint, IdentityKey, IdentityKeyStore, PreKeyBundle, ProtocolAddress, SessionRecord,
-    SessionStore, SignalProtocolError, process_prekey_bundle,
+    SessionStore, SignalProtocolError, initiate_session,
 };
 use rand::{CryptoRng, Rng};
 use std::time::SystemTime;
@@ -60,7 +60,7 @@ impl SessionManager {
         // Defense-in-depth: locally verify XEdDSA signatures over the signed
         // prekey and Kyber prekey BEFORE handing the bundle to libsignal.
         //
-        // libsignal's `process_prekey_bundle` performs the same verification
+        // libsignal's `initiate_session` performs the same verification
         // internally (rust/protocol/src/session.rs ~L191), but doing it here
         // first guarantees that any future libsignal refactor (or misuse of
         // an internal helper) cannot silently bypass the signature check on
@@ -111,7 +111,7 @@ impl SessionManager {
             return Err(CryptoError::InvalidSignature);
         }
 
-        process_prekey_bundle(
+        initiate_session(
             remote_address,
             local_address,
             session_store,
@@ -132,6 +132,9 @@ impl SessionManager {
             // must stay distinguishable from a generic protocol failure, and it
             // must carry the bundle's key — that is the key the user is being
             // asked to accept.
+            if let Some(error) = super::outbound_identity_error(&e) {
+                return error;
+            }
             if let SignalProtocolError::UntrustedIdentity(ref address) = e {
                 return super::untrusted_identity(
                     address,

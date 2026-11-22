@@ -9,7 +9,7 @@
 //! with one device missing would be the sender. libsignal takes each
 //! destination's registration id from its session, and there is no session
 //! with ourselves, so for our own device one is built here in memory from our
-//! own prekey records (`process_prekey_bundle` on a throwaway store). It is
+//! own prekey records (`initiate_session` on a throwaway store). It is
 //! never persisted and never used to encrypt anything: multi-recipient
 //! encryption reads only its registration id. The echo comes back to this
 //! device and is dropped by the decrypt path's SealedSenderSelfSend check.
@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use libsignal_protocol::{
     Direction, GenericSignedPreKey, IdentityChange, IdentityKey, IdentityKeyPair,
     IdentityKeyStore, InMemSignalProtocolStore, KyberPreKeyStore, ProtocolAddress, SessionRecord,
-    SessionStore, SignalProtocolError, SignedPreKeyStore, process_prekey_bundle,
+    SessionStore, SignalProtocolError, SignedPreKeyStore, initiate_session,
     sealed_sender_multi_recipient_encrypt,
 };
 
@@ -97,7 +97,7 @@ async fn self_session(store: &SignalStore, local: &ProtocolAddress) -> Result<Se
     .map_err(protocol)?;
     let mut scratch = InMemSignalProtocolStore::new(identity, registration_id).map_err(protocol)?;
     let mut rng = OsRng.unwrap_err();
-    process_prekey_bundle(
+    initiate_session(
         local,
         local,
         &mut scratch.session_store,
@@ -232,6 +232,7 @@ mod tests {
         let mut alice = party("alice", 1111, &mut rng);
         let bob = party("bob", 2222, &mut rng);
         let mut ids = alice.store.clone();
+        alice.store.key_store().mark_peer_verified(bob.address.name(), &bob.identity.identity_key().serialize()).unwrap();
         SessionManager::establish_session(&bob.address, &alice.address, &mut alice.store, &mut ids, &bob.bundle, &mut rng)
             .await
             .unwrap();

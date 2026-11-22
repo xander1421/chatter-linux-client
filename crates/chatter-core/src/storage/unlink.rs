@@ -32,6 +32,10 @@ use crate::error::StorageError;
 /// its `identityKeys` table (the safety numbers the user saw).
 const DEVICE_CONFIGURATION_TABLES: &[&str] = &[
     "dm_outbox",
+    "peer_kt_jobs",
+    "peer_kt_archived_receives",
+    "dm_bootstrap_replies",
+    "peer_key_transparency",
     "pending_dm_messages",
     "pending_channel_messages",
     "pending_anon_group_messages",

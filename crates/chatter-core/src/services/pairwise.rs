@@ -2,7 +2,8 @@
 //! anonymous groups).
 //!
 //! Every network call here rides the secret (Tor) channel and fails closed:
-//! session establishment is an anonymous prekey fetch + KT check, and the only
+//! session establishment fetches prekeys anonymously, and the verification
+//! worker uses the same required route. The only
 //! identified request — refreshing our own sender certificate — goes over Tor
 //! too. Nothing here uses the normal pool transport. Delivery to mailboxes is
 //! the calling context's job; DMs and server groups use `SignalService`
@@ -11,7 +12,7 @@
 use std::sync::Arc;
 
 use crate::domain::UserId;
-use crate::error::NetworkError;
+use crate::error::{CryptoError, NetworkError, ServiceError};
 use crate::mailbox::token_manager::{MailboxToken, TokenManager};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::signal::SignalService;
@@ -27,6 +28,10 @@ pub enum PairwiseError {
     /// session is established (never trust-on-first-use).
     #[error("can't verify this contact's security key ({peer_id})")]
     RecipientKeyUnverified { peer_id: String },
+
+    /// A typed identity decision from the Signal store.
+    #[error(transparent)]
+    Identity(CryptoError),
 
     /// Encryption failed.
     #[error("encryption failed: {0}")]
@@ -55,6 +60,16 @@ pub enum PairwiseError {
     Storage(#[from] crate::error::StorageError),
 }
 
+fn session_error(error: ServiceError) -> PairwiseError {
+    match error {
+        ServiceError::Crypto(error @ (CryptoError::KeyVerificationPending { .. }
+            | CryptoError::UntrustedIdentity { .. })) => PairwiseError::Identity(error),
+        ServiceError::Network(error) => PairwiseError::Network(error),
+        ServiceError::Storage(error) => PairwiseError::Storage(error),
+        other => PairwiseError::SessionError(other.to_string()),
+    }
+}
+
 /// Reusable pairwise encryption service using Signal Protocol.
 ///
 /// Handles Signal Protocol session management and Double Ratchet
@@ -66,6 +81,17 @@ pub struct PairwiseService {
 }
 
 impl PairwiseService {
+    pub(crate) fn require_sendable_existing(&self, peer: &UserId) -> Result<(), PairwiseError> {
+        let peer = peer.to_string();
+        let signal = self.signal_service.for_anonymous_route();
+        if let Some(key) = signal.get_peer_identity(&peer)? {
+            signal.require_sendable_key(&peer, &key).map_err(PairwiseError::Identity)?;
+        } else if signal.key_store.has_kt_job(&peer, signal.actor.kt_route())? {
+            return Err(PairwiseError::Identity(CryptoError::KeyVerificationPending { peer_id: peer }));
+        }
+        Ok(())
+    }
+
     /// Create a new PairwiseService.
     pub fn new(signal_service: Arc<SignalService>, grpc_pool: Arc<GrpcClientPool>) -> Self {
         Self {
@@ -146,40 +172,31 @@ impl PairwiseService {
         device_id: u32,
         plaintext: &[u8],
     ) -> Result<Vec<u8>, PairwiseError> {
+        self.require_sendable_existing(peer_id)?;
         self.ensure_sender_certificate().await?;
         self.signal_service
             .encrypt_message_anonymous(&peer_id.to_string(), device_id, plaintext)
             .await
-            .map_err(|e| PairwiseError::EncryptionFailed(e.to_string()))
+            .map_err(|error| match session_error(error) {
+                PairwiseError::SessionError(error) => PairwiseError::EncryptionFailed(error),
+                error => error,
+            })
     }
 
-    /// Establish a session anonymously if needed, then encrypt.
-    ///
-    /// The prekey bundle is fetched with a blind-signature token and its
-    /// identity key checked against Key Transparency, both over the secret
-    /// (Tor) channel; no authenticated request names the peer.
-    ///
-    /// `device_id` is the peer device the chat is bound to. `None` (first
-    /// contact) fetches every device (`*`; the server requires a device id)
-    /// and binds ONE of them, the lowest device id the server serves a
-    /// bundle for ([`single_device_bundle`]); that device is returned so the
-    /// caller can pin it. A pinned device the
-    /// server no longer has fails ([`PairwiseError::PeerDeviceGone`]) — the
-    /// chat never moves to another of the peer's devices.
-    pub async fn encrypt_anonymous(
+    /// Establish a session using the secret route's blind-token bundle RPC.
+    /// The store schedules verification if the bundle's exact key is pending.
+    pub(crate) async fn prepare_anonymous_session(
         &self,
         peer_id: &UserId,
         device_id: Option<u32>,
-        plaintext: &[u8],
         token: &MailboxToken,
-    ) -> Result<(Vec<u8>, u32), PairwiseError> {
+    ) -> Result<u32, PairwiseError> {
+        self.require_sendable_existing(peer_id)?;
         self.ensure_sender_certificate().await?;
-        let peer_id_str = peer_id.to_string();
-
-        let mut anon_auth = self.grpc_pool.secret_auth_client()?;
-        let bundle_response = anon_auth
+        let peer = peer_id.to_string();
+        let bundle_response = self.grpc_pool.secret_auth_client()?
             .get_pre_key_bundle_anonymous(
-                &peer_id_str,
+                &peer,
                 &prekey_request_device(device_id),
                 &token.public_key,
                 &token.signature,
@@ -187,7 +204,7 @@ impl PairwiseService {
             .await
             .map_err(|e| match (device_id, &e) {
                 (Some(_), NetworkError::NotFound(_)) => PairwiseError::PeerDeviceGone,
-                _ => PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e)),
+                _ => PairwiseError::Network(e),
             })?;
         let bundle = single_device_bundle(bundle_response.result, device_id)?;
         let bundle_device = bundle.device_id;
@@ -196,33 +213,23 @@ impl PairwiseService {
                 chatter_proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(bundle),
             ),
         };
-
-        // KT gate: the peer's identity key is verified against its signed Key
-        // Transparency proof, fetched over the same anonymous channel, before
-        // the session is established. A server-forged identity key is
-        // REJECTED here.
-        let mut anon_kt_client = self.grpc_pool.secret_kt_client()?;
         self.signal_service
-            .ensure_session_with_bundle(
-                &mut anon_kt_client,
-                &peer_id_str,
-                bundle_device,
-                bundle_response,
-            )
+            .ensure_session_with_bundle(&peer, bundle_device, bundle_response)
             .await
-            .map_err(|e| match e {
-                crate::error::ServiceError::Crypto(
-                    crate::error::CryptoError::NotInTransparencyLog { peer_id },
-                ) => PairwiseError::RecipientKeyUnverified { peer_id },
-                e => PairwiseError::SessionError(e.to_string()),
-            })?;
+            .map_err(session_error)?;
+        Ok(bundle_device)
+    }
 
-        let ciphertext = self
-            .signal_service
-            .encrypt_message_anonymous(&peer_id_str, bundle_device, plaintext)
-            .await
-            .map_err(|e| PairwiseError::EncryptionFailed(e.to_string()))?;
-        Ok((ciphertext, bundle_device))
+    pub async fn encrypt_anonymous(
+        &self,
+        peer_id: &UserId,
+        device_id: Option<u32>,
+        plaintext: &[u8],
+        token: &MailboxToken,
+    ) -> Result<(Vec<u8>, u32), PairwiseError> {
+        let device = self.prepare_anonymous_session(peer_id, device_id, token).await?;
+        let ciphertext = self.encrypt_existing_session(peer_id, device, plaintext).await?;
+        Ok((ciphertext, device))
     }
 
     /// Deliver `plaintext` to ONE of a peer's device inboxes, fully
@@ -250,6 +257,7 @@ impl PairwiseService {
         before_send: impl FnOnce(u32) -> Result<(), PairwiseError>,
     ) -> Result<u32, PairwiseError> {
         // Over Tor or not at all; refuse before any token is spent.
+        self.require_sendable_existing(peer_id)?;
         let mut anon_client = self.grpc_pool.secret_message_client()?;
         let claim = || {
             tokens

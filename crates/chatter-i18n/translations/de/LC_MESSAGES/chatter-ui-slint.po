@@ -5998,3 +5998,9 @@ msgstr "Zur Nachricht"
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr "Ungelesen: {}"
+
+msgid "Verifying key"
+msgstr "Schlüssel wird überprüft"
+
+msgid "Key not verified"
+msgstr "Schlüssel nicht geprüft"

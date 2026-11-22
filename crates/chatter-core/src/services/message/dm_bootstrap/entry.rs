@@ -9,6 +9,7 @@ impl MessageService {
         if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             return Err(MessageError::ShieldNotReady);
         }
+        self.require_mailbox_peer_key(peer_id)?;
         let our_user_id = self.settings_repo.current_user_id()?;
         let mut auth_client = AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone());
         if our_user_id.as_uuid() > peer_id.as_uuid() {

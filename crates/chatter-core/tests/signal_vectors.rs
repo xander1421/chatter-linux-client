@@ -8,7 +8,7 @@
 //! # Why seeded RNG instead of static byte vectors for X3DH/PQXDH?
 //!
 //! libsignal-protocol does not expose deterministic seeds on its public
-//! `process_prekey_bundle` API: the function takes a `Rng + CryptoRng` and uses
+//! `initiate_session` API: the function takes a `Rng + CryptoRng` and uses
 //! it for the ephemeral X25519 base key and PQXDH KEM encapsulation randomness.
 //! Even with a seeded `StdRng`, libsignal also pulls system time (`SystemTime`)
 //! into the session record, and KEM encapsulation in `mlkem1024`/`kyber1024`
@@ -25,7 +25,7 @@
 //!
 //! # Tests
 //!
-//! 1. `pqxdh_session_roundtrip_seeded` — Alice runs `process_prekey_bundle`
+//! 1. `pqxdh_session_roundtrip_seeded` — Alice runs `initiate_session`
 //!    against a Bob bundle built from a seeded RNG, encrypts a known
 //!    plaintext, and Bob decrypts it back to the same bytes.
 //! 2. `sender_certificate_roundtrip_validates` — A SenderCertificate built via
@@ -45,7 +45,7 @@ use libsignal_protocol::{
     KeyPair, KyberPreKeyRecord, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeySignalMessage,
     PreKeyStore, ProtocolAddress, SenderCertificate, SenderKeyDistributionMessage,
     ServerCertificate, SignedPreKeyId, SignedPreKeyRecord, Timestamp, kem, message_decrypt,
-    message_encrypt, process_prekey_bundle,
+    message_encrypt, initiate_session,
 };
 use rand::{SeedableRng, rngs::StdRng};
 use std::time::SystemTime;
@@ -157,7 +157,7 @@ async fn pqxdh_session_roundtrip_seeded() {
     // process-bundle calls above, not just on the decrypt below.
     let alice_address = ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(1).unwrap());
 
-    process_prekey_bundle(
+    initiate_session(
         &bob_address,
         &alice_address,
         &mut alice_store.session_store,

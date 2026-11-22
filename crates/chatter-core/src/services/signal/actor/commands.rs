@@ -51,6 +51,12 @@ pub(crate) enum SignalCommand {
             >,
         >,
     },
+    CompleteKtJob {
+        owner: String,
+        job: KtJob,
+        verdict: KtVerdict,
+        response: oneshot::Sender<Result<KtUpdate, ServiceError>>,
+    },
     EstablishSession {
         address: ProtocolAddress,
         bundle: PreKeyBundle,

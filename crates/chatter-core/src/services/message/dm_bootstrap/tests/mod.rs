@@ -98,6 +98,9 @@ async fn cache_device(
         )
         .await
         .unwrap();
+    ms.signal_service.key_store.mark_peer_verified(
+        &peer.to_string(), &peer_identity.identity_key().serialize(),
+    ).unwrap();
     ms.signal_service
         .actor
         .establish_session(ProtocolAddress::new(peer.to_string(), device_id), bundle)

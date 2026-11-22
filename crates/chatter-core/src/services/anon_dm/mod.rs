@@ -110,6 +110,10 @@ pub enum AnonDmError {
     #[error("user is blocked: {0}")]
     UserBlocked(UserId),
 
+    /// An exact recipient identity is awaiting proof or user acceptance.
+    #[error(transparent)]
+    RecipientIdentity(crate::error::CryptoError),
+
     /// Invalid private friend code.
     #[error("invalid private friend code: {0}")]
     InvalidFriendCode(String),
@@ -119,6 +123,7 @@ impl From<crate::services::pairwise::PairwiseError> for AnonDmError {
     fn from(e: crate::services::pairwise::PairwiseError) -> Self {
         use crate::services::pairwise::PairwiseError;
         match e {
+            PairwiseError::Identity(e) => Self::RecipientIdentity(e),
             PairwiseError::Network(e) => Self::MessageError(e.to_string()),
             PairwiseError::Storage(e) => Self::Storage(e),
             PairwiseError::Token(crate::error::MailboxError::NoTokensAvailable) => {

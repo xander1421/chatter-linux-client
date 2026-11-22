@@ -146,6 +146,8 @@ struct Entry {
 struct Prepared {
     request: Vec<u8>,
     state_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    distribution: Option<Vec<u8>>,
     at: i64,
 }
 struct Deposit {
@@ -211,10 +213,14 @@ fn settle_admission(
 pub(super) fn retain_channel_request(
     mut request: SendMessageRequest,
     state_hash: Option<Vec<u8>>,
+    distribution: Option<&chatter_proto::content_v1::SenderKeyDistribution>,
 ) -> Result<SendMessageRequest, StorageError> {
     CHANNEL_DEPOSIT.try_with(|deposit| {
         request.client_request_id = deposit.id.to_string();
-        let prepared = Prepared {request:request.encode_to_vec(),state_hash,at:now()};
+        let prepared = Prepared {
+            request: request.encode_to_vec(), state_hash, at: now(),
+            distribution: distribution.map(prost::Message::encode_to_vec),
+        };
         let raw = serde_json::to_string(&prepared).map_err(|_|invalid("Cannot retain channel request"))?;
         let conn = deposit.db.connection()?;
         let changed = conn.execute("UPDATE settings SET value=json_set(value,'$.phase','submitted','$.prepared',json(?3)) WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='preparing' AND EXISTS(SELECT 1 FROM messages WHERE id=json_extract(settings.value,'$.entry.row.id') AND is_deleted=0) AND NOT EXISTS(SELECT 1 FROM deleted_messages WHERE id=json_extract(settings.value,'$.entry.row.id'))", params![deposit.key, deposit.generation,raw])?;
@@ -235,6 +241,26 @@ pub(super) fn retain_channel_response(
         if changed != 1 { return Err(invalid("Channel response lease expired")); }
         Ok(())
     }).unwrap_or(Ok(()))
+}
+
+fn record_channel_attempt_failure(
+    db: &Database,
+    key: &str,
+    generation: &str,
+    retryable: bool,
+) -> Result<usize, StorageError> {
+    let conn = db.connection()?;
+    Ok(conn.execute(
+        "UPDATE settings SET value=json_set(value,'$.phase',CASE WHEN ?3 THEN 'queued' ELSE 'terminal' END,
+         '$.attempts',MIN(json_extract(value,'$.attempts')+1,6),
+         '$.next_at',?4+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6))))
+         WHERE key=?1 AND json_extract(value,'$.generation')=?2",
+        params![key, generation, retryable, now()],
+    )?)
+}
+
+fn waits_for_peer_verification(error: &MessageError) -> bool {
+    matches!(error, MessageError::RecipientKeyVerifying { .. })
 }
 
 impl MessageService {
@@ -540,7 +566,11 @@ impl MessageService {
             // Only a private channel goes out anonymously; an encrypted
             // public channel also carries a state hash but posts to the server.
             if self.is_private_channel(&row.conversation_id) {
-                self.submit_group_request(&request).await
+                let distribution = prepared.distribution.as_deref().ok_or_else(||
+                    MessageError::InvalidContent("Private post is missing its original sender key".into()))?;
+                let distribution = chatter_proto::content_v1::SenderKeyDistribution::decode(distribution)
+                    .map_err(|_| invalid("Invalid retained sender key"))?;
+                self.submit_group_request(&request, &distribution).await
             } else {
                 Ok(self.message_client().send_prepared_message(request).await?)
             }
@@ -783,18 +813,16 @@ impl MessageService {
                 );
                 // A later preconnect miss does not undo an earlier ambiguous
                 // deposit. Keep replaying its exact request in that case.
-                let transient = crate::state::send_session::check_send_session().is_err()
+                let verifying = waits_for_peer_verification(&error);
+                let transient = verifying || crate::state::send_session::check_send_session().is_err()
                     || if request_not_sent {
                         !first_attempt
                     } else {
                         matches!(&error, MessageError::Network(e) if e.is_retryable() || e.is_transport_error())
                     };
-                let changed = {
-                    let conn = self.database.connection()?;
-                    // Transient failures resume preparation or replay the exact
-                    // request. Auth, invalid payload, membership and expiry stop.
-                    conn.execute("UPDATE settings SET value=json_set(value,'$.phase',CASE WHEN ?3 THEN 'queued' ELSE 'terminal' END,'$.attempts',MIN(json_extract(value,'$.attempts')+1,6),'$.next_at',?4+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6)))) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,transient,now()])?
-                };
+                let changed = record_channel_attempt_failure(
+                    &self.database, journal_key, generation, transient,
+                )?;
                 if changed == 0 {
                     return self
                         .message_repo
@@ -807,6 +835,7 @@ impl MessageService {
                     |r| r.get(0),
                 )?;
                 let (status, reason) = match phase.as_str() {
+                    "queued" if verifying => ("sending", Some(super::core::VERIFYING_KEY)),
                     "queued" => ("sending", Some("Waiting for connection")),
                     "submitted" => ("sending", Some("Delivery unconfirmed")),
                     _ => ("failed", error.permanent_send_failure_reason()),
@@ -943,12 +972,16 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
 ) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
     let mut connectivity = client.offline_state().subscribe();
+    let mut keys = client.event_bus().subscribe_domain();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut previous_session = None;
         loop {
-            ticker.tick().await;
+            let key_updated = tokio::select! {
+                _ = ticker.tick() => false,
+                _ = super::core::wait_for_key_verification(&mut keys) => true,
+            };
             let Some(client) = weak.upgrade() else {
                 break;
             };
@@ -994,9 +1027,13 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
                 }
                 // Bound retained metadata: request bytes are kept only while
                 // they could still resolve an unknown canonical id.
-                tx.execute("UPDATE settings SET value=json_remove(value,'$.prepared.request','$.prepared.state_hash','$.response') WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.prepared.request') IS NOT NULL AND (json_extract(value,'$.server_id') IS NOT NULL OR json_extract(value,'$.prepared.at')<?2)",params![pattern,now()-REQUEST_WINDOW])?;
-                if reconnected {
-                    tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0) WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'",params![pattern])?;
+                tx.execute("UPDATE settings SET value=json_remove(value,'$.prepared.request','$.prepared.state_hash','$.prepared.distribution','$.response') WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.prepared.request') IS NOT NULL AND (json_extract(value,'$.server_id') IS NOT NULL OR json_extract(value,'$.prepared.at')<?2)",params![pattern,now()-REQUEST_WINDOW])?;
+                if reconnected || key_updated {
+                    tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0)
+                        WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'
+                        AND (?2 OR EXISTS(SELECT 1 FROM messages m WHERE m.id=json_extract(settings.value,'$.entry.row.id')
+                        AND m.failure_reason=?3))",
+                        params![pattern, reconnected, super::core::VERIFYING_KEY])?;
                 }
                 let rows: Vec<(String, Option<String>, String, Option<String>, Option<u32>)> = {
                     let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase'),COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
@@ -1126,6 +1163,24 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_private_post_waiting_on_a_member_keeps_its_prepared_post_for_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("kt-channel.db"), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let settings = crate::storage::SettingsRepository::new(db.clone());
+        let key = key(UserId::new(), MessageId::new());
+        let prepared = serde_json::json!({"request":[1,2,3],"distribution":[4,5],"at":now()});
+        settings.set(&key, &serde_json::json!({
+            "phase":"submitted", "generation":"lease", "prepared":prepared, "attempts":0,
+        })).unwrap();
+        let error = MessageError::RecipientKeyVerifying { peer_id: UserId::new().to_string() };
+        assert_eq!(record_channel_attempt_failure(&db, &key, "lease", waits_for_peer_verification(&error)).unwrap(), 1);
+        let retained: serde_json::Value = settings.get(&key).unwrap().unwrap();
+        assert_eq!(retained["phase"], "queued");
+        assert_eq!(retained["prepared"], prepared);
+    }
 
     #[test]
     fn cancelled_deposit_queued_under_old_receive_session_cannot_mutate_journal() {

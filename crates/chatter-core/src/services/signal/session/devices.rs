@@ -50,6 +50,30 @@ impl SignalService {
         recipient_id: &str,
         need_access_policy: bool,
     ) -> Result<(Vec<u32>, bool), ServiceError> {
+        self.ensure_device_sessions(auth_client, recipient_id, need_access_policy, false).await
+    }
+
+    /// A private post must be addressed to the full roster, including every
+    /// current device. Do not turn a blocked device into a partial send.
+    pub(crate) async fn require_group_device_sessions(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+    ) -> Result<Vec<u32>, ServiceError> {
+        if let Some(key) = self.get_peer_identity(recipient_id)? {
+            self.require_sendable_key(recipient_id, &key).map_err(ServiceError::Crypto)?;
+        }
+        self.ensure_device_sessions(auth_client, recipient_id, false, true)
+            .await.map(|(devices, _)| devices)
+    }
+
+    async fn ensure_device_sessions(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        need_access_policy: bool,
+        require_every_device: bool,
+    ) -> Result<(Vec<u32>, bool), ServiceError> {
         use chatter_proto::chat_v1::get_pre_key_bundle_response;
 
         // Same refusal as `ensure_session`, and it matters MORE here: this is
@@ -90,7 +114,9 @@ impl SignalService {
             .filter(|d| Some(*d) != this_device)
             .collect();
         let known_policy = self.unrestricted_access(recipient_id);
-        if !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
+        if !require_every_device
+            && !with_session.is_empty() && (known_policy.is_some() || !need_access_policy)
+        {
             return Ok((with_session, known_policy.unwrap_or(false)));
         }
 
@@ -102,7 +128,8 @@ impl SignalService {
             Ok(r) => r,
             // A throttled policy read must not fail a send we can already
             // encrypt: it goes identified, as it would have without the flag.
-            Err(crate::error::NetworkError::RateLimited) if !with_session.is_empty() => {
+            Err(crate::error::NetworkError::RateLimited)
+                if !require_every_device && !with_session.is_empty() => {
                 tracing::warn!(
                     recipient = %recipient_id,
                     devices = ?with_session,
@@ -164,23 +191,6 @@ impl SignalService {
                     // too: `OutgoingMessage.doSendMessage` -> `registerError`).
                     match Self::convert_prekey_bundle(proto_bundle) {
                         Ok(bundle) => {
-                            // KT gate: a device whose identity key is not committed
-                            // in the transparency log is skipped (a forged key fails
-                            // for every device, leaving established_device_ids empty
-                            // -> the whole recipient is refused below).
-                            if let Err(e) = self
-                                .verify_peer_key_transparency(auth_client, recipient_id, &bundle)
-                                .await
-                            {
-                                tracing::warn!(
-                                    recipient = %recipient_id,
-                                    device_id,
-                                    error = %e,
-                                    "KT verification failed for device bundle, skipping device"
-                                );
-                                last_error = Some(e);
-                                continue;
-                            }
                             match self.actor.establish_session(address, bundle).await {
                                 Ok(_) => established_device_ids.push(device_id),
                                 Err(e) => {
@@ -190,7 +200,12 @@ impl SignalService {
                                         error = %e,
                                         "Failed to establish session with device"
                                     );
-                                    last_error = Some(e);
+                                    if require_every_device {
+                                        return Err(e);
+                                    }
+                                    if last_error.is_none() || matches!(e, ServiceError::Crypto(CryptoError::KeyVerificationPending { .. })) {
+                                        last_error = Some(e);
+                                    }
                                 }
                             }
                         }
@@ -201,7 +216,12 @@ impl SignalService {
                                 error = %e,
                                 "Failed to convert prekey bundle for device"
                             );
-                            last_error = Some(e);
+                            if require_every_device {
+                                return Err(e);
+                            }
+                            if last_error.is_none() {
+                                last_error = Some(e);
+                            }
                         }
                     }
                 }

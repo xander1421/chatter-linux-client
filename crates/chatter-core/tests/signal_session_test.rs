@@ -14,7 +14,7 @@ use libsignal_protocol::{
     DeviceId, GenericSignedPreKey, IdentityKeyPair, InMemSignalProtocolStore, KeyPair,
     KyberPreKeyRecord, KyberPreKeyStore, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeyStore,
     ProtocolAddress, SessionStore, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
-    Timestamp, kem, process_prekey_bundle,
+    Timestamp, kem, initiate_session,
 };
 
 /// Alice is the local party in these fixtures; libsignal >= 0.99 wants her
@@ -133,7 +133,7 @@ async fn handshake(peer: &ProtocolAddress) -> (InMemSignalProtocolStore, InMemSi
     let alice_identity = IdentityKeyPair::generate(&mut alice_rng);
     let mut alice_store =
         InMemSignalProtocolStore::new(alice_identity, ALICE_REGISTRATION_ID).expect("alice store");
-    process_prekey_bundle(
+    initiate_session(
         peer,
         &alice_addr(),
         &mut alice_store.session_store,
@@ -661,7 +661,7 @@ async fn prekey_message_from(sender_identity: IdentityKeyPair, seed: u64) -> Vec
     .unwrap();
 
     let mut sender_store = InMemSignalProtocolStore::new(sender_identity, 0xAAAA).unwrap();
-    process_prekey_bundle(
+    initiate_session(
         &recipient,
         &alice_addr(),
         &mut sender_store.session_store,

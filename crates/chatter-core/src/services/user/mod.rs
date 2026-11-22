@@ -304,6 +304,7 @@ pub fn is_lookup_handle(q: &str) -> bool {
 /// coordinating network client and local storage.
 #[derive(Clone)]
 pub struct UserService {
+    signal: Arc<crate::services::signal::SignalService>,
     grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
     user_repo: Arc<UserRepository>,
@@ -348,6 +349,7 @@ fn profile_fetch_due(last: Option<Instant>, now: Instant) -> bool {
 impl UserService {
     /// Create a new UserService with dependencies.
     pub fn new(
+        signal: Arc<crate::services::signal::SignalService>,
         grpc_pool: Arc<GrpcClientPool>,
         settings_repo: Arc<SettingsRepository>,
         user_repo: Arc<UserRepository>,
@@ -356,6 +358,7 @@ impl UserService {
         event_bus: crate::events::EventBus,
     ) -> Self {
         Self {
+            signal,
             grpc_pool,
             settings_repo,
             user_repo,

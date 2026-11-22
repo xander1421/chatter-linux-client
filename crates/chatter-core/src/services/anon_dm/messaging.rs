@@ -227,8 +227,17 @@ impl AnonDmService {
                 .await;
         }
 
-        // Send to peer
-        self.send_message(conversation_id, inner_content).await?;
+        // The stored row stays retryable if encryption never reached a deposit.
+        match self.send_message(conversation_id, inner_content).await {
+            Err(AnonDmError::RecipientIdentity(crate::error::CryptoError::KeyVerificationPending { .. })) => {
+                crate::services::message::core::update_retry_status(
+                    self.settings_repo.database(),
+                    &message_id, "failed", Some(crate::services::message::core::VERIFYING_KEY),
+                )?;
+                return Ok((message_id, sent_at));
+            }
+            result => result?,
+        }
 
         // Mark as "sent" for delivery status indicator
         let channel_id_for_status: ChannelId = (*conversation_id).into();

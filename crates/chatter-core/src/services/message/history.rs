@@ -38,6 +38,7 @@ impl MessageService {
         ephemeral_service: Arc<EphemeralService>,
         mailbox_manager: Arc<MailboxManager>,
     ) -> Self {
+        let shield_mode = signal_service.actor.shield_mode();
         let solicited_resends = SolicitedResends::load(settings_repo.clone());
         Self {
             grpc_pool,
@@ -55,7 +56,7 @@ impl MessageService {
             event_bus,
             ephemeral_service,
             mailbox_manager,
-            shield_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shield_mode,
             pending_group_decrypts: Arc::new(parking_lot::Mutex::new(
                 std::collections::HashMap::new(),
             )),

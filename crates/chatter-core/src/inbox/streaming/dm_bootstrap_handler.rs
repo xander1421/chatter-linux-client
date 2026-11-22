@@ -39,8 +39,93 @@ use crate::services::SignalService;
 use crate::services::message::{MessageService, PendingFlush};
 use crate::storage::repositories::pending_dm_repo::queued_bubble_timestamp;
 use crate::storage::repositories::PendingDmRepository;
-use crate::storage::{Database, KeyStore, SettingsRepository};
+use crate::storage::{Database, SettingsRepository};
 use crate::util::time::TimestampNanos;
+
+/// Retain the reply through login and transport restarts before acknowledging
+/// the incoming envelope. The authenticated sender/device came from Signal.
+pub(crate) fn retain_bootstrap_reply(
+    settings: &SettingsRepository, owner: Option<&str>, envelope: &str, peer: UserId,
+    device: u32, payload: &[u8],
+) -> Result<bool, crate::error::StorageError> {
+    if !(payload.is_empty() || DmBootstrap::is_bootstrap_message(payload)) {
+        return Ok(false);
+    }
+    let Some(owner) = owner else { return Ok(false) };
+    let conn = settings.database().connection()?;
+    let current: String = conn.query_row(
+        "SELECT value FROM settings WHERE key=?1",
+        [crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID],
+        |row| row.get(0),
+    )?;
+    if serde_json::from_str::<String>(&current).ok().as_deref() != Some(owner) {
+        return Err(crate::error::StorageError::InvalidData("Bootstrap receive owner changed".into()));
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO dm_bootstrap_replies(owner_id,envelope_id,peer_id,device_id,payload)
+         VALUES (?1,?2,?3,?4,?5)",
+        rusqlite::params![owner, envelope, peer.to_string(), device, payload],
+    )?;
+    Ok(true)
+}
+
+#[test]
+fn bootstrap_replies_survive_reopening_the_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bootstrap.db");
+    let peer = UserId::new();
+    let owner = UserId::new().to_string();
+    {
+        let db = Arc::new(Database::open(&path, "test").unwrap());
+        db.run_migrations().unwrap();
+        let settings = SettingsRepository::new(db);
+        settings.set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &owner).unwrap();
+        assert!(retain_bootstrap_reply(&settings, Some(&owner), "device-message", peer, 6, &[]).unwrap());
+        assert!(retain_bootstrap_reply(&settings, Some(&owner), "device-message", peer, 6, &[]).unwrap());
+    }
+    let db = Database::open(&path, "test").unwrap();
+    let jobs = due_bootstrap_replies(&db, &owner).unwrap();
+    assert_eq!(jobs, vec![("device-message".into(), peer, 6, vec![])]);
+}
+
+async fn next_bootstrap_retry(
+    timer: &mut tokio::time::Interval,
+    keys: &mut broadcast::Receiver<DomainEvent>,
+) -> bool {
+    tokio::select! {
+        _ = timer.tick() => false,
+        _ = crate::services::message::core::wait_for_key_verification(keys) => true,
+    }
+}
+
+fn due_bootstrap_replies(
+    database: &Database, owner: &str,
+) -> Result<Vec<(String, UserId, u32, Vec<u8>)>, crate::error::StorageError> {
+    let now = chrono::Utc::now().timestamp();
+    let mut conn = database.connection()?;
+    let tx = conn.transaction()?;
+    let rows = {
+        let mut query = tx.prepare(
+            "SELECT envelope_id,peer_id,device_id,payload FROM dm_bootstrap_replies
+             WHERE owner_id=?1 AND next_attempt_at<=?2 ORDER BY next_attempt_at,envelope_id LIMIT 8",
+        )?;
+        let rows = query.query_map(rusqlite::params![owner, now], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let mut jobs = Vec::with_capacity(rows.len());
+    for (envelope, peer, device, payload) in rows {
+        let Ok(peer) = peer.parse() else { continue };
+        tx.execute(
+            "UPDATE dm_bootstrap_replies SET next_attempt_at=?3 WHERE owner_id=?1 AND envelope_id=?2",
+            rusqlite::params![owner, envelope, now + 60],
+        )?;
+        jobs.push((envelope, peer, device, payload));
+    }
+    tx.commit()?;
+    Ok(jobs)
+}
 
 /// Spawn the DM bootstrap event handler from EventBus.
 ///
@@ -100,6 +185,9 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
         tracing::info!("DM bootstrap handler started");
         let pending_dms = PendingDmRepository::new(database.clone());
         let mut recovery = HashMap::<UserId, BootstrapWait>::new();
+        let mut reply_tick = tokio::time::interval(Duration::from_secs(5));
+        reply_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut keys = event_bus.subscribe_domain();
         let mut recovery_tick = tokio::time::interval(Duration::from_secs(30));
         recovery_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -111,6 +199,61 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
 
         loop {
             tokio::select! {
+                key_updated = next_bootstrap_retry(&mut reply_tick, &mut keys), if bootstrap_tasks.len() < 24 => {
+                    if let Ok(Some(owner)) = message_service.settings_repo.get_string(
+                        crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID
+                    ) {
+                        if key_updated {
+                            if let Ok(conn) = database.connection() {
+                                let _ = conn.execute("UPDATE dm_bootstrap_replies SET next_attempt_at=0 WHERE owner_id=?1", [&owner]);
+                            }
+                        }
+                        match due_bootstrap_replies(&database, &owner) {
+                            Ok(jobs) => for (envelope, peer, device, payload) in jobs {
+                                if !in_progress.lock().await.insert((peer,device)) {
+                                    continue;
+                                }
+                                let database = database.clone();
+                                let pool = grpc_pool.clone();
+                                let service = message_service.clone();
+                                let events = event_bus.clone();
+                                let pending = in_progress.clone();
+                                let turn = peer_turn(&peer_turns, peer).await;
+                                let owner = owner.clone();
+                                bootstrap_tasks.spawn(async move {
+                                    let _turn = turn.lock().await;
+                                    let result = match service.require_mailbox_peer_key(&peer) {
+                                        Err(crate::services::message::MessageError::RecipientKeyVerifying { .. }) => {
+                                            pending.lock().await.remove(&(peer, device));
+                                            return;
+                                        }
+                                        Err(crate::services::message::MessageError::RecipientIdentityChanged { .. }
+                                            | crate::services::message::MessageError::RecipientKeyUnverified { .. }) => Ok(()),
+                                        Err(error) => Err(error.to_string()),
+                                        Ok(()) if payload.is_empty() => {
+                                        if owner.parse::<UserId>().is_ok_and(|local| local.as_uuid() < peer.as_uuid()) {
+                                            handle_bootstrap_request_async(database.clone(), pool, service, peer, device).await
+                                        } else {
+                                            Ok(())
+                                        }
+                                        }
+                                        Ok(()) => handle_bootstrap_async(database.clone(), pool, peer, device, &payload, &service, &events).await,
+                                    };
+                                    if result.is_ok() {
+                                        if let Ok(conn) = database.connection() {
+                                            let _ = conn.execute(
+                                                "DELETE FROM dm_bootstrap_replies WHERE owner_id=?1 AND envelope_id=?2",
+                                                rusqlite::params![owner,envelope],
+                                            );
+                                        }
+                                    }
+                                    pending.lock().await.remove(&(peer,device));
+                                });
+                            },
+                            Err(error) => tracing::warn!(%error, "Could not load retained mailbox bootstrap replies"),
+                        }
+                    }
+                },
                 _ = recovery_tick.tick() => {
                     // Reissue of stuck OUTGOING bootstraps is retry work: skip it
                     // while backgrounded (Signal-mobile model). Incoming bootstrap
@@ -122,6 +265,26 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         Ok(peers) => {
                             recovery.retain(|peer, _| peers.contains(peer));
                             for peer in peers {
+                                let ready = crate::mailbox::dm::DmConversationManager::new(database.clone())
+                                    .load_conversation(&peer).ok().flatten().is_some_and(|dm| dm.is_ready_to_send());
+                                if ready {
+                                    recovery.remove(&peer);
+                                    if in_progress.lock().await.insert((peer,0)) {
+                                        let service = message_service.clone();
+                                        let pool = grpc_pool.clone();
+                                        let events = event_bus.clone();
+                                        let active = in_progress.clone();
+                                        let turn = peer_turn(&peer_turns, peer).await;
+                                        bootstrap_tasks.spawn(async move {
+                                            let _turn = turn.lock().await;
+                                            let mut auth = pool.auth_client();
+                                            let flush = service.send_pending_messages(&mut auth, &peer, &service.mailbox_manager).await;
+                                            flush.emit(peer, &events);
+                                            active.lock().await.remove(&(peer,0));
+                                        });
+                                    }
+                                    continue;
+                                }
                                 let decision = recovery.entry(peer).or_insert_with(BootstrapWait::new)
                                     .advance(Instant::now());
                                 match decision {
@@ -433,6 +596,9 @@ async fn handle_bootstrap_request_async(
         "BOOTSTRAP[2/4] Processing REQUEST - initiating as lower UUID"
     );
 
+    message_service.require_mailbox_peer_key(&peer_id)
+        .map_err(|error| error.to_string())?;
+
     // Create fresh gRPC channel
     // Get channel and auth interceptor from pool
     tracing::debug!(
@@ -468,9 +634,7 @@ async fn handle_bootstrap_request_async(
     );
 
     // Encrypt bootstrap message with Signal Protocol
-    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
-    let key_store = Arc::new(KeyStore::new(database.clone()));
-    let signal_service = SignalService::new(key_store, settings_repo);
+    let signal_service = message_service.signal_service.for_anonymous_route();
 
     let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
     let peer_id_str = peer_id.to_string();
@@ -587,6 +751,9 @@ async fn handle_bootstrap_async(
     // MESSAGE over it beats `handle_incoming_bootstrap` dropping it.
     release_bootstrap_lock(&peer_id);
 
+    message_service.require_mailbox_peer_key(&peer_id)
+        .map_err(|error| error.to_string())?;
+
     // Process the incoming bootstrap
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");
     let response = match dm_bootstrap
@@ -615,8 +782,7 @@ async fn handle_bootstrap_async(
     // Create a SINGLE SignalService instance for all encryptions in this bootstrap flow.
     // This is critical - using separate instances can cause session counter desync.
     let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
-    let key_store = Arc::new(KeyStore::new(database.clone()));
-    let signal_service = SignalService::new(key_store.clone(), settings_repo.clone());
+    let signal_service = message_service.signal_service.for_anonymous_route();
     let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
 
     // Send bootstrap response with two-layer encryption
@@ -685,6 +851,11 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     use crate::storage::repositories::PendingDmRepository;
     use prost::Message as ProstMessage;
 
+    // Leave the durable plaintext queue with its current owner while the
+    // identity gate waits. The bootstrap recovery tick will try it again.
+    if message_service.require_mailbox_peer_key(&peer_id).is_err() {
+        return None;
+    }
     let pending = match PendingDmRepository::new(database.clone()).drain(&peer_id) {
         Ok(msgs) => msgs,
         Err(e) => {
@@ -908,6 +1079,7 @@ pub async fn seal_for_peer_mailbox(
     send_key: &[u8; 32],
 ) -> Result<Vec<Vec<u8>>, String> {
     signal_service
+        .for_anonymous_route()
         .encrypt_message_session_devices(
             auth_client,
             &peer_id.to_string(),

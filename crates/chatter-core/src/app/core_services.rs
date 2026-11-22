@@ -421,6 +421,7 @@ impl CoreServices {
         };
 
         let anon_group_service = self.anon_group_service.clone();
+        let mut keys = self.event_bus.subscribe_domain();
         let retry_parked = async move {
             // Retained join posts survive restart; inspect them soon after
             // startup instead of waiting for the first 5–15 minute poll.
@@ -429,7 +430,10 @@ impl CoreServices {
                 if let Err(e) = anon_group_service.retry_parked_sends().await {
                     tracing::warn!("Parked anon-group send retry failed: {}", e);
                 }
-                jittered_sleep().await;
+                tokio::select! {
+                    _ = jittered_sleep() => {}
+                    _ = crate::services::message::core::wait_for_key_verification(&mut keys) => {}
+                }
             }
         };
 

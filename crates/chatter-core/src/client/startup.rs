@@ -426,6 +426,10 @@ impl ChatterClient {
         }
 
         // ── Channel + DM services ───────────────────────────────────
+        let h_peer_verifier = crate::services::signal::spawn_peer_verifier(
+            self.services.signal_service.clone(), self.services.grpc_pool.clone(),
+            self.event_bus().clone(), self.auth_state().clone(),
+        );
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);
         let h_dm_send_retry = crate::services::message::spawn_dm_send_recovery(self);
@@ -580,6 +584,7 @@ impl ChatterClient {
             h_channel_stream,
             h_delete_batch_retry,
             h_receipt_retry,
+            h_peer_verifier,
             h_saved_sync_retry,
             h_channel_send_retry,
             h_dm_send_retry,

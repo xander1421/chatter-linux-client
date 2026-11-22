@@ -3427,3 +3427,6 @@ msgstr ""
 
 msgid "This username link is invalid or expired."
 msgstr ""
+
+msgid "Verifying key"
+msgstr ""

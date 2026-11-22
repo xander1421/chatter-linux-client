@@ -35,6 +35,15 @@ pub(super) async fn process_sealed_sender_message(
         timestamp: msg.server_timestamp,
     };
 
+    let owner = match message_gateway.settings_repo.get_string(
+        crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+    ) {
+        Ok(owner) => owner,
+        Err(error) => {
+            tracing::warn!(%error, "Could not read the sealed receive owner");
+            return AckDecision::Retain;
+        }
+    };
     let pending = PENDING_ANNOUNCEMENTS.lock().get(&msg.message_guid).cloned();
     let result = if let Some((sender_id, channel_id, announcement)) = pending {
         Ok(SealedSenderResult::MailboxAnnouncement {
@@ -103,7 +112,24 @@ pub(super) async fn process_sealed_sender_message(
             ephemeral_public_key,
             timestamp,
         }) => {
-            // Emit DomainEvent for KeyExchange so DM bootstrap handler can process it
+            match crate::inbox::streaming::dm_bootstrap_handler::retain_bootstrap_reply(
+                &message_gateway.settings_repo, owner.as_deref(), &msg.message_guid, sender_id,
+                sender_device_id, &ephemeral_public_key,
+            ) {
+                Ok(true) => {
+                    let _ = event_tx.send(InboxEvent::MessageProcessed {
+                        message_id: msg.message_guid.clone(),
+                    });
+                    stats.write().messages_processed += 1;
+                    return AckDecision::Ack;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "Could not retain the mailbox bootstrap reply");
+                    return AckDecision::Retain;
+                }
+            }
+            // Events without a durable mailbox reply keep normal routing.
             if let Some(tx) = domain_tx {
                 // Parse conversation_id as ChannelId
                 let conv_id: crate::domain::ChannelId =

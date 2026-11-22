@@ -18,6 +18,7 @@ use crate::crypto::{
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::{CryptoError, ServiceError};
 use crate::storage::KeyStore;
+use crate::storage::peer_verification::{KtJob, KtRoute, KtUpdate, KtVerdict};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Result is returned only after receive state is durably committed.
@@ -122,6 +123,28 @@ fn local_protocol_address(settings: &SettingsRepository) -> Result<ProtocolAddre
 #[derive(Clone)]
 
 pub struct SignalActorHandle {
-    sender: mpsc::Sender<SignalCommand>,
+    sender: mpsc::Sender<(KtRoute, SignalCommand)>,
+    shield_mode: Arc<std::sync::atomic::AtomicBool>,
+    force_anonymous: bool,
 }
 
+
+/// Device inbox envelopes can contain either a regular post or an anonymous
+/// bootstrap. Their wire type is private until after the ratchet decrypt.
+fn receive_kt_route(route: KtRoute, plaintext: &[u8]) -> KtRoute {
+    use chatter_proto::content_v1::{Content, content::Content::*};
+    use prost::Message;
+    if route == KtRoute::AnonymousTor {
+        return route;
+    }
+    match Content::decode(plaintext).ok().and_then(|body| body.content) {
+        Some(KeyExchange(_) | AnonDmRequest(_) | AnonDmAccept(_) | AnonDmMessage(_) | AnonDmEnd(_)
+            | AnonDmPresence(_) | AnonDmProfileUpdate(_)
+            | AnonGroupInvite(_) | AnonGroupJoinAck(_) | AnonGroupMessage(_)
+            | AnonGroupMemberList(_) | AnonGroupDecline(_) | AnonGroupLeave(_)
+            | AnonGroupKick(_) | AnonGroupProfileShare(_) | AnonGroupUpdate(_)) =>
+            KtRoute::AnonymousTor,
+        Some(_) => route,
+        None => KtRoute::AnonymousTor,
+    }
+}

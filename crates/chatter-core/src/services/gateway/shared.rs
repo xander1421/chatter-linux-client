@@ -249,7 +249,10 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         // is already open in this conversation, so point at it.
         SendError::Message(crate::services::message::MessageError::RecipientIdentityChanged {
             ..
-        }) => chatter_i18n::tr("Their safety number changed — accept it above to send"),
+        })
+        | SendError::AnonDm(crate::services::anon_dm::AnonDmError::RecipientIdentity(
+            crate::error::CryptoError::UntrustedIdentity { new_identity_key: Some(_), .. },
+        )) => chatter_i18n::tr("Their safety number changed — accept it above to send"),
         // Not "try again" either: the server could not prove this contact's
         // key, and retrying asks it the same question.
         SendError::Message(crate::services::message::MessageError::RecipientKeyUnverified {

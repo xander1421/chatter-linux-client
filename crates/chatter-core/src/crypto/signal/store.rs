@@ -14,7 +14,8 @@ use libsignal_protocol::{
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::error::StorageError;
+use crate::error::{CryptoError, IdentityChangeSource, StorageError};
+use crate::storage::peer_verification::{KtRoute, PeerVerification};
 use crate::storage::KeyStore;
 #[cfg(feature = "mesh")]
 use crate::storage::mesh_binding_store::MeshBindingStore;
@@ -47,6 +48,8 @@ impl std::error::Error for StorageCallbackError {}
 #[derive(Clone)]
 pub struct SignalStore {
     key_store: Arc<KeyStore>,
+    kt_route: Option<KtRoute>,
+    authenticated_whisper_receive: bool,
     /// Mesh ratchets have a device-local address space per signed-in account.
     /// Identity keys remain keyed by the ordinary account ID.
     mesh_owner: Option<String>,
@@ -59,6 +62,8 @@ impl SignalStore {
     pub fn new(key_store: Arc<KeyStore>) -> Self {
         Self {
             key_store,
+            kt_route: Some(KtRoute::Normal),
+            authenticated_whisper_receive: false,
             mesh_owner: None,
             #[cfg(feature = "mesh")]
             mesh_binding: None,
@@ -76,6 +81,8 @@ impl SignalStore {
     ) -> Self {
         Self {
             key_store,
+            kt_route: Some(KtRoute::Normal),
+            authenticated_whisper_receive: false,
             mesh_owner: Some(owner),
             mesh_binding: Some((binding_store, peer)),
         }
@@ -128,6 +135,87 @@ impl SignalStore {
         local_account_matches(owner.as_deref(), account)
     }
 
+    pub(crate) fn set_kt_route(&mut self, route: KtRoute) {
+        self.kt_route = Some(route);
+        self.authenticated_whisper_receive = false;
+    }
+
+    pub(crate) fn defer_inbound_kt_route(&mut self) {
+        self.kt_route = None;
+    }
+
+    // The Whisper trust callback runs after successful ratchet authentication.
+    // A differing key can only pass through the archived record callback:
+    // save_identity still rejects it. Keep new prekey handshakes strict.
+    pub(crate) fn allow_archived_whisper_receive(&mut self) {
+        self.authenticated_whisper_receive = true;
+    }
+
+    // SSv2 and sealed plaintext do not invoke is_trusted_identity themselves.
+    pub(crate) fn require_sendable_peer(&self, address: &ProtocolAddress) -> std::result::Result<(), CryptoError> {
+        if self.is_local_account(address.name()).map_err(|e| CryptoError::Protocol(e.to_string()))? {
+            return Ok(());
+        }
+        let key = self.key_store.get_identity(address.name())?;
+        let Some(key) = key else {
+            return Err(CryptoError::SessionNotFound(address.to_string()));
+        };
+        self.check_outbound_key(address.name(), u32::from(address.device_id()), &key, Some(&key))
+    }
+
+    /// The same decision is used by the libsignal store callback and operations
+    /// which take a raw identity key instead of a Signal session.
+    pub(crate) fn require_sendable_key(
+        &self, peer: &str, key: &[u8],
+    ) -> std::result::Result<(), CryptoError> {
+        if self.is_local_account(peer).map_err(|e| CryptoError::Protocol(e.to_string()))? {
+            let ours = self.key_store.get_local_identity()?.ok_or(CryptoError::NoIdentity)?;
+            let identity = IdentityKeyPair::try_from(ours.1.as_slice())
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+            return if identity.identity_key().serialize().as_ref() == key {
+                Ok(())
+            } else {
+                Err(untrusted_send(peer, 0, None))
+            };
+        }
+        let stored = self.key_store.get_identity(peer)?;
+        self.check_outbound_key(peer, 0, key, stored.as_deref())
+    }
+
+    fn check_outbound_key(
+        &self, peer: &str, device: u32, key: &[u8], stored: Option<&[u8]>,
+    ) -> std::result::Result<(), CryptoError> {
+        if let Some((candidate, source, device_id)) = self.key_store.get_pending_identity_change(peer)? {
+            return Err(CryptoError::UntrustedIdentity {
+                peer_id: peer.to_owned(),
+                device_id,
+                new_identity_key: Some(candidate),
+                attribution: IdentityChangeSource::from_db_str(&source),
+            });
+        }
+        let state = self.key_store.peer_verification(peer, key)?;
+        match state {
+            PeerVerification::Rejected => Err(untrusted_send(peer, device, None)),
+            PeerVerification::UnverifiedInbound => {
+                self.key_store.enqueue_kt(peer, key, self.kt_route.ok_or_else(|| {
+                    CryptoError::Protocol("outbound verification route absent".into())
+                })?)?;
+                Err(CryptoError::KeyVerificationPending { peer_id: peer.to_owned() })
+            }
+            permitted => {
+                if permitted == PeerVerification::Legacy {
+                    self.key_store.enqueue_kt(peer, key, self.kt_route.ok_or_else(|| {
+                    CryptoError::Protocol("outbound verification route absent".into())
+                })?)?;
+                }
+                if stored.is_some_and(|old| old != key) {
+                    return Err(untrusted_send(peer, device, None));
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Get the underlying KeyStore.
     pub fn key_store(&self) -> Arc<KeyStore> {
         self.key_store.clone()
@@ -158,6 +246,57 @@ fn storage_to_signal_error(e: StorageError) -> SignalProtocolError {
         "storage",
         Box::new(StorageCallbackError(e.to_string())),
     )
+}
+
+fn untrusted_send(peer: &str, device: u32, key: Option<Vec<u8>>) -> CryptoError {
+    CryptoError::UntrustedIdentity {
+        peer_id: peer.to_owned(),
+        device_id: device,
+        new_identity_key: key,
+        attribution: IdentityChangeSource::ServerClaimed,
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum OutboundTrustError {
+    #[error("Key verification pending for {0}")]
+    Pending(String),
+    #[error("Untrusted identity for {peer_id}:{device_id}")]
+    Changed {
+        peer_id: String,
+        device_id: u32,
+        candidate: Option<Vec<u8>>,
+        attribution: IdentityChangeSource,
+    },
+}
+
+fn outbound_callback_error(error: CryptoError) -> SignalProtocolError {
+    let cause = match error {
+        CryptoError::KeyVerificationPending { peer_id } => OutboundTrustError::Pending(peer_id),
+        CryptoError::UntrustedIdentity { peer_id, device_id, new_identity_key, attribution } =>
+            OutboundTrustError::Changed { peer_id, device_id, candidate: new_identity_key, attribution },
+        CryptoError::Storage(error) => return storage_to_signal_error(error),
+        error => return SignalProtocolError::InvalidState("outbound identity", error.to_string()),
+    };
+    SignalProtocolError::ApplicationCallbackError("is_trusted_identity", Box::new(cause))
+}
+
+pub(crate) fn outbound_identity_error(error: &SignalProtocolError) -> Option<CryptoError> {
+    let SignalProtocolError::ApplicationCallbackError(_, cause) = error else {
+        return None;
+    };
+    let cause: &dyn std::error::Error = cause.as_ref();
+    Some(match cause.downcast_ref::<OutboundTrustError>()? {
+        OutboundTrustError::Pending(peer_id) =>
+            CryptoError::KeyVerificationPending { peer_id: peer_id.clone() },
+        OutboundTrustError::Changed { peer_id, device_id, candidate, attribution } =>
+            CryptoError::UntrustedIdentity {
+                peer_id: peer_id.clone(),
+                device_id: *device_id,
+                new_identity_key: candidate.clone(),
+                attribution: *attribution,
+            },
+    })
 }
 
 // =============================================================================
@@ -214,14 +353,19 @@ impl IdentityKeyStore for SignalStore {
             }
             return Ok(IdentityChange::from_changed(false));
         }
-        if self.is_local_account(account)?
-            && self.get_identity_key_pair().await?.identity_key() != identity
+        let is_local = self.is_local_account(account)?;
+        if is_local && self.get_identity_key_pair().await?.identity_key() != identity {
+            return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+        }
+        if self.authenticated_whisper_receive && self.key_store.get_identity(account)
+            .map_err(storage_to_signal_error)?
+            .is_some_and(|old| old.as_slice() != identity.serialize().as_ref())
         {
             return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
         }
         let key_changed = self
             .key_store
-            .save_identity(account, &identity.serialize())
+            .save_routed_identity(account, &identity.serialize(), self.kt_route.filter(|_| !is_local))
             .map_err(storage_to_signal_error)?;
 
         if key_changed {
@@ -255,11 +399,31 @@ impl IdentityKeyStore for SignalStore {
         Ok(IdentityChange::from_changed(key_changed))
     }
 
+    async fn record_received_identity(
+        &mut self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<()> {
+        if self.mesh_owner.is_some() || self.is_local_account(address.name())? {
+            return Ok(());
+        }
+        let peer = address.name();
+        let observed = identity.serialize();
+        let route = self.kt_route.unwrap_or(KtRoute::AnonymousTor);
+        match self.key_store.get_identity(peer).map_err(storage_to_signal_error)? {
+            Some(pinned) if pinned.as_slice() != observed.as_ref() => self.key_store
+                .enqueue_archived_kt(peer, &pinned, &observed, route).map_err(storage_to_signal_error),
+            Some(_) => self.key_store.enqueue_inbound_kt(peer, &observed, route)
+                .map_err(storage_to_signal_error),
+            None => Ok(()),
+        }
+    }
+
     async fn is_trusted_identity(
         &self,
         address: &ProtocolAddress,
         identity: &IdentityKey,
-        _direction: Direction,
+        direction: Direction,
     ) -> Result<bool> {
         #[cfg(feature = "mesh")]
         if self.mesh_owner.is_some() {
@@ -285,12 +449,20 @@ impl IdentityKeyStore for SignalStore {
             .get_identity(address.name())
             .map_err(storage_to_signal_error)?;
 
+        if matches!(direction, Direction::Sending) {
+            self.check_outbound_key(
+                address.name(), u32::from(address.device_id()), &identity.serialize(),
+                stored_key.as_deref(),
+            ).map_err(outbound_callback_error)?;
+            return Ok(true);
+        }
+
         match stored_key {
             None => Ok(self.mesh_owner.is_none()), // mesh never accepts TOFU
             Some(bytes) => {
                 let stored_identity = IdentityKey::try_from(bytes.as_slice())
                     .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-                Ok(&stored_identity == identity)
+                Ok(&stored_identity == identity || self.authenticated_whisper_receive)
             }
         }
     }

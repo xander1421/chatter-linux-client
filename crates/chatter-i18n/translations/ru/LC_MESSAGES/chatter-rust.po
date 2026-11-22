@@ -3950,3 +3950,6 @@ msgstr "Зарегистрировано"
 
 msgid "This username link is invalid or expired."
 msgstr "Эта ссылка на имя пользователя недействительна или устарела."
+
+msgid "Verifying key"
+msgstr "Проверка ключа"

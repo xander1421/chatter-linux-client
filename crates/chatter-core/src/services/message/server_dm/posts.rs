@@ -112,6 +112,10 @@ impl MessageService {
                     (false, None)
                 }
                 Err(MessageError::BootstrapInitiated) => (true, None),
+                Err(MessageError::RecipientKeyVerifying { .. }) => {
+                    self.finish_retry_row(&message.id, "failed", Some(super::super::core::SHIELD_VERIFYING_KEY))?;
+                    (false, None)
+                }
                 Err(e) => {
                     tracing::warn!(peer_id = %peer_id, error = %e, sent_at, "Friend DM not sent; stored as failed");
                     self.finish_retry_row(
@@ -329,27 +333,41 @@ impl MessageService {
             dm.disappearing_enabled_until = 0;
             dm.disappearing_activation_seconds = 0;
         }
-        if message.failure_reason.as_deref() == Some(super::super::core::SHIELD_WAITING_FOR_TOKENS)
+        if matches!(message.failure_reason.as_deref(),
+            Some(super::super::core::SHIELD_WAITING_FOR_TOKENS | super::super::core::SHIELD_VERIFYING_KEY))
         {
             // This row was parked before any submission or device snapshot.
             // It is still a Shield intent, even if the user left Shield while
             // it waited. Never auto-fall through to the direct sealed outbox.
             if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
-                || self
-                    .token_manager
+                || (message.failure_reason.as_deref() == Some(super::super::core::SHIELD_WAITING_FOR_TOKENS)
+                    && self.token_manager
                     .available_token_count()
                     .map_err(|e| MessageError::DmError(e.to_string()))?
-                    == 0
+                    == 0)
             {
                 return Err(MessageError::ShieldNotReady);
             }
             // Remove the automatic-retry marker before the first submission.
             // Cancellation/partial delivery is then owned by the send journal,
             // never picked up as a fresh automatic post.
-            self.finish_retry_row(&message.id, "failed", None)?;
-            let status = match self.send_dm(&peer_id, content, &self.mailbox_manager).await {
+            let verifying = message.failure_reason.as_deref() == Some(super::super::core::SHIELD_VERIFYING_KEY);
+            if !verifying {
+                self.finish_retry_row(&message.id, "failed", None)?;
+            }
+            let devices = if verifying { self.original_dm_devices(peer_id, message.sent_at)? } else { Vec::new() };
+            let result = if devices.is_empty() {
+                self.send_dm(&peer_id, content, &self.mailbox_manager).await
+            } else {
+                self.send_shield_dm_to_devices(&peer_id, content, &devices).await
+            };
+            let status = match result {
                 Ok(()) => "sent",
                 Err(MessageError::BootstrapInitiated) => "sending",
+                Err(MessageError::RecipientKeyVerifying { .. }) => {
+                    self.finish_retry_row(&message.id, "failed", Some(super::super::core::SHIELD_VERIFYING_KEY))?;
+                    return Ok("failed");
+                }
                 Err(error) => {
                     self.finish_retry_row(
                         &message.id,
@@ -404,6 +422,10 @@ impl MessageService {
         let status = match send {
             Ok(()) => "sent",
             Err(MessageError::BootstrapInitiated) => "sending",
+            Err(MessageError::RecipientKeyVerifying { .. }) => {
+                self.finish_retry_row(&message.id, "failed", Some(super::super::core::SHIELD_VERIFYING_KEY))?;
+                return Ok("failed");
+            }
             Err(e) => {
                 let current = self.finish_retry_row(
                     &message.id,
