@@ -220,6 +220,30 @@ impl GrpcClientPool {
         (self.transport_mode(), self.transport_token.read().clone())
     }
 
+    /// Capture the generation whose onion poll may update the Tor indicator.
+    pub(crate) fn tor_poll_generation(&self) -> Option<u64> {
+        let _channel = self.channel.read();
+        (self.transport_mode() == TransportMode::Onion)
+            .then(|| self.transport_gen.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    pub(crate) fn note_tor_poll(
+        &self,
+        generation: u64,
+        status: crate::network::connection::TorStatus,
+    ) -> bool {
+        // Endpoint swaps and network refreshes retire the generation under
+        // this lock, so neither can interleave with checking and publishing.
+        let _channel = self.channel.read();
+        if self.transport_mode() != TransportMode::Onion
+            || self.transport_gen.load(std::sync::atomic::Ordering::Acquire) != generation
+        {
+            return false;
+        }
+        crate::network::connection::set_tor_status(status);
+        true
+    }
+
     #[cfg(feature = "media")]
     pub(crate) fn admit_unconsented_media(
         &self,

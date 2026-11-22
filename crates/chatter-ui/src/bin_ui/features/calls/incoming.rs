@@ -819,9 +819,6 @@ fn paint_incoming(
 /// result — which only repaints the view showing its own call id — is dropped,
 /// leaving "Calling..." forever. Load this call's presentation from core first.
 fn load_presented_incoming(w: &MainWindow, ui_ctx: &ChatterClient, revision: u64, call_id: &str) {
-    if w.global::<crate::CallView>().get_incoming_call_data().call_id.as_str() == call_id {
-        return;
-    }
     let Some(state) = ui_ctx.incoming_call_presentation_state() else { return };
     state.with_snapshot(|snapshot| {
         if snapshot.session_revision != Some(revision) {
@@ -844,6 +841,13 @@ fn load_presented_incoming(w: &MainWindow, ui_ctx: &ChatterClient, revision: u64
         else {
             return;
         };
+        let view = w.global::<crate::CallView>();
+        if view.get_incoming_call_data().call_id.as_str() == call_id {
+            // An earlier Accept may have cleared this while the same ring was
+            // still pending Shield confirmation.
+            view.set_incoming_call_replaces_active(*replaces_active);
+            return;
+        }
         paint_incoming(
             w,
             ui_ctx,
@@ -1244,6 +1248,10 @@ mod session_tests {
             // The query is a FIFO actor barrier; production completion still requires media match.
             current.orch_mark_connected(CallHandle::from(id.to_string()), kind, alice, false);
             runtime.block_on(current.orch_active_kind());
+            let view = window.global::<crate::CallView>();
+            view.set_incoming_call_replaces_active(false);
+            load_presented_incoming(&window, &client, revision, "B");
+            assert!(view.get_incoming_call_replaces_active());
             let mut data = window.global::<crate::CallView>().get_active_call_data();
             data.call_id = id.to_string().into();
             data.is_connected = false;

@@ -60,6 +60,10 @@ pub enum AttachmentError {
     #[error("network error: {0}")]
     NetworkError(String),
 
+    /// The pool retired the route used by this transfer.
+    #[error("transport changed; retry on the current route")]
+    TransportChanged,
+
     /// Invalid attachment data.
     #[error("invalid attachment: {0}")]
     InvalidAttachment(String),
@@ -225,10 +229,14 @@ async fn fence_cdn_transfer<T>(
 ) -> Result<T, AttachmentError> {
     tokio::select! {
         biased;
-        _ = token.cancelled() => Err(AttachmentError::NetworkError(
-            crate::error::NetworkError::TransportChanged.to_string(),
-        )),
-        result = transfer => result,
+        _ = token.cancelled() => Err(AttachmentError::TransportChanged),
+        result = transfer => {
+            if token.is_cancelled() {
+                Err(AttachmentError::TransportChanged)
+            } else {
+                result
+            }
+        },
     }
 }
 
@@ -240,7 +248,7 @@ async fn retired_route_cancels_a_cdn_transfer_and_refuses_to_start_another() {
         old.cancel();
         std::future::pending::<Result<(), AttachmentError>>().await
     }).await;
-    assert!(matches!(cancelled, Err(AttachmentError::NetworkError(_))));
+    assert!(matches!(cancelled, Err(AttachmentError::TransportChanged)));
 
     let token = tokio_util::sync::CancellationToken::new();
     token.cancel();
@@ -480,21 +488,7 @@ impl AttachmentService {
         Ok(total)
     }
 
-    /// PUT `body` to a presigned URL over the selected transport.
-    ///
-    /// Returns `(status, etag)`; the caller decides how to treat the status
-    /// (single PUTs error on non-2xx, multipart parts retry). Never falls back to
-    /// a direct request when Tor is required.
-    pub(crate) async fn cdn_http_put(
-        &self,
-        url: &str,
-        body: Vec<u8>,
-        content_type: &str,
-    ) -> Result<(u16, Option<String>), AttachmentError> {
-        let (tor, token) = self.cdn_route()?;
-        fence_cdn_transfer(token, self.cdn_http_put_on_route(url, body, content_type, tor)).await
-    }
-
+    /// PUT to a presigned URL on the upload attempt's fenced route.
     async fn cdn_http_put_on_route(
         &self, url: &str, body: Vec<u8>, content_type: &str, tor: bool,
     ) -> Result<(u16, Option<String>), AttachmentError> {

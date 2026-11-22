@@ -349,6 +349,29 @@ mod tests {
         assert!(pool.admit_unconsented_media().is_err());
     }
 
+    #[test]
+    fn retired_onion_polls_cannot_publish_to_a_new_generation() {
+        use crate::network::connection::TorStatus;
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        let onion = || Endpoint::from_static("http://example.onion");
+
+        pool.swap_endpoint(onion(), TransportMode::Onion).unwrap();
+        let retired = pool.tor_poll_generation().unwrap();
+        pool.set_transport_mode(TransportMode::Direct).unwrap();
+        assert!(!pool.note_tor_poll(retired, TorStatus::Connected));
+        assert!(pool.tor_poll_generation().is_none());
+
+        pool.swap_endpoint(onion(), TransportMode::Onion).unwrap();
+        assert!(!pool.note_tor_poll(retired, TorStatus::Error));
+        let current = pool.tor_poll_generation().unwrap();
+        assert!(pool.note_tor_poll(current, TorStatus::Connected));
+        #[cfg(feature = "onion")]
+        {
+            pool.invalidate_onion_connections();
+            assert!(!pool.note_tor_poll(current, TorStatus::Error));
+        }
+    }
+
     #[cfg(feature = "onion")]
     #[tokio::test]
     async fn endpoint_swap_clears_secret_probe_health_and_retires_anonymous_channels() {

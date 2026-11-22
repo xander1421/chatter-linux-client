@@ -254,9 +254,8 @@ impl InboxPoller {
             // the in-flight connect, and the next poll would restart it from
             // scratch — a livelock that never establishes the channel. Direct TCP
             // keeps the tight 15s.
-            let (mode, generation) = self.grpc_pool.route_generation_snapshot();
-            let on_onion = mode == crate::network::grpc::client_pool::TransportMode::Onion;
-            let rpc_timeout = if on_onion {
+            let onion_generation = self.grpc_pool.tor_poll_generation();
+            let rpc_timeout = if onion_generation.is_some() {
                 std::time::Duration::from_secs(95)
             } else {
                 std::time::Duration::from_secs(15)
@@ -269,15 +268,16 @@ impl InboxPoller {
             // Drive the Tor indicator off the real onion RPC outcome (Circuit+RPC
             // signal): a completed round-trip = Connected, a timeout = Error. Only
             // touch it on onion — direct mode owns its own connection state.
-            if on_onion && !generation.is_cancelled() {
-                use crate::network::connection::{TorStatus, set_tor_status};
+            if let Some(generation) = onion_generation {
+                use crate::network::connection::TorStatus;
                 use crate::error::NetworkError;
-                match &outcome {
-                    Ok(Ok(_)) => set_tor_status(TorStatus::Connected),
-                    Err(_) | Ok(Err(NetworkError::RequestNotSent(_) | NetworkError::ConnectionFailed(_))) => {
-                        set_tor_status(TorStatus::Error);
-                    }
-                    _ => {}
+                let status = match &outcome {
+                    Ok(Ok(_)) => Some(TorStatus::Connected),
+                    Err(_) | Ok(Err(NetworkError::RequestNotSent(_) | NetworkError::ConnectionFailed(_))) => Some(TorStatus::Error),
+                    _ => None,
+                };
+                if let Some(status) = status {
+                    self.grpc_pool.note_tor_poll(generation, status);
                 }
             }
             let result = outcome
