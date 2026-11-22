@@ -244,6 +244,7 @@ impl SignalActorHandle {
                             let res = if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(ciphertext.as_slice()) {
                                 let new_key = prekey_msg.identity_key().serialize().to_vec();
                                 libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &local_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await
+                                    .map(|result| result.plaintext)
                                     .map_err(|e| map_identified_decrypt_err(e, Some(new_key)))
                             } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(ciphertext.as_slice()) {
                                 libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &local_address, &mut store, &mut store2, &mut rng).await
