@@ -9,7 +9,7 @@
 //! (`auth_crypto::login_identifier`), and passwords never are: every password
 //! check is an OPAQUE exchange (`crypto::opaque`).
 
-use crate::network::grpc::transport::GrpcTransport;
+use crate::network::grpc::{AnonymousKtClient, transport::GrpcTransport};
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
 
@@ -18,9 +18,8 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use chatter_proto::chat_v1::{
     AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordFinishRequest,
     ChangePasswordStartRequest, ChangePasswordStartResponse, DeleteAccountRequest,
-    GetActiveSessionsRequest, GetActiveSessionsResponse, GetConsistencyProofRequest,
-    GetConsistencyProofResponse, GetPreKeyBundleRequest, GetPreKeyBundleResponse,
-    GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest, GetProofResponse,
+    GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
+    GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse,
     GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse, InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginFinishRequest,
     LoginStartRequest, LoginStartResponse, LogoutRequest, PasswordProof, PasswordProofStartRequest,
@@ -33,7 +32,7 @@ use chatter_proto::chat_v1::{
     UploadPreKeyBundleRequest, UseRecoveryCodeFinishRequest, UseRecoveryCodeFinishResponse,
     UseRecoveryCodeStartRequest, UseRecoveryCodeStartResponse, auth_event,
     auth_service_client::AuthServiceClient,
-    key_transparency_service_client::KeyTransparencyServiceClient, signal_pre_key_bundle,
+    signal_pre_key_bundle,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
@@ -53,10 +52,7 @@ use chatter_proto::chat_v1::{
 /// ```
 pub struct AuthClient {
     inner: AuthServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
-    /// Key Transparency client, built on the same channel + auth interceptor.
-    /// Used to fetch a peer's signed inclusion proof before trusting the
-    /// identity key in their prekey bundle (Phase 2 KT verification).
-    kt: KeyTransparencyServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
+    kt: AnonymousKtClient,
 }
 
 impl AuthClient {
@@ -68,50 +64,13 @@ impl AuthClient {
     /// * `interceptor` - Cloned auth interceptor for credential injection
     pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
-            inner: AuthServiceClient::with_interceptor(channel.clone(), interceptor.clone()),
-            kt: KeyTransparencyServiceClient::with_interceptor(channel, interceptor),
+            inner: AuthServiceClient::with_interceptor(channel.clone(), interceptor),
+            kt: AnonymousKtClient::new(channel),
         }
     }
 
-    /// Fetch the Key Transparency inclusion proof for `user_id`.
-    ///
-    /// Returns `Ok(Some(proof))` when the user has a leaf in the KT log,
-    /// `Ok(None)` when the server reports `NotFound` (a pre-KT user with no
-    /// leaf — the caller decides the no-proof policy), and `Err` on any other
-    /// transport/server failure (which must NOT be silently treated as "no
-    /// proof": a network error is not evidence of a missing leaf).
-    pub async fn get_key_transparency_proof(
-        &mut self,
-        user_id: &str,
-    ) -> Result<Option<GetProofResponse>, NetworkError> {
-        let request = GetProofRequest {
-            user_id: user_id.to_string(),
-        };
-        match self.kt.get_proof(request).await {
-            Ok(resp) => Ok(Some(resp.into_inner())),
-            Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
-            Err(status) => Err(NetworkError::from_status(&status)),
-        }
-    }
-
-    /// Fetch a consistency proof between two tree-head epochs.
-    ///
-    /// Used by `services::signal::kt_anchor` to prove the KT log only GREW
-    /// between the head this device pinned and a newer one. Mirrors
-    /// `AnonymousKtClient::get_consistency_proof` for the identified path.
-    pub async fn get_consistency_proof(
-        &mut self,
-        old_epoch: u64,
-        new_epoch: u64,
-    ) -> Result<GetConsistencyProofResponse, NetworkError> {
-        let request = GetConsistencyProofRequest {
-            old_epoch,
-            new_epoch,
-        };
-        match self.kt.get_consistency_proof(request).await {
-            Ok(resp) => Ok(resp.into_inner()),
-            Err(status) => Err(NetworkError::from_status(&status)),
-        }
+    pub(crate) fn key_transparency_client(&mut self) -> &mut AnonymousKtClient {
+        &mut self.kt
     }
 
     /// OPAQUE login, first round trip: KE1 for the login identifier. The

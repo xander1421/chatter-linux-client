@@ -71,22 +71,16 @@ struct Entry {
 const TABLE: &[Entry] = &[
     // ---- Signal: key transparency ---------------------------------------
     Entry {
-        symbol: "verify_kt_proof",
-        defined_in: "chatter-core/src/crypto/mod.rs",
-        expect: Expect::Wired,
-        why: "The background peer verifier and the signed membership lookup verify inclusion proofs.",
-    },
-    Entry {
-        symbol: "verify_consistency_proof",
-        defined_in: "chatter-core/src/crypto/keytransparency.rs",
-        expect: Expect::Wired,
-        why: "The pinned tree-head continuity check rejects rollback and inconsistent log views.",
-    },
-    Entry {
-        symbol: "hold_head_locked",
+        symbol: "kt_anchor::search",
         defined_in: "chatter-core/src/services/signal/kt_anchor.rs",
         expect: Expect::Wired,
-        why: "Signed channel membership and mailbox token manifests hold their proof to the device pin.",
+        why: "Identity verification passes the previously verified head and observations to libsignal.",
+    },
+    Entry {
+        symbol: "kt_anchor::Pin::load",
+        defined_in: "chatter-core/src/services/signal/kt_anchor.rs",
+        expect: Expect::Wired,
+        why: "Mailbox manifests use the same persisted baselines as identity searches.",
     },
     Entry {
         symbol: "ensure_session_with_bundle",
@@ -617,7 +611,7 @@ fn production_callers(symbol: &str, defined_in: &str) -> Vec<String> {
 /// A control with no caller is not a control.
 ///
 /// MUTATION: delete the `evaluate_announce(` call at `services/mesh/ble.rs`, or
-/// the `verify_kt_proof` calls in `services/signal/session.rs`. This test goes
+/// the `kt_anchor::search` call in `services/signal/session/kt.rs`. This test goes
 /// red naming the symbol. Nothing else in the suite does — `announce.rs`'s own
 /// unit tests and V14/V24/V37 all call those functions directly.
 #[test]
@@ -824,10 +818,8 @@ fn anonymous_peer_verification_is_anchored_to_the_device_pin() {
         ("run_peer_verifier", "verify_peer_key"),
         ("verify_peer_key", "job_client"),
         ("job_client", "secret_kt_client"),
-        ("verify_peer_key", "verify_kt_proof"),
-        ("verify_peer_key", "hold_peer_head"),
-        ("hold_peer_head", "get_consistency_proof"),
-        ("hold_peer_head", "accept_advance"),
+        ("verify_peer_key", "lookup_identity"),
+        ("lookup_identity", "kt_anchor::search"),
     ];
 
     let files: Vec<_> = rust_sources()
@@ -867,7 +859,7 @@ fn delivery_paths_do_not_call_key_transparency_network_methods() {
         "/services/signal/session/devices.rs", "/inbox/", "/client/outgoing.rs",
     ];
     const NETWORK_METHODS: &[&str] = &[
-        "verify_peer_key", "get_proof", "get_key_transparency_proof", "get_consistency_proof",
+        "verify_peer_key", "kt_anchor::search", "get_proof", "get_key_transparency_proof", "get_consistency_proof",
     ];
     for path in rust_sources() {
         let filename = path.to_string_lossy().replace('\\', "/");

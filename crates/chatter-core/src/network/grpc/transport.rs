@@ -355,8 +355,8 @@ fn requires_device_auth(path: &str) -> bool {
             | "/chat.v1.provisioning.DeviceProvisioningService/GetProvisioningMessage"
             | "/chat.v1.provisioning.DeviceProvisioningService/CompleteDeviceLinking"
             | "/chat.v1.provisioning.DeviceProvisioningService/GetTransferArchive"
-            | "/chat.v1.KeyTransparencyService/GetProof"
-            | "/chat.v1.KeyTransparencyService/GetConsistencyProof"
+            | "/chat.v1.KeyTransparencyService/Search"
+            | "/chat.v1.KeyTransparencyService/Monitor"
     )
 }
 

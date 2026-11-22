@@ -79,8 +79,9 @@ impl MailboxClient {
     /// Clients use this to blind their ephemeral keys before requesting tokens.
     pub async fn get_blind_signature_public_key(
         &mut self,
+        consistency: chatter_proto::chat_v1::KtConsistency,
     ) -> Result<GetBlindSignaturePublicKeyResponse, NetworkError> {
-        let request = GetBlindSignaturePublicKeyRequest {};
+        let request = GetBlindSignaturePublicKeyRequest { consistency: Some(consistency) };
 
         self.inner
             .get_blind_signature_public_key(request)

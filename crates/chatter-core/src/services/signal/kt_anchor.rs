@@ -1,725 +1,344 @@
-//! Pin the key-transparency log across time.
-//!
-//! # What was missing
-//!
-//! [`crate::crypto::verify_kt_proof`] checks that a peer's identity key is in
-//! the tree whose root the server just signed. Every part of that is verified
-//! — except *which tree*. Each proof was checked in isolation against a head
-//! the server supplied in the same response, so a server free to sign heads is
-//! free to serve a different tree per user, per device, or per request:
-//!
-//! - **Fork / split view.** Sign tree A for the victim and tree B for everyone
-//!   else. Both verify. The victim's contact sees an identity key nobody else
-//!   can observe, which is exactly the attack KT exists to make public.
-//! - **Rollback.** Serve an older epoch whose leaf held a key the attacker
-//!   controls. The signature is valid; it is simply the wrong point in time.
-//!
-//! `verify_consistency_proof` — the check that catches both — existed, was
-//! correct, and had zero production callers. This module is the caller.
-//!
-//! # The rule
-//!
-//! Keep the highest tree head this device has ever accepted. For each new head:
-//!
-//! | relation to pinned | action |
-//! |---|---|
-//! | no pin yet | pin it (trust on first use, like the log itself) |
-//! | same epoch, same root | accept |
-//! | same epoch, **different root** | REJECT — signed fork at one epoch |
-//! | older epoch | REJECT — rollback |
-//! | newer epoch | fetch a consistency proof pinned→new, verify, then advance |
-//!
-//! # The binding that is easy to omit
-//!
-//! [`crate::crypto::verify_consistency_proof`] proves the *response* is
-//! internally coherent: both heads signed, epochs ordered, proof roots equal to
-//! the signed roots, old leaves reconstructing the old root. It knows nothing
-//! about what THIS device previously trusted, so on its own a server can answer
-//! with a perfectly valid proof between two epochs of a tree we never saw.
-//!
-//! [`advance_pinned_head`] therefore compares `old_root` against the pinned
-//! root itself, and `new_root`/`new_epoch` against the head being offered.
-//! Without those three comparisons the consistency proof is decoration.
+//! Chatter transport and durable state for libsignal's KT verifier.
 
-use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
 
-use crate::crypto::keytransparency::{KtError, verify_consistency_proof};
-use std::future::Future;
-use std::time::Duration;
+use chatter_proto::chat_v1::{KtConsistency, KtSearchRequest, KtSearchResponse};
+use libsignal_keytrans::{
+    CondensedTreeSearchResponse, DeploymentMode, FullSearchResponse, FullTreeHead, KeyTransparency,
+    LastTreeHead, MonitoringData, PublicConfig, SearchContext, SlimSearchRequest,
+    StoredMonitoringData, StoredTreeHead, VerifiedSearchResult, VerifyingKey, VrfPublicKey,
+};
+use prost::Message;
 
-use crate::error::NetworkError;
-use chatter_proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
+use crate::error::{NetworkError, ServiceError, StorageError};
+use crate::network::grpc::AnonymousKtClient;
 use crate::storage::repositories::SettingsRepository;
 
-/// Settings key holding [`PinnedTreeHead`].
-pub const KT_PINNED_TREE_HEAD: &str = "kt.pinned_tree_head";
+const HEAD: &str = "kt.libsignal.head";
+const DISTINGUISHED_HEAD: &str = "kt.libsignal.distinguished";
+const DISTINGUISHED: &[u8] = b"distinguished";
+const CHECKPOINT_REFRESH: Duration = Duration::from_secs(6 * 60 * 60);
+pub(crate) const PIN_RPC_DEADLINE: Duration = Duration::from_secs(10);
 
-/// The highest KT tree head this device has accepted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PinnedTreeHead {
-    pub epoch: u64,
-    pub root: [u8; 32],
-}
-
-/// What [`advance_pinned_head`] did, for logging and for tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnchorOutcome {
-    /// No pin existed; this head is now pinned. Trust on first use.
-    FirstPin,
-    /// Same epoch and same root as the pin.
-    Unchanged,
-    /// Newer epoch, consistency proof verified, pin advanced.
-    Advanced,
-}
-
-fn root_of(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
-    sth.root_hash
-        .as_slice()
-        .try_into()
-        .map_err(|_| KtError::Malformed("tree head root is not 32 bytes"))
-}
-
-/// Read the pinned head. Only a missing setting is a first contact.
-pub fn pinned_head(settings: &SettingsRepository) -> Result<Option<PinnedTreeHead>, KtError> {
-    settings
-        .get::<PinnedTreeHead>(KT_PINNED_TREE_HEAD)
-        .map_err(|_| KtError::PinUnreadable)
-}
-
-/// What the caller must do about an offered tree head.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AnchorAction {
-    /// Nothing to fetch; the head is already accounted for.
-    Settled(AnchorOutcome),
-    /// The head is newer than the pin. Fetch a consistency proof for this epoch
-    /// range and hand it to [`accept_advance`].
-    NeedsProof { old_epoch: u64, new_epoch: u64 },
-}
-
-/// Classify an offered tree head against the pinned one.
-///
-/// Deliberately synchronous and transport-free: the caller owns the network
-/// call. An earlier version took an async callback, which forced a `RefCell`
-/// around the client and made the resulting future `!Send`, breaking every
-/// `tokio::spawn` downstream. Splitting the decision from the fetch is both
-/// simpler and `Send`.
-///
-/// `Settled(FirstPin)` also WRITES the pin — first use is the one case with
-/// nothing to prove against.
-pub fn classify_head(
-    settings: &SettingsRepository,
-    sth: &SignedTreeHead,
-) -> Result<AnchorAction, KtError> {
-    let offered_root = root_of(sth)?;
-    let offered_epoch = sth.epoch;
-
-    // The server's epoch IS its log size (keytransparency/service.go `state`),
-    // so an honest head has epoch == tree_size >= 1; epoch 0 is the empty log,
-    // which is never signed. Refusing anything else, before the first pin, is
-    // what makes every later advance need a consistency proof from the pinned
-    // root: a head signed at epoch 0 over a non-empty tree used to be pinned,
-    // and from a 0 pin the next head was re-pinned with no proof, so a fork
-    // planted there could step onto the public log.
-    if offered_epoch == 0 || offered_epoch != sth.tree_size {
-        return Err(KtError::Malformed("tree head epoch is not its log size"));
-    }
-
-    let Some(pin) = pinned_head(settings)? else {
-        store(settings, offered_epoch, offered_root)?;
-        return Ok(AnchorAction::Settled(AnchorOutcome::FirstPin));
-    };
-
-    if offered_epoch < pin.epoch {
-        // Rollback: a validly signed head from before the one we accepted.
-        // Nothing about the signature is wrong; the epoch is.
-        tracing::warn!(target: "kt_pin::offered_older_than_pin", "KT continuity rejected");
-        return Err(KtError::ConsistencyEpochOrder);
-    }
-
-    if offered_epoch == pin.epoch {
-        return if offered_root == pin.root {
-            Ok(AnchorAction::Settled(AnchorOutcome::Unchanged))
-        } else {
-            // Two different signed roots at one epoch. The only way to produce
-            // this is to sign two trees, so it is a fork by definition.
-            tracing::warn!(target: "kt_pin::same_epoch_different_root", "KT continuity rejected");
-            Err(KtError::ConsistencyRootMismatch)
-        };
-    }
-
-    Ok(AnchorAction::NeedsProof {
-        old_epoch: pin.epoch,
-        new_epoch: offered_epoch,
-    })
-}
-
-/// Verify a fetched consistency proof and advance the pin.
-///
-/// Call only with the response for the range [`classify_head`] asked for.
-pub fn accept_advance(
-    settings: &SettingsRepository,
-    sth: &SignedTreeHead,
-    resp: &GetConsistencyProofResponse,
-) -> Result<AnchorOutcome, KtError> {
-    let offered_root = root_of(sth)?;
-    let pin = pinned_head(settings)?.ok_or(KtError::Malformed("pin vanished mid-advance"))?;
-
-    verify_consistency_proof(resp)?;
-    bind_proof_to_pin(resp, pin, sth.epoch, offered_root)?;
-
-    store(settings, sth.epoch, offered_root)?;
-    Ok(AnchorOutcome::Advanced)
-}
-
-/// Serializes every read-check-write of the pin.
-///
-/// [`classify_head`] reads the pin and [`accept_advance`] writes it, with a
-/// consistency-proof fetch in between. Two callers checking the same new head
-/// concurrently (a prewarm and a profile-key send for one new friend, both
-/// establishing a session) used to both see `NeedsProof` from the old pin; the
-/// first advanced it, and the second's proof no longer started at the pin, so
-/// it was REJECTED as a rewritten log and its session refused.
-///
-/// One lock for the process, not per database: a client process holds one
-/// account, and the critical section is one proof fetch. A process hosting
-/// many accounts (the test harness) only serializes those fetches.
 static PIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static VERIFIER: OnceLock<Option<KeyTransparency>> = OnceLock::new();
 
-/// Proof that the caller holds [`PIN_LOCK`].
-pub type PinGuard = tokio::sync::MutexGuard<'static, ()>;
-
-/// Take [`PIN_LOCK`]. Hold it across fetching the head too when the head comes
-/// from a fresh KT proof: a head fetched before another caller advanced the pin
-/// would otherwise be older than the pin and be rejected as a rollback.
-pub async fn lock_pin() -> PinGuard {
-    PIN_LOCK.lock().await
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum KtError {
+    #[error(transparent)]
+    Network(#[from] NetworkError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    #[error(transparent)]
+    Proof(#[from] libsignal_keytrans::Error),
+    #[error(transparent)]
+    Decode(#[from] prost::DecodeError),
+    #[error("{0}")]
+    Invalid(&'static str),
 }
 
-/// Deadline for every RPC made while [`PIN_LOCK`] is held. The lock is
-/// process-wide, so one response the server withholds (keepalive pings still
-/// answered, so the transport never fails) would otherwise stall every session
-/// establishment and every manifest fetch behind it. Ten seconds matches the
-/// manifest fetch's own deadline in `token_manager`.
-pub const PIN_RPC_DEADLINE: Duration = Duration::from_secs(10);
-
-/// Run `rpc` under [`PIN_RPC_DEADLINE`]. A timeout is
-/// [`NetworkError::Timeout`]: the caller fails that check (an error is never a
-/// way past it) and returning drops its [`PinGuard`], freeing the lock.
-pub async fn pinned_rpc<T, E>(rpc: impl Future<Output = Result<T, E>>) -> Result<T, E>
-where
-    E: From<NetworkError>,
-{
-    within(PIN_RPC_DEADLINE, rpc).await
-}
-
-async fn within<T, E>(deadline: Duration, rpc: impl Future<Output = Result<T, E>>) -> Result<T, E>
-where
-    E: From<NetworkError>,
-{
-    tokio::time::timeout(deadline, rpc)
-        .await
-        .unwrap_or_else(|_| Err(NetworkError::Timeout.into()))
-}
-
-#[cfg(test)]
-/// [`classify_head`] then, for a newer head, [`accept_advance`] with the proof
-/// `fetch` returns for the pinned->offered range (callers pass the anonymous
-/// KT client). Any failure, fetch included, rejects: an error must not be a
-/// way past the check. Verify the head's signature first; a first pin is
-/// stored unverified.
-///
-/// `fetch` is `FnOnce` by value, so the future stays `Send` without the
-/// `RefCell` an earlier callback design needed (see [`classify_head`]).
-pub async fn hold_head<F, Fut>(
-    settings: &SettingsRepository,
-    sth: &SignedTreeHead,
-    fetch: F,
-) -> Result<AnchorOutcome, KtError>
-where
-    F: FnOnce(u64, u64) -> Fut,
-    Fut: Future<Output = Result<GetConsistencyProofResponse, NetworkError>>,
-{
-    let pin = lock_pin().await;
-    hold_head_locked(&pin, settings, sth, fetch).await
-}
-
-/// [`hold_head`] for a caller already holding [`PIN_LOCK`].
-pub async fn hold_head_locked<F, Fut>(
-    _pin: &PinGuard,
-    settings: &SettingsRepository,
-    sth: &SignedTreeHead,
-    fetch: F,
-) -> Result<AnchorOutcome, KtError>
-where
-    F: FnOnce(u64, u64) -> Fut,
-    Fut: Future<Output = Result<GetConsistencyProofResponse, NetworkError>>,
-{
-    match classify_head(settings, sth)? {
-        AnchorAction::Settled(outcome) => Ok(outcome),
-        AnchorAction::NeedsProof {
-            old_epoch,
-            new_epoch,
-        } => {
-            let resp = pinned_rpc(fetch(old_epoch, new_epoch))
-                .await
-                .map_err(|_| KtError::ConsistencyUnavailable)?;
-            accept_advance(settings, sth, &resp)
+impl From<KtError> for ServiceError {
+    fn from(error: KtError) -> Self {
+        match error {
+            KtError::Network(error) => Self::Network(error),
+            KtError::Storage(error) => Self::Storage(error),
+            error => Self::Validation(format!("key transparency: {error}")),
         }
     }
 }
 
-/// Tie a verified consistency proof to THIS device's history.
-///
-/// [`verify_consistency_proof`] proves the response is internally coherent, and
-/// nothing more — it has no idea what we previously trusted. Without the three
-/// comparisons below, a server answers with a genuine, correctly signed proof
-/// between two epochs of a tree this device never saw, and the whole check
-/// becomes decoration. Kept separate from the transport so it can be tested
-/// without minting signed tree heads.
-fn bind_proof_to_pin(
-    resp: &GetConsistencyProofResponse,
-    pin: PinnedTreeHead,
-    offered_epoch: u64,
-    offered_root: [u8; 32],
-) -> Result<(), KtError> {
-    let old_sth = resp
-        .old_signed_tree_head
+fn verifier() -> Result<&'static KeyTransparency, KtError> {
+    use crate::config::{KT_TREE_HEAD_PUBLIC_KEY_BYTES, KT_VRF_PUBLIC_KEY_BYTES};
+    VERIFIER
+        .get_or_init(|| {
+            let signature_key = VerifyingKey::from_bytes(&KT_TREE_HEAD_PUBLIC_KEY_BYTES).ok()?;
+            let vrf_key = VrfPublicKey::try_from(KT_VRF_PUBLIC_KEY_BYTES).ok()?;
+            Some(KeyTransparency {
+                config: PublicConfig {
+                    mode: DeploymentMode::ContactMonitoring,
+                    signature_key,
+                    vrf_key,
+                },
+            })
+        })
         .as_ref()
-        .ok_or(KtError::Malformed("missing old_signed_tree_head"))?;
-    let new_sth = resp
-        .new_signed_tree_head
-        .as_ref()
-        .ok_or(KtError::Malformed("missing new_signed_tree_head"))?;
+        .ok_or(KtError::Invalid("invalid pinned key transparency keys"))
+}
 
-    // The proof must START at the exact head we pinned...
-    if old_sth.epoch != pin.epoch || root_of(old_sth)? != pin.root {
-        return Err(KtError::ConsistencyRootMismatch);
+/// Owns the lock from loading baselines through verifying and persisting the
+/// response, so concurrent routes use the latest verified head.
+pub(crate) struct Pin<'a> {
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+    settings: &'a SettingsRepository,
+    last: Option<LastTreeHead>,
+    distinguished: LastTreeHead,
+    refreshed_checkpoint: bool,
+}
+
+impl<'a> Pin<'a> {
+    pub(crate) async fn load(
+        client: &mut AnonymousKtClient,
+        settings: &'a SettingsRepository,
+    ) -> Result<Self, KtError> {
+        let lock = PIN_LOCK.lock().await;
+        let last = load_head(settings, HEAD)?;
+        let distinguished = load_head(settings, DISTINGUISHED_HEAD)?;
+        let now = SystemTime::now();
+        let refresh = distinguished.as_ref().is_none_or(|head| {
+            signed_time(head.0.timestamp)
+                .ok()
+                .and_then(|time| now.duration_since(time).ok())
+                .is_some_and(|age| age >= CHECKPOINT_REFRESH)
+        });
+        let distinguished = if refresh {
+            let response = client
+                .search(request(DISTINGUISHED, None, distinguished.as_ref()))
+                .await?
+                .ok_or(KtError::Invalid("distinguished checkpoint is missing"))?;
+            let verified = verify_search(
+                DISTINGUISHED,
+                response,
+                SearchContext {
+                    last_distinguished_tree_head: distinguished.as_ref(),
+                    ..Default::default()
+                },
+                now,
+            )?;
+            LastTreeHead(
+                verified.state_update.tree_head,
+                verified.state_update.tree_root,
+            )
+        } else {
+            distinguished.ok_or(KtError::Invalid("distinguished checkpoint is missing"))?
+        };
+        Ok(Self {
+            _lock: lock,
+            settings,
+            last,
+            distinguished,
+            refreshed_checkpoint: refresh,
+        })
     }
-    // ...and END at the head actually being offered, so a server cannot prove
-    // consistency to some third head and have us accept a different one.
-    if new_sth.epoch != offered_epoch || root_of(new_sth)? != offered_root {
-        return Err(KtError::ConsistencyRootMismatch);
+
+    pub(crate) fn consistency(&self) -> KtConsistency {
+        consistency(self.last.as_ref(), Some(&self.distinguished))
+    }
+
+    fn observations(&self, key: &str, label: &[u8]) -> Result<Option<MonitoringData>, KtError> {
+        let Some(bytes) = load_setting(self.settings, key)? else {
+            return Ok(None);
+        };
+        let data = StoredMonitoringData::decode(bytes.as_slice())?;
+        let positions_valid = self.last.as_ref().is_some_and(|head| {
+            let size = head.0.tree_size;
+            data.pos < size && data.ptrs.keys().all(|&pos| data.pos <= pos && pos < size)
+        });
+        if data.index.len() != 32
+            || data.search_key != label
+            || data.ptrs.is_empty()
+            || !positions_valid
+        {
+            return Err(KtError::Invalid("invalid stored transparency observations"));
+        }
+        Ok(Some(data.into()))
+    }
+
+    /// Persist the verified head and monitoring observations together.
+    pub(crate) fn verify(
+        &self,
+        label: &[u8],
+        response: KtSearchResponse,
+        expected: Option<&[u8]>,
+    ) -> Result<Vec<u8>, KtError> {
+        let state_key = label_state_key(label);
+        let now = SystemTime::now();
+        let verified = verify_search(
+            label,
+            response,
+            SearchContext {
+                last_tree_head: self.last.as_ref(),
+                last_distinguished_tree_head: Some(&self.distinguished),
+                data: self.observations(&state_key, label)?,
+            },
+            now,
+        )?;
+        if expected.is_some_and(|value| value != verified.value) {
+            return Err(KtError::Invalid(
+                "transparency proof commits a different value",
+            ));
+        }
+
+        let update = verified.state_update;
+        let head = encode_head(LastTreeHead(update.tree_head, update.tree_root), now);
+        let conn = self.settings.database().connection()?;
+        let tx = conn.unchecked_transaction().map_err(StorageError::from)?;
+        SettingsRepository::set_with_connection(&tx, HEAD, &head)?;
+        if self.refreshed_checkpoint {
+            let checkpoint = encode_head(self.distinguished.clone(), now);
+            SettingsRepository::set_with_connection(&tx, DISTINGUISHED_HEAD, &checkpoint)?;
+        }
+        if let Some(data) = update.monitoring_data {
+            let stored = StoredMonitoringData {
+                index: data.index.to_vec(),
+                pos: data.pos,
+                ptrs: data.ptrs,
+                owned: data.owned,
+                search_key: label.to_vec(),
+                max_observed_version: data.max_observed_version,
+            };
+            SettingsRepository::set_with_connection(
+                &tx,
+                &state_key,
+                &hex::encode(stored.encode_to_vec()),
+            )?;
+        }
+        tx.commit().map_err(StorageError::from)?;
+        Ok(verified.value)
+    }
+}
+
+/// Fetches and verifies an identity's current value on the caller's route.
+/// Only an explicit RPC NotFound produces an unlisted result.
+pub(crate) async fn search(
+    client: &mut AnonymousKtClient,
+    settings: &SettingsRepository,
+    label: &str,
+    deadline: Duration,
+) -> Result<Option<Vec<u8>>, KtError> {
+    tokio::time::timeout(deadline, async {
+        let pin = Pin::load(client, settings).await?;
+        let response = client
+            .search(request(
+                label.as_bytes(),
+                pin.last.as_ref(),
+                Some(&pin.distinguished),
+            ))
+            .await?;
+        match response {
+            Some(response) => pin.verify(label.as_bytes(), response, None).map(Some),
+            None if pin
+                .observations(&label_state_key(label.as_bytes()), label.as_bytes())?
+                .is_some() =>
+            {
+                Err(KtError::Invalid("previously verified label is missing"))
+            }
+            None => Ok(None),
+        }
+    })
+    .await
+    .unwrap_or(Err(NetworkError::Timeout.into()))
+}
+
+/// Verify the inclusion in an already accepted, persisted manifest. Its
+/// signed timestamp fixes the time of this historical proof. The manifest
+/// still has to pass its own schedule and current validity checks.
+pub(crate) fn verify_cached(
+    label: &[u8],
+    mut response: KtSearchResponse,
+    expected: &[u8],
+) -> Result<(), KtError> {
+    let full = response
+        .tree_head
+        .as_mut()
+        .ok_or(KtError::Invalid("missing full tree head"))?;
+    let head = full
+        .tree_head
+        .as_ref()
+        .ok_or(KtError::Invalid("missing tree head"))?;
+    let time = signed_time(head.timestamp)?;
+    full.last.clear();
+    full.distinguished.clear();
+    let verified = verify_search(label, response, SearchContext::default(), time)?;
+    if verified.value != expected {
+        return Err(KtError::Invalid(
+            "transparency proof commits a different value",
+        ));
     }
     Ok(())
 }
 
-fn store(settings: &SettingsRepository, epoch: u64, root: [u8; 32]) -> Result<(), KtError> {
+fn verify_search(
+    label: &[u8],
+    response: KtSearchResponse,
+    context: SearchContext<'_>,
+    now: SystemTime,
+) -> Result<VerifiedSearchResult, KtError> {
+    let full_head = response
+        .tree_head
+        .ok_or(KtError::Invalid("missing full tree head"))?;
+    let condensed = response
+        .condensed
+        .ok_or(KtError::Invalid("missing search proof"))?;
+    // The Chatter transport messages have the upstream protobuf field layout.
+    // Decode to libsignal's own types before making any verification decision.
+    let full_head = FullTreeHead::decode(full_head.encode_to_vec().as_slice())?;
+    let condensed = CondensedTreeSearchResponse::decode(condensed.encode_to_vec().as_slice())?;
+    Ok(verifier()?.verify_search(
+        SlimSearchRequest::new(label.to_vec()),
+        FullSearchResponse::new(condensed, &full_head),
+        context,
+        false,
+        now,
+    )?)
+}
+
+fn request(
+    label: &[u8],
+    last: Option<&LastTreeHead>,
+    distinguished: Option<&LastTreeHead>,
+) -> KtSearchRequest {
+    KtSearchRequest {
+        search_key: label.to_vec(),
+        version: None,
+        consistency: Some(consistency(last, distinguished)),
+    }
+}
+
+fn consistency(last: Option<&LastTreeHead>, distinguished: Option<&LastTreeHead>) -> KtConsistency {
+    KtConsistency {
+        last: last.map(|head| head.0.tree_size),
+        distinguished: distinguished.map(|head| head.0.tree_size),
+    }
+}
+
+fn signed_time(timestamp: i64) -> Result<SystemTime, KtError> {
+    let ms = u64::try_from(timestamp).map_err(|_| KtError::Invalid("invalid tree timestamp"))?;
+    SystemTime::UNIX_EPOCH
+        .checked_add(Duration::from_millis(ms))
+        .ok_or(KtError::Invalid("invalid tree timestamp"))
+}
+
+fn load_head(settings: &SettingsRepository, key: &str) -> Result<Option<LastTreeHead>, KtError> {
+    let Some(bytes) = load_setting(settings, key)? else {
+        return Ok(None);
+    };
+    let head = StoredTreeHead::decode(bytes.as_slice())?
+        .into_last_tree_head()
+        .ok_or(KtError::Invalid("invalid stored tree head"))?;
+    if head.0.tree_size == 0 || head.0.tree_size > (1 << 62) {
+        return Err(KtError::Invalid("invalid stored tree size"));
+    }
+    signed_time(head.0.timestamp)?;
+    Ok(Some(head))
+}
+
+fn encode_head(head: LastTreeHead, now: SystemTime) -> String {
+    hex::encode(head.into_stored(now).encode_to_vec())
+}
+
+fn label_state_key(label: &[u8]) -> String {
+    format!("kt.libsignal.label.{}", hex::encode(label))
+}
+
+fn load_setting(settings: &SettingsRepository, key: &str) -> Result<Option<Vec<u8>>, KtError> {
     settings
-        .set(KT_PINNED_TREE_HEAD, &PinnedTreeHead { epoch, root })
-        .map_err(|_| KtError::Malformed("could not persist the pinned tree head"))
+        .get_string(key)?
+        .map(|encoded| {
+            hex::decode(encoded).map_err(|_| KtError::Invalid("invalid stored transparency state"))
+        })
+        .transpose()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    fn settings() -> (SettingsRepository, tempfile::TempDir) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db = Arc::new(
-            crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").expect("open"),
-        );
-        db.run_migrations().expect("migrate");
-        (SettingsRepository::new(db), dir)
-    }
-
-    fn sth(epoch: u64, root: [u8; 32]) -> SignedTreeHead {
-        SignedTreeHead {
-            epoch,
-            tree_size: epoch,
-            root_hash: root.to_vec(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn first_head_is_pinned_on_first_use() {
-        let (s, _dir) = settings();
-        let a = classify_head(&s, &sth(7, [1u8; 32])).unwrap();
-        assert_eq!(a, AnchorAction::Settled(AnchorOutcome::FirstPin));
-        assert_eq!(
-            pinned_head(&s).unwrap().unwrap(),
-            PinnedTreeHead {
-                epoch: 7,
-                root: [1u8; 32]
-            }
-        );
-    }
-
-    #[test]
-    fn the_same_head_again_is_accepted_without_a_proof() {
-        let (s, _dir) = settings();
-        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
-        assert_eq!(
-            classify_head(&s, &sth(7, [1u8; 32])).unwrap(),
-            AnchorAction::Settled(AnchorOutcome::Unchanged)
-        );
-    }
-
-    /// The split-view attack: two different roots signed at one epoch.
-    #[test]
-    fn a_second_root_at_the_same_epoch_is_a_fork_and_is_rejected() {
-        let (s, _dir) = settings();
-        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
-
-        assert_eq!(
-            classify_head(&s, &sth(7, [2u8; 32])).unwrap_err(),
-            KtError::ConsistencyRootMismatch
-        );
-        assert_eq!(
-            pinned_head(&s).unwrap().unwrap().root,
-            [1u8; 32],
-            "a rejected head must not overwrite the pin"
-        );
-    }
-
-    /// The rollback attack: a validly signed but older head.
-    #[test]
-    fn an_older_epoch_is_rejected_as_a_rollback() {
-        let (s, _dir) = settings();
-        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
-
-        assert_eq!(
-            classify_head(&s, &sth(6, [9u8; 32])).unwrap_err(),
-            KtError::ConsistencyEpochOrder
-        );
-        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 7);
-    }
-
-    /// A newer head must not be silently accepted; it must demand a proof for
-    /// exactly the pinned->offered range.
-    #[test]
-    fn a_newer_epoch_demands_a_proof_for_the_pinned_range() {
-        let (s, _dir) = settings();
-        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
-
-        assert_eq!(
-            classify_head(&s, &sth(9, [2u8; 32])).unwrap(),
-            AnchorAction::NeedsProof {
-                old_epoch: 7,
-                new_epoch: 9
-            }
-        );
-        assert_eq!(
-            pinned_head(&s).unwrap().unwrap().epoch,
-            7,
-            "classify must not advance the pin before the proof is checked"
-        );
-    }
-
-    /// Pinned->offered proof (epochs 3->5) from the Go server's log code,
-    /// signed with the development tree-head key, which `cargo test` pins.
-    fn dev_consistency_vector() -> Option<GetConsistencyProofResponse> {
-        use prost::Message;
-        let dev_head =
-            hex::decode("88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72")
-                .unwrap();
-        if crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES[..] != dev_head[..] {
-            return None;
-        }
-        let bytes = hex::decode("0ad001080310051a205ed9e9409cde85956181059d21619eb6d03ad1a702a28aab187b36f19e3ac559222093fc7ed082c0645ecda3730127828cbcc45715eb804f7ab9b3a6c88e20a29e962a202c1a31e263ce44dd488fe109624f5f2b6ce878abc94682443a1dfeaae31e101c2a20c3aeb3b4971908ef5a272c19ad3c48fbece6aae37ea81109d0b4dc6a43fbaf342a20d9ecb1f2efc4207cebe9e736aa3bc8c590ce5eb57e9512851026d3712b0f72492a204b1b46d1e688e4ec8c5308c5028bde466a0683e0a3b95784cb79c022fabdee371268080312205ed9e9409cde85956181059d21619eb6d03ad1a702a28aab187b36f19e3ac559180322406760e4ce59358342fd48591390ecb2367a172ade74a7ffece3a7170458bd9015c756e72a75daf44a010f62192e66d99fbd6bac8537deae41b3d946469a26d80a1a680805122093fc7ed082c0645ecda3730127828cbcc45715eb804f7ab9b3a6c88e20a29e9618052240ba4a10369857031171b4bd1b07f57d9fa9e83761553c9b0dfb021a9985d17ea313c2004a79b6dac3eac6eaa28b69bdc42c82c82074ecc85e4f8bb67a57bfca01").unwrap();
-        Some(GetConsistencyProofResponse::decode(bytes.as_slice()).unwrap())
-    }
-
-    fn fetch_ok(
-        resp: GetConsistencyProofResponse,
-        asked: &mut Option<(u64, u64)>,
-    ) -> impl FnOnce(
-        u64,
-        u64,
-    ) -> std::future::Ready<Result<GetConsistencyProofResponse, NetworkError>>
-    + '_ {
-        move |old, new| {
-            *asked = Some((old, new));
-            std::future::ready(Ok(resp))
-        }
-    }
-
-    #[tokio::test]
-    async fn hold_head_pins_first_head_without_fetching() {
-        let (s, _dir) = settings();
-        // A fetch would fail the call: a first pin has nothing to prove against.
-        let outcome = hold_head(&s, &sth(7, [1u8; 32]), |_, _| async {
-            Err::<GetConsistencyProofResponse, _>(NetworkError::ConnectionFailed("no fetch".into()))
-        })
-        .await
-        .unwrap();
-        assert_eq!(outcome, AnchorOutcome::FirstPin);
-        assert_eq!(
-            pinned_head(&s).unwrap().unwrap(),
-            PinnedTreeHead {
-                epoch: 7,
-                root: [1u8; 32]
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn hold_head_advances_on_a_valid_consistency_proof() {
-        let Some(resp) = dev_consistency_vector() else {
-            return;
-        };
-        let (s, _dir) = settings();
-        let old = resp.old_signed_tree_head.clone().unwrap();
-        let new = resp.new_signed_tree_head.clone().unwrap();
-        classify_head(&s, &old).unwrap();
-        let mut asked = None;
-        let outcome = hold_head(&s, &new, fetch_ok(resp, &mut asked))
-            .await
-            .unwrap();
-        assert_eq!(outcome, AnchorOutcome::Advanced);
-        assert_eq!(
-            asked,
-            Some((3, 5)),
-            "the proof is fetched for exactly pinned->offered"
-        );
-        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 5);
-    }
-
-    /// Two concurrent checks of the same new head (V34: a new friend's prewarm
-    /// and profile-key send each establishing a session). The second must see
-    /// the advanced pin, not reject its own proof as a rewritten log.
-    #[tokio::test]
-    async fn concurrent_checks_of_one_new_head_both_pass() {
-        let Some(resp) = dev_consistency_vector() else {
-            return;
-        };
-        let (s, _dir) = settings();
-        let old = resp.old_signed_tree_head.clone().unwrap();
-        let new = resp.new_signed_tree_head.clone().unwrap();
-        classify_head(&s, &old).unwrap();
-
-        // The interleaving the lock forbids: both classify against the old
-        // pin, the first advances it, the second's proof no longer starts there.
-        let needs = AnchorAction::NeedsProof {
-            old_epoch: 3,
-            new_epoch: 5,
-        };
-        assert_eq!(classify_head(&s, &new).unwrap(), needs);
-        assert_eq!(classify_head(&s, &new).unwrap(), needs);
-        assert_eq!(
-            accept_advance(&s, &new, &resp).unwrap(),
-            AnchorOutcome::Advanced
-        );
-        assert_eq!(
-            accept_advance(&s, &new, &resp).unwrap_err(),
-            KtError::ConsistencyRootMismatch
-        );
-        let (s, _dir) = settings();
-        classify_head(&s, &old).unwrap();
-
-        let fetch = |resp: GetConsistencyProofResponse| {
-            move |_, _| async move {
-                // Let the other check run between classify and accept.
-                tokio::task::yield_now().await;
-                Ok::<_, NetworkError>(resp)
-            }
-        };
-        let (a, b) = tokio::join!(
-            hold_head(&s, &new, fetch(resp.clone())),
-            hold_head(&s, &new, fetch(resp)),
-        );
-        let mut outcomes = [a.unwrap(), b.unwrap()];
-        outcomes.sort_by_key(|o| *o as u8);
-        assert_eq!(
-            outcomes,
-            [AnchorOutcome::Unchanged, AnchorOutcome::Advanced]
-        );
-        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 5);
-    }
-
-    /// A newer head whose proof does not start at the root this device
-    /// pinned: the log this client saw was not the one the server extended.
-    #[tokio::test]
-    async fn hold_head_rejects_a_fork_and_keeps_the_pin() {
-        let Some(resp) = dev_consistency_vector() else {
-            return;
-        };
-        let (s, _dir) = settings();
-        let new = resp.new_signed_tree_head.clone().unwrap();
-        classify_head(&s, &sth(3, [9u8; 32])).unwrap();
-        let mut asked = None;
-        assert_eq!(
-            hold_head(&s, &new, fetch_ok(resp, &mut asked))
-                .await
-                .unwrap_err(),
-            KtError::ConsistencyRootMismatch
-        );
-        assert_eq!(
-            pinned_head(&s).unwrap().unwrap(),
-            PinnedTreeHead {
-                epoch: 3,
-                root: [9u8; 32]
-            }
-        );
-
-        // A failed fetch is a rejection too, never a pass.
-        assert_eq!(
-            hold_head(&s, &new, |_, _| async {
-                Err::<GetConsistencyProofResponse, _>(NetworkError::ConnectionFailed("down".into()))
-            })
-            .await
-            .unwrap_err(),
-            KtError::ConsistencyUnavailable
-        );
-        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 3);
-    }
-
-    /// F3: the server's epoch is its log size, so a head at epoch 0 or with
-    /// epoch != tree_size was signed by no honest server. It is refused before
-    /// it can become a pin, and nothing is stored.
-    #[test]
-    fn a_head_whose_epoch_is_not_its_log_size_is_never_pinned() {
-        let (s, _dir) = settings();
-        let mut zero = sth(0, [1u8; 32]);
-        zero.tree_size = 1;
-        assert_eq!(
-            classify_head(&s, &zero).unwrap_err(),
-            KtError::Malformed("tree head epoch is not its log size")
-        );
-        let mut skewed = sth(7, [1u8; 32]);
-        skewed.tree_size = 9;
-        assert!(classify_head(&s, &skewed).is_err());
-        assert!(pinned_head(&s).unwrap().is_none());
-    }
-
-    /// F3: a pin already at epoch 0 (from a build that stored one) no longer
-    /// re-pins the next head for free. It needs a consistency proof bound to
-    /// that root like any other pin, and a proof from anywhere else is refused.
-    #[tokio::test]
-    async fn an_epoch_zero_pin_needs_a_proof_like_any_other() {
-        let (s, _dir) = settings();
-        store(&s, 0, [9u8; 32]).unwrap();
-        assert_eq!(
-            classify_head(&s, &sth(5, [2u8; 32])).unwrap(),
-            AnchorAction::NeedsProof {
-                old_epoch: 0,
-                new_epoch: 5
-            }
-        );
-        assert_eq!(
-            hold_head(&s, &sth(5, [2u8; 32]), |_, _| async {
-                Err::<GetConsistencyProofResponse, _>(NetworkError::InvalidRequest(
-                    "old_epoch 0".into(),
-                ))
-            })
-            .await
-            .unwrap_err(),
-            KtError::ConsistencyUnavailable
-        );
-        assert_eq!(
-            pinned_head(&s).unwrap().unwrap(),
-            PinnedTreeHead {
-                epoch: 0,
-                root: [9u8; 32]
-            }
-        );
-
-        // A genuine, correctly signed proof that does not start at this pin.
-        let Some(resp) = dev_consistency_vector() else {
-            return;
-        };
-        let new = resp.new_signed_tree_head.clone().unwrap();
-        let mut asked = None;
-        assert!(
-            hold_head(&s, &new, fetch_ok(resp, &mut asked))
-                .await
-                .is_err()
-        );
-        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 0);
-    }
-
-    /// A bad proof must leave the pin where it was.
-    #[test]
-    fn a_failed_advance_leaves_the_pin_untouched() {
-        let (s, _dir) = settings();
-        classify_head(&s, &sth(7, [1u8; 32])).unwrap();
-
-        let bogus = GetConsistencyProofResponse::default();
-        assert!(accept_advance(&s, &sth(8, [2u8; 32]), &bogus).is_err());
-        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 7);
-    }
-
-    /// The binding this module exists to add, tested directly: a consistency
-    /// proof that is internally valid but does not start at OUR pinned root.
-    /// Testing `bind_proof_to_pin` rather than the whole path keeps this from
-    /// needing a real signing key, and keeps it failing for the right reason.
-    #[test]
-    fn a_proof_that_does_not_start_at_our_pin_is_rejected() {
-        let pin = PinnedTreeHead {
-            epoch: 7,
-            root: [1u8; 32],
-        };
-        let resp = GetConsistencyProofResponse {
-            // Correctly signed, correctly ordered — but of a tree we never saw.
-            old_signed_tree_head: Some(sth(7, [0xAAu8; 32])),
-            new_signed_tree_head: Some(sth(8, [2u8; 32])),
-            ..Default::default()
-        };
-        assert_eq!(
-            bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).unwrap_err(),
-            KtError::ConsistencyRootMismatch
-        );
-    }
-
-    /// A proof to a DIFFERENT new head than the one being offered. Without the
-    /// second comparison the server proves consistency to head X and then has
-    /// us pin head Y.
-    #[test]
-    fn a_proof_that_does_not_end_at_the_offered_head_is_rejected() {
-        let pin = PinnedTreeHead {
-            epoch: 7,
-            root: [1u8; 32],
-        };
-        let resp = GetConsistencyProofResponse {
-            old_signed_tree_head: Some(sth(7, [1u8; 32])),
-            new_signed_tree_head: Some(sth(8, [0xBBu8; 32])),
-            ..Default::default()
-        };
-        assert_eq!(
-            bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).unwrap_err(),
-            KtError::ConsistencyRootMismatch
-        );
-    }
-
-    /// Same roots, wrong epoch labels — the epoch half of both comparisons.
-    #[test]
-    fn a_proof_with_mismatched_epochs_is_rejected() {
-        let pin = PinnedTreeHead {
-            epoch: 7,
-            root: [1u8; 32],
-        };
-        let resp = GetConsistencyProofResponse {
-            old_signed_tree_head: Some(sth(6, [1u8; 32])),
-            new_signed_tree_head: Some(sth(8, [2u8; 32])),
-            ..Default::default()
-        };
-        assert_eq!(
-            bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).unwrap_err(),
-            KtError::ConsistencyRootMismatch
-        );
-    }
-
-    #[test]
-    fn a_proof_from_our_pin_to_the_offered_head_is_accepted() {
-        let pin = PinnedTreeHead {
-            epoch: 7,
-            root: [1u8; 32],
-        };
-        let resp = GetConsistencyProofResponse {
-            old_signed_tree_head: Some(sth(7, [1u8; 32])),
-            new_signed_tree_head: Some(sth(8, [2u8; 32])),
-            ..Default::default()
-        };
-        assert!(bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).is_ok());
-    }
-
-    /// A withheld response fails the check at the deadline instead of holding
-    /// the process-wide pin lock forever.
-    #[tokio::test]
-    async fn a_withheld_response_times_out() {
-        let r: Result<(), NetworkError> =
-            within(Duration::from_millis(10), std::future::pending()).await;
-        assert!(matches!(r, Err(NetworkError::Timeout)));
-    }
-}
+mod vectors;

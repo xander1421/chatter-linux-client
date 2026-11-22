@@ -15,7 +15,6 @@ pub mod ecies;
 pub mod envelope_crypto;
 pub mod group_send;
 pub mod kdf;
-pub mod keytransparency;
 pub mod message_backup;
 pub mod opaque;
 pub mod pow;
@@ -26,7 +25,6 @@ pub mod secret_string;
 pub mod signal;
 pub mod svr;
 pub mod svr_backup;
-pub mod vrf;
 
 pub use call_key_provider::{
     CallKeyState,
@@ -40,10 +38,7 @@ pub use call_key_provider::{
 pub use device_credentials::{DeviceCredentials, DeviceToken, derive_uak};
 pub use dm_crypto::{decrypt_dm_bytes, decrypt_dm_message, encrypt_dm_bytes, encrypt_dm_message};
 pub use envelope_crypto::{decrypt_envelope, encrypt_envelope, generate_mailbox_encryption_key};
-pub use keytransparency::{
-    KtError, verify_consistency_proof as verify_kt_consistency_proof,
-    verify_proof as verify_kt_proof,
-};
+
 pub use provisioning::{
     ProvisioningKeypair, decrypt_envelope as decrypt_provision_envelope,
     encrypt_envelope as encrypt_provision_envelope,

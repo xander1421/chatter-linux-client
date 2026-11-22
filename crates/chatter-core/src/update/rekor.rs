@@ -31,7 +31,6 @@
 //! checkpoint for a DIFFERENT tree (Rekor rotates shards; the origin line
 //! changes) is accepted fresh, because no proof can span shards.
 
-use crate::crypto::keytransparency::{verify_log_consistency, verify_log_inclusion};
 use base64::Engine;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::signature::hazmat::PrehashVerifier;
@@ -237,7 +236,6 @@ pub fn verify_log_entry(
         return Err("Rekor inclusion proof does not match its checkpoint".into());
     }
     if !verify_log_inclusion(
-        rfc6962_node,
         &rfc6962_leaf(&body),
         proof.log_index,
         proof.tree_size,
@@ -372,7 +370,6 @@ pub fn check_consistency(
         .find(|p| p.from_size == stored.size)
         .ok_or("Rekor consistency proof is missing")?;
     if !verify_log_consistency(
-        rfc6962_node,
         stored.size,
         new.size,
         &stored.root,
@@ -382,6 +379,89 @@ pub fn check_consistency(
         return Err("Rekor log is not an extension of the checkpoint already seen".into());
     }
     Ok(())
+}
+
+/// Evaluate the RFC 6962 audit path against the checkpoint root.
+fn verify_log_inclusion(
+    leaf: &[u8; 32],
+    index: u64,
+    size: u64,
+    path: &[[u8; 32]],
+    root: &[u8; 32],
+) -> bool {
+    if index >= size {
+        return false;
+    }
+    let (mut fnv, mut sn) = (index, size - 1);
+    let mut r = *leaf;
+    for p in path {
+        if sn == 0 {
+            return false;
+        }
+        if fnv & 1 == 1 || fnv == sn {
+            r = rfc6962_node(p, &r);
+            while fnv & 1 == 0 && fnv != 0 {
+                fnv >>= 1;
+                sn >>= 1;
+            }
+        } else {
+            r = rfc6962_node(&r, p);
+        }
+        fnv >>= 1;
+        sn >>= 1;
+    }
+    sn == 0 && r == *root
+}
+
+/// Check that both Rekor checkpoint roots are reconstructed by the RFC 6962 path.
+fn verify_log_consistency(
+    old_size: u64,
+    new_size: u64,
+    old_root: &[u8; 32],
+    new_root: &[u8; 32],
+    path: &[[u8; 32]],
+) -> bool {
+    if old_size == 0 || old_size >= new_size {
+        return false;
+    }
+
+    // When the old size is a power of two the old root IS a node of the new
+    // tree, so the server omits it from the path.
+    let mut p: Vec<[u8; 32]> = Vec::with_capacity(path.len() + 1);
+    if old_size & (old_size - 1) == 0 {
+        p.push(*old_root);
+    }
+    p.extend_from_slice(path);
+    if p.is_empty() {
+        return false;
+    }
+
+    let (mut fnv, mut sn) = (old_size - 1, new_size - 1);
+    while fnv & 1 == 1 {
+        fnv >>= 1;
+        sn >>= 1;
+    }
+    let (mut fr, mut sr) = (p[0], p[0]);
+
+    for c in &p[1..] {
+        if sn == 0 {
+            return false;
+        }
+        if fnv & 1 == 1 || fnv == sn {
+            fr = rfc6962_node(c, &fr);
+            sr = rfc6962_node(c, &sr);
+            while fnv & 1 == 0 && fnv != 0 {
+                fnv >>= 1;
+                sn >>= 1;
+            }
+        } else {
+            sr = rfc6962_node(&sr, c);
+        }
+        fnv >>= 1;
+        sn >>= 1;
+    }
+
+    sn == 0 && fr == *old_root && sr == *new_root
 }
 
 #[cfg(test)]

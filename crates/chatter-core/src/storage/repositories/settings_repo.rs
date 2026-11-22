@@ -239,7 +239,7 @@ impl SettingsRepository {
         Ok(())
     }
 
-    fn set_with_connection<T: Serialize>(conn: &rusqlite::Connection, key: &str, value: &T) -> Result<(), StorageError> {
+    pub(crate) fn set_with_connection<T: Serialize>(conn: &rusqlite::Connection, key: &str, value: &T) -> Result<(), StorageError> {
         let json = serde_json::to_string(value).map_err(|e| {
             StorageError::InvalidData(format!("Failed to serialize setting '{}': {}", key, e))
         })?;

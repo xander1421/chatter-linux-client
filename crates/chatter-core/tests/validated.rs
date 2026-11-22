@@ -4308,48 +4308,13 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
 }
 
 // ============================================================================
-// V14 — Key Transparency REJECTS a server-forged identity key (Phase 2).
-//
-// STATUS: PASS (was #[ignore]d RED under finding F9; F9 is now RESOLVED). This
-// test exercises the real client KT path against the real server:
-//
-//   register REAL Bob -> Bob's identity key is in the server's append-only KT
-//   Merkle log (Phase-1 producer) -> Alice fetches Bob's SIGNED inclusion proof
-//   via GetProof -> Alice verifies it with the client verifier
-//   (crypto::keytransparency::verify_proof), pinning the tree-head public key.
-//
-// POSITIVE CONTROL: the honest Bob bundle (carrying Bob's REAL identity key,
-// the one committed in the log) verifies against Bob's KT proof AND establishes
-// a Signal session. If this half fails, the negative half proves nothing.
-//
-// THE ATTACK (F9): a malicious server serves an internally-valid prekey bundle
-// for Bob's user_id but carrying MALLORY's identity key (prekeys signed by
-// Mallory — every signature inside verifies). The client fetches Bob's KT proof;
-// the proof's committed value is Bob's REAL key, which != Mallory's forged key,
-// so verify_proof returns IdentityKeyMismatch and the KT-gated establishment
-// REFUSES the session. The forged key is never trusted.
-//
-// This is the exact check wired into production session establishment
-// (services/signal/session.rs::verify_peer_key_transparency, called before
-// establish_session in ensure_session and the multi-device path). This test
-// drives the same fetch (AuthClient::get_key_transparency_proof) and the same
-// verifier (crypto::verify_kt_proof), against a real server proof — so it also
-// proves byte-format interop with the Go crypto package.
-//
-// MUTATION (run it, observe RED, revert): disable the KT check by making
-// crypto/keytransparency.rs::verify_proof return `Ok(())` unconditionally (or
-// delete the `IdentityKeyMismatch` guard). The attack half then accepts
-// Mallory's forged key and this test FAILS at the "forged key must be rejected"
-// assertion. Reverting restores GREEN.
-//
-// NO-PROOF POLICY: a peer with no leaf (pre-KT user, GetProof -> NotFound) is
-// trusted TOFU with a loud warn (see verify_peer_key_transparency). Bob HAS a
-// leaf, so this test proves rejection works for a peer who is in the log.
-// ============================================================================
+// V14: the normal route checks exact identity bytes against the live KT log.
 #[tokio::test]
 async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
     use chatter_core::crypto::SessionManager;
     use chatter_core::testing::network::grpc::AuthClient;
+    use chatter_core::testing::services::SignalService;
+    use chatter_core::testing::storage::{Database, KeyStore, SettingsRepository};
     use libsignal_protocol::{
         DeviceId, IdentityKey, IdentityKeyPair, IdentityKeyStore, InMemSignalProtocolStore,
         KeyPair, PreKeyBundle, ProtocolAddress, kem,
@@ -4402,32 +4367,23 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         .expect("valid bundle")
     }
 
-    // The exact client-side KT check used in production: fetch the peer's signed
-    // inclusion proof, then verify the bundle's identity key is the one the log
-    // commits (crypto::verify_kt_proof, pinned tree-head key). Returns the same
-    // verdict the production `verify_peer_key_transparency` would.
     async fn kt_verify_bundle_key(
+        service: &SignalService,
         auth_client: &mut AuthClient,
         peer_user_id: &str,
         bundle: &PreKeyBundle,
     ) -> Result<(), String> {
-        let ik = bundle.identity_key().unwrap().serialize();
-        match auth_client
-            .get_key_transparency_proof(peer_user_id)
+        let identity = bundle.identity_key().unwrap().serialize();
+        service.verify_identity_key_transparency(auth_client, peer_user_id, &identity)
             .await
-            .map_err(|e| format!("KT proof fetch failed: {e}"))?
-        {
-            Some(proof) => chatter_core::crypto::verify_kt_proof(peer_user_id, &ik, &proof)
-                .map_err(|e| format!("{e}")),
-            None => Ok(()), // TOFU: not reached here — Bob has a leaf.
-        }
+            .map_err(|error| error.to_string())
     }
 
     let mut rng = StdRng::seed_from_u64(0x14_FEED);
 
     // ---- Register a REAL Bob through the server (Phase-1 producer appends his
     // identity key to the KT log), and authenticate the pool as Alice so the
-    // GetProof lookup is authorized. -----------------------------------------
+    // KT lookup uses the normal route. -----------------------------------------
     let pool = common::create_test_pool()
         .await
         .expect("pool connect failed");
@@ -4436,8 +4392,16 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         .expect("Bob registration failed — no KT leaf to verify against");
     let _alice = common::setup_authenticated_test(&pool)
         .await
-        .expect("Alice registration/auth failed — GetProof would be unauthenticated");
+        .expect("Alice registration/auth failed");
     let mut auth_client = pool.auth_client();
+    let dir = tempfile::tempdir().unwrap();
+    let db = std::sync::Arc::new(Database::open(&dir.path().join("kt.db"), "testpass").unwrap());
+    db.run_migrations().unwrap();
+    let service = SignalService::new(
+        std::sync::Arc::new(KeyStore::new(db.clone())),
+        std::sync::Arc::new(SettingsRepository::new(db)),
+    );
+
 
     // Bob's REAL identity key, as committed at registration (33-byte serialized).
     let ik_bob = IdentityKey::decode(&bob.public_key).expect("Bob identity key decodes");
@@ -4460,39 +4424,6 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
     // The address Alice BELIEVES is Bob. KT binds the served key to Bob's leaf.
     let bob_addr = ProtocolAddress::new(bob.user_id.clone(), DeviceId::new(1).unwrap());
 
-    // Prove the KT proof exists and its committed key is Bob's real key.
-    let proof = auth_client
-        .get_key_transparency_proof(&bob.user_id)
-        .await
-        .expect("GetProof transport ok")
-        .expect("Bob must have a KT leaf (Phase-1 producer runs at registration)");
-    let committed = &proof.identity_key;
-    assert_eq!(
-        committed.as_slice(),
-        bob.public_key.as_slice(),
-        "KT log commits Bob's real identity key"
-    );
-    let epoch = proof
-        .signed_tree_head
-        .as_ref()
-        .map(|s| s.epoch)
-        .unwrap_or(0);
-    let tree_size = proof
-        .signed_tree_head
-        .as_ref()
-        .map(|s| s.tree_size)
-        .unwrap_or(0);
-    println!(
-        "  fetched Bob's signed KT proof: epoch={epoch} tree_size={tree_size} \
-         siblings={} committed_key={}",
-        proof
-            .inclusion_proof
-            .as_ref()
-            .map(|p| p.sibling_hashes.len())
-            .unwrap_or(0),
-        hex::encode(&committed[..committed.len().min(8)]),
-    );
-
     // ---- POSITIVE CONTROL: honest Bob bundle verifies against KT AND
     // establishes a session. Mechanism works => a later reject is real. --------
     {
@@ -4503,7 +4434,7 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
             "positive control: honest bundle carries Bob's real key"
         );
 
-        kt_verify_bundle_key(&mut auth_client, &bob.user_id, &honest)
+        kt_verify_bundle_key(&service, &mut auth_client, &bob.user_id, &honest)
             .await
             .expect("POSITIVE CONTROL FAILED: Bob's real key must verify against his KT proof");
 
@@ -4541,14 +4472,14 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         "sanity: the forged bundle carries Mallory's identity key, not Bob's"
     );
 
-    let verdict = kt_verify_bundle_key(&mut auth_client, &bob.user_id, &forged).await;
+    let verdict = kt_verify_bundle_key(&service, &mut auth_client, &bob.user_id, &forged).await;
 
     // THE PROPERTY: a key not committed in Bob's KT leaf is REJECTED.
     assert!(
         verdict.is_err(),
         "KEY TRANSPARENCY FAILED (F9 regression): the client ACCEPTED a bundle for Bob's \
          user_id ({}) carrying MALLORY's identity key ({ik_mallory:?}) instead of Bob's \
-         ({ik_bob:?}). The KT proof committed Bob's real key; verify_proof should have \
+         ({ik_bob:?}). The KT proof committed Bob's real key; the verifier should have \
          rejected the mismatch. A malicious server could MITM this conversation.",
         bob.user_id,
     );
@@ -4563,7 +4494,7 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
     let mut alice_sess = make_store(&mut rng);
     let mut alice_id = alice_sess.clone();
     let gated: Result<(), String> = async {
-        kt_verify_bundle_key(&mut auth_client, &bob.user_id, &forged).await?;
+        kt_verify_bundle_key(&service, &mut auth_client, &bob.user_id, &forged).await?;
         // Unreachable on a correct client: only runs if KT passed.
         SessionManager::establish_session(
             &bob_addr,
@@ -7274,56 +7205,7 @@ async fn v23_message_ordering_reorder_and_gap() {
 }
 
 // ============================================================================
-// V24 — ANONYMOUS-DM path REJECTS a server-forged identity key via Key
-// Transparency (Phase 3a — closes the anon-path MITM hole).
-//
-// STATUS: PASS. This is the anon-path analog of V14. V14 proved the IDENTIFIED
-// DM path KT-gates session establishment (rejects a forged peer identity key).
-// The ANONYMOUS-DM path (Tor/shield mode, `ensure_session_with_bundle`) was
-// explicitly left KT- UNgated in Phase 2 because `GetProof` was authenticated
-// and the anon path has no identity to authenticate with — so it trusted peer
-// identity keys BLINDLY, a MITM hole on exactly the metadata-private path that
-// most needs protection.
-//
-// Phase 3a closes it: `GetProof` is now a PUBLIC method (a KT proof is public,
-// auditable transparency data), so the anon path fetches a peer's signed
-// inclusion proof over the ANONYMOUS channel (`AnonymousKtClient`, no auth
-// interceptor) and `ensure_session_with_bundle` KT-gates establishment exactly
-// like the identified path — via the SAME verifier (`crypto::verify_kt_proof`)
-// and the SAME reject/TOFU semantics (`verify_peer_key_transparency_anon`).
-//
-//   register REAL Bob -> Bob's identity key is in the append-only KT log
-//   -> the anon path fetches Bob's signed proof WITHOUT authentication
-//   -> ensure_session_with_bundle verifies the bundle key == committed key.
-//
-// POSITIVE CONTROL: an HONEST anonymously-fetched bundle carrying Bob's REAL
-// key (the one committed in the log) passes the anon KT gate AND establishes a
-// Signal session. If this half fails, the reject below proves nothing.
-//
-// THE ATTACK (F9 on the anon path): a malicious server serves an
-// internally-valid prekey bundle for Bob's user_id carrying MALLORY's identity
-// key (every signature inside verifies). The anon path fetches Bob's KT proof;
-// the committed value is Bob's REAL key != Mallory's forged key, so the anon KT
-// gate returns an error and `ensure_session_with_bundle` REFUSES — no session,
-// the forged key is never trusted.
-//
-// This drives the REAL production anon entrypoint
-// (`SignalService::ensure_session_with_bundle`, the exact method
-// `PairwiseService::encrypt_anonymous` calls), so it also proves byte-format
-// interop of the public GetProof over the anonymous channel.
-//
-// MUTATION (run it, observe RED, revert): in
-// `services/signal/session.rs::verify_peer_key_transparency_anon`, make the
-// function `return Ok(())` unconditionally (disable the anon KT check). The
-// attack half then ACCEPTS Mallory's forged bundle, a session is established,
-// and this test FAILS at the "forged bundle must be rejected" assertion.
-// Reverting restores GREEN.
-//
-// QUERY-PRIVACY NOTE: this closes the MITM hole. It does NOT yet hide WHICH
-// peer is looked up — the anon GetProof still carries the plaintext user_id
-// (the same user_id already sent in the anonymous prekey fetch). VRF-indexed
-// query privacy is the remaining Phase 3b work (crypto/vrf.go).
-// ============================================================================
+// V24: anonymous session establishment verifies KT on its own route.
 #[tokio::test]
 async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
     use chatter_core::testing::services::SignalService;
@@ -7456,41 +7338,12 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
 
     let bob_addr = ProtocolAddress::new(bob.user_id.clone(), DeviceId::new(1).unwrap());
 
-    // ---- Prove the anon-reachable public GetProof works: fetch Bob's proof
-    // over the ANONYMOUS channel (no auth interceptor, no identity) and confirm
-    // it commits Bob's real key. This is the fetch the anon gate uses. ---------
-    {
-        let mut anon_kt = pool.anonymous_kt_client();
-        let proof = anon_kt
-            .get_proof(&bob.user_id)
-            .await
-            .expect("anon GetProof transport ok (public method reachable without auth)")
-            .expect("Bob must have a KT leaf (Phase-1 producer runs at registration)");
-        assert_eq!(
-            proof.identity_key.as_slice(),
-            bob.public_key.as_slice(),
-            "anon KT proof commits Bob's real identity key"
-        );
-        let epoch = proof
-            .signed_tree_head
-            .as_ref()
-            .map(|s| s.epoch)
-            .unwrap_or(0);
-        let tree_size = proof
-            .signed_tree_head
-            .as_ref()
-            .map(|s| s.tree_size)
-            .unwrap_or(0);
-        println!(
-            "  anon-fetched Bob's signed KT proof over the anonymous channel (no auth): \
-             epoch={epoch} tree_size={tree_size} siblings={}",
-            proof
-                .inclusion_proof
-                .as_ref()
-                .map(|p| p.sibling_hashes.len())
-                .unwrap_or(0),
-        );
-    }
+    let proof = pool.anonymous_kt_client()
+        .search(kt_search_request(&bob.user_id, None))
+        .await
+        .expect("anonymous Search transport")
+        .expect("registered account has a KT entry");
+    assert_eq!(proof.condensed.unwrap().value.unwrap().value, bob.public_key);
 
     // ---- POSITIVE CONTROL: honest anon bundle (Bob's real key) passes the anon
     // KT gate AND establishes a session. Mechanism works => a later reject is
@@ -7818,178 +7671,77 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
 }
 
 // ============================================================================
-// V25 — KEY TRANSPARENCY CONSISTENCY MONITORING: the client verifies the log is
-// APPEND-ONLY across epochs and REJECTS a forked/rewritten log (Phase 3b, (B)).
-//
-// STATUS: PASS. V14/V24 prove the client rejects a forged identity key at a
-// SINGLE tree head. But a single signed tree head says nothing about HISTORY: a
-// malicious server could sign a fresh tree that quietly REWROTE a user's
-// committed key (or DROPPED a leaf) between epochs — a fork of the transparency
-// log — and each individual inclusion proof would still verify. Consistency
-// monitoring closes that: given two tree heads the client verifies they are
-// consistent (every old leaf persists unchanged in the new tree) and alarms on a
-// fork.
-//
-// This drives the REAL server consistency endpoint
-// (`KeyTransparencyService/GetConsistencyProof`, public/unauthenticated, served
-// from the append-only log via the EXISTING `crypto.BuildConsistencyProof`) over
-// the ANONYMOUS channel, and the REAL client verifier
-// (`crypto::verify_kt_consistency_proof`) — so it proves byte-format interop of
-// the sparse-Merkle ROOT RECONSTRUCTION (the client independently rebuilds the
-// old root from the served old leaves and checks it equals the pinned-key-signed
-// old root) as well as the per-leaf persistence check.
-//
-// POSITIVE CONTROL: an honest consistency proof between two real epochs verifies
-// Ok. If this half failed, the rejects below would prove nothing.
-//
-// The proof is an RFC 6962 consistency proof over the append-only LOG tree, so
-// the client reconstructs BOTH roots from the path and compares each to its
-// signed head.
-//
-// THE ATTACKS (all must be REJECTED):
-//   (A) TAMPERED PATH: flip a byte in a path node. Neither root reconstructs
-//       -> REJECT.
-//   (B) UNDER-REPORT: drop a path node -> REJECT.
-//   (C) REWRITTEN HISTORY: claim an old root the signed old head does not carry.
-//       This is the shape a server that changed a committed value, dropped an
-//       entry, or reordered the log produces — it reconstructs a DIFFERENT old
-//       root from its altered data -> REJECT.
-//
-// MUTATION (run it, observe RED, revert; source-hash the file in the submodule):
-// in `crypto/keytransparency.rs::verify_consistency_proof`, make the function
-// `return Ok(())` as its first statement. Both attack halves then ACCEPT the
-// forged/under-reported proof and this test FAILS at the "must be rejected"
-// assertions. Reverting restores GREEN.
-// ============================================================================
+// V25: verify the live journal's consistency proof against a previous head.
 #[tokio::test]
 async fn v25_consistency_proof_rejects_a_forked_log() {
-    use chatter_core::crypto::verify_kt_consistency_proof;
+    use libsignal_keytrans::LastTreeHead;
 
     if std::env::var("INTEGRATION_TESTS").is_err() {
-        eprintln!("skipping v25: INTEGRATION_TESTS not set");
         return;
     }
+    let pool = common::create_test_pool().await.unwrap();
+    let first = common::register_test_user(&pool).await.unwrap();
+    let mut kt = pool.anonymous_kt_client();
+    let initial = kt.search(kt_search_request(&first.user_id, None))
+        .await.unwrap().unwrap();
+    let verified = verify_test_kt_response(&first.user_id, initial, None).unwrap();
+    let update = verified.state_update;
+    let pin = LastTreeHead(update.tree_head, update.tree_root);
 
-    let pool = common::create_test_pool()
-        .await
-        .expect("pool connect failed");
+    let second = common::register_test_user(&pool).await.unwrap();
+    let proof = kt.search(kt_search_request(&second.user_id, Some(pin.0.tree_size)))
+        .await.unwrap().unwrap();
+    assert_eq!(verify_test_kt_response(&second.user_id, proof.clone(), Some(&pin)).unwrap().value, second.public_key);
 
-    // Two sequential registrations => two strictly increasing epochs (epoch =
-    // total appends; count(*) only grows). old_epoch < new_epoch <= current.
-    let _u1 = common::register_test_user(&pool)
-        .await
-        .expect("first registration failed");
-    let mut anon_kt = pool.anonymous_kt_client();
-    let p1 = anon_kt
-        .get_proof(&_u1.user_id)
-        .await
-        .expect("GetProof transport ok")
-        .expect("u1 has a KT leaf");
-    let old_epoch = p1.signed_tree_head.as_ref().unwrap().epoch;
+    let mut tampered = proof.clone();
+    tampered.tree_head.as_mut().unwrap().last[0][0] ^= 1;
+    assert!(verify_test_kt_response(&second.user_id, tampered, Some(&pin)).is_err());
 
-    let _u2 = common::register_test_user(&pool)
-        .await
-        .expect("second registration failed");
-    let p2 = anon_kt
-        .get_proof(&_u2.user_id)
-        .await
-        .expect("GetProof transport ok")
-        .expect("u2 has a KT leaf");
-    let new_epoch = p2.signed_tree_head.as_ref().unwrap().epoch;
+    let mut short = proof.clone();
+    short.tree_head.as_mut().unwrap().last.remove(0);
+    assert!(verify_test_kt_response(&second.user_id, short, Some(&pin)).is_err());
 
-    assert!(
-        old_epoch >= 1 && old_epoch < new_epoch,
-        "need 1 <= old_epoch({old_epoch}) < new_epoch({new_epoch})"
-    );
+    let mut fork = pin;
+    fork.1[0] ^= 1;
+    assert!(verify_test_kt_response(&second.user_id, proof, Some(&fork)).is_err());
+}
 
-    // ---- Fetch the consistency proof over the ANONYMOUS channel (public method,
-    // no auth, no identity leaked). --------------------------------------------
-    let honest = anon_kt
-        .get_consistency_proof(old_epoch, new_epoch)
-        .await
-        .expect("anon GetConsistencyProof transport ok (public method reachable without auth)");
-
-    let path_len = honest.proof.as_ref().map(|p| p.path.len()).unwrap_or(0);
-    println!(
-        "  fetched consistency proof over the anonymous channel: old_epoch={old_epoch} \
-         new_epoch={new_epoch} path_nodes={path_len}"
-    );
-    assert!(
-        path_len >= 1,
-        "a consistency proof between two distinct epochs needs a path"
-    );
-
-    // ---- POSITIVE CONTROL: the honest proof verifies (log is append-only). ----
-    verify_kt_consistency_proof(&honest).expect(
-        "POSITIVE CONTROL FAILED: honest consistency proof between two real epochs must verify",
-    );
-    println!(
-        "  positive control: honest consistency proof VERIFIED (log is append-only across epochs)"
-    );
-
-    // ---- ATTACK (A): tamper a path node. -------------------------------------
-    {
-        let mut forged = honest.clone();
-        let p = forged.proof.as_mut().unwrap();
-        p.path[0][0] ^= 0xFF;
-
-        let verdict = verify_kt_consistency_proof(&forged);
-        assert!(
-            verdict.is_err(),
-            "CONSISTENCY MONITORING FAILED (tampered path accepted): the path no longer \
-             reconstructs the signed roots and must be rejected."
-        );
-        println!(
-            "  attack (A) tampered path REJECTED: {}",
-            verdict.unwrap_err()
-        );
+fn kt_search_request(label: &str, last: Option<u64>) -> chatter_proto::chat_v1::KtSearchRequest {
+    chatter_proto::chat_v1::KtSearchRequest {
+        search_key: label.as_bytes().to_vec(),
+        version: None,
+        consistency: Some(chatter_proto::chat_v1::KtConsistency { last, distinguished: None }),
     }
+}
 
-    // ---- ATTACK (B): UNDER-REPORT — drop a path node. ------------------------
-    {
-        let mut forged = honest.clone();
-        let p = forged.proof.as_mut().unwrap();
-        p.path.remove(0);
+fn verify_test_kt_response(
+    label: &str,
+    response: chatter_proto::chat_v1::KtSearchResponse,
+    last: Option<&libsignal_keytrans::LastTreeHead>,
+) -> Result<libsignal_keytrans::VerifiedSearchResult, libsignal_keytrans::Error> {
+    use chatter_core::config::{KT_TREE_HEAD_PUBLIC_KEY_BYTES, KT_VRF_PUBLIC_KEY_BYTES};
+    use libsignal_keytrans::{
+        CondensedTreeSearchResponse, DeploymentMode, FullSearchResponse, FullTreeHead,
+        KeyTransparency, PublicConfig, SearchContext, SlimSearchRequest, VerifyingKey, VrfPublicKey,
+    };
+    use prost::Message;
 
-        let verdict = verify_kt_consistency_proof(&forged);
-        assert!(
-            verdict.is_err(),
-            "CONSISTENCY MONITORING FAILED (under-report accepted): a short path must not \
-             reconstruct the signed roots."
-        );
-        println!(
-            "  attack (B) under-report REJECTED: {}",
-            verdict.unwrap_err()
-        );
-    }
-
-    // ---- ATTACK (C): REWRITTEN HISTORY — an old root we never signed. --------
-    // A server that rewrote a committed entry reconstructs a different old root
-    // from its own altered data. Here that is simulated directly: the proof
-    // claims an old root its signed old head does not carry.
-    {
-        let mut forged = honest.clone();
-        let p = forged.proof.as_mut().unwrap();
-        p.old_root[0] ^= 0xFF;
-
-        let verdict = verify_kt_consistency_proof(&forged);
-        assert!(
-            verdict.is_err(),
-            "CONSISTENCY MONITORING FAILED (rewritten history accepted): an old root that the \
-             signed old head does not carry must be rejected — this is how a rewritten log is \
-             caught."
-        );
-        println!(
-            "  attack (C) rewritten history REJECTED: {}",
-            verdict.unwrap_err()
-        );
-    }
-
-    println!(
-        "  V25 PASS — consistency proof VERIFIED the append-only log across epochs \
-         (old={old_epoch} new={new_epoch}, {path_len} path nodes) and REJECTED a tampered \
-         path, a dropped path node, and an unsigned old root. Log-fork hole closed."
-    );
+    let head = FullTreeHead::decode(response.tree_head.unwrap().encode_to_vec().as_slice()).unwrap();
+    let condensed = CondensedTreeSearchResponse::decode(response.condensed.unwrap().encode_to_vec().as_slice()).unwrap();
+    let verifier = KeyTransparency {
+        config: PublicConfig {
+            mode: DeploymentMode::ContactMonitoring,
+            signature_key: VerifyingKey::from_bytes(&KT_TREE_HEAD_PUBLIC_KEY_BYTES).unwrap(),
+            vrf_key: VrfPublicKey::try_from(KT_VRF_PUBLIC_KEY_BYTES).unwrap(),
+        },
+    };
+    verifier.verify_search(
+        SlimSearchRequest::new(label.as_bytes().to_vec()),
+        FullSearchResponse::new(condensed, &head),
+        SearchContext { last_tree_head: last, ..Default::default() },
+        false,
+        std::time::SystemTime::now(),
+    )
 }
 
 // ============================================================================
@@ -9496,213 +9248,31 @@ async fn v36_disappearing_messages_expire_locally() {
 }
 
 // ============================================================================
-// V37 — KEY TRANSPARENCY QUERY-PRIVACY VRF: the served leaf key is VRF_sk(user_id),
-// the client verifies the VRF proof byte-exact against a LIVE server proof, the
-// recovered index IS the committed leaf, the anon path still REJECTS a forged
-// identity key (V24 property preserved under VRF), and a TAMPERED VRF proof is
-// REJECTED (the verifier is not decorative).
-//
-// STATUS: PASS. Phase 3b. Before this, the KT sparse-Merkle leaf key was
-// SHA-256("ChatterKT-leaf-v1" || user_id) — a value ANY auditor scanning the
-// public log could recompute, mapping every leaf back to its username. Now the
-// leaf key is VRF_sk(user_id), an ECVRF-EDWARDS25519-SHA512-TAI output the server
-// computes with a secret key; the server serves an 80-byte VRF proof binding the
-// queried user_id to that index, and the client verifies it under the PINNED VRF
-// public key (config::KT_VRF_PUBLIC_KEY_BYTES). The mapping stays committed and
-// publicly auditable, but the leaf keys are pseudorandom and unlinkable to
-// usernames without the server's VRF secret.
-//
-// WHAT THIS PROVES (live, not asserted):
-//   1. INTEROP: a REAL server VRF proof, fetched over the anonymous channel,
-//      verifies in the byte-exact Rust ECVRF verifier (crypto::vrf::vrf_verify),
-//      and the recovered 32-byte index EQUALS inclusion_proof.key. If any byte
-//      format diverged (suite tag 0x03, TAI hash-to-curve, 16-byte challenge
-//      encoding, cofactor-x8 output), this would fail against the live proof.
-//   2. LEAF-KEY IS PSEUDORANDOM: inclusion_proof.key != SHA-256(domain||user_id).
-//      The old, auditor-recomputable derivation no longer keys the tree.
-//   3. FORGERY STILL REJECTED (V24 under VRF): verify_kt_proof accepts Bob's real
-//      key and REJECTS a forged (Mallory) key — the F9 property is preserved now
-//      that the leaf key is VRF-derived and the VRF proof is LOAD-BEARING in
-//      verify_kt_proof (it derives the expected leaf key from the VRF proof).
-//   4. TAMPER -> REJECT (not decorative): flipping one byte of the VRF proof makes
-//      verify_kt_proof REJECT with VrfInvalid.
-//
-// HONEST SCOPE — PROVEN vs ASSERTED:
-//   * PROVEN: byte-exact Go<->Rust ECVRF interop against a live proof; tamper is
-//     rejected; the tree is VRF-keyed and V14/V24/V25 stay green under it.
-//   * NOT achieved (documented, not claimed): query privacy against the SERVING
-//     server. GetProof still carries the plaintext user_id because the server
-//     needs it to compute VRF_sk(user_id) — the VRF is server-side, not oblivious.
-//     Hiding the lookup from the server too needs an OPRF (out of scope). What VRF
-//     buys is unlinkability of leaf->username for a THIRD-PARTY AUDITOR of the log
-//     plus a committed, verifiable name->index mapping.
-//
-// MUTATION (RED test): in crypto/keytransparency.rs::verify_proof, replace the
-// VRF-derived `expected_key` with the old SHA-256 leaf_key(user_id): against the
-// VRF-keyed server the honest POSITIVE CONTROL then fails with WrongLeafKey -> RED.
-// Or make vrf_verify return Some(index) unconditionally (decorative verifier):
-// the TAMPER assertion then fails to reject -> RED. Reverting restores GREEN.
-// ============================================================================
+// V37: verify the live VRF proof and bind it to the exact queried label.
 #[tokio::test]
 async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
     use chatter_core::config::KT_VRF_PUBLIC_KEY_BYTES;
-    use chatter_core::crypto::vrf::vrf_verify;
-    use chatter_core::crypto::{KtError, verify_kt_proof};
-    use libsignal_protocol::{IdentityKey, IdentityKeyPair};
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
-    use sha2::{Digest, Sha256};
+    use libsignal_keytrans::VrfPublicKey;
 
     if std::env::var("INTEGRATION_TESTS").is_err() {
-        eprintln!("skipping v37: INTEGRATION_TESTS not set");
         return;
     }
+    let pool = common::create_test_pool().await.unwrap();
+    let peer = common::register_test_user(&pool).await.unwrap();
+    let proof = pool.anonymous_kt_client()
+        .search(kt_search_request(&peer.user_id, None))
+        .await.unwrap().unwrap();
+    let verifier = VrfPublicKey::try_from(KT_VRF_PUBLIC_KEY_BYTES).unwrap();
+    let vrf = proof.condensed.as_ref().unwrap().vrf_proof.as_slice().try_into().unwrap();
+    let index = verifier.proof_to_hash(peer.user_id.as_bytes(), vrf).unwrap();
+    let verified = verify_test_kt_response(&peer.user_id, proof.clone(), None).unwrap();
+    assert_eq!(verified.value, peer.public_key);
+    assert_eq!(verified.state_update.monitoring_data.unwrap().index, index);
 
-    let mut rng = StdRng::seed_from_u64(0x37_FEED);
-
-    // ---- Register a REAL Bob (Phase-1 producer appends his identity key under
-    // its VRF index). The pool is NOT authenticated: the anon channel must reach
-    // the public GetProof, which now carries the VRF proof. --------------------
-    let pool = common::create_test_pool()
-        .await
-        .expect("pool connect failed");
-    let bob = common::register_test_user(&pool)
-        .await
-        .expect("Bob registration failed — no KT leaf to verify against");
-
-    let ik_bob = IdentityKey::decode(&bob.public_key).expect("Bob identity key decodes");
-    let mallory_kp = IdentityKeyPair::generate(&mut rng);
-    let ik_mallory = *mallory_kp.identity_key();
-    let mallory_serialized = ik_mallory.serialize();
-    assert_ne!(
-        ik_bob, ik_mallory,
-        "sanity: Bob and Mallory are distinct identities"
-    );
-
-    // ---- Fetch Bob's proof over the ANONYMOUS channel (public method, no auth).
-    let mut anon_kt = pool.anonymous_kt_client();
-    let proof = anon_kt
-        .get_proof(&bob.user_id)
-        .await
-        .expect("anon GetProof transport ok (public method reachable without auth)")
-        .expect("Bob must have a KT leaf (Phase-1 producer runs at registration)");
-
-    let incl = proof
-        .inclusion_proof
-        .as_ref()
-        .expect("inclusion proof present");
-    let leaf_key_on_wire: [u8; 32] = incl
-        .key
-        .as_slice()
-        .try_into()
-        .expect("leaf key is 32 bytes");
-
-    assert!(
-        !proof.vrf_proof.is_empty(),
-        "server must serve a VRF proof (Phase 3b)"
-    );
-    assert_eq!(
-        proof.vrf_proof.len(),
-        80,
-        "ECVRF proof is 80 bytes (gamma||c||s)"
-    );
-    assert_eq!(
-        proof.vrf_public_key.as_slice(),
-        KT_VRF_PUBLIC_KEY_BYTES.as_slice(),
-        "advisory VRF pubkey the server names must match the client's PINNED key"
-    );
-
-    // (1) INTEROP: the LIVE server VRF proof verifies byte-exact in the Rust
-    // ECVRF verifier, and the recovered index IS the committed leaf key.
-    let index = vrf_verify(
-        &KT_VRF_PUBLIC_KEY_BYTES,
-        bob.user_id.as_bytes(),
-        &proof.vrf_proof,
-    )
-    .expect("LIVE server VRF proof must verify in the byte-exact Rust ECVRF verifier");
-    assert_eq!(
-        index, leaf_key_on_wire,
-        "VRF index recovered from the proof must EQUAL inclusion_proof.key (the tree is VRF-keyed)"
-    );
-    assert_eq!(
-        &proof.vrf_output[..32],
-        index.as_slice(),
-        "the first 32 bytes of the 64-byte VRF output are the leaf index"
-    );
-    println!(
-        "  (1) INTEROP: live server VRF proof verified byte-exact; index={} == leaf key",
-        hex::encode(&index[..8])
-    );
-
-    // (2) LEAF-KEY IS PSEUDORANDOM: NOT the old, auditor-recomputable
-    // SHA-256("ChatterKT-leaf-v1" || user_id).
-    let old_sha_leaf: [u8; 32] = {
-        let mut h = Sha256::new();
-        h.update(b"ChatterKT-leaf-v1");
-        h.update(bob.user_id.as_bytes());
-        h.finalize().into()
-    };
-    assert_ne!(
-        leaf_key_on_wire, old_sha_leaf,
-        "QUERY-PRIVACY REGRESSION: the leaf key equals the guessable SHA-256(domain||user_id) — \
-         an auditor could map it back to the username. It must be the VRF index."
-    );
-    println!("  (2) leaf key is the VRF index, NOT the auditor-recomputable SHA-256(user_id)");
-
-    // (3) FORGERY STILL REJECTED (V24 under VRF): the VRF proof is load-bearing in
-    // verify_kt_proof. Honest key verifies; a forged (Mallory) key is rejected.
-    verify_kt_proof(&bob.user_id, &bob.public_key, &proof)
-        .expect("POSITIVE CONTROL: Bob's real key must verify against his VRF-keyed KT proof");
-
-    let forged_verdict = verify_kt_proof(&bob.user_id, &mallory_serialized, &proof);
-    assert!(
-        matches!(forged_verdict, Err(KtError::IdentityKeyMismatch)),
-        "F9 REGRESSION under VRF: a forged identity key ({ik_mallory:?}) must be REJECTED with \
-         IdentityKeyMismatch, got {forged_verdict:?}"
-    );
-    println!(
-        "  (3) forgery still rejected under VRF: {}",
-        forged_verdict.unwrap_err()
-    );
-
-    // (4) TAMPER -> REJECT (verifier is not decorative): flip one byte of the VRF
-    // proof; verify_kt_proof must reject with VrfInvalid.
-    {
-        let mut tampered = proof.clone();
-        tampered.vrf_proof[10] ^= 0x01; // corrupt gamma byte
-        let verdict = verify_kt_proof(&bob.user_id, &bob.public_key, &tampered);
-        assert!(
-            matches!(verdict, Err(KtError::VrfInvalid)),
-            "DECORATIVE-VERIFIER TRAP: a tampered VRF proof must be REJECTED with VrfInvalid, \
-             got {verdict:?}. A verifier that accepts a broken proof is worse than none."
-        );
-        println!(
-            "  (4) tampered VRF proof REJECTED: {}",
-            verdict.unwrap_err()
-        );
-    }
-
-    // Bonus: the VRF proof does not verify under a DIFFERENT user_id (wrong alpha)
-    // — it is bound to the exact user queried.
-    {
-        let wrong = vrf_verify(
-            &KT_VRF_PUBLIC_KEY_BYTES,
-            b"00000000-0000-0000-0000-000000000000",
-            &proof.vrf_proof,
-        );
-        assert!(
-            wrong.is_none(),
-            "VRF proof must not verify under a different user_id (alpha)"
-        );
-    }
-
-    println!(
-        "\n  V37 PASS — the KT leaf key is now VRF_sk(user_id); the client verified a LIVE server \
-         VRF proof byte-exact (Go RFC 9381 prover <-> libsignal-keytrans verifier), the recovered index is the \
-         committed leaf, a forged identity key is STILL rejected (V24 under VRF), and a tampered \
-         VRF proof is rejected. Query privacy vs a THIRD-PARTY AUDITOR is achieved; vs the serving \
-         server it is not (GetProof still carries user_id — an OPRF is out of scope).\n"
-    );
+    let mut tampered = proof.clone();
+    tampered.condensed.as_mut().unwrap().vrf_proof[10] ^= 1;
+    assert!(verify_test_kt_response(&peer.user_id, tampered, None).is_err());
+    assert!(verify_test_kt_response("00000000-0000-4000-8000-000000000000", proof, None).is_err());
 }
 
 // ============================================================================

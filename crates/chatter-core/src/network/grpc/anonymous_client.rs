@@ -12,8 +12,7 @@ use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use chatter_proto::chat_v1::{
-    GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleRequest,
-    GetPreKeyBundleResponse, GetProofRequest, GetProofResponse, SealedDelivery,
+    GetPreKeyBundleRequest, GetPreKeyBundleResponse, KtSearchRequest, KtSearchResponse, SealedDelivery,
     SealedDeviceMessage, SendGroupMessageRequest, SendGroupMessageResponse,
     SendSealedMessageRequest, SendSealedMessageResponse,
     auth_service_client::AuthServiceClient,
@@ -279,80 +278,23 @@ impl AnonymousAuthClient {
     }
 }
 
-/// Anonymous Key Transparency client — for fetching a peer's signed KT
-/// inclusion proof WITHOUT an authenticated identity.
-///
-/// # Why this exists (Phase 3a)
-///
-/// The identified DM path fetches KT proofs through the authenticated
-/// `AuthClient` (`get_key_transparency_proof`) and rejects a peer bundle whose
-/// identity key is not the KT-committed one (see
-/// `SignalService::verify_peer_key_transparency`). The ANONYMOUS-DM path has no
-/// authenticated identity to make that call with, so before Phase 3a it trusted
-/// peer identity keys blindly — a MITM hole on exactly the metadata-private
-/// path that most needs protection.
-///
-/// `GetProof` is a PUBLIC method server-side (a KT proof is public, auditable
-/// transparency data), so this client can fetch it over the isolated anonymous
-/// channel — no auth interceptor, no identity leaked — and the anon path then
-/// KT-gates session establishment exactly like the identified path.
-///
-/// # Privacy note (Phase 3b, not yet closed)
-///
-/// The lookup key is still the plaintext `user_id`, so the server sees WHICH
-/// peer is queried. Hiding that (VRF-indexed lookup) is the remaining
-/// query-privacy work.
+/// Key transparency on the supplied route, without an auth interceptor.
 pub struct AnonymousKtClient {
     inner: KeyTransparencyServiceClient<GrpcTransport>,
 }
 
 impl AnonymousKtClient {
-    /// Create a new anonymous KT client from a raw channel (NO auth interceptor).
     pub fn new(channel: GrpcTransport) -> Self {
-        Self {
-            inner: KeyTransparencyServiceClient::new(channel),
-        }
+        Self { inner: KeyTransparencyServiceClient::new(channel) }
     }
 
-    /// Fetch a peer's signed KT inclusion proof anonymously.
-    ///
-    /// Mirrors `AuthClient::get_key_transparency_proof`: returns `Ok(None)` when
-    /// the server reports `NotFound` (a pre-KT user with no leaf — the caller
-    /// decides the no-proof/TOFU policy) and `Err` on any other transport/server
-    /// failure (a network error is NOT evidence of a missing leaf and must not be
-    /// silently treated as "no proof").
-    pub async fn get_proof(
+    pub async fn search(
         &mut self,
-        user_id: &str,
-    ) -> Result<Option<GetProofResponse>, NetworkError> {
-        let request = GetProofRequest {
-            user_id: user_id.to_string(),
-        };
-        match self.inner.get_proof(request).await {
-            Ok(resp) => Ok(Some(resp.into_inner())),
+        request: KtSearchRequest,
+    ) -> Result<Option<KtSearchResponse>, NetworkError> {
+        match self.inner.search(request).await {
+            Ok(response) => Ok(Some(response.into_inner())),
             Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
-            Err(status) => Err(NetworkError::from_status(&status)),
-        }
-    }
-
-    /// Fetch a consistency proof between two tree-head epochs.
-    ///
-    /// The client uses this to verify the log is APPEND-ONLY between an epoch it
-    /// previously trusted and a newer one, and to REJECT/alarm on a fork (a
-    /// server that rewrote history). Like `get_proof`, `GetConsistencyProof` is a
-    /// public method, so it works over the anonymous channel with no identity
-    /// leaked.
-    pub async fn get_consistency_proof(
-        &mut self,
-        old_epoch: u64,
-        new_epoch: u64,
-    ) -> Result<GetConsistencyProofResponse, NetworkError> {
-        let request = GetConsistencyProofRequest {
-            old_epoch,
-            new_epoch,
-        };
-        match self.inner.get_consistency_proof(request).await {
-            Ok(resp) => Ok(resp.into_inner()),
             Err(status) => Err(NetworkError::from_status(&status)),
         }
     }
