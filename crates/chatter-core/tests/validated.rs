@@ -11081,14 +11081,14 @@ async fn v48_username_link_resolves_privately_end_to_end() {
         .await
         .expect("B failed to resolve A's username link");
     assert_eq!(
-        resolved_username, full_username,
+        resolved_username.as_deref(), Some(full_username.as_str()),
         "B decrypted a DIFFERENT username than A encrypted"
     );
     assert_eq!(
         resolved_id, uid_a,
         "resolved link did not name A's account id"
     );
-    println!("  the fix: B resolved the link to @{resolved_username} = {uid_a}");
+    println!("  B resolved the link to @{full_username} = {uid_a}");
 
     // NEGATIVE HALF 3: wrong entropy — the server's-eye view. Same link id,
     // zeroed fragment: decryption MUST fail (HMAC mismatch), so an actor
@@ -11122,7 +11122,7 @@ async fn v48_username_link_resolves_privately_end_to_end() {
         .resolve_username_link(&url2)
         .await
         .expect("rotated link must resolve");
-    assert_eq!((u2, id2), (full_username.clone(), uid_a));
+    assert_eq!((u2.as_deref(), id2), (Some(full_username.as_str()), uid_a));
     let n_rows = psql(&format!(
         "SELECT COUNT(*) FROM user_username_links WHERE user_id = '{uid_a}'"
     ));

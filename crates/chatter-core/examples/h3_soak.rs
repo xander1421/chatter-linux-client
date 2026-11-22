@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let epoch = Instant::now();
     println!("soak start: {DURATION}s; Q quiet between +300s and +390s");
-    let mut running = JoinSet::new();
+    let mut running = JoinSet::<bool>::new();
     let mut failures = 0;
     for second in (0..DURATION).step_by(5) {
         sleep_until(epoch + Duration::from_secs(second)).await;
