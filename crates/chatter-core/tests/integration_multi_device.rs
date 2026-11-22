@@ -123,7 +123,7 @@ async fn test_logout_specific_device() {
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
     // Logout our device
-    let result = auth_client.logout(user.device_id).await;
+    let result = auth_client.logout(user.device_id, None).await;
     assert!(result.is_ok(), "Logout should succeed");
 
     // After logout, authenticated requests should fail

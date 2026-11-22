@@ -849,7 +849,7 @@ async fn test_logout() {
     let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let result = auth_client.logout(user.device_id).await;
+    let result = auth_client.logout(user.device_id, None).await;
 
     assert!(result.is_ok(), "Logout should succeed");
 }
