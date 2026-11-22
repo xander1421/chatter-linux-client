@@ -111,6 +111,24 @@ impl SealedSenderManager {
         Ok(envelopes)
     }
 
+    /// Prepare a mailbox envelope in memory. A trust refusal leaves both
+    /// the send journal and the ratchet untouched.
+    pub(crate) async fn encrypt_for_submission(
+        plaintext: &[u8],
+        sender_cert: &SenderCertificate,
+        destination: &ProtocolAddress,
+        base: &crate::crypto::SignalStore,
+        permit: &crate::services::gateway::submission::SubmissionPermit,
+    ) -> Result<Vec<u8>, crate::error::ServiceError> {
+        let mut staged = super::super::store::StagedSignalStore::new(base.clone());
+        let mut identities = staged.clone();
+        let ciphertext = Self::encrypt(plaintext, sender_cert, destination, &mut staged, &mut identities)
+            .await?;
+        permit.start().map_err(crate::error::ServiceError::Storage)?;
+        staged.commit().await.map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        Ok(ciphertext)
+    }
+
     /// Encrypt plaintext to sealed sender format.
     ///
     /// This is the simplest way to send a sealed sender message. It encrypts

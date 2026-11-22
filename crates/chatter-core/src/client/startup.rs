@@ -429,6 +429,7 @@ impl ChatterClient {
         let h_peer_verifier = crate::services::signal::spawn_peer_verifier(
             self.services.signal_service.clone(), self.services.grpc_pool.clone(),
             self.event_bus().clone(), self.auth_state().clone(),
+            self.update_transport_epoch.subscribe(),
         );
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);

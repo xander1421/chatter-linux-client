@@ -59,6 +59,20 @@ impl SignalService {
         }))
     }
 
+    // A bundle already surfaced an identity that the verifier has yet to
+    // decide. Fetching it again would consume another one-time prekey.
+    pub(super) fn require_bundle_lookup_ready(&self, peer: &str) -> Result<(), ServiceError> {
+        if let Some(key) = self.get_peer_identity(peer)? {
+            self.require_sendable_key(peer, &key).map_err(ServiceError::Crypto)?;
+        }
+        if self.key_store.has_blocking_kt_job(peer, self.actor.kt_route())? {
+            return Err(ServiceError::Crypto(CryptoError::KeyVerificationPending {
+                peer_id: peer.to_owned(),
+            }));
+        }
+        Ok(())
+    }
+
     pub async fn ensure_session(
         &self,
         auth_client: &mut AuthClient,
@@ -97,6 +111,8 @@ impl SignalService {
             );
             return Ok(());
         }
+
+        self.require_bundle_lookup_ready(recipient_id)?;
 
         // No usable session — either doesn't exist or is corrupted
         tracing::debug!(

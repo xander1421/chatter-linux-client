@@ -131,11 +131,23 @@ impl SignalActorHandle {
         sender_cert: SenderCertificate,
         recipient_address: ProtocolAddress,
     ) -> Result<Vec<u8>, ServiceError> {
+        self.encrypt_sealed_with_permit(plaintext, sender_cert, recipient_address, None)
+            .await
+    }
+
+    pub(crate) async fn encrypt_sealed_with_permit(
+        &self,
+        plaintext: Vec<u8>,
+        sender_cert: SenderCertificate,
+        recipient_address: ProtocolAddress,
+        permit: Option<crate::services::gateway::submission::SubmissionPermit>,
+    ) -> Result<Vec<u8>, ServiceError> {
         admit_outgoing_content(&plaintext)?;
         self.send(|tx| SignalCommand::EncryptSealed {
             plaintext,
             sender_cert,
             recipient_address,
+            permit,
             response: tx,
         })
         .await?

@@ -15,11 +15,12 @@ pub(crate) fn spawn_peer_verifier(
     pool: Arc<GrpcClientPool>,
     events: EventBus,
     auth: AuthState,
+    transport_epoch: tokio::sync::watch::Receiver<u64>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::join!(
-            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::Normal),
-            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::AnonymousTor),
+            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::Normal, transport_epoch.clone()),
+            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::AnonymousTor, transport_epoch),
         );
     })
 }
@@ -30,6 +31,7 @@ async fn run_peer_verifier(
     events: &EventBus,
     auth: &AuthState,
     route: KtRoute,
+    mut transport_epoch: tokio::sync::watch::Receiver<u64>,
 ) {
     let mut recovered_session = None;
     let mut ticks = tokio::time::interval(Duration::from_secs(3));
@@ -52,6 +54,7 @@ async fn run_peer_verifier(
             }
             recovered_session = Some((owner, revision));
         }
+        transport_epoch.borrow_and_update();
         if route == KtRoute::Normal && service.actor.kt_route() == KtRoute::AnonymousTor {
             continue;
         }
@@ -66,7 +69,7 @@ async fn run_peer_verifier(
             }
         };
         let owner_key = &owner_key;
-        futures::stream::iter(jobs)
+        let verify = futures::stream::iter(jobs)
             .for_each_concurrent(4, |job| async move {
                 let current = || {
                     let state = auth.get();
@@ -104,8 +107,18 @@ async fn run_peer_verifier(
                         }
                     }
                 }
-            })
-            .await;
+            });
+        if route == KtRoute::Normal {
+            // Stop polling in-flight direct RPCs, including a proof's follow-up
+            // consistency request, when the caller changes privacy modes.
+            tokio::select! {
+                biased;
+                _ = transport_epoch.changed() => {}
+                _ = verify => {}
+            }
+        } else {
+            verify.await;
+        }
     }
 }
 
@@ -540,6 +553,90 @@ mod kt_pin_tests {
             assert_eq!(jobs[0].peer, peer);
             assert_eq!(jobs[0].key, key);
             assert_eq!(jobs[0].route, route);
+        }
+    }
+
+    #[tokio::test]
+    async fn unsigned_not_found_keeps_legacy_keys_eligible_for_rechecking() {
+        use crate::storage::peer_verification::PeerVerification;
+        let (_dir, service, owner) = fixture();
+        let peer = crate::domain::UserId::new().to_string();
+        let key = [5; 33];
+        service.key_store.save_identity(&peer, &key).unwrap();
+        let conn = service.settings_repo.database().connection().unwrap();
+        conn.execute(
+            "UPDATE peer_key_transparency SET state='legacy-unlisted' WHERE account=?1",
+            [&peer],
+        ).unwrap();
+        drop(conn);
+
+        service.require_sendable_key(&peer, &key).unwrap();
+        let job = service.key_store.due_kt_jobs(KtRoute::Normal, i64::MAX).unwrap().remove(0);
+        assert_eq!(
+            service.actor.complete_kt_job(owner.to_string(), job, KtVerdict::NotInLog).await.unwrap(),
+            KtUpdate::Stale,
+        );
+        assert_eq!(
+            service.key_store.peer_verification(&peer, &key).unwrap(),
+            PeerVerification::Legacy,
+        );
+        service.require_sendable_key(&peer, &key).unwrap();
+        assert!(!service.key_store.has_blocking_kt_job(&peer, KtRoute::Normal).unwrap());
+        assert!(service.key_store.due_kt_jobs(KtRoute::Normal, chrono::Utc::now().timestamp()).unwrap().is_empty());
+        assert_eq!(service.key_store.due_kt_jobs(KtRoute::Normal, i64::MAX).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pinning_a_rejected_key_inbound_schedules_the_identity_prompt() {
+        use crate::storage::peer_verification::PeerVerification;
+        let (dir, service, owner) = fixture();
+        let peer = crate::domain::UserId::new();
+        let rejected = [5; 33];
+        let logged = [6; 33];
+        service.key_store.enqueue_kt(&peer.to_string(), &rejected, KtRoute::Normal).unwrap();
+        let job = service.key_store.due_kt_jobs(KtRoute::Normal, i64::MAX).unwrap().remove(0);
+        assert_eq!(
+            service.actor.complete_kt_job(owner.to_string(), job, KtVerdict::Mismatch(logged.to_vec())).await.unwrap(),
+            KtUpdate::Refused,
+        );
+        assert_eq!(
+            service.key_store.peer_verification(&peer.to_string(), &rejected).unwrap(),
+            PeerVerification::Rejected,
+        );
+
+        // The inbound commit pins the rejected key. The routed and deferred
+        // receive paths must both be able to schedule it.
+        service.key_store.save_routed_identity(&peer.to_string(), &rejected, Some(KtRoute::Normal)).unwrap();
+        assert_eq!(service.key_store.due_kt_jobs(KtRoute::Normal, i64::MAX).unwrap().len(), 1);
+        let db = crate::storage::Database::open(&dir.path().join("keys.db"), "fixture").unwrap();
+        db.connection().unwrap().execute("DELETE FROM peer_kt_jobs", []).unwrap();
+        service.key_store.recover_kt_jobs(&owner.to_string()).unwrap();
+        let job = service.key_store.due_kt_jobs(KtRoute::AnonymousTor, i64::MAX).unwrap().remove(0);
+        let events = EventBus::new();
+        let mut rx = events.subscribe_domain();
+        settle_peer_verification(&service, &events, &owner.to_string(), job, KtVerdict::Mismatch(logged.to_vec())).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            DomainEvent::PeerIdentityChanged { peer_user_id, attributed: false } if peer_user_id == peer
+        ));
+        assert_eq!(service.pending_identity_change(&peer.to_string()).unwrap().unwrap().0, logged);
+    }
+
+    #[tokio::test]
+    async fn pending_key_blocks_single_and_wildcard_bundle_refetch() {
+        let (_dir, service, _) = fixture();
+        let peer = crate::domain::UserId::new().to_string();
+        service.key_store.enqueue_kt(&peer, &[5; 33], KtRoute::Normal).unwrap();
+        let pool = GrpcClientPool::new("http://127.0.0.1:1").unwrap();
+        let mut auth = pool.auth_client();
+        for result in [
+            service.ensure_session(&mut auth, &peer, 1).await,
+            service.ensure_sessions_all_devices(&mut auth, &peer).await.map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { peer_id })) if peer_id == peer
+            ));
         }
     }
 

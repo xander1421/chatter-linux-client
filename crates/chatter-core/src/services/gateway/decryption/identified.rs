@@ -11,6 +11,34 @@ impl MessageGateway {
         sender_id: &UserId,
         sender_device_id: u32,
     ) -> Result<SealedSenderResult, ServiceError> {
+        self.decrypt_identified_with_signal(
+            &self.signal_service,
+            envelope,
+            sender_id,
+            sender_device_id,
+        )
+        .await
+    }
+
+    pub(crate) async fn decrypt_mailbox_bootstrap_response(
+        &self,
+        envelope: &[u8],
+        sender_id: &UserId,
+        sender_device_id: u32,
+    ) -> Result<SealedSenderResult, ServiceError> {
+        // A mailbox response can arrive after Shield is turned off.
+        let signal = self.signal_service.for_anonymous_route();
+        self.decrypt_identified_with_signal(&signal, envelope, sender_id, sender_device_id)
+            .await
+    }
+
+    async fn decrypt_identified_with_signal(
+        &self,
+        signal: &crate::services::SignalService,
+        envelope: &[u8],
+        sender_id: &UserId,
+        sender_device_id: u32,
+    ) -> Result<SealedSenderResult, ServiceError> {
         // The identified path never STARTS a session. Its sender is the
         // server's claim alone, and a first identity key is trusted on first
         // use (`crypto/signal/store.rs` is_trusted_identity), so a PreKey
@@ -18,8 +46,7 @@ impl MessageGateway {
         // talked to. Sessions are established over sealed sender, whose
         // certificate names the sender.
         let session_key = format!("{}:{}", sender_id, sender_device_id);
-        if self
-            .signal_service
+        if signal
             .key_store
             .load_session(&session_key)
             .map_err(ServiceError::Storage)?
@@ -35,8 +62,7 @@ impl MessageGateway {
         // Whisper message the current state cannot open, tries them and
         // promotes the one that decrypts (libsignal `session_management.rs`
         // `try_decrypt_from_record`).
-        let mut plaintext = self
-            .signal_service
+        let mut plaintext = signal
             .decrypt_message_identified(envelope, &sender_id.to_string(), sender_device_id)
             .await?;
 

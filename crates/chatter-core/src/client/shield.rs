@@ -114,9 +114,9 @@ impl ChatterClient {
     /// this method does not emit a domain event because the flag is a
     /// presentation concern, not a chatter-core state change.
     pub fn set_anon_mode_enabled(self: &Arc<Self>, enabled: bool) {
+        self.anon_mode.store(enabled, Ordering::Release);
         self.update_transport_epoch
             .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
-        self.anon_mode.store(enabled, Ordering::Release);
         // Suspend direct SSE synchronously at Shield entry, before queuing
         // transport rebuild. configure_push holds this same admission lock.
         if enabled {

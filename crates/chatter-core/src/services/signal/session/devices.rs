@@ -53,8 +53,8 @@ impl SignalService {
         self.ensure_device_sessions(auth_client, recipient_id, need_access_policy, false).await
     }
 
-    /// A private post must be addressed to the full roster, including every
-    /// current device. Do not turn a blocked device into a partial send.
+    /// Reuse admitted sessions for a private-channel send. The anonymous
+    /// submit reports missing or stale devices for reconciliation.
     pub(crate) async fn require_group_device_sessions(
         &self,
         auth_client: &mut AuthClient,
@@ -72,7 +72,7 @@ impl SignalService {
         auth_client: &mut AuthClient,
         recipient_id: &str,
         need_access_policy: bool,
-        require_every_device: bool,
+        strict_discovery: bool,
     ) -> Result<(Vec<u32>, bool), ServiceError> {
         use chatter_proto::chat_v1::get_pre_key_bundle_response;
 
@@ -114,10 +114,21 @@ impl SignalService {
             .filter(|d| Some(*d) != this_device)
             .collect();
         let known_policy = self.unrestricted_access(recipient_id);
-        if !require_every_device
-            && !with_session.is_empty() && (known_policy.is_some() || !need_access_policy)
-        {
+        if !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
             return Ok((with_session, known_policy.unwrap_or(false)));
+        }
+
+        if strict_discovery && this_device.is_some() {
+            return Ok((with_session, known_policy.unwrap_or(false)));
+        }
+
+        match self.require_bundle_lookup_ready(recipient_id) {
+            Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }))
+                if !with_session.is_empty() =>
+            {
+                return Ok((with_session, known_policy.unwrap_or(false)));
+            }
+            result => result?,
         }
 
         // Fetch prekey bundles for ALL devices using wildcard
@@ -129,7 +140,7 @@ impl SignalService {
             // A throttled policy read must not fail a send we can already
             // encrypt: it goes identified, as it would have without the flag.
             Err(crate::error::NetworkError::RateLimited)
-                if !require_every_device && !with_session.is_empty() => {
+                if !with_session.is_empty() => {
                 tracing::warn!(
                     recipient = %recipient_id,
                     devices = ?with_session,
@@ -200,7 +211,7 @@ impl SignalService {
                                         error = %e,
                                         "Failed to establish session with device"
                                     );
-                                    if require_every_device {
+                                    if strict_discovery {
                                         return Err(e);
                                     }
                                     if last_error.is_none() || matches!(e, ServiceError::Crypto(CryptoError::KeyVerificationPending { .. })) {
@@ -216,7 +227,7 @@ impl SignalService {
                                 error = %e,
                                 "Failed to convert prekey bundle for device"
                             );
-                            if require_every_device {
+                            if strict_discovery {
                                 return Err(e);
                             }
                             if last_error.is_none() {
@@ -251,8 +262,14 @@ impl SignalService {
                 if this_device == Some(device_id) {
                     return Ok((Vec::new(), unrestricted));
                 }
-                self.ensure_session(auth_client, recipient_id, device_id)
-                    .await?;
+                let id = DeviceId::try_from(device_id)
+                    .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+                let address = ProtocolAddress::new(recipient_id.to_owned(), id);
+                if !self.actor.has_session(address.clone()).await? {
+                    let bundle = Self::convert_prekey_bundle(single_bundle)?;
+                    self.actor.establish_session(address, bundle).await
+                        .inspect_err(|error| self.note_identity_change(error))?;
+                }
                 Ok((vec![device_id], unrestricted))
             }
         }
@@ -260,7 +277,7 @@ impl SignalService {
 
     /// The recipient's `unrestricted_unidentified_access` flag from the last
     /// bundle fetch this run, if any.
-    pub(super) fn unrestricted_access(&self, recipient_id: &str) -> Option<bool> {
+    pub(crate) fn unrestricted_access(&self, recipient_id: &str) -> Option<bool> {
         self.unrestricted_access
             .lock()
             .ok()?

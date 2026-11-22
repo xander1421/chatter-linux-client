@@ -132,6 +132,10 @@
     }
 
     fn two_members() -> TwoMembers {
+        two_members_at("https://localhost:1")
+    }
+
+    fn two_members_at(server_url: &str) -> TwoMembers {
         use crate::client::ChatterClient;
         use crate::domain::channel::{
             Channel, ChannelType, MemberRole, Membership, NotificationPreference,
@@ -151,7 +155,7 @@
             )
             .unwrap();
             let c = ChatterClient::builder()
-                .server_url("https://localhost:1")
+                .server_url(server_url)
                 .data_dir(dir.path().to_str().unwrap())
                 .build()
                 .expect("build client");

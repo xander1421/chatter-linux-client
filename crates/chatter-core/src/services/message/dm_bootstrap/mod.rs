@@ -25,4 +25,4 @@ mod prewarm;
 use delivery::bootstrap_request;
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

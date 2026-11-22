@@ -12,7 +12,6 @@ pub(crate) enum KtRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PeerVerification {
     Legacy,
-    LegacyUnlisted,
     UnverifiedInbound,
     Verified,
     Rejected,
@@ -57,8 +56,7 @@ impl KeyStore {
             )
             .optional()?;
         Ok(match value.as_deref() {
-            Some("legacy") => PeerVerification::Legacy,
-            Some("legacy-unlisted") => PeerVerification::LegacyUnlisted,
+            Some("legacy" | "legacy-unlisted") => PeerVerification::Legacy,
             Some("verified") => PeerVerification::Verified,
             Some("rejected") => PeerVerification::Rejected,
             _ => PeerVerification::UnverifiedInbound,
@@ -75,7 +73,9 @@ impl KeyStore {
             "INSERT OR IGNORE INTO peer_kt_jobs (account,identity_key,route)
              SELECT ?1,?2,?3 WHERE NOT EXISTS (
                  SELECT 1 FROM peer_key_transparency WHERE account=?1 AND identity_key=?2
-                 AND state IN ('verified','legacy-unlisted','rejected')
+                 AND (state='verified' OR (state='rejected' AND NOT EXISTS (
+                     SELECT 1 FROM remote_identities WHERE address=?1 AND identity_key=?2
+                 )))
              ) AND NOT EXISTS (
                  SELECT 1 FROM pending_identity_changes WHERE peer_user_id=?1
              )",
@@ -165,9 +165,14 @@ impl KeyStore {
         Ok(())
     }
 
-    pub(crate) fn has_kt_job(&self, peer: &str, route: KtRoute) -> Result<bool, StorageError> {
+    pub(crate) fn has_blocking_kt_job(&self, peer: &str, route: KtRoute) -> Result<bool, StorageError> {
         Ok(self.db.read_connection()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM peer_kt_jobs WHERE account=?1 AND route=?2)",
+            "SELECT EXISTS(
+                SELECT 1 FROM peer_kt_jobs j
+                 LEFT JOIN peer_key_transparency k ON k.account=j.account AND k.identity_key=j.identity_key
+                 WHERE j.account=?1 AND j.route=?2 AND j.archived=0
+                   AND (k.state IS NULL OR k.state='unverified-inbound')
+            )",
             params![peer, route as i64],
             |row| row.get(0),
         )?)
@@ -184,7 +189,7 @@ impl KeyStore {
             "INSERT OR IGNORE INTO peer_kt_jobs (account,identity_key,route)
              SELECT k.account,k.identity_key,?2 FROM peer_key_transparency k
                JOIN remote_identities r ON r.address=k.account AND r.identity_key=k.identity_key
-             WHERE k.state='unverified-inbound' AND k.account!=?1
+             WHERE k.state IN ('unverified-inbound','rejected') AND k.account!=?1
              AND NOT EXISTS (SELECT 1 FROM peer_kt_jobs j
                 WHERE j.account=k.account AND j.identity_key=k.identity_key)
              AND NOT EXISTS (SELECT 1 FROM pending_identity_changes p WHERE p.peer_user_id=k.account)",
@@ -294,33 +299,20 @@ impl KeyStore {
                 KtUpdate::Refused
             }
         } else {
-            let is_legacy = tx.execute(
-                "UPDATE peer_key_transparency SET state='legacy-unlisted'
-                 WHERE account=?1 AND identity_key=?2 AND state='legacy'",
-                params![job.peer, job.key],
-            )? == 1;
-            if is_legacy {
-                KtUpdate::Ready
-            } else {
-                // GetProof's NotFound is unsigned. A newly presented key must
-                // never gain trust from it. Retry slowly in case the log catches up.
-                tx.execute(
-                    "UPDATE peer_kt_jobs SET attempts=8,due_at=?4
-                     WHERE account=?1 AND identity_key=?2 AND route=?3",
-                    params![
-                        job.peer,
-                        job.key,
-                        job.route as i64,
-                        chrono::Utc::now().timestamp() + 300
-                    ],
-                )?;
-                tx.commit()?;
-                return Ok(if job.attempts == 8 {
-                    KtUpdate::Stale
-                } else {
-                    KtUpdate::Refused
-                });
-            }
+            // GetProof's NotFound is unsigned. Keep the existing trust
+            // decision and the durable job, including for grandfathered pins.
+            tx.execute(
+                "UPDATE peer_kt_jobs SET attempts=8,due_at=?4
+                 WHERE account=?1 AND identity_key=?2 AND route=?3",
+                params![
+                    job.peer,
+                    job.key,
+                    job.route as i64,
+                    chrono::Utc::now().timestamp() + 300
+                ],
+            )?;
+            tx.commit()?;
+            return Ok(KtUpdate::Stale);
         };
         if already_changed || update == KtUpdate::Changed {
             tx.execute("DELETE FROM peer_kt_jobs WHERE account=?1", [&job.peer])?;

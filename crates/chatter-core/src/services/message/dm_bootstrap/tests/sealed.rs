@@ -336,3 +336,43 @@ async fn sealed_batch_skips_a_blocked_device_and_commits_the_ready_device() {
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].key, key);
 }
+
+#[cfg(feature = "dev-trust-root")]
+#[tokio::test]
+async fn secret_mailbox_submission_starts_only_after_the_actors_identity_check() {
+    use crate::error::{CryptoError, ServiceError};
+    use crate::services::gateway::submission::{SubmissionPermit, track_submission};
+
+    let (client, _dir) = shield_client(UserId::from_uuid(uuid::Uuid::from_u128(1)));
+    let ms = client.messages();
+    let peer = UserId::new();
+    cache_device(ms, &peer, 2, &mut StdRng::seed_from_u64(921)).await;
+    let cert = cache_fixture_sender_certificate(&client, ms.current_user_id().unwrap());
+    let store = &ms.signal_service.key_store;
+    let session = || store.load_session(&format!("{peer}:2")).unwrap().unwrap();
+    let original = session();
+
+    ms.database.connection().unwrap().execute(
+        "UPDATE peer_key_transparency SET state='unverified-inbound' WHERE account=?1",
+        [peer.to_string()],
+    ).unwrap();
+    let encrypt = || async {
+        ms.signal_service.actor.for_anonymous_route().encrypt_sealed_with_permit(
+            chatter_proto::protovalidate::test_plaintext("secret mailbox post"),
+            cert.clone(),
+            ProtocolAddress::new(peer.to_string(), DeviceId::new(2).unwrap()),
+            Some(SubmissionPermit::capture()),
+        ).await
+    };
+    let (result, started, _) = track_submission(encrypt(), None).await;
+    assert!(matches!(result, Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }))));
+    assert!(!started);
+    assert_eq!(session(), original);
+
+    let key = store.get_identity(&peer.to_string()).unwrap().unwrap();
+    store.mark_peer_verified(&peer.to_string(), &key).unwrap();
+    let (result, started, _) = track_submission(encrypt(), None).await;
+    assert!(result.is_ok());
+    assert!(started);
+    assert_ne!(session(), original);
+}

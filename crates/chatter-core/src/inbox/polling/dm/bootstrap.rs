@@ -90,7 +90,7 @@ pub(super) async fn try_parse_bootstrap_response(
         }
     };
     match message_gateway
-        .decrypt_identified_message(&frame.signal_ciphertext, &peer_id, frame.sender_device_id)
+        .decrypt_mailbox_bootstrap_response(&frame.signal_ciphertext, &peer_id, frame.sender_device_id)
         .await
     {
         Ok(result) => {

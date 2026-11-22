@@ -56,7 +56,7 @@ impl TokenCache {
         }
     }
 
-    fn put(&self, channel_id: &ChannelId, state_hash: StateHash, expiration: u64, token: Vec<u8>) {
+    pub(super) fn put(&self, channel_id: &ChannelId, state_hash: StateHash, expiration: u64, token: Vec<u8>) {
         if let Ok(mut map) = self.0.lock() {
             map.insert(*channel_id, Cached { state_hash, expiration, token });
         }
@@ -159,8 +159,8 @@ impl MessageService {
         check_distribution(distribution, &contents)?;
         let members = active_members(&verified);
         let mut auth_client = self.auth_client();
-        // The server requires the complete active roster. Discover every
-        // member's sessions, but a pending key never waits on a KT RPC here.
+        // Reuse cached sessions. Cold members need initial discovery; the
+        // anonymous submit names any missing or stale devices for reconciliation.
         let mut blocked = None;
         for member in &members {
             match self.signal_service.require_group_device_sessions(&mut auth_client, member).await
@@ -202,8 +202,8 @@ impl MessageService {
                     continue;
                 }
                 let plaintext = self.skdm_plaintext(&channel_id, &verified, distribution, member);
-                let outcome = self.deposit_sealed_to_all_devices(
-                    &mut auth_client, &mut message_client, member, &plaintext, Some(channel_id.as_bytes()),
+                let outcome = self.deposit_private_channel_key(
+                    &mut auth_client, &mut message_client, member, &plaintext, &channel_id,
                 ).await;
                 if let Some(error) = outcome.error {
                     return Err(error);

@@ -444,6 +444,17 @@ impl SignalService {
         device_id: u32,
         plaintext: &[u8],
     ) -> Result<Vec<u8>, ServiceError> {
+        self.encrypt_message_anonymous_with_permit(recipient_id, device_id, plaintext, None)
+            .await
+    }
+
+    pub(crate) async fn encrypt_message_anonymous_with_permit(
+        &self,
+        recipient_id: &str,
+        device_id: u32,
+        plaintext: &[u8],
+        permit: Option<crate::services::gateway::submission::SubmissionPermit>,
+    ) -> Result<Vec<u8>, ServiceError> {
         let lock_key = format!("{}:{}", recipient_id, device_id);
         let lock = self.get_encrypt_lock(&lock_key).await;
         let _guard = lock.lock().await;
@@ -475,7 +486,7 @@ impl SignalService {
 
         self.actor
             .for_anonymous_route()
-            .encrypt_sealed(plaintext.to_vec(), sender_cert, address)
+            .encrypt_sealed_with_permit(plaintext.to_vec(), sender_cert, address, permit)
             .await
     }
 }

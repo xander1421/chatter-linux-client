@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccessPolicy {
+    FetchIfNeeded,
+    Cached,
+}
+
 impl MessageService {
     /// Encrypt `plaintext` for every device of `recipient_id` and deposit
     /// all the ciphertexts in ONE `SendSealedMessage` (`SealedDelivery::
@@ -34,6 +40,34 @@ impl MessageService {
         plaintext: &[u8],
         group_id: Option<&[u8]>,
     ) -> DepositOutcome {
+        self.deposit_sealed_to_all_devices_with_policy(
+            auth_client, message_client, recipient_id, plaintext, group_id, AccessPolicy::FetchIfNeeded,
+        ).await
+    }
+
+    pub(in crate::services::message) async fn deposit_private_channel_key(
+        &self,
+        auth_client: &mut AuthClient,
+        message_client: &mut MessageClient,
+        recipient_id: &str,
+        plaintext: &[u8],
+        channel_id: &ChannelId,
+    ) -> DepositOutcome {
+        self.deposit_sealed_to_all_devices_with_policy(
+            auth_client, message_client, recipient_id, plaintext, Some(channel_id.as_bytes()),
+            AccessPolicy::Cached,
+        ).await
+    }
+
+    async fn deposit_sealed_to_all_devices_with_policy(
+        &self,
+        auth_client: &mut AuthClient,
+        message_client: &mut MessageClient,
+        recipient_id: &str,
+        plaintext: &[u8],
+        group_id: Option<&[u8]>,
+        policy: AccessPolicy,
+    ) -> DepositOutcome {
         let client_request_id = super::super::dm_outbox::request_id()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let mismatch = match self
@@ -44,6 +78,7 @@ impl MessageService {
                 plaintext,
                 group_id,
                 &client_request_id,
+                policy,
             )
             .await
         {
@@ -96,6 +131,7 @@ impl MessageService {
                 plaintext,
                 group_id,
                 &client_request_id,
+                policy,
             )
             .await
         {
@@ -124,6 +160,7 @@ impl MessageService {
         plaintext: &[u8],
         group_id: Option<&[u8]>,
         client_request_id: &str,
+        policy: AccessPolicy,
     ) -> Result<DepositOutcome, crate::error::NetworkError> {
         // To our own user (self-sync, SKDM, SenderKeyRequest) the deposit is
         // identified on the authenticated channel, never UAK on the anonymous
@@ -149,7 +186,7 @@ impl MessageService {
                 auth_client,
                 recipient_id,
                 plaintext,
-                !is_self && !has_profile_key,
+                policy == AccessPolicy::FetchIfNeeded && !is_self && !has_profile_key,
                 group_id,
             )
             .await
@@ -209,6 +246,12 @@ impl MessageService {
             .collect();
         messages.sort_by_key(|m| m.device_id);
 
+        // A private SKDM should not request prekeys just to read the access
+        // policy. With an unknown policy, try unrestricted sealed delivery
+        // and let the server reject it if the recipient requires their UAK.
+        let unrestricted = unrestricted
+            || (policy == AccessPolicy::Cached
+                && self.signal_service.unrestricted_access(recipient_id).is_none());
         let recipient_uak = if is_self {
             None
         } else {

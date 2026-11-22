@@ -217,10 +217,10 @@ impl AnonDmService {
                 .await
                 .map_err(|e| discard(e.into()))?;
         }
-        crate::services::gateway::submission::mark_submission_started()
-            .map_err(|e| discard(e.into()))?;
+        let permit = crate::services::gateway::submission::SubmissionPermit::capture();
         let ciphertext = match self.pairwise_service
-            .encrypt_existing_session(peer_id, device, &plaintext).await
+            .encrypt_existing_session_with_permit(peer_id, device, &plaintext, Some(permit))
+            .await
         {
             Ok(ciphertext) => ciphertext,
             Err(error @ crate::services::pairwise::PairwiseError::Identity(_)) => {

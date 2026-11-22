@@ -66,6 +66,7 @@ pub(crate) enum SignalCommand {
         plaintext: Vec<u8>,
         sender_cert: SenderCertificate,
         recipient_address: ProtocolAddress,
+        permit: Option<crate::services::gateway::submission::SubmissionPermit>,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
     EncryptSealedBoundedBatch {

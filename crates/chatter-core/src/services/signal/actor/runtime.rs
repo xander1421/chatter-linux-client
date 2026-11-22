@@ -157,11 +157,17 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::EncryptSealed { plaintext, sender_cert, recipient_address, response } => {
-                            let mut store2 = store.clone();
-                            let res = SealedSenderManager::encrypt(&plaintext, &sender_cert, &recipient_address, &mut store, &mut store2)
-                                .await
-                                .map_err(ServiceError::Crypto);
+                        SignalCommand::EncryptSealed { plaintext, sender_cert, recipient_address, permit, response } => {
+                            let res = if let Some(permit) = permit {
+                                SealedSenderManager::encrypt_for_submission(
+                                    &plaintext, &sender_cert, &recipient_address, &store, &permit,
+                                ).await
+                            } else {
+                                let mut identities = store.clone();
+                                SealedSenderManager::encrypt(
+                                    &plaintext, &sender_cert, &recipient_address, &mut store, &mut identities,
+                                ).await.map_err(ServiceError::Crypto)
+                            };
                             let _ = response.send(res);
                         }
 

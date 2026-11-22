@@ -86,7 +86,7 @@ impl PairwiseService {
         let signal = self.signal_service.for_anonymous_route();
         if let Some(key) = signal.get_peer_identity(&peer)? {
             signal.require_sendable_key(&peer, &key).map_err(PairwiseError::Identity)?;
-        } else if signal.key_store.has_kt_job(&peer, signal.actor.kt_route())? {
+        } else if signal.key_store.has_blocking_kt_job(&peer, signal.actor.kt_route())? {
             return Err(PairwiseError::Identity(CryptoError::KeyVerificationPending { peer_id: peer }));
         }
         Ok(())
@@ -172,10 +172,21 @@ impl PairwiseService {
         device_id: u32,
         plaintext: &[u8],
     ) -> Result<Vec<u8>, PairwiseError> {
+        self.encrypt_existing_session_with_permit(peer_id, device_id, plaintext, None)
+            .await
+    }
+
+    pub(crate) async fn encrypt_existing_session_with_permit(
+        &self,
+        peer_id: &UserId,
+        device_id: u32,
+        plaintext: &[u8],
+        permit: Option<crate::services::gateway::submission::SubmissionPermit>,
+    ) -> Result<Vec<u8>, PairwiseError> {
         self.require_sendable_existing(peer_id)?;
         self.ensure_sender_certificate().await?;
         self.signal_service
-            .encrypt_message_anonymous(&peer_id.to_string(), device_id, plaintext)
+            .encrypt_message_anonymous_with_permit(&peer_id.to_string(), device_id, plaintext, permit)
             .await
             .map_err(|error| match session_error(error) {
                 PairwiseError::SessionError(error) => PairwiseError::EncryptionFailed(error),
