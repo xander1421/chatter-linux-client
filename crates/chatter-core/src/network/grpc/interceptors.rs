@@ -76,6 +76,7 @@ type GenerationCallback = Arc<RwLock<Option<Arc<dyn Fn(u64) + Send + Sync>>>>;
 pub struct AuthInterceptor {
     auth: Arc<RwLock<AuthMode>>,
     generation: Arc<AtomicU64>,
+    expected_generation: Option<u64>,
     session_ended: GenerationCallback,
     device_unlinked: GenerationCallback,
 }
@@ -86,6 +87,7 @@ impl AuthInterceptor {
         Self {
             auth: Arc::new(RwLock::new(AuthMode::None)),
             generation: Arc::new(AtomicU64::new(0)),
+            expected_generation: None,
             session_ended: Arc::new(RwLock::new(None)),
             device_unlinked: Arc::new(RwLock::new(None)),
         }
@@ -135,6 +137,19 @@ impl AuthInterceptor {
 
     pub(crate) fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Capture the UUID and bind requests to the credentials it came from.
+    pub(crate) fn bind_basic_account(&self) -> Option<(uuid::Uuid, Self)> {
+        let auth = self.auth.read();
+        let AuthMode::Basic { username, .. } = &*auth else {
+            return None;
+        };
+        let (user_id, _) = username.split_once('.')?;
+        let user_id = user_id.parse().ok()?;
+        let mut bound = self.clone();
+        bound.expected_generation = Some(self.generation());
+        Some((user_id, bound))
     }
 
     pub(crate) fn on_session_ended(&self, callback: Arc<dyn Fn(u64) + Send + Sync>) {
@@ -259,12 +274,19 @@ impl Default for AuthInterceptor {
 impl Interceptor for AuthInterceptor {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
         let auth = self.auth.read();
+        let generation = self.generation();
+        if self
+            .expected_generation
+            .is_some_and(|expected| expected != generation)
+        {
+            return Err(Status::unauthenticated("device credentials changed"));
+        }
 
         // This extension is local only; it never becomes wire metadata.
         if matches!(&*auth, AuthMode::Basic { .. } | AuthMode::Bearer(_)) {
             request.extensions_mut().insert(DeviceAuthRequest {
                 interceptor: self.clone(),
-                generation: self.generation(),
+                generation,
             });
         }
 
@@ -325,6 +347,25 @@ impl Interceptor for AuthInterceptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_bound_auth_refuses_replaced_credentials() {
+        let interceptor = AuthInterceptor::new();
+        assert!(interceptor.bind_basic_account().is_none());
+        let first = "11111111-1111-1111-1111-111111111111";
+        let second = "22222222-2222-2222-2222-222222222222";
+        interceptor.set_basic(format!("{first}.1"), "synthetic-token-1".into());
+        let (owner, mut bound) = interceptor.bind_basic_account().unwrap();
+        assert_eq!(owner.to_string(), first);
+        assert!(bound.call(Request::new(())).is_ok());
+
+        interceptor.set_basic(format!("{second}.1"), "synthetic-token-2".into());
+        let error = bound.call(Request::new(())).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+        let (owner, mut bound) = interceptor.bind_basic_account().unwrap();
+        assert_eq!(owner.to_string(), second);
+        assert!(bound.call(Request::new(())).is_ok());
+    }
 
     #[test]
     fn auth_info_debug_redacts_token() {

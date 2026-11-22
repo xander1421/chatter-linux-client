@@ -34,6 +34,7 @@ rust-version = "1.99"
 [workspace.dependencies]
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
 libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+libsignal-account-keys = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
 zkgroup = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
 libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
 signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }

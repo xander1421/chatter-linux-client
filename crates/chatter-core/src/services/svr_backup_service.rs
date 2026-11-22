@@ -8,8 +8,8 @@
 //!
 //! - The `svr_secret` (32 bytes, derived from PIN) is NEVER stored — only
 //!   passed transiently into each method call.
-//! - Backups are encrypted with AES-256-GCM keyed by `svr_secret`.
-//! - The server indexes backups by HMAC-SHA256(svr_secret, "BackupId") and
+//! - Backups are encrypted with AES-256-GCM under a dedicated subkey.
+//! - The server indexes backups by an account-bound BackupId digest and
 //!   never sees the plaintext secret or PIN.
 //! - Fetch is rate-limited server-side to prevent PIN brute-force attacks.
 
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use zeroize::Zeroize;
 
 use crate::crypto::svr_backup::{
-    KeyBackupPayload, decrypt_backup, derive_backup_id, encrypt_backup,
+    KeyBackupPayload, decrypt_backup, derive_backup_id_hash, encrypt_backup,
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -400,6 +400,7 @@ impl SvrBackupService {
         profile_key: &[u8; 32],
         full_username: &str,
     ) -> Result<u32, SvrBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         // 1. Build and encrypt the payload
         let payload = KeyBackupPayload {
             identity_keypair: *identity_keypair,
@@ -409,7 +410,7 @@ impl SvrBackupService {
         let encrypted = encrypt_backup(&payload, svr_secret)?;
 
         // 2. Derive deterministic backup ID
-        let backup_id_hash = derive_backup_id(svr_secret);
+        let backup_id_hash = derive_backup_id_hash(svr_secret, &aci);
 
         // 3. Read current version and increment
         let current_version: u32 = self
@@ -419,7 +420,6 @@ impl SvrBackupService {
         let next_version = current_version + 1;
 
         // 4. Upload
-        let mut client = self.grpc_pool.svr_client();
         let confirmed_version = client
             .store_backup(encrypted, backup_id_hash.to_vec(), next_version)
             .await?;
@@ -473,11 +473,11 @@ impl SvrBackupService {
         &self,
         svr_secret: &[u8; 32],
     ) -> Result<RestoreResult, SvrBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         // 1. Derive backup ID
-        let backup_id_hash = derive_backup_id(svr_secret);
+        let backup_id_hash = derive_backup_id_hash(svr_secret, &aci);
 
         // 2. Fetch from server
-        let mut client = self.grpc_pool.svr_client();
         let result = client
             .fetch_backup(backup_id_hash.to_vec())
             .await
@@ -537,8 +537,9 @@ impl SvrBackupService {
         new_registration_lock: &[u8; 32],
         new_svr_public_key: &[u8; 32],
     ) -> Result<(), SvrBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         // 1. Derive old backup ID (proves ownership of current backup)
-        let old_backup_id_hash = derive_backup_id(old_svr_secret);
+        let old_backup_id_hash = derive_backup_id_hash(old_svr_secret, &aci);
 
         // 2. Build and encrypt the payload with the NEW secret
         let mut payload = KeyBackupPayload {
@@ -552,7 +553,7 @@ impl SvrBackupService {
         payload.zeroize();
 
         // 3. Derive new backup ID
-        let new_backup_id_hash = derive_backup_id(new_svr_secret);
+        let new_backup_id_hash = derive_backup_id_hash(new_svr_secret, &aci);
 
         // 4. Read current version and increment
         let current_version: u32 = self
@@ -562,7 +563,6 @@ impl SvrBackupService {
         let next_version = current_version + 1;
 
         // 5. Call server's atomic change-pin RPC
-        let mut client = self.grpc_pool.svr_client();
         let confirmed_version = client
             .change_pin_backup(
                 encrypted,
@@ -619,11 +619,11 @@ impl SvrBackupService {
     ///
     /// * `svr_secret` - 32-byte secret derived from user's PIN (never stored)
     pub async fn delete_backup(&self, svr_secret: &[u8; 32]) -> Result<(), SvrBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         // 1. Derive backup ID
-        let backup_id_hash = derive_backup_id(svr_secret);
+        let backup_id_hash = derive_backup_id_hash(svr_secret, &aci);
 
         // 2. Delete from server
-        let mut client = self.grpc_pool.svr_client();
         client.delete_backup(backup_id_hash.to_vec()).await?;
 
         // 3. Clear local version counter

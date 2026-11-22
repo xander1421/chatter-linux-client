@@ -8,8 +8,8 @@
 //! - **Server**: upload the same container to RustFS via a presigned URL
 //!   (`SvrService.SetMessageBackup`) / fetch + restore on a fresh install
 //!   after login + PIN. KEK = HKDF(svr_secret, "Chatter Message Backup KEK
-//!   v1"); index = HMAC(svr_secret, "MessageBackupId"). The server stores an
-//!   opaque blob and never holds key material.
+//!   v1"); the lookup digest comes from the account-bound BackupId. The
+//!   server stores an opaque blob and never holds key material.
 //!
 //! What's inside the container and the idempotent import rules live in
 //! `storage::backup_data`; the container crypto lives in
@@ -22,7 +22,7 @@ use zeroize::Zeroize;
 
 use crate::crypto::message_backup::{
     ARGON2_SALT_LEN, KEY_MODE_LINK, KEY_MODE_PASSPHRASE, KEY_MODE_SVR, decrypt_backup_file,
-    derive_message_backup_id, derive_passphrase_kek, derive_server_kek, encrypt_backup_file,
+    derive_message_backup_id_hash, derive_passphrase_kek, derive_server_kek, encrypt_backup_file,
     parse_backup_file,
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
@@ -251,10 +251,11 @@ impl MessageBackupService {
         &self,
         pin: &str,
         username: &str,
+        aci: &libsignal_core::Aci,
     ) -> Result<([u8; 32], [u8; 32]), MessageBackupError> {
         let mut svr_secret = crate::crypto::svr::derive_svr_secret_async(pin, username).await?;
         let kek = derive_server_kek(&svr_secret);
-        let backup_id = derive_message_backup_id(&svr_secret);
+        let backup_id = derive_message_backup_id_hash(&svr_secret, aci);
         svr_secret.zeroize();
         Ok((kek, backup_id))
     }
@@ -281,14 +282,14 @@ impl MessageBackupService {
         // was set must not block the user's own backup (see validate_pin_shape).
         crate::crypto::svr::validate_pin_shape(pin)
             .map_err(|e| MessageBackupError::Generic(format!("invalid PIN: {e}")))?;
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         let username = self.salt_username()?;
-        let (mut kek, backup_id) = self.derive_server_keys(pin, &username).await?;
+        let (mut kek, backup_id) = self.derive_server_keys(pin, &username, &aci).await?;
 
         let result = self.build_container(&kek, KEY_MODE_SVR, &[]);
         kek.zeroize();
         let (container, rows) = result?;
 
-        let mut client = self.grpc_pool.svr_client();
         let upload = client
             .set_message_backup(backup_id.to_vec(), container.len() as u64)
             .await?;
@@ -316,10 +317,10 @@ impl MessageBackupService {
         &self,
         pin: &str,
     ) -> Result<ImportSummary, MessageBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         let username = self.salt_username()?;
-        let (mut kek, backup_id) = self.derive_server_keys(pin, &username).await?;
+        let (mut kek, backup_id) = self.derive_server_keys(pin, &username, &aci).await?;
 
-        let mut client = self.grpc_pool.svr_client();
         let download = match client.get_message_backup(backup_id.to_vec()).await {
             Ok(d) => d,
             Err(NetworkError::NotFound(_)) => {
@@ -356,12 +357,12 @@ impl MessageBackupService {
 
     /// Delete the server-side backup (metadata row + blob).
     pub async fn delete_server_backup(&self, pin: &str) -> Result<(), MessageBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         let username = self.salt_username()?;
         let mut svr_secret = crate::crypto::svr::derive_svr_secret_async(pin, &username).await?;
-        let backup_id = derive_message_backup_id(&svr_secret);
+        let backup_id = derive_message_backup_id_hash(&svr_secret, &aci);
         svr_secret.zeroize();
 
-        let mut client = self.grpc_pool.svr_client();
         client.delete_message_backup(backup_id.to_vec()).await?;
         tracing::info!("server message backup deleted");
         Ok(())
