@@ -764,9 +764,8 @@ pub(crate) fn spawn_notification_listener(
                 // ================================================================
                 DomainEvent::DeviceLinked {
                     device_id,
-                    device_name,
-                    device_info,
                     approved_by_self,
+                    ..
                 } => {
                     // Skip the toast on the device that just approved the
                     // pairing — the UI there already showed a confirm
@@ -774,20 +773,8 @@ pub(crate) fn spawn_notification_listener(
                     if *approved_by_self {
                         continue;
                     }
-                    // Locked: no device name or model on the lock screen.
-                    let locked = notification_service.app_locked();
-                    let body = match (device_name.as_deref(), device_info.as_deref()) {
-                        _ if locked => {
-                            chatter_i18n::tr("A new device was just linked to your account.")
-                        }
-                        (Some(name), _) if !name.is_empty() => {
-                            chatter_i18n::trf("\"{}\" is now linked to your account.", &[&name])
-                        }
-                        (_, Some(info)) if !info.is_empty() => {
-                            chatter_i18n::trf("{} was just linked to your account.", &[&info])
-                        }
-                        _ => chatter_i18n::tr("A new device was just linked to your account."),
-                    };
+                    // This toast can remain visible after the app locks.
+                    let body = chatter_i18n::tr("A new device was just linked to your account.");
                     tracing::info!(device_id, "DeviceLinked notification → surfacing toast");
                     let title = chatter_i18n::tr("New device linked");
                     let _ = notification_service.show_message(

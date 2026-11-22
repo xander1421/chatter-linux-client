@@ -423,13 +423,13 @@ impl From<ClientError> for StartupError {
 }
 
 impl ClientError {
-    /// Whether a message-history backup requires a newer app to restore.
-    pub fn is_unsupported_backup(&self) -> bool {
+    /// Whether restore refused the history backup's payload version.
+    pub fn is_unsupported_backup_version(&self) -> bool {
         matches!(
             self,
             Self::BackupRestore(
                 crate::services::message_backup_service::MessageBackupError::Storage(
-                    crate::error::StorageError::UnsupportedBackup(_)
+                    crate::error::StorageError::UnsupportedBackupVersion { .. }
                 )
             )
         )

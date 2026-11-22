@@ -285,15 +285,19 @@ async fn secret_request_and_message_events_reach_generic_notification_sink() {
         // reach the sink before this device notification.
         bus.emit_domain(DomainEvent::DeviceLinked {
             device_id: 2,
-            device_name: None,
-            device_info: None,
+            device_name: Some("Private device name".into()),
+            device_info: Some("Private device model".into()),
             approved_by_self: false,
         });
         let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(shown.0, "New device linked", "{suppression}");
+        assert_eq!(
+            shown,
+            ("New device linked".into(), "A new device was just linked to your account.".into()),
+            "{suppression}"
+        );
         assert!(rx.try_recv().is_err());
     }
     task.abort();

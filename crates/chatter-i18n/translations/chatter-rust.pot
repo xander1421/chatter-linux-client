@@ -214,14 +214,6 @@ msgstr ""
 msgid "A new device was just linked to your account."
 msgstr ""
 
-#: crates/chatter-core/src/client/notification.rs:784
-msgid "\"{}\" is now linked to your account."
-msgstr ""
-
-#: crates/chatter-core/src/client/notification.rs:787
-msgid "{} was just linked to your account."
-msgstr ""
-
 #: crates/chatter-core/src/client/notification.rs:792 crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
 msgstr ""
@@ -2975,7 +2967,7 @@ msgid "Restored {} rows ({} already present or kept locally)"
 msgstr ""
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
-msgid "This backup was made by a newer version of Chatter. Update the app to restore it."
+msgid "This backup was made by an older version and can't be restored"
 msgstr ""
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260

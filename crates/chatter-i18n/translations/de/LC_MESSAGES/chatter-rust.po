@@ -300,14 +300,6 @@ msgstr "Hat mit {} reagiert"
 msgid "A new device was just linked to your account."
 msgstr "Ein neues Gerät wurde gerade mit deinem Konto verknüpft."
 
-#: crates/chatter-core/src/client/notification.rs:784
-msgid "\"{}\" is now linked to your account."
-msgstr "\"{}\" ist jetzt mit deinem Konto verknüpft."
-
-#: crates/chatter-core/src/client/notification.rs:787
-msgid "{} was just linked to your account."
-msgstr "{} wurde gerade mit deinem Konto verknüpft."
-
 #: crates/chatter-core/src/client/notification.rs:792
 #: crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
@@ -3511,12 +3503,8 @@ msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "{} Einträge wiederhergestellt ({} schon vorhanden oder lokal behalten)"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
-msgid ""
-"This backup was made by a newer version of Chatter. Update the app to "
-"restore it."
-msgstr ""
-"Diese Sicherung stammt von einer neueren Version von Chatter. Aktualisiere "
-"die App, um sie wiederherzustellen."
+msgid "This backup was made by an older version and can't be restored"
+msgstr "Diese Sicherung wurde mit einer älteren Version erstellt und kann nicht wiederhergestellt werden."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."

@@ -254,8 +254,8 @@ fn message_restore_status(result: Result<ImportSummary, ClientError>) -> String 
             "Restored {} rows ({} already present or kept locally)",
             &[&summary.rows_inserted, &summary.rows_skipped],
         ),
-        Err(error) if error.is_unsupported_backup() => chatter_i18n::tr(
-            "This backup was made by a newer version of Chatter. Update the app to restore it.",
+        Err(error) if error.is_unsupported_backup_version() => chatter_i18n::tr(
+            "This backup was made by an older version and can't be restored",
         ),
         Err(_) => chatter_i18n::tr(
             "Could not restore backup. Check your passphrase or PIN, then retry.",

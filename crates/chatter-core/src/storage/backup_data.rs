@@ -266,25 +266,6 @@ impl MessageExpiry {
     }
 }
 
-fn legacy_timer_unknown(
-    conn: &Connection,
-    kind: &str,
-    conversation: &SqlValue,
-) -> Result<bool, StorageError> {
-    match kind {
-        // A friend DM's timer can change or lapse. No v1 field proves that a
-        // particular message was untimed, even when no timer notice remains.
-        "server_dm" => Ok(true),
-        // A channel's TTL is fixed at creation. Missing metadata is ambiguous.
-        "channel" => Ok(!conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM channels WHERE id=?1 AND COALESCE(default_ttl_seconds,0)=0)",
-            [conversation],
-            |row| row.get::<_, bool>(0),
-        )?),
-        _ => Ok(false),
-    }
-}
-
 const NO_MESSAGE_TOMBSTONE: &str =
     "NOT EXISTS(SELECT 1 FROM deleted_messages WHERE id=m.id)
      AND NOT (m.conversation_type='server_dm' AND EXISTS(SELECT 1 FROM dm_receive_tombstones
@@ -303,6 +284,42 @@ fn live_message_predicate() -> String {
             AND COALESCE(julianday(e.expires_at) > julianday(:now),0)=0)
         AND {NO_MESSAGE_TOMBSTONE}"
     )
+}
+
+fn retained_messages_cte() -> String {
+    format!(
+        "WITH retained_messages AS NOT MATERIALIZED (SELECT m.* FROM messages m WHERE {})",
+        live_message_predicate()
+    )
+}
+
+const EXCLUDED_REPLY_PARENT: &str = "m.reply_to IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM retained_messages parent WHERE parent.id=m.reply_to)
+    AND NOT EXISTS (
+        SELECT 1 FROM retained_messages parent
+        WHERE parent.conversation_type=m.conversation_type
+          AND parent.conversation_id=m.conversation_id
+          AND parent.sender_id=m.reply_to_author_id
+          AND parent.sent_at>0 AND backup_reply_id(parent.sent_at)=m.reply_to
+    )";
+
+const REDACTED_REPLY_CONTENT: &str = "CASE WHEN json_valid(m.content_json)
+    AND json_type(m.content_json,'$.quote')='object'
+    THEN json_set(m.content_json,'$.quote.preview','') ELSE m.content_json END";
+
+fn register_backup_reply_id(conn: &Connection) -> Result<(), StorageError> {
+    use rusqlite::functions::FunctionFlags;
+
+    conn.create_scalar_function(
+        "backup_reply_id",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let sent_at = ctx.get::<i64>(0)?;
+            Ok(crate::domain::ids::MessageId::from_timestamp(sent_at as u64).to_string())
+        },
+    )?;
+    Ok(())
 }
 
 fn message_tombstoned(
@@ -405,10 +422,8 @@ fn dump_snapshot(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize), S
     let mut rows = 0usize;
     let now = chrono::Utc::now();
     let cutoff = now.to_rfc3339();
-    let predicate = live_message_predicate();
-    let retained = format!(
-        "WITH retained_messages AS NOT MATERIALIZED (SELECT m.* FROM messages m WHERE {predicate})"
-    );
+    register_backup_reply_id(conn)?;
+    let retained = retained_messages_cte();
     let history_params: &[(&str, &dyn rusqlite::ToSql)] = &[
         (":now", &cutoff),
         (":owner", &user_id),
@@ -442,16 +457,13 @@ fn dump_snapshot(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize), S
             "ephemeral_messages" => "message_id IN (SELECT id FROM retained_messages)".to_owned(),
             "threads" => "root_message_id IN (SELECT id FROM retained_messages)".to_owned(),
             "messages" => {
-                const EXCLUDED_PARENT: &str = "m.reply_to IS NOT NULL AND
-                    NOT EXISTS (SELECT 1 FROM retained_messages parent WHERE parent.id=m.reply_to)";
                 cols = table_columns(conn, table)?
                     .iter()
                     .map(|col| match col.as_str() {
                         "reply_to_text" | "reply_to_thumbnail" | "reply_to_thumbnail_mime" =>
-                            format!("CASE WHEN {EXCLUDED_PARENT} THEN NULL ELSE m.{col} END"),
-                        "content_json" => format!("CASE WHEN {EXCLUDED_PARENT}
-                            AND json_valid(m.content_json) AND json_type(m.content_json,'$.quote')='object'
-                            THEN json_set(m.content_json,'$.quote.preview','') ELSE m.content_json END"),
+                            format!("CASE WHEN {EXCLUDED_REPLY_PARENT} THEN NULL ELSE m.{col} END"),
+                        "content_json" => format!("CASE WHEN {EXCLUDED_REPLY_PARENT}
+                            THEN {REDACTED_REPLY_CONTENT} ELSE m.content_json END"),
                         _ => format!("m.{col}"),
                     })
                     .collect::<Vec<_>>()
@@ -568,12 +580,30 @@ fn dump_attachments(
     )
 }
 
+fn read_frame(buf: &mut &[u8]) -> Result<Frame, StorageError> {
+    Frame::decode_length_delimited(buf)
+        .map_err(|error| StorageError::InvalidData(format!("backup frame undecodable: {error}")))
+}
+
 /// Import a decrypted payload. Existing PK/dedup conflicts are skipped, so
 /// rows that already exist locally (same PK / dedup key) are skipped — a
 /// restore can never overwrite newer local data. Unknown tables and columns
 /// reject the payload; the transaction then rolls back without partial import.
 pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSummary, StorageError> {
     let mut buf = payload;
+    let Some(frame::Payload::Info(info)) = read_frame(&mut buf)?.payload else {
+        return Err(StorageError::InvalidData(
+            "backup payload must start with an info frame".into(),
+        ));
+    };
+    if info.payload_version != PAYLOAD_VERSION {
+        return Err(StorageError::UnsupportedBackupVersion {
+            found: info.payload_version,
+            expected: PAYLOAD_VERSION,
+        });
+    }
+    let archive_owner = info.user_id;
+
     let mut summary = ImportSummary::default();
 
     // Per-table insert state, rebuilt at each TableHeader frame.
@@ -613,47 +643,19 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     let now = chrono::Utc::now().to_rfc3339();
     let mut current: Option<TableState> = None;
     let mut expiry_by_id = HashMap::new();
-    let mut legacy_timed_channels = HashSet::new();
-    let mut omitted_messages = HashSet::new();
-    let mut restored_replies = Vec::new();
+    let mut inserted_replies = Vec::new();
     let mut saw_messages = false;
-    let mut archive_owner = String::new();
-
-    let mut version = None;
     while buf.has_remaining() {
-        let f = Frame::decode_length_delimited(&mut buf)
-            .map_err(|e| StorageError::InvalidData(format!("backup frame undecodable: {e}")))?;
-        match f.payload {
-            Some(frame::Payload::Info(info)) => {
-                if version.is_some() {
-                    return Err(StorageError::InvalidData(
-                        "backup payload has duplicate info frames".into(),
-                    ));
-                }
-                if info.payload_version > PAYLOAD_VERSION {
-                    return Err(StorageError::UnsupportedBackup(format!(
-                        "payload version {} is newer than supported version {}",
-                        info.payload_version, PAYLOAD_VERSION
-                    )));
-                }
-                if info.payload_version == 0 {
-                    return Err(StorageError::InvalidData(format!(
-                        "unsupported backup payload version {} (this build supports version {})",
-                        info.payload_version, PAYLOAD_VERSION
-                    )));
-                }
-                version = Some(info.payload_version);
-                archive_owner = info.user_id;
+        match read_frame(&mut buf)?.payload {
+            Some(frame::Payload::Info(_)) => {
+                return Err(StorageError::InvalidData(
+                    "backup payload has duplicate info frames".into(),
+                ));
             }
             Some(frame::Payload::Table(th)) => {
-                if version.is_none() {
-                    return Err(StorageError::InvalidData(
-                        "backup table appears before info frame".into(),
-                    ));
-                }
                 let allowed = BACKUP_TABLES.contains(&th.table.as_str()) || th.table == "settings";
                 if !allowed {
-                    return Err(StorageError::UnsupportedBackup(format!(
+                    return Err(StorageError::InvalidData(format!(
                         "backup contains unknown table '{}'",
                         th.table
                     )));
@@ -669,7 +671,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 let mut seen_columns = HashSet::new();
                 for col in &th.columns {
                     if !live_cols.contains(col) {
-                        return Err(StorageError::UnsupportedBackup(format!(
+                        return Err(StorageError::InvalidData(format!(
                             "backup table '{table}' contains unknown column '{col}'"
                         )));
                     }
@@ -843,14 +845,6 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     {
                         continue;
                     }
-                    "channels" if version == Some(1) => {
-                        if let (Some(id), SqlValue::Integer(ttl)) =
-                            (text_value(get("id")), get("default_ttl_seconds"))
-                            && *ttl > 0
-                        {
-                            legacy_timed_channels.insert(id.to_owned());
-                        }
-                    }
                     "attachments" | "threads" => {
                         let parent = if state.table == "attachments" {
                             "id"
@@ -881,13 +875,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             || matches!(get("is_deleted"), SqlValue::Integer(value) if *value != 0)
                             || message_tombstoned(&tx, &state.columns, &params, &archive_owner)?
                             || expiry.is_some_and(MessageExpiry::expired)
-                            || (version == Some(1)
-                                && expiry.is_none()
-                                && (text_value(get("conversation_id")).is_some_and(|id| {
-                                    kind == "channel" && legacy_timed_channels.contains(id)
-                                }) || legacy_timer_unknown(&tx, kind, get("conversation_id"))?))
                         {
-                            omitted_messages.insert(id.to_owned());
                             continue;
                         }
                         let inserted = tx
@@ -899,8 +887,8 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                                 expiry.insert(&tx, id)?;
                                 summary.rows_inserted += 1;
                             }
-                            if let Some(parent) = text_value(get("reply_to")) {
-                                restored_replies.push((id.to_owned(), parent.to_owned()));
+                            if text_value(get("reply_to")).is_some() {
+                                inserted_replies.push(id.to_owned());
                             }
                         }
                         let retained = if inserted != 0 {
@@ -996,18 +984,21 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
             None => {}
         }
     }
-    if version.is_none() {
-        return Err(StorageError::InvalidData(
-            "backup payload missing info frame".into(),
-        ));
-    }
-    for (id, parent) in restored_replies {
-        tx.prepare_cached(
-            "UPDATE messages SET reply_to_text=NULL,reply_to_thumbnail=NULL,reply_to_thumbnail_mime=NULL,
-             content_json=CASE WHEN json_valid(content_json) AND json_type(content_json,'$.quote')='object'
-                 THEN json_set(content_json,'$.quote.preview','') ELSE content_json END
-             WHERE id=?1 AND (?3 OR EXISTS(SELECT 1 FROM deleted_messages WHERE id=?2))",
-        )?.execute(rusqlite::params![id, parent, omitted_messages.contains(&parent)])?;
+    if !inserted_replies.is_empty() {
+        // A parent retained by the exporter can expire or be deleted locally
+        // before the archive is restored.
+        register_backup_reply_id(&tx)?;
+        let retained = retained_messages_cte();
+        let mut redact = tx.prepare(&format!(
+            "{retained} UPDATE messages AS m SET reply_to_text=NULL,
+             reply_to_thumbnail=NULL,reply_to_thumbnail_mime=NULL,
+             content_json={REDACTED_REPLY_CONTENT} WHERE m.id=:id AND {EXCLUDED_REPLY_PARENT}"
+        ))?;
+        for id in inserted_replies {
+            redact.execute(rusqlite::named_params! {
+                ":id": &id, ":now": &now, ":owner": &archive_owner, ":user_key": keys::CURRENT_USER_ID,
+            })?;
+        }
     }
     for (attachment, id, sql, values) in attachments_and_threads {
         let retained = if attachment {
@@ -1080,12 +1071,34 @@ mod tests {
         let conn = db.connection().unwrap();
         insert_message(&conn, "deleted-parent", "original message", 1);
         insert_message(&conn, "live-parent", "retained message", 2);
+        let synthetic = crate::domain::ids::MessageId::from_timestamp(2).to_string();
         let replies = [
-            ("deleted", "deleted-parent", false),
-            ("missing", "missing-parent", false),
-            ("live", "live-parent", true),
+            ("deleted", "deleted-parent", "live-parent", "user-a", false),
+            ("missing", "missing-parent", "live-parent", "user-a", false),
+            ("live", "live-parent", "live-parent", "user-a", true),
+            (
+                "synthetic",
+                synthetic.as_str(),
+                "live-parent",
+                "user-a",
+                true,
+            ),
+            (
+                "wrong-chat",
+                synthetic.as_str(),
+                "other-chat",
+                "user-a",
+                false,
+            ),
+            (
+                "wrong-author",
+                synthetic.as_str(),
+                "live-parent",
+                "user-b",
+                false,
+            ),
         ];
-        for (index, (id, parent, _)) in replies.into_iter().enumerate() {
+        for (index, (id, parent, chat, author, _)) in replies.into_iter().enumerate() {
             insert_message(&conn, id, "reply", index as i64 + 3);
             let content = serde_json::json!({
                 "text": format!("reply body {id}"),
@@ -1093,7 +1106,8 @@ mod tests {
             });
             conn.execute(
                 "UPDATE messages SET reply_to=?2, reply_to_text=?3, reply_to_thumbnail=?4,
-                    reply_to_thumbnail_mime=?5, content_json=?6 WHERE id=?1",
+                    reply_to_thumbnail_mime=?5, content_json=?6, conversation_id=?7,
+                    reply_to_author_id=?8 WHERE id=?1",
                 rusqlite::params![
                     id,
                     parent,
@@ -1101,6 +1115,8 @@ mod tests {
                     format!("{id} thumbnail").into_bytes(),
                     format!("image/x-{id}"),
                     content.to_string(),
+                    chat,
+                    author,
                 ],
             )
             .unwrap();
@@ -1118,7 +1134,7 @@ mod tests {
                 .windows(marker.len())
                 .any(|bytes| bytes == marker.as_bytes())
         };
-        for (id, _, retained) in replies {
+        for (id, _, _, _, retained) in replies {
             assert!(contains(&format!("reply body {id}")));
             for marker in [
                 format!("{id} cached text"),
@@ -1128,6 +1144,24 @@ mod tests {
             ] {
                 assert_eq!(contains(&marker), retained, "{marker}");
             }
+        }
+
+        let dst_dir = tempfile::tempdir().unwrap();
+        let dst = test_db(dst_dir.path());
+        let mut dst_conn = dst.connection().unwrap();
+        dst_conn
+            .execute("INSERT INTO deleted_messages VALUES ('live-parent')", [])
+            .unwrap();
+        import_frames(&mut dst_conn, &payload).unwrap();
+        for id in ["live", "synthetic"] {
+            let redacted: bool = dst_conn.query_row(
+                "SELECT reply_to_text IS NULL AND reply_to_thumbnail IS NULL
+                    AND reply_to_thumbnail_mime IS NULL AND json_extract(content_json,'$.quote.preview')=''
+                 FROM messages WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            ).unwrap();
+            assert!(redacted, "{id}");
         }
     }
 
@@ -1288,47 +1322,51 @@ mod tests {
     }
 
     #[test]
-    fn history_restore_legacy_omits_potentially_timed_history() {
+    fn history_restore_refuses_every_noncurrent_version_without_inserting_rows() {
         let src_dir = tempfile::tempdir().unwrap();
-        let dst_dir = tempfile::tempdir().unwrap();
         let src = test_db(src_dir.path());
-        let dst = test_db(dst_dir.path());
-        let payload = {
-            let conn = src.connection().unwrap();
-            insert_message(&conn, "unknown-dm", "old DM", 1);
-            insert_message(&conn, "saved", "old saved note", 2);
-            conn.execute_batch(
-                "UPDATE messages SET conversation_type='server_dm' WHERE id='unknown-dm';
-                UPDATE messages SET conversation_type='saved_messages' WHERE id='saved';",
-            )
-            .unwrap();
-            dump_frames(&conn, "owner").unwrap().0
-        };
-        let mut input = payload.as_slice();
-        let Some(frame::Payload::Info(mut info)) =
-            Frame::decode_length_delimited(&mut input).unwrap().payload
-        else {
+        let src_conn = src.connection().unwrap();
+        insert_message(&src_conn, "from-archive", "backup message", 1);
+        let (payload, _) = dump_frames(&src_conn, "owner").unwrap();
+        let mut frames = payload.as_slice();
+        let Some(frame::Payload::Info(info)) = read_frame(&mut frames).unwrap().payload else {
             panic!("missing backup header");
         };
-        info.payload_version = 1;
-        let mut legacy = Vec::new();
-        push_frame(&mut legacy, frame::Payload::Info(info));
-        let mut lifecycle = false;
-        while input.has_remaining() {
-            let frame = Frame::decode_length_delimited(&mut input).unwrap();
-            if let Some(frame::Payload::Table(header)) = &frame.payload {
-                lifecycle = LIFECYCLE_TABLES.contains(&header.table.as_str());
-            }
-            if !lifecycle {
-                frame.encode_length_delimited(&mut legacy).unwrap();
-            }
+
+        let dst_dir = tempfile::tempdir().unwrap();
+        let dst = test_db(dst_dir.path());
+        let mut dst_conn = dst.connection().unwrap();
+        insert_message(&dst_conn, "local", "local message", 2);
+        for version in [0, 1, 2, 3, PAYLOAD_VERSION + 1, u32::MAX] {
+            let mut unsupported = Vec::new();
+            push_frame(
+                &mut unsupported,
+                frame::Payload::Info(BackupInfo {
+                    payload_version: version,
+                    ..info.clone()
+                }),
+            );
+            unsupported.extend_from_slice(frames);
+            assert!(matches!(
+                import_frames(&mut dst_conn, &unsupported),
+                Err(StorageError::UnsupportedBackupVersion { found, expected: PAYLOAD_VERSION }) if found == version
+            ));
+            let ids = dst_conn
+                .prepare("SELECT id FROM messages")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(ids, ["local"]);
         }
-        let mut conn = dst.connection().unwrap();
-        import_frames(&mut conn, &legacy).unwrap();
-        let restored: String = conn
-            .query_row("SELECT id FROM messages", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(restored, "saved");
+
+        assert_eq!(
+            import_frames(&mut dst_conn, &payload)
+                .unwrap()
+                .rows_inserted,
+            1
+        );
     }
 
     /// Inspect actual frame bytes and decoded row counts, not just SQL filters.
@@ -1490,12 +1528,12 @@ mod tests {
         }
         assert!(!counts.contains_key("ephemeral_messages"));
 
-        // Older archives can still contain related rows for discarded history.
-        let mut old = Vec::new();
+        // Exercise current-version input with rows for targets discarded at import.
+        let mut unfiltered = Vec::new();
         push_frame(
-            &mut old,
+            &mut unfiltered,
             frame::Payload::Info(BackupInfo {
-                payload_version: 2,
+                payload_version: PAYLOAD_VERSION,
                 user_id: "owner".into(),
                 created_at_ms: 0,
             }),
@@ -1507,7 +1545,7 @@ mod tests {
             let cols = table_columns(&conn, table).unwrap().join(", ");
             dump_table(
                 &conn,
-                &mut old,
+                &mut unfiltered,
                 table,
                 &format!("SELECT {cols} FROM {table}"),
                 [],
@@ -1525,7 +1563,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        import_frames(&mut dst_conn, &old).unwrap();
+        import_frames(&mut dst_conn, &unfiltered).unwrap();
         for (table, column) in related_tables {
             let ids = dst_conn
                 .prepare(&format!("SELECT {column} FROM {table}"))

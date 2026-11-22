@@ -297,14 +297,6 @@ msgstr "Реакція {}"
 msgid "A new device was just linked to your account."
 msgstr "До вашого облікового запису щойно прив’язано новий пристрій."
 
-#: crates/chatter-core/src/client/notification.rs:784
-msgid "\"{}\" is now linked to your account."
-msgstr "«{}» тепер прив’язано до вашого облікового запису."
-
-#: crates/chatter-core/src/client/notification.rs:787
-msgid "{} was just linked to your account."
-msgstr "{} щойно прив’язано до вашого облікового запису."
-
 #: crates/chatter-core/src/client/notification.rs:792
 #: crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
@@ -3479,12 +3471,8 @@ msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "Відновлено рядків: {} (уже наявних або збережених локально: {})"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
-msgid ""
-"This backup was made by a newer version of Chatter. Update the app to "
-"restore it."
-msgstr ""
-"Цю копію створено новішою версією Chatter. Оновіть застосунок, щоб відновити "
-"її."
+msgid "This backup was made by an older version and can't be restored"
+msgstr "Цю резервну копію створено в старішій версії, тому її неможливо відновити."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
