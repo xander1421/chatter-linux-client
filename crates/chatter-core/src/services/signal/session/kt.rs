@@ -8,8 +8,6 @@ use futures::StreamExt;
 use parking_lot::Mutex;
 use std::time::Duration;
 
-const ANONYMOUS_DEADLINE: Duration = Duration::from_secs(95);
-
 pub(crate) fn spawn_peer_verifier(
     service: Arc<SignalService>,
     pool: Arc<GrpcClientPool>,
@@ -198,7 +196,7 @@ impl SignalService {
         let mut client = job_client(pool, route)?;
         let deadline = match route {
             KtRoute::Normal => kt_anchor::PIN_RPC_DEADLINE,
-            KtRoute::AnonymousTor => ANONYMOUS_DEADLINE,
+            KtRoute::AnonymousTor => kt_anchor::TOR_RPC_DEADLINE,
         };
         match self.lookup_identity(&mut client, peer, deadline).await? {
             Some(actual) if actual == key => Ok(KtVerdict::Verified),

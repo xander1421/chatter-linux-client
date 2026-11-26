@@ -435,6 +435,11 @@ impl LinkDeviceService {
             if let Some(ref name) = display_name {
                 self.settings_repo.set_string(keys::DISPLAY_NAME, name)?;
             }
+            crate::services::signal::kt_anchor::authorize_own_identity(
+                &self.settings_repo,
+                &user_id.to_string(),
+                &identity_pub_full,
+            )?;
             Ok(())
         })();
 

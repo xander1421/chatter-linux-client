@@ -556,12 +556,26 @@ async fn owner_monitor_persists_an_alert_when_the_server_restores_the_original_k
             .tree_size,
         4
     );
-    let mut offline = Script::default();
-    assert!(
-        check_own(&mut offline, &settings, PEER, &key, &verifier, now)
-            .await
-            .unwrap()
-    );
+    let pin = Pin::load_at(&mut client, &settings, &verifier, now)
+        .await
+        .unwrap();
+    let data = pin.observations(PEER).unwrap().data.unwrap();
+    let request = KtMonitorRequest {
+        keys: vec![super::KtMonitorKey {
+            search_key: PEER.to_vec(),
+            entry_position: data.latest_log_position(),
+            commitment_index: data.index.to_vec(),
+        }],
+        consistency: Some(pin.consistency()),
+    };
+    client
+        .monitors
+        .push_back((request, Err(NetworkError::Unavailable)));
+    assert!(matches!(
+        check_own(&mut client, &settings, PEER, &key, &verifier, now).await,
+        Err(KtError::Network(NetworkError::Unavailable))
+    ));
+    assert!(super::own_mismatch(&settings, PEER).unwrap());
 }
 
 #[tokio::test]
@@ -652,4 +666,181 @@ async fn contact_researches_an_advanced_version_even_if_the_key_is_restored() {
             .greatest_version(),
         2
     );
+}
+
+#[tokio::test]
+async fn authorized_owner_reset_establishes_a_new_baseline_and_detects_the_next_write() {
+    use crate::storage::repositories::settings_repo::keys;
+
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let owner = std::str::from_utf8(PEER).unwrap();
+    settings.set_string(keys::CURRENT_USER_ID, owner).unwrap();
+    let (steady_request, steady_proof) = monitor_proof(&vectors, "owner replacement steady");
+    let (advanced_request, advanced_proof) = monitor_proof(&vectors, "owner replacement advanced");
+    let mut client = Script {
+        searches: [
+            (
+                b"distinguished".as_slice(),
+                None,
+                None,
+                Some(search_proof(&vectors, "owner checkpoint")),
+            ),
+            (
+                PEER,
+                None,
+                Some(1),
+                Some(search_proof(&vectors, "owner identity")),
+            ),
+            (
+                PEER,
+                Some(2),
+                Some(1),
+                Some(search_proof(&vectors, "owner replacement")),
+            ),
+        ]
+        .into(),
+        monitors: [
+            (steady_request, Ok(steady_proof)),
+            (advanced_request, Ok(advanced_proof)),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let old_key = bytes(vector(&vectors, "owner identity").value.as_deref().unwrap());
+    let new_key = bytes(
+        vector(&vectors, "owner replacement")
+            .value
+            .as_deref()
+            .unwrap(),
+    );
+    assert!(
+        !check_own(&mut client, &settings, PEER, &old_key, &verifier, now)
+            .await
+            .unwrap()
+    );
+
+    super::authorize_own_identity(&settings, owner, &new_key).unwrap();
+    // Simulate reopening the repository with the durable permission and pin.
+    let settings = SettingsRepository::new(settings.database().clone());
+    assert!(
+        !check_own(&mut client, &settings, PEER, &new_key, &verifier, now)
+            .await
+            .unwrap()
+    );
+    assert!(!super::own_mismatch(&settings, PEER).unwrap());
+
+    // Republishing the same key leaves version 1 as its baseline.
+    super::authorize_own_identity(&settings, owner, &new_key).unwrap();
+    assert!(
+        !check_own(&mut client, &settings, PEER, &new_key, &verifier, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        check_own(&mut client, &settings, PEER, &new_key, &verifier, now)
+            .await
+            .unwrap()
+    );
+
+    // A retry or another device installation of the same proven key cannot
+    // clear evidence of a later unexpected write.
+    super::authorize_own_identity(&settings, owner, &new_key).unwrap();
+    assert!(super::own_mismatch(&settings, PEER).unwrap());
+}
+
+#[tokio::test]
+async fn provisioned_owner_key_can_bootstrap_at_an_existing_version() {
+    use crate::storage::repositories::settings_repo::keys;
+
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let owner = std::str::from_utf8(PEER).unwrap();
+    settings.set_string(keys::CURRENT_USER_ID, owner).unwrap();
+    let key = bytes(
+        vector(&vectors, "owner replacement")
+            .value
+            .as_deref()
+            .unwrap(),
+    );
+    super::authorize_own_identity(&settings, owner, &key).unwrap();
+
+    let mut proof = search_proof(&vectors, "owner replacement");
+    proof.tree_head.as_mut().unwrap().last.clear();
+    let mut client = Script {
+        searches: [
+            (
+                b"distinguished".as_slice(),
+                None,
+                None,
+                Some(search_proof(&vectors, "owner checkpoint")),
+            ),
+            (PEER, None, Some(1), Some(proof)),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    assert!(
+        !check_own(&mut client, &settings, PEER, &key, &verifier, now)
+            .await
+            .unwrap()
+    );
+    assert!(!super::own_mismatch(&settings, PEER).unwrap());
+}
+
+#[tokio::test]
+async fn concurrent_proofs_at_the_same_head_commit_distinct_labels_without_retrying() {
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let mut bootstrap = Script {
+        searches: [(
+            b"distinguished".as_slice(),
+            None,
+            None,
+            Some(search_proof(&vectors, "checkpoint 1")),
+        )]
+        .into(),
+        ..Default::default()
+    };
+    Pin::load_at(&mut bootstrap, &settings, &verifier, now)
+        .await
+        .unwrap();
+    let (release, halt) = tokio::sync::oneshot::channel();
+    let mut other = search_proof(&vectors, "first other");
+    other.tree_head.as_mut().unwrap().last.clear();
+    let mut slow = Script {
+        searches: [(OTHER, None, Some(1), Some(other))].into(),
+        stall: Some(halt),
+        ..Default::default()
+    };
+    let mut fast = Script {
+        searches: [(
+            PEER,
+            None,
+            Some(1),
+            Some(search_proof(&vectors, "same-size search")),
+        )]
+        .into(),
+        ..Default::default()
+    };
+
+    let (slow, ()) = tokio::join!(
+        search_contact(&mut slow, &settings, OTHER, &verifier, now),
+        async {
+            assert!(
+                search_contact(&mut fast, &settings, PEER, &verifier, now)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            release.send(()).unwrap();
+        },
+    );
+    assert!(slow.unwrap().is_some());
+    let pin = Pin::load_at(&mut bootstrap, &settings, &verifier, now)
+        .await
+        .unwrap();
+    for label in [PEER, OTHER] {
+        assert!(pin.observations(label).unwrap().data.is_some());
+    }
 }

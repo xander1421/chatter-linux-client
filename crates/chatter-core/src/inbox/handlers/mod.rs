@@ -299,11 +299,10 @@ pub enum DomainEvent {
         peer_user_id: UserId,
     },
 
-    /// A background verifier rejected the transparency log's history proof.
+    /// A background verifier could not verify the transparency log's history.
     KeyTransparencyHistoryUnverified,
 
-    /// A verified transparency proof exposed an unexpected write to our
-    /// account's identity key. The local Signal identity is unchanged.
+    /// The durable transparency warning for our account's identity key changed.
     OwnIdentityChanged { user_id: UserId },
 
     /// A peer who shares a channel with the local user added, revoked or

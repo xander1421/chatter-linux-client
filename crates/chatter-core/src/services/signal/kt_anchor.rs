@@ -17,6 +17,7 @@ use libsignal_keytrans::{
 };
 use prost::Message;
 use rusqlite::TransactionBehavior;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{CryptoError, NetworkError, ServiceError, StorageError};
 use crate::network::grpc::AnonymousKtClient;
@@ -27,6 +28,7 @@ const DISTINGUISHED_HEAD: &str = "kt.libsignal.distinguished";
 const DISTINGUISHED: &[u8] = b"distinguished";
 const CHECKPOINT_REFRESH: Duration = Duration::from_secs(6 * 60 * 60);
 pub(crate) const PIN_RPC_DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const TOR_RPC_DEADLINE: Duration = Duration::from_secs(95);
 
 static VERIFIER: OnceLock<Option<KeyTransparency>> = OnceLock::new();
 
@@ -291,7 +293,7 @@ impl<'a> Pin<'a> {
                 "transparency proof commits a different value",
             ));
         }
-        self.save_search::<()>(observations, verified, None)
+        self.save_search(observations, verified, |_| Ok(()))
     }
 
     async fn search_label(
@@ -347,39 +349,52 @@ impl<'a> Pin<'a> {
         Ok((LastTreeHead(update.tree_head, update.tree_root), data))
     }
 
-    fn save_search<T: serde::Serialize>(
+    fn save_search(
         &self,
         observations: Observations,
         verified: VerifiedSearchResult,
-        extra: Option<(&str, &T)>,
+        update_settings: impl FnOnce(&rusqlite::Connection) -> Result<(), KtError>,
     ) -> Result<(), KtError> {
         let update = verified.state_update;
         self.save(
             LastTreeHead(update.tree_head, update.tree_root),
             observations,
             update.monitoring_data,
-            extra,
+            update_settings,
         )
     }
 
-    fn save<T: serde::Serialize>(
+    fn save(
         &self,
         head: LastTreeHead,
         observations: Observations,
         data: Option<MonitoringData>,
-        extra: Option<(&str, &T)>,
+        update_settings: impl FnOnce(&rusqlite::Connection) -> Result<(), KtError>,
     ) -> Result<(), KtError> {
         let mut conn = self.settings.database().connection()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StorageError::from)?;
-        check_setting(&tx, HEAD, encoded_head(self.last.as_ref()))?;
+        let current: Option<String> = SettingsRepository::get_with_connection(&tx, HEAD)?;
+        let head_advanced = current.as_deref() != encoded_head(self.last.as_ref());
+        // A concurrent request may already have pinned this exact verified
+        // head. Its proof and ours authenticated the same root. Merge only
+        // this label's unchanged observations, keeping the recorded head.
+        if head_advanced
+            && current
+                .map(decode_head)
+                .transpose()?
+                .is_none_or(|current| current.head != head)
+        {
+            return Err(KtError::PinChanged);
+        }
         check_setting(&tx, DISTINGUISHED_HEAD, Some(&self.distinguished.encoded))?;
         check_setting(&tx, &observations.key, observations.encoded.as_deref())?;
 
-        if self
-            .last_head()
-            .is_none_or(|last| last.0.tree_size != head.0.tree_size)
+        if !head_advanced
+            && self
+                .last_head()
+                .is_none_or(|last| last.0.tree_size != head.0.tree_size)
         {
             SettingsRepository::set_with_connection(&tx, HEAD, &encode_head(head, self.now))?;
         }
@@ -398,9 +413,7 @@ impl<'a> Pin<'a> {
                 &hex::encode(stored.encode_to_vec()),
             )?;
         }
-        if let Some((key, value)) = extra {
-            SettingsRepository::set_with_connection(&tx, key, value)?;
-        }
+        update_settings(&tx)?;
         tx.commit().map_err(StorageError::from)?;
         Ok(())
     }
@@ -460,7 +473,7 @@ async fn search_contact(
         let previous = data.greatest_version();
         let (head, data) = pin.monitor_label(client, label, data).await?;
         let version = data.greatest_version();
-        pin.save::<()>(head, observations, Some(data), None)?;
+        pin.save(head, observations, Some(data), |_| Ok(()))?;
         if let Some((saved_version, value)) = settings.get::<(u32, Vec<u8>)>(&value_key)? {
             if saved_version == previous && version == previous {
                 return Ok(Some(value));
@@ -485,11 +498,10 @@ async fn search_contact(
             "identity search did not produce monitoring data",
         ))?
         .greatest_version();
-    pin.save_search(
-        observations,
-        verified,
-        Some((&value_key, &(version, &value))),
-    )?;
+    pin.save_search(observations, verified, |conn| {
+        SettingsRepository::set_with_connection(conn, &value_key, &(version, &value))?;
+        Ok(())
+    })?;
     Ok(Some(value))
 }
 
@@ -532,6 +544,111 @@ async fn with_deadline<T>(
         .unwrap_or(Err(NetworkError::Timeout.into()))
 }
 
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+struct OwnerState {
+    baseline: Option<OwnerBaseline>,
+    authorized: Option<OwnerAuthorization>,
+    observed_version: Option<u32>,
+    mismatch: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct OwnerBaseline {
+    key: String,
+    version: u32,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct OwnerAuthorization {
+    key: String,
+    next_version: Option<u32>,
+}
+
+impl OwnerState {
+    fn load(conn: &rusqlite::Connection, label: &[u8]) -> Result<Self, StorageError> {
+        let label = hex::encode(label);
+        if let Some(state) =
+            SettingsRepository::get_with_connection(conn, &format!("kt.libsignal.owner.{label}"))?
+        {
+            return Ok(state);
+        }
+        // The earlier state accepted only version zero as an owner baseline.
+        let key = SettingsRepository::get_with_connection::<String>(
+            conn,
+            &format!("kt.libsignal.own-key.{label}"),
+        )?;
+        let mismatch = SettingsRepository::get_with_connection(
+            conn,
+            &format!("kt.libsignal.own-mismatch.{label}"),
+        )?
+        .unwrap_or(false);
+        let observed_version = (!mismatch && key.is_some()).then_some(0);
+        Ok(Self {
+            baseline: key.map(|key| OwnerBaseline { key, version: 0 }),
+            observed_version,
+            mismatch,
+            ..Self::default()
+        })
+    }
+
+    fn store(&self, conn: &rusqlite::Connection, label: &[u8]) -> Result<(), StorageError> {
+        SettingsRepository::set_with_connection(
+            conn,
+            &format!("kt.libsignal.owner.{}", hex::encode(label)),
+            self,
+        )
+    }
+}
+
+/// Record the exact public key that completed a local republish or device
+/// link. The next verified search consumes this permission. A repeat publish
+/// of a key we already monitor keeps its history and any warning.
+pub(crate) fn authorize_own_identity(
+    settings: &SettingsRepository,
+    label: &str,
+    key: &[u8],
+) -> Result<(), StorageError> {
+    use crate::storage::repositories::settings_repo::keys;
+
+    let mut conn = settings.database().connection()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current = SettingsRepository::get_with_connection::<String>(&tx, keys::CURRENT_USER_ID)?;
+    if current.as_deref() != Some(label) {
+        return Err(StorageError::InvalidData(
+            "transparency owner changed during publication".into(),
+        ));
+    }
+    let mut state = OwnerState::load(&tx, label.as_bytes())?;
+    let key = hex::encode(key);
+    if state
+        .baseline
+        .as_ref()
+        .is_some_and(|baseline| baseline.key == key)
+    {
+        state.authorized = None;
+    } else if state
+        .authorized
+        .as_ref()
+        .is_none_or(|pending| pending.key != key)
+    {
+        // An observed version accounts for earlier unexpected writes too.
+        // On a fresh installation the authenticated local key is the only
+        // baseline available, so its exact value anchors the initial version.
+        let next_version = state
+            .observed_version
+            .map(|version| {
+                version.checked_add(1).ok_or_else(|| {
+                    StorageError::InvalidData("own identity transparency version exhausted".into())
+                })
+            })
+            .transpose()?;
+        state.authorized = Some(OwnerAuthorization { key, next_version });
+    }
+    state.store(&tx, label.as_bytes())?;
+    tx.commit()?;
+    Ok(())
+}
+
 async fn check_own(
     client: &mut impl KtTransport,
     settings: &SettingsRepository,
@@ -540,30 +657,50 @@ async fn check_own(
     verifier: &KeyTransparency,
     now: SystemTime,
 ) -> Result<bool, KtError> {
-    if own_mismatch(settings, label)? {
-        return Ok(true);
+    let previous = {
+        let conn = settings.database().read_connection()?;
+        OwnerState::load(&conn, label)?
+    };
+    let mut state = previous.clone();
+    let expected_hex = hex::encode(expected);
+    if state
+        .authorized
+        .as_ref()
+        .is_some_and(|pending| pending.key != expected_hex)
+    {
+        return Err(KtError::Invalid(
+            "local owner key changed during transparency verification",
+        ));
     }
-    let alert_key = own_mismatch_key(label);
     let pin = Pin::load_at(client, settings, verifier, now).await?;
     let observations = pin.observations(label)?;
-    let own_key = format!("kt.libsignal.own-key.{}", hex::encode(label));
-    let expected_hex = hex::encode(expected);
-    let verified_key = settings.get_string(&own_key)?;
-    if let Some(data) = observations
-        .data
+    let save_owner = |conn: &rusqlite::Connection, state: &OwnerState| -> Result<(), KtError> {
+        if OwnerState::load(conn, label)? != previous {
+            return Err(KtError::PinChanged);
+        }
+        if *state != previous {
+            state.store(conn, label)?;
+        }
+        Ok(())
+    };
+    let baseline = state
+        .baseline
         .as_ref()
-        .filter(|data| data.owned && verified_key.as_ref() == Some(&expected_hex))
-    {
+        .filter(|baseline| baseline.key == expected_hex);
+    if let (Some(baseline), Some(data)) = (
+        baseline,
+        observations.data.as_ref().filter(|data| data.owned),
+    ) {
         let (head, data) = pin.monitor_label(client, label, data).await?;
-        let changed = data.greatest_version() > 0;
-        pin.save(
-            head,
-            observations,
-            Some(data),
-            changed.then_some((&alert_key, &true)),
-        )?;
-        return Ok(changed);
+        let version = data.greatest_version();
+        state.mismatch |= version != baseline.version;
+        state.observed_version = Some(version);
+        pin.save(head, observations, Some(data), |conn| {
+            save_owner(conn, &state)
+        })?;
+        return Ok(state.mismatch);
     }
+
     let response = pin
         .search_label(client, label)
         .await?
@@ -571,33 +708,40 @@ async fn check_own(
             "own identity key is missing from transparency",
         ))?;
     let verified = pin.verify_response(label, response, &observations, true)?;
-    let data = verified
+    let version = verified
         .state_update
         .monitoring_data
         .as_ref()
         .ok_or(KtError::Invalid(
             "own identity search did not produce monitoring data",
-        ))?;
-    // Chatter assigns one identity key to an account, including its linked
-    // devices. A nonzero version on the first check exposes earlier writes,
-    // for which this installation has no locally trusted history.
-    let changed = verified.value != expected || data.greatest_version() > 0;
-    if changed {
-        pin.save_search(observations, verified, Some((&alert_key, &true)))?;
+        ))?
+        .greatest_version();
+
+    state.observed_version = Some(version);
+    if verified.value != expected {
+        state.mismatch = true;
+    } else if let Some(pending) = state.authorized.take() {
+        state.baseline = Some(OwnerBaseline {
+            key: expected_hex,
+            version,
+        });
+        state.mismatch = pending.next_version.is_some_and(|next| next != version);
+    } else if state.baseline.is_none() {
+        state.baseline = Some(OwnerBaseline {
+            key: expected_hex,
+            version,
+        });
+        state.mismatch |= version != 0;
     } else {
-        pin.save_search(observations, verified, Some((&own_key, &expected_hex)))?;
+        state.mismatch |= baseline.is_none_or(|baseline| baseline.version != version);
     }
-    Ok(changed)
+    pin.save_search(observations, verified, |conn| save_owner(conn, &state))?;
+    Ok(state.mismatch)
 }
 
 pub(crate) fn own_mismatch(settings: &SettingsRepository, label: &[u8]) -> Result<bool, KtError> {
-    Ok(settings
-        .get::<bool>(&own_mismatch_key(label))?
-        .unwrap_or(false))
-}
-
-fn own_mismatch_key(label: &[u8]) -> String {
-    format!("kt.libsignal.own-mismatch.{}", hex::encode(label))
+    let conn = settings.database().read_connection()?;
+    Ok(OwnerState::load(&conn, label)?.mismatch)
 }
 
 /// Verify the inclusion in an already accepted, persisted manifest. Its
