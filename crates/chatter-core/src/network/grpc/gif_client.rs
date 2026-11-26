@@ -154,25 +154,50 @@ impl AnonymousGifClient {
         }
     }
 
-    fn request<T>(&self, payload: T) -> Result<tonic::Request<T>, NetworkError> {
+    fn request<T>(&self, payload: T) -> Result<(tonic::Request<T>, String), NetworkError> {
         let mut request = tonic::Request::new(payload);
         let token = self.tokens.claim_send_credential()?;
-        super::interceptors::insert_blind_credential(
+        if let Err(status) = super::interceptors::insert_blind_credential(
             &mut request,
             &token.public_key,
             &token.signature,
-        )
-        .map_err(|status| NetworkError::from_status(&status))?;
-        Ok(request)
+        ) {
+            self.restore_credential(&token.id);
+            return Err(NetworkError::from_status(&status));
+        }
+        Ok((request, token.id))
+    }
+
+    fn restore_credential(&self, token_id: &str) {
+        if let Err(error) = self.tokens.return_unspent_gif_credential(token_id) {
+            tracing::warn!(%error, "Could not restore an unspent GIF credential");
+        }
+    }
+
+    fn response<T>(
+        &self,
+        token_id: &str,
+        result: Result<tonic::Response<T>, tonic::Status>,
+    ) -> Result<T, NetworkError> {
+        result.map(tonic::Response::into_inner).map_err(|status| {
+            // Local transport failures and ambiguous server errors can arrive
+            // after admission. Reuse only on an explicit server refusal.
+            if status.code() == tonic::Code::ResourceExhausted
+                && status
+                    .metadata()
+                    .get("x-gif-credential-unspent")
+                    .is_some_and(|value| value == "1")
+            {
+                self.restore_credential(token_id);
+            }
+            NetworkError::from_status(&status)
+        })
     }
 
     pub(crate) async fn media(mut self, url: &str) -> Result<Vec<u8>, NetworkError> {
-        let request = self.request(GetGifMediaRequest { url: url.into() })?;
-        self.inner
-            .get_private_gif_media(request)
-            .await
-            .map(|r| r.into_inner().data)
-            .map_err(|status| NetworkError::from_status(&status))
+        let (request, token_id) = self.request(GetGifMediaRequest { url: url.into() })?;
+        let result = self.inner.get_private_gif_media(request).await;
+        self.response(&token_id, result).map(|r| r.data)
     }
 
     pub(crate) async fn search(
@@ -180,29 +205,23 @@ impl AnonymousGifClient {
         query: &str,
         limit: i32,
     ) -> Result<Vec<GifResult>, NetworkError> {
-        let request = self.request(SearchGifsRequest {
+        let (request, token_id) = self.request(SearchGifsRequest {
             query: query.into(),
             limit,
             content_filter: "low".into(),
             ..Default::default()
         })?;
-        self.inner
-            .search_private_gifs(request)
-            .await
-            .map(|r| r.into_inner().results)
-            .map_err(|status| NetworkError::from_status(&status))
+        let result = self.inner.search_private_gifs(request).await;
+        self.response(&token_id, result).map(|r| r.results)
     }
 
     pub(crate) async fn trending(mut self, limit: i32) -> Result<Vec<GifResult>, NetworkError> {
-        let request = self.request(GetTrendingGifsRequest {
+        let (request, token_id) = self.request(GetTrendingGifsRequest {
             limit,
             content_filter: "low".into(),
             ..Default::default()
         })?;
-        self.inner
-            .get_private_trending_gifs(request)
-            .await
-            .map(|r| r.into_inner().results)
-            .map_err(|status| NetworkError::from_status(&status))
+        let result = self.inner.get_private_trending_gifs(request).await;
+        self.response(&token_id, result).map(|r| r.results)
     }
 }

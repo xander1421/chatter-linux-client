@@ -649,6 +649,20 @@ impl TokenManager {
         self.claim_prefetched_token().map_err(credential_error)
     }
 
+    /// Restore a GIF credential only after a known pre-admission refusal.
+    pub(crate) fn return_unspent_gif_credential(&self, token_id: &str) -> Result<(), MailboxError> {
+        let conn = self
+            .db
+            .connection()
+            .map_err(|error| MailboxError::Storage(error.to_string()))?;
+        conn.execute(
+            "UPDATE mailbox_tokens SET used_at = NULL WHERE id = ?1 AND purpose = ?2",
+            rusqlite::params![token_id, CredentialPurpose::Gif as i32],
+        )
+        .map_err(|error| MailboxError::Storage(error.to_string()))?;
+        Ok(())
+    }
+
     /// Debit a durable send and claim its credential together. A dry pool
     /// rolls back the debit, including when the eligible tokens are reserved.
     pub(crate) fn claim_budgeted_credential(

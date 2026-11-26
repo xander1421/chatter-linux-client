@@ -191,6 +191,17 @@ impl ServerState {
                 Routing::Other,
                 grpc_reply(pb::GetTrendingGifsResponse::default()),
             ),
+            "GetPrivateGifMedia"
+                if state.phase == "GIF refusal" || state.phase == "GIF ambiguous error" =>
+            {
+                let mut status = tonic::Status::resource_exhausted("fixture refused the request");
+                if state.phase == "GIF refusal" {
+                    status
+                        .metadata_mut()
+                        .insert("x-gif-credential-unspent", "1".parse().unwrap());
+                }
+                (Routing::Other, status.into_http())
+            }
             "GetPrivateGifMedia" => (
                 Routing::Other,
                 grpc_reply(pb::GetGifMediaResponse {
@@ -1209,6 +1220,55 @@ async fn private_attachment_mints_without_account_credentials() {
         mint.authorization.is_none() && mint.blind_credential,
         "{mint:?}"
     );
+}
+
+#[tokio::test]
+async fn local_gif_credential_is_restored_only_for_an_explicit_http_refusal() {
+    let channel = ChannelId::new();
+    let alice = UserId::new();
+    let bob = UserId::new();
+    let bundles = roster_bundles([alice, bob]);
+    let (url, probe, server) = start_server(ServerState::new(bundles.clone())).await;
+    let fixture = two_members_with_ids_at(&url, channel, alice, bob);
+    prepare_author(&fixture.alice, alice, channel, &bundles).await;
+    let service = fixture
+        .alice
+        .attachments()
+        .for_conversation(&crate::state::ActiveConversation::Channel(channel));
+    let tokens = service.attachment_repo().gif_tokens();
+    let starting_balance = tokens.available_token_count().unwrap();
+    probe.lock().unwrap().phase("GIF refusal");
+    assert!(
+        service
+            .fetch_gif_media("https://media.example/fixture.gif")
+            .await
+            .is_err()
+    );
+    assert_eq!(tokens.available_token_count().unwrap(), starting_balance);
+    probe.lock().unwrap().phase("GIF ambiguous error");
+    assert!(
+        service
+            .fetch_gif_media("https://media.example/fixture.gif")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tokens.available_token_count().unwrap(),
+        starting_balance - 1
+    );
+    probe.lock().unwrap().phase("GIF admitted");
+    assert_eq!(
+        service
+            .fetch_gif_media("https://media.example/fixture.gif")
+            .await
+            .unwrap(),
+        b"GIF89a"
+    );
+    assert_eq!(
+        tokens.available_token_count().unwrap(),
+        starting_balance - 2
+    );
+    server.abort();
 }
 
 #[cfg(feature = "onion")]
