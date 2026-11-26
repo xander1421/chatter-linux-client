@@ -69,8 +69,11 @@ impl GrpcClientPool {
         super::super::UserClient::new(self.channel(), self.auth_clone())
     }
 
-    pub(crate) fn anonymous_gif_client(&self) -> super::super::gif_client::AnonymousGifClient {
-        super::super::gif_client::AnonymousGifClient::new(self.one_shot_anonymous_channel())
+    pub(crate) fn anonymous_gif_client(
+        &self,
+        tokens: crate::mailbox::token_manager::TokenManager,
+    ) -> super::super::gif_client::AnonymousGifClient {
+        super::super::gif_client::AnonymousGifClient::new(self.one_shot_anonymous_channel(), tokens)
     }
 
     /// Create an authenticated GifClient.

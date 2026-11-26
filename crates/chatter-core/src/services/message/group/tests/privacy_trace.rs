@@ -156,6 +156,20 @@ impl ServerState {
                 Routing::Other,
                 grpc_reply(pb::ConfirmAttachmentUploadResponse { confirmed: true }),
             ),
+            "CreatePrivateAttachmentMultipartUpload" => (
+                Routing::Other,
+                grpc_reply(pb::CreateAttachmentMultipartUploadResponse {
+                    cdn_key: "pa_klmnopqrstuvwxyzabcdef".into(),
+                    upload_id: "fixture-multipart".into(),
+                    part_size: 2048,
+                    part_urls: vec![state.cdn_url.clone()],
+                    expires_at: i64::MAX,
+                }),
+            ),
+            "CompleteAttachmentMultipartUpload" => (
+                Routing::Other,
+                grpc_reply(pb::CompleteAttachmentMultipartUploadResponse::default()),
+            ),
             "GetPrivateAttachmentDownloadUrl" => (
                 Routing::Other,
                 grpc_reply(pb::GetAttachmentDownloadUrlResponse {
@@ -405,10 +419,23 @@ async fn prepare_author(
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, attachment)
+        "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, purpose)
          SELECT 'attachment-' || id, CAST(x'01' || substr(ephemeral_public_key, 2) AS BLOB),
                 ephemeral_private_key, signature, 'attachment-live', created_at, 1
-         FROM mailbox_tokens WHERE attachment = 0",
+         FROM mailbox_tokens WHERE purpose = 0",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO mailbox_server_keys (key_id, public_key_der, valid_until, created_at)
+         VALUES ('gif-live', x'00', ?1, '')",
+        [i64::MAX],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, purpose)
+         SELECT 'gif-' || id, CAST(x'02' || substr(ephemeral_public_key, 2) AS BLOB),
+                ephemeral_private_key, signature, 'gif-live', created_at, 2
+         FROM mailbox_tokens WHERE purpose = 0",
         [],
     ).unwrap();
     drop(conn);
@@ -844,6 +871,8 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                 .attachments()
                 .attachment_repo()
                 .attachment_tokens();
+            let gif_tokens = sending_client.attachments().attachment_repo().gif_tokens();
+            let gif_balance = gif_tokens.available_token_count().unwrap();
             let before_picker = attachment_tokens.available_token_count().unwrap();
             probe.lock().unwrap().phase("GIF search");
             let results = sending_client
@@ -869,6 +898,7 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                 attachment_tokens.available_token_count().unwrap(),
                 before_picker
             );
+            assert_eq!(gif_tokens.available_token_count().unwrap(), gif_balance - 4);
             let attachment_id = AttachmentId::from_cdn_key(&attachment.cdn_key);
             let pointer = chatter_proto::content_v1::AttachmentPointer {
                 cdn_key: attachment.cdn_key.clone(),
@@ -1012,7 +1042,7 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
             assert!(!account_routes.is_empty());
             let mut picker_connections = std::collections::HashSet::new();
             for rpc in picker {
-                assert!(rpc.authorization.is_none() && !rpc.blind_credential && !rpc.access_key);
+                assert!(rpc.authorization.is_none() && rpc.blind_credential && !rpc.access_key);
                 assert_ne!(rpc.connection, private);
                 assert!(!account_routes.contains(&rpc.connection));
                 assert!(
@@ -1266,7 +1296,10 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
     );
     let blob = Arc::new(Mutex::new(Bytes::new()));
     let calls = Arc::new(Mutex::new(Vec::new()));
+    use crate::network::grpc::client_pool::GrpcClientPool;
+    let retire_on_put = Arc::new(Mutex::new(None::<(Arc<GrpcClientPool>, ChannelId)>));
     let https = tokio::spawn({
+        let retire_on_put = retire_on_put.clone();
         let calls = calls.clone();
         async move {
             let tls = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
@@ -1275,6 +1308,7 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
                 let tls = tls.clone();
                 let blob = blob.clone();
                 let calls = calls.clone();
+                let retire_on_put = retire_on_put.clone();
                 tokio::spawn(async move {
                     let Ok(socket) = tls.accept(socket).await else {
                         return;
@@ -1286,6 +1320,7 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
                                 move |req: http::Request<hyper::body::Incoming>| {
                                     let blob = blob.clone();
                                     let calls = calls.clone();
+                                    let retire_on_put = retire_on_put.clone();
                                     async move {
                                         let (head, body) = req.into_parts();
                                         let body = body.collect().await.unwrap().to_bytes();
@@ -1301,13 +1336,21 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
                                         ));
                                         let response = if head.method == http::Method::PUT {
                                             *blob.lock().unwrap() = body;
+                                            if let Some((pool, channel)) =
+                                                retire_on_put.lock().unwrap().take()
+                                            {
+                                                pool.retire_test_channel_route(channel);
+                                            }
                                             Bytes::new()
                                         } else {
                                             blob.lock().unwrap().clone()
                                         };
-                                        Ok::<_, Infallible>(http::Response::new(Full::new(
-                                            response,
-                                        )))
+                                        Ok::<_, Infallible>(
+                                            http::Response::builder()
+                                                .header(http::header::ETAG, "\"fixture\"")
+                                                .body(Full::new(response))
+                                                .unwrap(),
+                                        )
                                     }
                                 },
                             ),
@@ -1368,6 +1411,25 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
                 )
                 .await
                 .unwrap();
+            probe.lock().unwrap().phase("multipart crossing");
+            *retire_on_put.lock().unwrap() =
+                Some((fixture.alice.messages().grpc_pool.clone(), channel));
+            let attachments = fixture.alice.attachments().for_conversation(&conversation);
+            let ciphertext =
+                crate::services::attachment::attachment_file_path(&upload.attachment_id);
+            let length = std::fs::metadata(&ciphertext).unwrap().len();
+            attachments
+                .upload_fixture_multipart(&ciphertext, length)
+                .await
+                .unwrap();
+            assert!(retire_on_put.lock().unwrap().is_none());
+            probe.lock().unwrap().phase("next upload");
+            attachments
+                .file_client()
+                .unwrap()
+                .get_attachment_upload_url(512)
+                .await
+                .unwrap();
         })
         .await;
     https.abort();
@@ -1379,7 +1441,8 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
             &http::Method::GET,
             &http::Method::PUT,
             &http::Method::GET,
-            &http::Method::PUT
+            &http::Method::PUT,
+            &http::Method::PUT,
         ]
     );
     assert_ne!(calls[0].1, calls[1].1);
@@ -1407,11 +1470,36 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
             .iter()
             .all(|rpc| rpc.authorization.is_none() && !rpc.access_key)
     );
-    assert!(!selected[0].blind_credential);
+    assert!(selected[0].blind_credential);
     assert!(selected[1].blind_credential);
     assert_ne!(selected[0].connection, selected[1].connection);
     assert_eq!(selected[1].connection, selected[2].connection);
     assert_eq!(calls[1].1, calls[3].1);
+    let multipart: Vec<_> = trace
+        .iter()
+        .filter(|rpc| rpc.phase == "multipart crossing")
+        .collect();
+    assert_eq!(multipart.len(), 2);
+    assert!(
+        multipart[0]
+            .endpoint
+            .ends_with("/CreatePrivateAttachmentMultipartUpload")
+    );
+    assert!(
+        multipart[1]
+            .endpoint
+            .ends_with("/CompleteAttachmentMultipartUpload")
+    );
+    assert_eq!(multipart[0].connection, multipart[1].connection);
+    assert_ne!(
+        multipart[0].connection,
+        trace
+            .iter()
+            .find(|rpc| rpc.phase == "next upload")
+            .unwrap()
+            .connection
+    );
+    assert_eq!(calls[3].1, calls[4].1);
     for name in [
         "GetPrivateAttachmentUploadUrl",
         "GetPrivateAttachmentDownloadUrl",

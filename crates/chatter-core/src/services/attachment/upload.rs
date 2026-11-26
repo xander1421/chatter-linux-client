@@ -50,30 +50,50 @@ fn part_ranges(total: u64, part_size: u64) -> Vec<(u64, u64)> {
 }
 
 impl AttachmentService {
-    // If the route changes, restart from the URL mint on the new route. A
-    // presigned URL or multipart upload ID may belong to a different server.
+    // Pin an attempt before minting. A transport-mode or endpoint change
+    // still cancels it and restarts with a fresh mint. Ordinary channel route
+    // rotation leaves this attempt, including later parts and confirm, alone.
     async fn upload_on_current_route<T, F>(
         &self,
-        mut attempt: impl FnMut(bool) -> F,
+        mut attempt: impl FnMut(AttachmentService, bool) -> F,
     ) -> Result<T, AttachmentError>
     where
         F: std::future::Future<Output = Result<T, AttachmentError>> + Send,
     {
-        let (tor, generation) = self.cdn_route()?;
-        match super::fence_cdn_transfer(generation, AttachmentError::TransportChanged, attempt(tor))
-            .await
+        let (service, tor, generation) = self.pin_upload_attempt()?;
+        match super::fence_cdn_transfer(
+            generation,
+            AttachmentError::TransportChanged,
+            attempt(service, tor),
+        )
+        .await
         {
             Err(AttachmentError::TransportChanged) => {
-                let (tor, generation) = self.cdn_route()?;
+                let (service, tor, generation) = self.pin_upload_attempt()?;
                 super::fence_cdn_transfer(
                     generation,
                     AttachmentError::TransportChanged,
-                    attempt(tor),
+                    attempt(service, tor),
                 )
                 .await
             }
             result => result,
         }
+    }
+
+    fn pin_upload_attempt(
+        &self,
+    ) -> Result<(AttachmentService, bool, tokio_util::sync::CancellationToken), AttachmentError>
+    {
+        let (tor, generation) = self.cdn_route()?;
+        let mut service = self.clone();
+        if let Some(channel) = service.private_channel {
+            service.upload_route = Some(
+                self.grpc_pool()?
+                    .pin_private_upload(channel, generation.clone()),
+            );
+        }
+        Ok((service, tor, generation))
     }
 
     /// PUT one part to its presigned URL (up to three attempts on the same route).
@@ -282,10 +302,11 @@ impl AttachmentService {
         let temp_path = temp_file.path();
         let thumbnail = media_meta.thumbnail.as_deref();
         let (cdn_key, (thumb_cdn_key, thumb_key, thumb_digest, thumb_pt_size)) = self
-            .upload_on_current_route(|tor| async move {
+            .upload_on_current_route(|service, tor| async move {
+                let service = &service;
                 let thumbnail_upload = async {
                     match thumbnail {
-                        Some(t) => self
+                        Some(t) => service
                             .upload_thumbnail_sidecar(t, tor)
                             .await
                             .unwrap_or_default(),
@@ -294,15 +315,17 @@ impl AttachmentService {
                 };
                 let main_upload = async {
                     if ciphertext_size > MULTIPART_THRESHOLD {
-                        return self
+                        return service
                             .upload_multipart_to_cdn(temp_path, ciphertext_size, tor)
                             .await;
                     }
-                    self.upload_single_to_cdn(ciphertext_size, |url| async move {
-                        self.put_encrypted_file(&url, temp_path, ciphertext_size, tor)
-                            .await
-                    })
-                    .await
+                    service
+                        .upload_single_to_cdn(ciphertext_size, |url| async move {
+                            service
+                                .put_encrypted_file(&url, temp_path, ciphertext_size, tor)
+                                .await
+                        })
+                        .await
                 };
                 let (cdn_key, thumbnail) = tokio::join!(main_upload, thumbnail_upload);
                 Ok((cdn_key?, thumbnail))
@@ -505,8 +528,10 @@ impl AttachmentService {
         &self,
         ciphertext: &[u8],
     ) -> Result<String, AttachmentError> {
-        self.upload_on_current_route(|tor| self.upload_ciphertext_to_cdn(ciphertext, tor))
-            .await
+        self.upload_on_current_route(|service, tor| async move {
+            service.upload_ciphertext_to_cdn(ciphertext, tor).await
+        })
+        .await
     }
 
     async fn upload_single_to_cdn<F>(
@@ -551,6 +576,20 @@ impl AttachmentService {
             );
         }
         Ok(response.cdn_key)
+    }
+
+    #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
+    pub(crate) async fn upload_fixture_multipart(
+        &self,
+        path: &Path,
+        ciphertext_size: u64,
+    ) -> Result<String, AttachmentError> {
+        self.upload_on_current_route(|service, tor| async move {
+            service
+                .upload_multipart_to_cdn(path, ciphertext_size, tor)
+                .await
+        })
+        .await
     }
 
     /// Upload an already-encrypted temp file via multipart, direct to RustFS.
@@ -709,10 +748,10 @@ impl AttachmentService {
         let ciphertext = encrypted.ciphertext.as_slice();
         let thumbnail = media_meta.thumbnail.as_deref();
         let (cdn_key, (thumb_cdn_key, thumb_key, thumb_digest, thumb_pt_size)) = self
-            .upload_on_current_route(|tor| async move {
-                let cdn_key = self.upload_ciphertext_to_cdn(ciphertext, tor).await?;
+            .upload_on_current_route(|service, tor| async move {
+                let cdn_key = service.upload_ciphertext_to_cdn(ciphertext, tor).await?;
                 let thumbnail = match thumbnail {
-                    Some(t) => self
+                    Some(t) => service
                         .upload_thumbnail_sidecar(t, tor)
                         .await
                         .unwrap_or_default(),
@@ -847,7 +886,9 @@ impl AttachmentService {
     pub async fn fetch_gif_media(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
         let pool = self.grpc_pool()?;
         let result = if self.uses_private_channel_route() {
-            pool.anonymous_gif_client().media(url).await
+            pool.anonymous_gif_client(self.attachment_repo.gif_tokens())
+                .media(url)
+                .await
         } else {
             pool.gif_client().media(url).await
         };
@@ -1281,7 +1322,7 @@ mod part_range_tests {
         let service = AttachmentService::new(Arc::new(AttachmentRepository::new(db)), pool.clone());
         let pool = pool.as_ref();
         let mut attempts = 0;
-        let upload = service.upload_on_current_route(|tor| {
+        let upload = service.upload_on_current_route(|_, tor| {
             assert!(!tor);
             attempts += 1;
             let first = attempts == 1;
@@ -1301,7 +1342,7 @@ mod part_range_tests {
 
         attempts = 0;
         let result: Result<(), _> = service
-            .upload_on_current_route(|_| {
+            .upload_on_current_route(|_, _| {
                 attempts += 1;
                 std::future::ready(Err(AttachmentError::NetworkError(
                     "unexpected HTTP error".into(),

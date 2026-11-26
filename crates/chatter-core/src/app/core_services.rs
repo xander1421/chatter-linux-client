@@ -333,7 +333,7 @@ impl CoreServices {
         if self.uses_anonymous_gif_picker(conversation) {
             return self
                 .grpc_pool
-                .anonymous_gif_client()
+                .anonymous_gif_client(self.token_manager.for_gifs())
                 .trending(limit as i32)
                 .await;
         }
@@ -362,7 +362,7 @@ impl CoreServices {
         if self.uses_anonymous_gif_picker(conversation) {
             return self
                 .grpc_pool
-                .anonymous_gif_client()
+                .anonymous_gif_client(self.token_manager.for_gifs())
                 .search(query, limit as i32)
                 .await;
         }
@@ -395,7 +395,7 @@ impl CoreServices {
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
         let auth = self.auth_state.clone();
-        let refill = |token_manager: Arc<crate::mailbox::token_manager::TokenManager>| {
+        let refill = |token_manager: Arc<crate::mailbox::token_manager::TokenManager>, batches| {
             let grpc_pool = grpc_pool.clone();
             let auth = auth.clone();
             async move {
@@ -415,23 +415,32 @@ impl CoreServices {
                     }) {
                         continue;
                     }
-                    match token_manager
-                        .request_tokens(
-                            &grpc_pool,
-                            crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
-                        )
-                        .await
-                    {
-                        Ok(granted) => {
-                            quota_retry = None;
-                            tracing::debug!(granted, "Scheduled credential batch received");
+                    for _ in 0..batches {
+                        if auth.get().session_revision != state.session_revision {
+                            break;
                         }
-                        Err(error @ crate::error::MailboxError::QuotaExhausted) => {
-                            quota_retry =
-                                Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
-                            trace_token_refill_failure(&error);
+                        match token_manager
+                            .request_tokens(
+                                &grpc_pool,
+                                crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
+                            )
+                            .await
+                        {
+                            Ok(granted) => {
+                                quota_retry = None;
+                                tracing::debug!(granted, "Scheduled credential batch received");
+                            }
+                            Err(error @ crate::error::MailboxError::QuotaExhausted) => {
+                                quota_retry =
+                                    Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
+                                trace_token_refill_failure(&error);
+                                break;
+                            }
+                            Err(error) => {
+                                trace_token_refill_failure(&error);
+                                break;
+                            }
                         }
-                        Err(error) => trace_token_refill_failure(&error),
                     }
                     if let Err(error) = token_manager.prune_expired_unused_tokens() {
                         trace_token_refill_failure(&error);
@@ -440,8 +449,10 @@ impl CoreServices {
             }
         };
 
-        let mailbox_refill = refill(token_manager.clone());
-        let attachment_refill = refill(Arc::new(token_manager.for_attachments()));
+        let mailbox_refill = refill(token_manager.clone(), 1);
+        let attachment_refill = refill(Arc::new(token_manager.for_attachments()), 1);
+        // A scheduled GIF refill can cover a 20-tile page in its first tick.
+        let gif_refill = refill(Arc::new(token_manager.for_gifs()), 3);
 
         let anon_group_service = self.anon_group_service.clone();
         let mut keys = self.event_bus.subscribe_domain();
@@ -461,7 +472,7 @@ impl CoreServices {
         };
 
         tokio::spawn(async move {
-            tokio::join!(mailbox_refill, attachment_refill, retry_parked);
+            tokio::join!(mailbox_refill, attachment_refill, gif_refill, retry_parked);
         })
     }
 

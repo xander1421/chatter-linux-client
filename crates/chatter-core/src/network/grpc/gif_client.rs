@@ -6,6 +6,7 @@ use crate::network::grpc::transport::GrpcTransport;
 use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
+use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use chatter_proto::chat_v1::{
     GetGifMediaRequest, GetTrendingGifsRequest, GetTrendingGifsResponse, GifResult,
@@ -140,16 +141,35 @@ impl GifClient {
 }
 
 /// The picker drops its connection after one RPC, including errors.
-pub(crate) struct AnonymousGifClient(GifServiceClient<GrpcTransport>);
+pub(crate) struct AnonymousGifClient {
+    inner: GifServiceClient<GrpcTransport>,
+    tokens: TokenManager,
+}
 
 impl AnonymousGifClient {
-    pub(crate) fn new(channel: GrpcTransport) -> Self {
-        Self(GifServiceClient::new(channel).max_decoding_message_size(MAX_GIF_MEDIA_MESSAGE))
+    pub(crate) fn new(channel: GrpcTransport, tokens: TokenManager) -> Self {
+        Self {
+            inner: GifServiceClient::new(channel).max_decoding_message_size(MAX_GIF_MEDIA_MESSAGE),
+            tokens,
+        }
+    }
+
+    fn request<T>(&self, payload: T) -> Result<tonic::Request<T>, NetworkError> {
+        let mut request = tonic::Request::new(payload);
+        let token = self.tokens.claim_send_credential()?;
+        super::interceptors::insert_blind_credential(
+            &mut request,
+            &token.public_key,
+            &token.signature,
+        )
+        .map_err(|status| NetworkError::from_status(&status))?;
+        Ok(request)
     }
 
     pub(crate) async fn media(mut self, url: &str) -> Result<Vec<u8>, NetworkError> {
-        self.0
-            .get_private_gif_media(GetGifMediaRequest { url: url.into() })
+        let request = self.request(GetGifMediaRequest { url: url.into() })?;
+        self.inner
+            .get_private_gif_media(request)
             .await
             .map(|r| r.into_inner().data)
             .map_err(|status| NetworkError::from_status(&status))
@@ -160,25 +180,27 @@ impl AnonymousGifClient {
         query: &str,
         limit: i32,
     ) -> Result<Vec<GifResult>, NetworkError> {
-        self.0
-            .search_private_gifs(SearchGifsRequest {
-                query: query.into(),
-                limit,
-                content_filter: "low".into(),
-                ..Default::default()
-            })
+        let request = self.request(SearchGifsRequest {
+            query: query.into(),
+            limit,
+            content_filter: "low".into(),
+            ..Default::default()
+        })?;
+        self.inner
+            .search_private_gifs(request)
             .await
             .map(|r| r.into_inner().results)
             .map_err(|status| NetworkError::from_status(&status))
     }
 
     pub(crate) async fn trending(mut self, limit: i32) -> Result<Vec<GifResult>, NetworkError> {
-        self.0
-            .get_private_trending_gifs(GetTrendingGifsRequest {
-                limit,
-                content_filter: "low".into(),
-                ..Default::default()
-            })
+        let request = self.request(GetTrendingGifsRequest {
+            limit,
+            content_filter: "low".into(),
+            ..Default::default()
+        })?;
+        self.inner
+            .get_private_trending_gifs(request)
             .await
             .map(|r| r.into_inner().results)
             .map_err(|status| NetworkError::from_status(&status))

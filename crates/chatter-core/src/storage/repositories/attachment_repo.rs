@@ -81,6 +81,10 @@ impl AttachmentRepository {
         !matches!(kind, Some(ChannelType::Public | ChannelType::SavedMessages))
     }
 
+    pub(crate) fn gif_tokens(&self) -> crate::mailbox::token_manager::TokenManager {
+        crate::mailbox::token_manager::TokenManager::new(self.db.clone()).for_gifs()
+    }
+
     pub(crate) fn attachment_tokens(&self) -> crate::mailbox::token_manager::TokenManager {
         crate::mailbox::token_manager::TokenManager::new(self.db.clone()).for_attachments()
     }

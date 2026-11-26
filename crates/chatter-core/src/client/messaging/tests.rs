@@ -32,7 +32,7 @@ mod shield_mode_tests {
         assert!(client.gif_picker_available_for(&ConversationType::ServerDm));
         assert!(client.gif_picker_available());
         client.anon_mode.store(true, Ordering::Release);
-        // Shield permits only the private channel's credential-free picker.
+        // Shield permits only the private channel's anonymous picker.
         assert!(!client.gif_picker_available_for(&ConversationType::ServerDm));
         assert!(!client.gif_picker_available_for(&ConversationType::Channel));
         assert!(!client.gif_picker_available());

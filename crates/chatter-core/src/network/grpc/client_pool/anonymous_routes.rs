@@ -47,6 +47,11 @@ impl GrpcClientPool {
         routes.entry(channel).or_default().clone()
     }
 
+    #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
+    pub(crate) fn retire_test_channel_route(&self, channel: crate::domain::ChannelId) {
+        assert!(self.private_channels.lock().remove(&channel).is_some());
+    }
+
     pub(super) fn private_post_channel(
         self: &Arc<Self>,
         channel: crate::domain::ChannelId,
@@ -57,12 +62,26 @@ impl GrpcClientPool {
     }
 
     fn private_channel_connection(&self, channel: crate::domain::ChannelId) -> GrpcTransport {
-        let route = self.private_channel_route(channel);
+        self.private_route_connection(&self.private_channel_route(channel))
+    }
+
+    fn private_route_connection(&self, route: &PrivateChannelRoute) -> GrpcTransport {
         self.isolated_unidentified_channel(
             &route.grpc,
             #[cfg(feature = "onion")]
             &route.tor,
         )
+    }
+
+    pub(crate) fn pin_private_upload(
+        &self,
+        channel: crate::domain::ChannelId,
+        generation: tokio_util::sync::CancellationToken,
+    ) -> PrivateUploadRoute {
+        let route = self.private_channel_route(channel);
+        let connection = self.private_route_connection(&route);
+        let grpc = GrpcTransport::private_channel(move || connection.clone(), generation);
+        PrivateUploadRoute { route, grpc }
     }
 
     pub(super) fn one_shot_anonymous_channel(&self) -> GrpcTransport {
@@ -77,10 +96,7 @@ impl GrpcClientPool {
         &self,
         channel: crate::domain::ChannelId,
     ) -> Result<reqwest::Client, String> {
-        self.private_channel_route(channel)
-            .cdn
-            .get_or_init(crate::network::storage_http::build_client)
-            .clone()
+        self.private_channel_route(channel).storage_client()
     }
 
     #[cfg(feature = "onion")]
@@ -88,7 +104,15 @@ impl GrpcClientPool {
         &self,
         channel: crate::domain::ChannelId,
     ) -> Result<super::super::onion_transport::SharedTorClient, NetworkError> {
-        let route = self.private_channel_route(channel);
+        self.private_route_storage_tor(&self.private_channel_route(channel))
+            .await
+    }
+
+    #[cfg(feature = "onion")]
+    async fn private_route_storage_tor(
+        &self,
+        route: &PrivateChannelRoute,
+    ) -> Result<super::super::onion_transport::SharedTorClient, NetworkError> {
         let base = super::super::onion_transport::shared_bootstrap(&self.onion_tor)
             .await
             .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
@@ -272,5 +296,34 @@ impl GrpcClientPool {
     pub fn disconnect_unidentified(&self) {
         *self.unidentified_channel.write() = None;
         *self.unidentified_health.write() = None;
+    }
+}
+
+impl PrivateChannelRoute {
+    fn storage_client(&self) -> Result<reqwest::Client, String> {
+        self.cdn
+            .get_or_init(crate::network::storage_http::build_client)
+            .clone()
+    }
+}
+
+impl PrivateUploadRoute {
+    pub(crate) fn file_client(
+        &self,
+        tokens: Arc<crate::mailbox::token_manager::TokenManager>,
+    ) -> super::super::FileClient {
+        super::super::FileClient::private_channel(self.grpc.clone(), tokens)
+    }
+
+    pub(crate) fn storage_client(&self) -> Result<reqwest::Client, String> {
+        self.route.storage_client()
+    }
+
+    #[cfg(feature = "onion")]
+    pub(crate) async fn storage_tor(
+        &self,
+        pool: &GrpcClientPool,
+    ) -> Result<super::super::onion_transport::SharedTorClient, NetworkError> {
+        pool.private_route_storage_tor(&self.route).await
     }
 }

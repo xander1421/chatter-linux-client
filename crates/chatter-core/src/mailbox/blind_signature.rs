@@ -238,7 +238,9 @@ fn manifest_now() -> Result<u64, MailboxError> {
 // Must match service/manifest.go. Explicit framing avoids protobuf serialization
 // differences and binds the key IDs, schedule, and DER under one signature.
 fn manifest_bytes(m: &GetBlindSignaturePublicKeyResponse) -> Vec<u8> {
-    let mut bytes = if m.attachment {
+    let mut bytes = if m.gif {
+        b"chatter/gif-blind-key-manifest/v1\0".to_vec()
+    } else if m.attachment {
         b"chatter/attachment-blind-key-manifest/v1\0".to_vec()
     } else {
         b"chatter/mailbox-blind-key-manifest/v1\0".to_vec()
@@ -447,6 +449,7 @@ pub(crate) mod tests {
         let pin = signer.verifying_key().to_bytes();
         let mut m = GetBlindSignaturePublicKeyResponse {
             attachment: false,
+            gif: false,
             public_key: blind_rsa_signatures::KeyPairSha384PSSZeroDeterministic::generate(
                 &mut DefaultRng,
                 2048,
@@ -590,6 +593,7 @@ pub(crate) mod tests {
         use chatter_proto::mailbox_v1::BlindSignatureNextKey;
         let m = GetBlindSignaturePublicKeyResponse {
             attachment: false,
+            gif: false,
             public_key: vec![1, 2],
             key_id: "a".into(),
             valid_from: 1,

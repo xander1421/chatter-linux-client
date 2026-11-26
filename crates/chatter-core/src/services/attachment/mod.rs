@@ -236,6 +236,7 @@ pub struct AttachmentService {
     /// transfer goes over Tor, whatever the pool's transport, or fails.
     pub(crate) secret_chat: bool,
     private_channel: Option<crate::domain::ChannelId>,
+    upload_route: Option<crate::network::grpc::client_pool::PrivateUploadRoute>,
 }
 
 impl AttachmentService {
@@ -315,6 +316,9 @@ impl AttachmentService {
                 .secret_file_client()
                 .map_err(|e| AttachmentError::NetworkError(e.to_string()));
         }
+        if let Some(route) = &self.upload_route {
+            return Ok(route.file_client(Arc::new(self.attachment_repo.attachment_tokens())));
+        }
         if let Some(channel) = self.private_channel {
             return Ok(pool.private_channel_file_client(
                 channel,
@@ -364,6 +368,11 @@ impl AttachmentService {
             pool.secret_storage_tor()
                 .await
                 .map_err(|e| AttachmentError::NetworkError(e.to_string()))
+        } else if let Some(route) = &self.upload_route {
+            route
+                .storage_tor(pool)
+                .await
+                .map_err(|e| AttachmentError::NetworkError(e.to_string()))
         } else if let Some(channel) = self.private_channel {
             pool.private_channel_storage_tor(channel)
                 .await
@@ -374,6 +383,11 @@ impl AttachmentService {
     }
 
     fn cdn_client(&self) -> Result<reqwest::Client, AttachmentError> {
+        if let Some(route) = &self.upload_route {
+            return route
+                .storage_client()
+                .map_err(AttachmentError::NetworkError);
+        }
         if let Some(channel) = self.private_channel {
             self.grpc_pool()?
                 .private_channel_storage_client(channel)
@@ -559,6 +573,7 @@ impl AttachmentService {
             grpc_pool: Some(grpc_pool),
             secret_chat: false,
             private_channel: None,
+            upload_route: None,
         }
     }
 
@@ -571,6 +586,7 @@ impl AttachmentService {
             grpc_pool: None,
             secret_chat: false,
             private_channel: None,
+            upload_route: None,
         }
     }
 

@@ -7,6 +7,7 @@ use crate::network::grpc::transport::GrpcTransport;
 use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
+use crate::mailbox::token_manager::CredentialPurpose;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use chatter_proto::mailbox_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
@@ -33,7 +34,7 @@ use chatter_proto::mailbox_v1::{
 /// ```
 #[derive(Clone)]
 pub struct MailboxClient {
-    attachment: bool,
+    purpose: CredentialPurpose,
     inner: EphemeralMailboxServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
@@ -41,13 +42,13 @@ impl MailboxClient {
     /// Create a new MailboxClient from pool components.
     pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
-            attachment: false,
+            purpose: CredentialPurpose::Mailbox,
             inner: EphemeralMailboxServiceClient::with_interceptor(channel, interceptor),
         }
     }
 
-    pub(crate) fn with_attachment_purpose(mut self, attachment: bool) -> Self {
-        self.attachment = attachment;
+    pub(crate) fn with_purpose(mut self, purpose: CredentialPurpose) -> Self {
+        self.purpose = purpose;
         self
     }
 
@@ -74,10 +75,10 @@ impl MailboxClient {
             key_id,
         };
 
-        let response = if self.attachment {
-            self.inner.get_attachment_tokens(request).await
-        } else {
-            self.inner.get_mailbox_tokens(request).await
+        let response = match self.purpose {
+            CredentialPurpose::Mailbox => self.inner.get_mailbox_tokens(request).await,
+            CredentialPurpose::Attachment => self.inner.get_attachment_tokens(request).await,
+            CredentialPurpose::Gif => self.inner.get_gif_tokens(request).await,
         };
         response.map(|r| r.into_inner()).map_err(|status| {
             // The mailbox handler's application refusal is distinct from
@@ -102,10 +103,10 @@ impl MailboxClient {
     ) -> Result<GetBlindSignaturePublicKeyResponse, NetworkError> {
         let request = GetBlindSignaturePublicKeyRequest { consistency: Some(consistency) };
 
-        let response = if self.attachment {
-            self.inner.get_attachment_signing_key(request).await
-        } else {
-            self.inner.get_blind_signature_public_key(request).await
+        let response = match self.purpose {
+            CredentialPurpose::Mailbox => self.inner.get_blind_signature_public_key(request).await,
+            CredentialPurpose::Attachment => self.inner.get_attachment_signing_key(request).await,
+            CredentialPurpose::Gif => self.inner.get_gif_signing_key(request).await,
         };
         response
             .map(|r| r.into_inner())

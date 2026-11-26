@@ -180,6 +180,14 @@ impl Default for PrivateChannelRoute {
     }
 }
 
+/// A single private upload uses this connection, circuit and CDN pool until
+/// its final confirmation or abort. The pool can rotate for other work.
+#[derive(Clone)]
+pub(crate) struct PrivateUploadRoute {
+    route: Arc<PrivateChannelRoute>,
+    grpc: GrpcTransport,
+}
+
 mod anonymous_routes;
 mod channels;
 mod clients;
