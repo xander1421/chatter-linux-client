@@ -67,26 +67,16 @@ impl MessageService {
             .map_err(MessageError::from)
     }
 
-    /// Whether a channel requires end-to-end encryption.
-    ///
-    /// Looks up channel locally first, fetches from server if not found.
-    pub(crate) async fn channel_requires_encryption(
+    /// Require local routing evidence before composing or replaying a channel send.
+    pub(crate) fn channel_send_requires_encryption(
         &self,
         channel_id: &ChannelId,
-        channel_client: &mut ChannelClient,
     ) -> Result<bool, MessageError> {
-        // Try local lookup first
-        if let Ok(Some(channel)) = self.channel_repo.get(channel_id) {
-            return Ok(channel.config.require_encryption);
+        use crate::domain::channel::ChannelType;
+        match self.channel_repo.routing_type(channel_id)? {
+            Some(ChannelType::Public) => Ok(false),
+            Some(ChannelType::Private) => Ok(true),
+            _ => Err(crate::error::NetworkError::Unavailable.into()),
         }
-
-        // Not found locally - fetch from server
-        tracing::debug!(
-            channel_id = %channel_id,
-            "Channel not in local repo, fetching from server"
-        );
-
-        let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
-        Ok(proto_channel.config.map(|c| c.encrypted).unwrap_or(false))
     }
 }

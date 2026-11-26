@@ -297,7 +297,7 @@ impl ConversationHandle {
         // here for moderators. The server stays authoritative; offering the
         // action to a non-moderator only yields a rejected request.
         if let ActiveConversation::Channel(channel_id) = &self.conversation {
-            menu.actions.info &= self.client.messages().channel_receipts_enabled(channel_id);
+            menu.actions.info &= self.client.messages().is_public_channel(channel_id);
             if !menu.actions.delete_for_everyone && !message.is_deleted && message.sent_at > 0 {
                 // on_server, mirroring `decide`: someone else's message has
                 // reached the server; our own must not be failed/sending.

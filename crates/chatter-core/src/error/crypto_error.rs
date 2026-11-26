@@ -220,6 +220,10 @@ pub enum CryptoError {
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
 
+    /// The sender-key distribution for a channel message has not arrived.
+    #[error("missing sender key")]
+    MissingSenderKey,
+
     /// Key not found in store.
     #[error("key not found: {0}")]
     KeyNotFound(String),

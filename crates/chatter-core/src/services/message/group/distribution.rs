@@ -657,6 +657,9 @@ impl MessageService {
         requester: &UserId,
         skdm_bytes: &[u8],
     ) -> Result<bool, MessageError> {
+        if !self.is_public_channel(channel_id) {
+            return Ok(false);
+        }
         if !self.may_hold_sender_key(channel_id, requester) {
             tracing::debug!(%channel_id, %requester, "Dropping SenderKeyRequest from a non-member");
             return Ok(false);

@@ -159,9 +159,7 @@ impl MessageService {
             )),
         };
 
-        let require_encryption = self
-            .channel_requires_encryption(channel_id, channel_client)
-            .await?;
+        let require_encryption = self.channel_send_requires_encryption(channel_id)?;
 
         // Sender-key channel: every key decision reads the VERIFIED membership.
         // No verified state, a failed verification or a fork blocks the send
@@ -197,7 +195,7 @@ impl MessageService {
         // The devices this send is for. Recorded before encryption so a later
         // failure still has an original recipient set, and a resend cannot
         // grow it. Receipts use the same rows.
-        if !self.is_private_channel(channel_id) {
+        if !require_encryption {
             self.snapshot_channel_receipt_targets(*channel_id, sent_at, channel_client).await?;
         }
 
@@ -244,7 +242,7 @@ impl MessageService {
             wrap.encode_to_vec()
         };
 
-        let private = self.is_private_channel(channel_id);
+        let private = require_encryption;
         let previous_distribution = if private {
             Some(self.create_sender_key_for_channel(channel_id).await?)
         } else {
@@ -785,6 +783,11 @@ impl MessageService {
     ) -> Result<(), MessageError> {
         let _ = self.settings_repo.current_user_id()?;
 
+        if matches!(content.content, Some(chatter_proto::content_v1::content::Content::Typing(_)))
+            && !self.is_public_channel(channel_id)
+        {
+            return Ok(());
+        }
         self.fanout_control_to_device_inboxes(auth_client, channel_id, &content)
             .await
     }
@@ -1236,11 +1239,8 @@ impl MessageService {
         // impossible, not merely unlikely.
         let is_public = self
             .channel_repo
-            .get(channel_id)
-            .ok()
-            .flatten()
-            .map(|c| c.channel_type == crate::domain::channel::ChannelType::Public)
-            .unwrap_or(false);
+            .routing_type(channel_id)?
+            == Some(crate::domain::channel::ChannelType::Public);
         if !is_public {
             return Err(MessageError::EncryptionFailed(format!(
                 "refusing to send plaintext on non-public channel {channel_id}: \

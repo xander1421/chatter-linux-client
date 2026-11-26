@@ -118,7 +118,7 @@ impl ConversationHandle {
         if timestamps.is_empty()
             || matches!(self.conversation, ActiveConversation::AnonGroup(_))
             || matches!(&self.conversation, ActiveConversation::Channel(channel)
-                if !self.client.messages().channel_receipts_enabled(channel))
+                if !self.client.messages().is_public_channel(channel))
         {
             return Ok(());
         }
@@ -341,7 +341,7 @@ impl ConversationHandle {
         if !self.client.chat_state().is_app_visible()
             || matches!(self.conversation, ActiveConversation::AnonGroup(_))
             || matches!(&self.conversation, ActiveConversation::Channel(channel)
-                if !self.client.messages().channel_receipts_enabled(channel))
+                if !self.client.messages().is_public_channel(channel))
         {
             return None;
         }

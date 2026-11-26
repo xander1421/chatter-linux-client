@@ -73,6 +73,88 @@
     }
 
     #[cfg(feature = "dev-trust-root")]
+    mod private_wire_fixture {
+        use crate::domain::UserId;
+        use chatter_proto::chat_v1 as pb;
+        use rand::{SeedableRng, rngs::StdRng};
+        use std::{collections::VecDeque, convert::Infallible, pin::Pin, task::{Context, Poll}};
+        use tonic::body::Body;
+
+    struct GrpcFrames(VecDeque<http_body::Frame<bytes::Bytes>>);
+    impl http_body::Body for GrpcFrames {
+        type Data = bytes::Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(mut self: Pin<&mut Self>, _: &mut Context<'_>) ->
+            Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
+        {
+            Poll::Ready(self.0.pop_front().map(Ok))
+        }
+    }
+
+    pub(super) fn grpc_reply(response: impl prost::Message) -> http::Response<Body> {
+        let mut body = vec![0];
+        body.extend_from_slice(&(response.encoded_len() as u32).to_be_bytes());
+        response.encode(&mut body).unwrap();
+        let mut trailers = http::HeaderMap::new();
+        trailers.insert("grpc-status", "0".parse().unwrap());
+        http::Response::builder()
+            .header("content-type", "application/grpc")
+            .body(Body::new(GrpcFrames(VecDeque::from([
+                http_body::Frame::data(body.into()),
+                http_body::Frame::trailers(trailers),
+            ]))))
+            .unwrap()
+    }
+
+    pub(super) async fn read_grpc_request<M: prost::Message + Default>(body: Body) -> M {
+        M::decode(read_wire(body).await.as_slice()).unwrap()
+    }
+
+    pub(super) async fn read_wire(mut body: Body) -> Vec<u8> {
+        use http_body::Body as _;
+        let mut wire = Vec::new();
+        while let Some(frame) = futures::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
+            if let Ok(data) = frame.unwrap().into_data() {
+                wire.extend_from_slice(&data);
+            }
+        }
+        wire.split_off(5)
+    }
+
+    pub(super) fn repair_bundle(owner: UserId, registration_id: u32, rng: &mut StdRng) -> pb::SignalPreKeyBundle {
+        use libsignal_protocol::{IdentityKeyPair, KeyPair, kem};
+        use pb::signal_pre_key_bundle::{KyberPreKeyRecord, SignedPreKeyRecord};
+
+        let identity = IdentityKeyPair::generate(
+            &mut StdRng::seed_from_u64(owner.as_uuid().as_u128() as u64),
+        );
+        let signed = KeyPair::generate(rng).public_key.serialize().to_vec();
+        let kyber = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng)
+            .public_key.serialize().to_vec();
+        pb::SignalPreKeyBundle {
+            identity_key: identity.identity_key().serialize().to_vec(),
+            registration_id,
+            device_id: 1,
+            signed_prekey: Some(SignedPreKeyRecord {
+                id: 17,
+                signature: identity.private_key().calculate_signature(&signed, rng).unwrap().to_vec(),
+                public_key: signed,
+                timestamp: 1,
+            }),
+            kyber_prekey: Some(KyberPreKeyRecord {
+                id: 18,
+                signature: identity.private_key().calculate_signature(&kyber, rng).unwrap().to_vec(),
+                public_key: kyber,
+                timestamp: 1,
+            }),
+            ..Default::default()
+        }
+    }
+
+    }
+
+    #[cfg(feature = "dev-trust-root")]
     #[tokio::test]
     async fn private_submit_fetches_bundles_anonymously_only_when_needed() {
         use chatter_proto::chat_v1 as pb;
@@ -81,79 +163,13 @@
         };
         use rand::{SeedableRng, rngs::StdRng};
         use std::{
-            collections::{HashMap, VecDeque}, convert::Infallible, future::Future, pin::Pin,
+            collections::HashMap, convert::Infallible, future::Future, pin::Pin,
             sync::{Arc, Mutex}, task::{Context, Poll},
         };
         use tokio::net::TcpListener;
         use tonic::{body::Body, server::NamedService, transport::Server};
 
-        struct GrpcFrames(VecDeque<http_body::Frame<bytes::Bytes>>);
-        impl http_body::Body for GrpcFrames {
-            type Data = bytes::Bytes;
-            type Error = Infallible;
-
-            fn poll_frame(mut self: Pin<&mut Self>, _: &mut Context<'_>) ->
-                Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
-            {
-                Poll::Ready(self.0.pop_front().map(Ok))
-            }
-        }
-
-        fn grpc_reply(response: impl prost::Message) -> http::Response<Body> {
-            let mut body = vec![0];
-            body.extend_from_slice(&(response.encoded_len() as u32).to_be_bytes());
-            response.encode(&mut body).unwrap();
-            let mut trailers = http::HeaderMap::new();
-            trailers.insert("grpc-status", "0".parse().unwrap());
-            http::Response::builder()
-                .header("content-type", "application/grpc")
-                .body(Body::new(GrpcFrames(VecDeque::from([
-                    http_body::Frame::data(body.into()),
-                    http_body::Frame::trailers(trailers),
-                ]))))
-                .unwrap()
-        }
-
-        async fn read_grpc_request<M: prost::Message + Default>(mut body: Body) -> M {
-            use http_body::Body as _;
-            let mut wire = Vec::new();
-            while let Some(frame) = futures::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
-                if let Ok(data) = frame.unwrap().into_data() {
-                    wire.extend_from_slice(&data);
-                }
-            }
-            M::decode(&wire[5..]).unwrap()
-        }
-
-        fn repair_bundle(owner: UserId, registration_id: u32, rng: &mut StdRng) -> pb::SignalPreKeyBundle {
-            use libsignal_protocol::{IdentityKeyPair, KeyPair, kem};
-            use pb::signal_pre_key_bundle::{KyberPreKeyRecord, SignedPreKeyRecord};
-
-            let identity = IdentityKeyPair::generate(
-                &mut StdRng::seed_from_u64(owner.as_uuid().as_u128() as u64),
-            );
-            let signed = KeyPair::generate(rng).public_key.serialize().to_vec();
-            let kyber = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng)
-                .public_key.serialize().to_vec();
-            pb::SignalPreKeyBundle {
-                identity_key: identity.identity_key().serialize().to_vec(),
-                registration_id,
-                device_id: 1,
-                signed_prekey: Some(SignedPreKeyRecord {
-                    id: 17,
-                    signature: identity.private_key().calculate_signature(&signed, rng).unwrap().to_vec(),
-                    public_key: signed,
-                    timestamp: 1,
-                }),
-                kyber_prekey: Some(KyberPreKeyRecord {
-                    id: 18,
-                    signature: identity.private_key().calculate_signature(&kyber, rng).unwrap().to_vec(),
-                    public_key: kyber,
-                    timestamp: 1,
-                }),
-                ..Default::default()
-            }
-        }
+        use private_wire_fixture::{grpc_reply, read_grpc_request, repair_bundle};
 
         #[derive(Clone, Default)]
         struct Probe {

@@ -50,6 +50,7 @@ pub struct SignalStore {
     key_store: Arc<KeyStore>,
     kt_route: Option<KtRoute>,
     outbound_kt_due_at: i64,
+    inbound_kt_due_at: i64,
     authenticated_whisper_receive: bool,
     /// Mesh ratchets have a device-local address space per signed-in account.
     /// Identity keys remain keyed by the ordinary account ID.
@@ -65,6 +66,7 @@ impl SignalStore {
             key_store,
             kt_route: Some(KtRoute::Normal),
             outbound_kt_due_at: 0,
+            inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
             mesh_owner: None,
             #[cfg(feature = "mesh")]
@@ -85,6 +87,7 @@ impl SignalStore {
             key_store,
             kt_route: Some(KtRoute::Normal),
             outbound_kt_due_at: 0,
+            inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
             mesh_owner: Some(owner),
             mesh_binding: Some((binding_store, peer)),
@@ -140,11 +143,16 @@ impl SignalStore {
 
     pub(crate) fn set_kt_route(&mut self, route: KtRoute) {
         self.kt_route = Some(route);
+        self.inbound_kt_due_at = 0;
         self.authenticated_whisper_receive = false;
     }
 
     pub(crate) fn defer_outbound_kt_until(&mut self, due_at: i64) {
         self.outbound_kt_due_at = due_at;
+    }
+
+    pub(crate) fn defer_received_key_until(&mut self, due_at: i64) {
+        self.inbound_kt_due_at = due_at;
     }
 
     pub(crate) fn defer_inbound_kt_route(&mut self) {
@@ -419,8 +427,8 @@ impl IdentityKeyStore for SignalStore {
         let route = self.kt_route.unwrap_or(KtRoute::AnonymousTor);
         match self.key_store.get_identity(peer).map_err(storage_to_signal_error)? {
             Some(pinned) if pinned.as_slice() != observed.as_ref() => self.key_store
-                .enqueue_archived_kt(peer, &pinned, &observed, route).map_err(storage_to_signal_error),
-            Some(_) => self.key_store.enqueue_inbound_kt(peer, &observed, route)
+                .enqueue_archived_kt(peer, &pinned, &observed, route, self.inbound_kt_due_at).map_err(storage_to_signal_error),
+            Some(_) => self.key_store.enqueue_inbound_kt(peer, &observed, route, self.inbound_kt_due_at)
                 .map_err(storage_to_signal_error),
             None => Ok(()),
         }

@@ -57,14 +57,23 @@ impl SignalService {
 
     /// Reuse admitted sessions for a private-channel send. The anonymous
     /// submit reports missing or stale devices for reconciliation.
+    pub(crate) fn require_group_device_ready(&self, recipient_id: &str) -> Result<(), ServiceError> {
+        if let Some(key) = self.get_peer_identity(recipient_id)? {
+            self.require_private_post_key(recipient_id, &key)?;
+        }
+        self.require_bundle_lookup_ready(recipient_id)
+    }
+
+    pub(crate) fn has_discovered_private_echo(&self) -> Result<bool, ServiceError> {
+        let (key, _) = self.private_echo_key()?;
+        Ok(self.settings_repo.get::<Option<u32>>(&key)?.flatten().is_some())
+    }
+
     pub(crate) async fn require_group_device_sessions(
         &self,
         source: &mut PreKeySource<'_>,
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
-        if let Some(key) = self.get_peer_identity(recipient_id)? {
-            self.require_private_post_key(recipient_id, &key)?;
-        }
         self.ensure_device_sessions(source, recipient_id, false, true)
             .await.map(|(devices, _)| devices)
     }
@@ -125,15 +134,11 @@ impl SignalService {
             .filter(|d| Some(*d) != this_device)
             .collect();
         let known_policy = self.unrestricted_access(recipient_id);
-        if !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
+        if !strict_discovery && !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
             return Ok((with_session, known_policy.unwrap_or(false)));
         }
 
-        let refresh_echo = strict_discovery && this_device.is_some()
-            && self.private_echo_registration()?.is_none();
-        if strict_discovery && !refresh_echo && let Some(device) = this_device {
-            return Ok((vec![device], known_policy.unwrap_or(false)));
-        }
+        let refresh_echo = strict_discovery && this_device.is_some();
 
         match self.require_bundle_lookup_ready(recipient_id) {
             Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }))
@@ -162,6 +167,9 @@ impl SignalService {
         };
 
         let Some(result) = response.result else {
+            if strict_discovery {
+                return Err(crate::error::NetworkError::Unavailable.into());
+            }
             // No bundle at all: nothing to fetch a session from. The send
             // still asks the server, which names any device we are missing.
             return Ok((with_session, false));

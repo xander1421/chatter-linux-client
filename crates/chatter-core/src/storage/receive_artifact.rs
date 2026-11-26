@@ -481,6 +481,7 @@ pub(crate) struct ReceiveChanges {
     pub sessions: Vec<(String, Vec<u8>)>,
     pub identities: Vec<(String, Vec<u8>)>,
     pub prekey_identity: Option<(String, Vec<u8>)>,
+    pub group_scope: Option<Vec<u8>>,
     pub archived_identities: Vec<(String, Vec<u8>, Vec<u8>)>,
     pub prekeys: Vec<(u32, Option<Vec<u8>>)>,
     pub signed: Vec<(u32, Vec<u8>)>,

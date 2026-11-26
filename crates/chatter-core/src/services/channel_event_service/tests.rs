@@ -305,6 +305,7 @@ impl World {
         w.by_owner(vec![act(Action::Genesis(pb::Genesis {
             policy: Some(Policy::defaults(false).to_proto()),
             disappearing_seconds: 0,
+            channel_type: 0,
         }))])
         .await;
         w.by_owner(vec![w.add(&w.me)]).await;

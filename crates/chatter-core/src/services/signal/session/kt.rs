@@ -488,7 +488,7 @@ mod kt_pin_tests {
         service.key_store.save_identity(&peer, &pinned).unwrap();
         service
             .key_store
-            .enqueue_archived_kt(&peer, &pinned, &archived, KtRoute::AnonymousTor)
+            .enqueue_archived_kt(&peer, &pinned, &archived, KtRoute::AnonymousTor, 0)
             .unwrap();
         let mut jobs = service
             .key_store
@@ -509,7 +509,7 @@ mod kt_pin_tests {
         assert!(service.pending_identity_change(&peer).unwrap().is_none());
         service
             .key_store
-            .enqueue_archived_kt(&peer, &pinned, &archived, KtRoute::AnonymousTor)
+            .enqueue_archived_kt(&peer, &pinned, &archived, KtRoute::AnonymousTor, 0)
             .unwrap();
         assert!(
             service

@@ -69,7 +69,7 @@ impl SealedSenderManager {
         pre_key_store: &mut P,
         signed_pre_key_store: &SP,
         kyber_pre_key_store: &mut K,
-        allow_archived_whisper: impl FnOnce(&mut I),
+        configure_receive: impl FnOnce(&mut I, CiphertextMessageType, Option<&[u8]>),
     ) -> Result<(ReceivedSealedSender, CiphertextMessageType), CryptoError>
     where
         I: IdentityKeyStore,
@@ -187,11 +187,11 @@ impl SealedSenderManager {
             )
         };
 
+        configure_receive(identity_store, msg_type, group_id.as_deref());
         let mut rng = OsRng.unwrap_err();
         let mut prekey_identity = None;
         let message = match msg_type {
             CiphertextMessageType::Whisper => {
-                allow_archived_whisper(identity_store);
                 let ctext = SignalMessage::try_from(contents).map_err(map_inner_err)?;
                 message_decrypt_signal(
                     &ctext,
@@ -243,6 +243,7 @@ impl SealedSenderManager {
 
         let result = ReceivedSealedSender {
             prekey_identity,
+            group_id,
             sender_uuid,
             sender_e164,
             device_id: sender_device_id,

@@ -40,6 +40,21 @@ pub(crate) enum KtUpdate {
     Stale,
 }
 
+/// A target-specific proof immediately after channel delivery identifies the
+/// post's author. Keep verification pending until a separate jittered deadline.
+pub(crate) fn receive_key_due_at(
+    group_id: Option<&[u8]>,
+    is_public: impl FnOnce(&crate::domain::ChannelId) -> bool,
+) -> i64 {
+    if group_id.is_some_and(|id| crate::domain::ChannelId::try_from_slice(id)
+        .is_none_or(|channel| !is_public(&channel)))
+    {
+        chrono::Utc::now().timestamp() + crate::app::core_services::jittered_delay().as_secs() as i64
+    } else {
+        0
+    }
+}
+
 impl KeyStore {
     pub(crate) fn peer_verification(
         &self,
@@ -117,6 +132,7 @@ impl KeyStore {
         peer: &str,
         key: &[u8],
         route: KtRoute,
+        due_at: i64,
     ) -> Result<bool, StorageError> {
         let current: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM remote_identities WHERE address=?1 AND identity_key=?2)
@@ -124,7 +140,7 @@ impl KeyStore {
             params![peer, key], |row| row.get(0),
         )?;
         if current {
-            Self::enqueue_kt_in(conn, peer, key, route)
+            Self::enqueue_kt_in_at(conn, peer, key, route, due_at)
         } else {
             Ok(false)
         }
@@ -135,9 +151,10 @@ impl KeyStore {
         peer: &str,
         key: &[u8],
         route: KtRoute,
+        due_at: i64,
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        if Self::enqueue_inbound_kt_in(&conn, peer, key, route)? {
+        if Self::enqueue_inbound_kt_in(&conn, peer, key, route, due_at)? {
             self.kt_work.notify_one();
         }
         Ok(())
@@ -149,6 +166,7 @@ impl KeyStore {
         pinned: &[u8],
         archived: &[u8],
         route: KtRoute,
+        due_at: i64,
     ) -> Result<bool, StorageError> {
         let inserted = conn.execute(
             "INSERT OR IGNORE INTO peer_kt_archived_receives VALUES (?1,?2,?3,?4)",
@@ -156,9 +174,9 @@ impl KeyStore {
         )? == 1;
         if inserted {
             conn.execute(
-                "INSERT INTO peer_kt_jobs (account,identity_key,route,archived)
-                 VALUES (?1,?2,?3,1) ON CONFLICT(account,identity_key,route) DO UPDATE SET archived=1",
-                params![peer, archived, route as i64],
+                "INSERT INTO peer_kt_jobs (account,identity_key,route,archived,due_at)
+                 VALUES (?1,?2,?3,1,?4) ON CONFLICT(account,identity_key,route) DO UPDATE SET archived=1",
+                params![peer, archived, route as i64, due_at],
             )?;
         }
         Ok(inserted)
@@ -170,10 +188,11 @@ impl KeyStore {
         pinned: &[u8],
         archived: &[u8],
         route: KtRoute,
+        due_at: i64,
     ) -> Result<(), StorageError> {
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
-        let queued = Self::enqueue_archived_kt_in(&tx, peer, pinned, archived, route)?;
+        let queued = Self::enqueue_archived_kt_in(&tx, peer, pinned, archived, route, due_at)?;
         tx.commit()?;
         if queued {
             self.kt_work.notify_one();
@@ -371,5 +390,20 @@ impl KeyStore {
             params![peer, key],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod receive_schedule_tests {
+    use super::*;
+
+    #[test]
+    fn a_received_group_identity_is_due_independently_of_delivery() {
+        let channel = crate::domain::ChannelId::new();
+        let now = chrono::Utc::now().timestamp();
+        let due = receive_key_due_at(Some(channel.as_bytes()), |_| false);
+        assert!((now + 300..=now + 901).contains(&due));
+        assert_eq!(receive_key_due_at(Some(channel.as_bytes()), |id| *id == channel), 0);
+        assert_eq!(receive_key_due_at(None, |_| false), 0);
     }
 }

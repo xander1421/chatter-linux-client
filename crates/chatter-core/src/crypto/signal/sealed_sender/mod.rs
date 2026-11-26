@@ -30,6 +30,7 @@ pub struct ReceivedSealedSender {
     pub sender_e164: Option<String>,
     pub device_id: libsignal_protocol::DeviceId,
     pub message: Vec<u8>,
+    pub(crate) group_id: Option<Vec<u8>>,
     pub(crate) prekey_identity: Option<libsignal_protocol::IdentityKey>,
 }
 

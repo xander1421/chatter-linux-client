@@ -61,9 +61,8 @@ pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>
 }
 
 impl MessageService {
-    pub(crate) fn channel_receipts_enabled(&self, channel: &ChannelId) -> bool {
-        self.channel_repo.get_channel_type(channel).ok().flatten()
-            == Some(crate::domain::channel::ChannelType::Public)
+    pub(crate) fn is_public_channel(&self, channel: &ChannelId) -> bool {
+        self.channel_repo.is_routed_public(channel)
     }
 
     /// A public-channel receipt belongs to each message's author and all of that
@@ -76,7 +75,7 @@ impl MessageService {
         timestamps: &[u64],
         read: bool,
     ) -> Result<(), MessageError> {
-        if !self.channel_receipts_enabled(&channel) {
+        if !self.is_public_channel(&channel) {
             return Ok(());
         }
         let me = self.current_user_id()?;
@@ -115,7 +114,7 @@ impl MessageService {
         if stamps.is_empty() {
             return Ok(());
         }
-        match self.channel_repo.get_channel_type(&channel)? {
+        match self.channel_repo.routing_type(&channel)? {
             Some(crate::domain::channel::ChannelType::Public) => {}
             Some(_) => return Ok(()),
             // The durable outbox can precede channel metadata. Wait for
@@ -349,7 +348,7 @@ impl MessageService {
                 ));
             }
         };
-        if kind == ConversationType::Channel && !self.channel_receipts_enabled(&conversation) {
+        if kind == ConversationType::Channel && !self.is_public_channel(&conversation) {
             sync.receipt_targets.clear();
             return Ok(());
         }
@@ -372,7 +371,7 @@ impl MessageService {
         sent_at: u64,
         auth: &mut crate::network::grpc::auth_client::AuthClient,
     ) {
-        if self.channel_receipts_enabled(&channel) {
+        if self.is_public_channel(&channel) {
             self.sync_to_own_devices(auth, channel_receipt_sync(channel, sent_at)).await;
         }
     }
@@ -383,7 +382,7 @@ impl MessageService {
     ) -> Result<Vec<DeviceReceipt>, MessageError> {
         if self.message_repo.get(&message_id)?.is_some_and(|message| {
             message.conversation_type == ConversationType::Channel
-                && !self.channel_receipts_enabled(&message.conversation_id)
+                && !self.is_public_channel(&message.conversation_id)
         }) {
             return Ok(Vec::new());
         }
@@ -396,7 +395,7 @@ impl MessageService {
             .get(&id)?
             .ok_or(MessageError::MessageNotFound(id))?;
         if message.conversation_type == ConversationType::Channel
-            && !self.channel_receipts_enabled(&message.conversation_id)
+            && !self.is_public_channel(&message.conversation_id)
         {
             return Err(MessageError::InvalidContent("channel has no message receipts".into()));
         }
@@ -458,7 +457,7 @@ impl MessageService {
         receipt_type: i32,
         timestamps: &[u64],
     ) -> Result<(), MessageError> {
-        if kind == ConversationType::Channel && !self.channel_receipts_enabled(&conversation) {
+        if kind == ConversationType::Channel && !self.is_public_channel(&conversation) {
             return Ok(());
         }
         let Some(read) = receipt_stage(&self.settings_repo, receipt_type)? else {

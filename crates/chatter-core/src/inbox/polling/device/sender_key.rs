@@ -266,7 +266,7 @@ pub(super) async fn process_sender_key_message(
                 message_guid = %msg.message_guid,
                 channel_id = %channel_id,
                 sender_id = %sender_id,
-                "[INBOX_SK] DECRYPTION FAILED - missing sender key, requesting SKDM"
+                "[INBOX_SK] Waiting for the sender-key distribution"
             );
             // Emit event to request sender's SKDM
             let _ = event_tx.send(InboxEvent::SenderKeyNeeded {

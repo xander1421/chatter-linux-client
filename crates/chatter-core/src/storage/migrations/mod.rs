@@ -135,6 +135,7 @@ mod v142_channel_delivery_outbox;
 mod v143_verified_member_mutes;
 mod v144_peer_key_transparency;
 mod v145_private_channel_receipts;
+mod v146_signed_channel_type;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -497,4 +498,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v143_verified_member_mutes::V143VerifiedMemberMutes)
         .register(v144_peer_key_transparency::V144PeerKeyTransparency)
         .register(v145_private_channel_receipts::V145PrivateChannelReceipts)
+        .register(v146_signed_channel_type::V146SignedChannelType)
 }

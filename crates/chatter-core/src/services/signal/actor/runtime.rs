@@ -238,11 +238,21 @@ impl SignalActorHandle {
                             let mut store3 = store.clone();
                             let mut store4 = store.clone();
                             let store6 = store.clone();
+                            let channels = crate::storage::ChannelRepository::new(settings_repo.database().clone());
+                            let mut key_due_at = 0;
                             let res = match SealedSenderManager::decrypt(
                                 &ciphertext, &trust_root, validation_time,
                                 None, local_uuid, local_device_id,
                                 &mut store, &mut store2, &mut store3, &store6, &mut store4,
-                                SignalStore::allow_archived_whisper_receive,
+                                |store, message_type, group_id| {
+                                    key_due_at = crate::storage::peer_verification::receive_key_due_at(
+                                        group_id, |channel| channels.is_routed_public(channel),
+                                    );
+                                    store.defer_received_key_until(key_due_at);
+                                    if message_type == CiphertextMessageType::Whisper {
+                                        store.allow_archived_whisper_receive();
+                                    }
+                                },
                             ).await {
                                 Ok((result, msg_type)) => {
                                     let address = ProtocolAddress::new(result.sender_uuid, result.device_id);
@@ -250,6 +260,7 @@ impl SignalActorHandle {
                                         if let Err(error) = store.key_store().enqueue_inbound_kt(
                                             address.name(), &identity.serialize(),
                                             receive_kt_route(route, &result.message),
+                                            key_due_at,
                                         ) {
                                             tracing::warn!(%error, "Could not schedule verification of a received key");
                                         }
@@ -288,7 +299,7 @@ impl SignalActorHandle {
                                     .map_err(|e| map_identified_decrypt_err(e, Some(new_key)))
                                     .map(|result| {
                                         if let Err(error) = store.key_store().enqueue_inbound_kt(
-                                            result.sender.name(), &result.sender_identity_key.serialize(), route,
+                                            result.sender.name(), &result.sender_identity_key.serialize(), route, 0,
                                         ) {
                                             tracing::warn!(%error, "Could not schedule verification of a received key");
                                         }

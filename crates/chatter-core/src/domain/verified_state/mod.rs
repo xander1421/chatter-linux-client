@@ -212,12 +212,20 @@ pub struct MembershipState {
     pub policy: Policy,
     pub invites: BTreeMap<KeyBytes, Invite>,
     pub disappearing_seconds: u32,
+    pub channel_type: pb::ChannelType,
 }
 
 impl MembershipState {
     /// `SHA-256("chatter-channel-state-v1\0" || canonical_state)`.
     pub fn hash(&self) -> StateHash {
         canonical::state_hash(self)
+    }
+
+    pub(crate) fn routing_type(value: i32) -> Result<pb::ChannelType, VerifyError> {
+        match pb::ChannelType::try_from(value) {
+            Ok(kind @ (pb::ChannelType::Unspecified | pb::ChannelType::ChannelPublic | pb::ChannelType::ChannelPrivate)) => Ok(kind),
+            _ => Err(malformed("channel_type")),
+        }
     }
 
     /// Validate a server-supplied `MembershipState` (bootstrap). Duplicates,
@@ -276,6 +284,7 @@ impl MembershipState {
             policy,
             invites,
             disappearing_seconds: p.disappearing_seconds,
+            channel_type: Self::routing_type(p.channel_type)?,
         };
         if !state.has_one_owner() {
             return Err(VerifyError::InvalidAction(
@@ -326,6 +335,7 @@ impl MembershipState {
                 })
                 .collect(),
             disappearing_seconds: self.disappearing_seconds,
+            channel_type: self.channel_type as i32,
         }
     }
 

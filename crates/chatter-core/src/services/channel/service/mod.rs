@@ -169,6 +169,7 @@ impl ChannelService {
                 action(Action::Genesis(pb::Genesis {
                     policy: Some(policy.to_proto()),
                     disappearing_seconds: 0,
+                    channel_type: proto_type as i32,
                 })),
             );
             self.membership_log
@@ -184,7 +185,7 @@ impl ChannelService {
                             proto_config.clone(),
                             description,
                             icon,
-                            Some(change),
+                            Some((channel_id, change)),
                         )
                     },
                 )
@@ -221,24 +222,32 @@ impl ChannelService {
         proto_config: Option<chat_v1::channel::Config>,
         description: Option<&str>,
         icon: Option<&[u8]>,
-        genesis: Option<chat_v1::ChannelChange>,
+        genesis: Option<(ChannelId, chat_v1::ChannelChange)>,
     ) -> Result<Channel, crate::error::NetworkError> {
+        let expected_id = genesis.as_ref().map(|(id, _)| *id);
         let mut stream = self
             .grpc_pool
             .channel_client()
-            .create_channel(name, proto_type, proto_config, description, icon, genesis)
+            .create_channel(name, proto_type, proto_config, description, icon, genesis.map(|(_, change)| change))
             .await?;
         while let Some(event) = stream.next().await {
             match event?.event {
                 Some(channel_event::Event::ChannelCreated(proto_channel)) => {
                     let channel = proto_to_domain_channel(&proto_channel)
                         .map_err(|e| crate::error::NetworkError::InvalidRequest(e.to_string()))?;
-                    // Upsert: this client's own channel-event stream may have
-                    // stored the same server row first.
+                    if expected_id.is_some_and(|id| id != channel.id) {
+                        return Err(crate::error::NetworkError::InvalidRequest(
+                            "channel creation response did not name the signed channel".into(),
+                        ));
+                    }
+                    let kind = crate::services::channel::converters::proto_channel_type_to_domain(
+                        proto_type as i32,
+                    );
                     self.channel_repo
-                        .upsert(&channel)
+                        .pin_created_type(&channel.id, kind)
                         .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
-                    return Ok(channel);
+                    return self.channel_repo.save_remote(channel)
+                        .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()));
                 }
                 Some(channel_event::Event::OperationFailed(failure)) => {
                     let msg = failure
@@ -267,9 +276,7 @@ impl ChannelService {
         let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
-        self.channel_repo.upsert(&channel)?;
-
-        Ok(channel)
+        Ok(self.channel_repo.save_remote(channel)?)
     }
 
     /// Internal: Get a channel using an existing client.
@@ -281,9 +288,7 @@ impl ChannelService {
         let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
-        self.channel_repo.upsert(&channel)?;
-
-        Ok(channel)
+        Ok(self.channel_repo.save_remote(channel)?)
     }
 
     /// Update a channel.
@@ -375,8 +380,9 @@ impl ChannelService {
         })?;
 
         self.channel_repo.update(&channel)?;
-
-        Ok(channel)
+        self.channel_repo.get(&channel.id)?.ok_or_else(|| {
+            ChannelError::InvalidInput("updated channel is missing".into())
+        })
     }
 
     /// Delete a channel.

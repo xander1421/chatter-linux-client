@@ -290,6 +290,7 @@ impl ChannelInbound {
                         let result = self.messages.database.run_blocking(move || users.set_friend_profile_key_admitted(&us, &sid, &key, Some(&admitted))).await;
                         session.check().map_err(|_| Ingested::RetryableFailure)?;
                         match result {
+                            Ok(_) if !self.messages.is_public_channel(&channel_id) => {}
                             Ok(true) => {
                                 if let Err(error) = self.users.get_user_profile(&sid).await {
                                     tracing::warn!(%sid, %error, "Could not refresh channel sender profile");

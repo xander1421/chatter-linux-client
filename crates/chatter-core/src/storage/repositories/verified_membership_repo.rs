@@ -82,12 +82,12 @@ impl VerifiedMembershipRepository {
         tx.execute(
             "INSERT INTO verified_channel_state (channel_id, revision, state_hash, policy_add_member,
                 policy_remove_member, policy_set_role, policy_manage_invites, policy_set_disappearing,
-                policy_join, disappearing_seconds, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                policy_join, disappearing_seconds, status, channel_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(channel_id) DO UPDATE SET revision = ?2, state_hash = ?3,
                 policy_add_member = ?4, policy_remove_member = ?5, policy_set_role = ?6,
                 policy_manage_invites = ?7, policy_set_disappearing = ?8, policy_join = ?9,
-                disappearing_seconds = ?10, status = ?11",
+                disappearing_seconds = ?10, status = ?11, channel_type = ?12",
             params![
                 cid,
                 st.revision as i64,
@@ -100,8 +100,18 @@ impl VerifiedMembershipRepository {
                 p.join as i32,
                 st.disappearing_seconds,
                 status as u8,
+                st.channel_type as i32,
             ],
         )?;
+        use crate::domain::channel::ChannelType;
+        let kind = match st.channel_type {
+            pb::ChannelType::ChannelPublic => Some(ChannelType::Public),
+            pb::ChannelType::ChannelPrivate => Some(ChannelType::Private),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            super::channel_repo::ChannelRepository::pin_type_in(&tx, channel_id, kind)?;
+        }
         tx.execute(
             "DELETE FROM verified_channel_members WHERE channel_id = ?1",
             params![cid],
@@ -165,7 +175,7 @@ impl VerifiedMembershipRepository {
             .query_row(
                 "SELECT revision, state_hash, policy_add_member, policy_remove_member, policy_set_role,
                         policy_manage_invites, policy_set_disappearing, policy_join,
-                        disappearing_seconds, status
+                        disappearing_seconds, status, channel_type
                  FROM verified_channel_state WHERE channel_id = ?1",
                 params![cid],
                 |r| {
@@ -176,11 +186,12 @@ impl VerifiedMembershipRepository {
                         r.get::<_, i32>(7)?,
                         r.get::<_, u32>(8)?,
                         r.get::<_, u8>(9)?,
+                        r.get::<_, i32>(10)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((revision, stored_hash, roles, join, disappearing_seconds, status)) = head else {
+        let Some((revision, stored_hash, roles, join, disappearing_seconds, status, channel_type)) = head else {
             return Ok(None);
         };
         let policy = Policy {
@@ -272,6 +283,7 @@ impl VerifiedMembershipRepository {
             policy,
             invites,
             disappearing_seconds,
+            channel_type: MembershipState::routing_type(channel_type).map_err(|_| bad("channel type"))?,
         };
         let state_hash = state.hash();
         if stored_hash.as_slice() != state_hash.as_slice() {
@@ -532,6 +544,52 @@ mod tests {
         (c, v)
     }
 
+    #[test]
+    fn signed_channel_type_overrides_server_metadata_and_survives_refresh() {
+        use crate::domain::{channel::{Channel, ChannelType}, ids::UserId};
+        use crate::storage::repositories::ChannelRepository;
+
+        let (_dir, repo) = repo();
+        let channels = ChannelRepository::new(repo.db.clone());
+        let channel = ChannelId::new();
+        let owner = UserId::new();
+        let mut metadata = Channel::new(channel, "name".into(), ChannelType::Public, owner);
+        metadata.config.require_encryption = false;
+        channels.save_remote(metadata.clone()).unwrap();
+        assert_eq!(channels.routing_type(&channel).unwrap(), None);
+
+        let identity = KeyPair::generate(&mut rand::rng());
+        let (signed, verified) = change(
+            &channel.to_string(), None, (&owner.to_string(), &identity),
+            vec![Action::Genesis(pb::Genesis {
+                policy: Some(Policy::defaults(false).to_proto()),
+                disappearing_seconds: 0,
+                channel_type: pb::ChannelType::ChannelPrivate as i32,
+            })],
+        );
+        repo.commit(&channel, &signed, &verified).unwrap();
+        let saved = repo.load(&channel).unwrap().unwrap();
+        assert_eq!(saved.state.channel_type, pb::ChannelType::ChannelPrivate);
+        let mut forged_state = saved.state.clone();
+        forged_state.channel_type = pb::ChannelType::ChannelPublic;
+        assert_ne!(saved.state_hash, forged_state.hash());
+
+        for returned in [
+            channels.save_remote(metadata.clone()).unwrap(),
+            {
+                channels.update(&metadata).unwrap();
+                channels.get(&channel).unwrap().unwrap()
+            },
+        ] {
+            assert_eq!(returned.channel_type, ChannelType::Private);
+            assert!(returned.config.require_encryption);
+        }
+        // Removing provisional metadata cannot erase signed routing evidence.
+        channels.delete(&channel).unwrap();
+        assert_eq!(channels.routing_type(&channel).unwrap(), Some(ChannelType::Private));
+        assert_eq!(channels.save_remote(metadata).unwrap().channel_type, ChannelType::Private);
+    }
+
     /// The signed mute survives storage exactly, `u64::MAX` (stored as the
     /// i64 -1) included, and is 0 for anyone outside the verified state.
     #[test]
@@ -549,6 +607,7 @@ mod tests {
                 Action::Genesis(pb::Genesis {
                     policy: Some(Policy::defaults(false).to_proto()),
                     disappearing_seconds: 0,
+                    channel_type: 0,
                 }),
                 Action::AddMember(pb::AddMember {
                     user_id: bob.0.clone(),
@@ -597,6 +656,7 @@ mod tests {
                 Action::Genesis(pb::Genesis {
                     policy: Some(Policy::defaults(false).to_proto()),
                     disappearing_seconds: 30,
+                    channel_type: 0,
                 }),
                 Action::AddMember(pb::AddMember {
                     user_id: bob.0.clone(),

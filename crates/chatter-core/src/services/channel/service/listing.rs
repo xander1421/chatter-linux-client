@@ -30,9 +30,7 @@ impl ChannelService {
 
         let channel = proto_to_domain_channel(&proto_channel)?;
 
-        self.channel_repo.upsert(&channel)?;
-
-        Ok(channel)
+        Ok(self.channel_repo.save_remote(channel)?)
     }
 
     /// Unarchive a channel.
@@ -49,9 +47,7 @@ impl ChannelService {
 
         let channel = proto_to_domain_channel(&proto_channel)?;
 
-        self.channel_repo.upsert(&channel)?;
-
-        Ok(channel)
+        Ok(self.channel_repo.save_remote(channel)?)
     }
 
     /// List archived channel IDs.
@@ -94,9 +90,7 @@ impl ChannelService {
 
         let mut channels = Vec::with_capacity(response.channels.len());
         for proto in &response.channels {
-            let channel = proto_to_domain_channel(proto)?;
-
-            self.channel_repo.upsert(&channel)?;
+            let channel = self.channel_repo.save_remote(proto_to_domain_channel(proto)?)?;
 
             // The server lists only channels we are a member of, but omits
             // rosters, and the sidebar lists channels by local membership. A
@@ -143,7 +137,14 @@ impl ChannelService {
                 }
             }
 
-            channels.push(channel);
+            if self.channel_repo.routing_type(&channel.id)?.is_none()
+                && matches!(channel.channel_type, ChannelType::Public | ChannelType::Private)
+            {
+                if let Err(error) = self.membership_log.catch_up(&channel.id).await {
+                    tracing::debug!(channel_id = %channel.id, %error, "Could not verify channel routing type");
+                }
+            }
+            channels.push(self.channel_repo.get(&channel.id)?.unwrap_or(channel));
         }
 
         Ok(channels)
@@ -178,7 +179,14 @@ impl ChannelService {
         let mut channels = Vec::with_capacity(response.results.len());
         for proto in &response.results {
             let channel = proto_to_domain_channel(proto)?;
-            channels.push(channel);
+            if self.channel_repo.routing_type(&channel.id)?.is_none()
+                && matches!(channel.channel_type, ChannelType::Public | ChannelType::Private)
+            {
+                if let Err(error) = self.membership_log.catch_up(&channel.id).await {
+                    tracing::debug!(channel_id = %channel.id, %error, "Could not verify channel routing type");
+                }
+            }
+            channels.push(self.channel_repo.get(&channel.id)?.unwrap_or(channel));
         }
 
         Ok(channels)

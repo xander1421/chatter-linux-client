@@ -160,9 +160,8 @@ impl MessageService {
     /// server copy: they reach members anonymously (this file), so there is
     /// nothing on the server to fetch, delete or pin.
     pub(crate) fn is_private_channel(&self, channel_id: &ChannelId) -> bool {
-        self.channel_repo.get(channel_id).ok().flatten().is_some_and(|c| {
-            c.channel_type == crate::domain::channel::ChannelType::Private
-        })
+        self.channel_repo.routing_type(channel_id).ok().flatten()
+            == Some(crate::domain::channel::ChannelType::Private)
     }
 
     async fn refresh_group_send_token(
@@ -337,39 +336,48 @@ impl MessageService {
         contents: Vec<u8>,
         token: Vec<u8>,
     ) -> Result<chat_v1::Message, MessageError> {
+        // Do not send a subset of lookups. A cold roster scan covers
+        // every member, including accounts whose sessions are already warm.
         let holders = self.private_post_holders(&channel_id, distribution).await?.unwrap_or_default();
-        let mut planned = 0;
+        let mut refresh_roster = false;
+        let mut fanout = 0;
         for member in &members {
             let devices = self.private_post_devices(member, &me).await?;
-            if devices.is_empty() {
-                // One deposit and room for discovery before and after KT.
-                planned += 3;
-            } else if devices.iter().any(|(device, registration)| {
+            refresh_roster |= devices.is_empty()
+                || (member == &me && devices.len() == 1 && devices[0].0 == self.current_device_id_or_zero()
+                    && !self.signal_service.has_discovered_private_echo()
+                        .map_err(|error| MessageError::from_signal_send(error, "private echo discovery"))?);
+            if devices.iter().any(|(device, registration)| {
                 !registration.is_some_and(|r| holders.contains(&(member.clone(), *device, r)))
             }) {
-                planned += 1;
+                fanout += 1;
             }
         }
+        let planned = if refresh_roster { 3 * members.len() } else { fanout };
         self.require_private_post_balance(planned, MAX_REPAIRS_PER_POST)?;
-
-        let mut auth_client = self.auth_client();
-        let mut prekeys = self.private_post_prekeys();
-        // Reuse cached sessions. Cold members need initial discovery; the
-        // anonymous submit names any missing or stale devices for reconciliation.
-        let mut blocked = None;
         for member in &members {
-            match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
-                .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
-            {
-                Ok(devices) if devices.is_empty() => return Err(NetworkError::Unavailable.into()),
-                Ok(_) => {}
-                Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
-                Err(error) => return Err(error),
+            self.signal_service.require_group_device_ready(member)
+                .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))?;
+        }
+
+        if refresh_roster {
+            let mut prekeys = self.private_post_prekeys();
+            let mut blocked = None;
+            for member in &members {
+                match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
+                    .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
+                {
+                    Ok(devices) if devices.is_empty() => return Err(NetworkError::Unavailable.into()),
+                    Ok(_) => {}
+                    Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
+                    Err(error) => return Err(error),
+                }
+            }
+            if let Some(error) = blocked {
+                return Err(error);
             }
         }
-        if let Some(error) = blocked {
-            return Err(error);
-        }
+        let mut auth_client = self.auth_client();
         // Discovery can await the network while the local sender key advances.
         let holders = self.private_post_holders(&channel_id, distribution).await?;
         let same_next = holders.is_some();

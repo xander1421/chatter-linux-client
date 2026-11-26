@@ -74,23 +74,6 @@ impl InboxEventProcessor {
                     }
                 }
 
-                // Protocol: pre-fetch sender profile
-                if self
-                    .user_service
-                    .get_user_local(sender_id)
-                    .ok()
-                    .flatten()
-                    .is_none()
-                {
-                    tracing::debug!(
-                        sender_id = %sender_id,
-                        "Fetching sender profile for channel message"
-                    );
-                    // The fetch can finish after a join notice was rendered.
-                    // Emit the normal profile event so visible rows re-resolve.
-                    self.spawn_peer_profile_refresh(*sender_id);
-                }
-
                 // Read the message store_data_message already persisted. Its
                 // conversation_type tells us how to address the delivery
                 // receipt: a channel-free DM (ServerDm, keyed by the sender)
@@ -100,6 +83,14 @@ impl InboxEventProcessor {
                     .parse::<crate::domain::ids::MessageId>()
                     .ok()
                     .and_then(|mid| self.message_service.get_message_local(&mid).ok().flatten());
+
+                let may_refresh_sender = stored.as_ref().is_some_and(|message| {
+                    message.conversation_type == crate::domain::message::ConversationType::ServerDm
+                        || self.message_service.is_public_channel(&message.conversation_id)
+                });
+                if may_refresh_sender && self.user_service.get_user_local(sender_id).ok().flatten().is_none() {
+                    self.spawn_peer_profile_refresh(*sender_id);
+                }
 
                 // A self-synced OUTGOING message (SyncSent, F8 fix) is attributed
                 // to US: `sender_id` is our own id. You never send a delivery

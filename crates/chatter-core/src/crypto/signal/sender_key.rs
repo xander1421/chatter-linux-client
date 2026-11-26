@@ -317,6 +317,9 @@ impl SenderKeyManager {
         let result = group_decrypt(ciphertext, sender_key_store, sender)
             .await
             .map_err(|e| {
+                if matches!(e, libsignal_protocol::SignalProtocolError::NoSenderKeyState { .. }) {
+                    return CryptoError::MissingSenderKey;
+                }
                 // `DuplicatedMessage` ("message with old counter") returns
                 // before `store_sender_key`. The persisted chain is unchanged.
                 // A missing SKDM and a ciphertext that might still open stay
