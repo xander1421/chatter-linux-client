@@ -425,7 +425,7 @@ impl MessageService {
                     Ok(devices) if devices.is_empty() => return Err(NetworkError::Unavailable.into()),
                     Ok(_) => {}
                     Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(retryable_discovery(error)),
                 }
             }
             if let Some(error) = blocked {
@@ -597,6 +597,17 @@ fn check_distribution(
     }
 }
 
+/// The server answers a member with no prekey bundle (`ErrNoPreKeyBundle`)
+/// as `NotFound`, the same state as an empty device list: a member between
+/// registrations, not a refusal of the post. Both keep the journal retrying
+/// instead of failing the post for every member.
+fn retryable_discovery(error: MessageError) -> MessageError {
+    match error {
+        MessageError::Network(NetworkError::NotFound(_)) => NetworkError::Unavailable.into(),
+        error => error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,5 +622,18 @@ mod tests {
         assert_eq!(cache.get(&ch, &h2, 1_000), None, "a new verified state needs a new token");
         assert_eq!(cache.get(&ch, &h1, 100_000 - REFRESH_MARGIN_SECS), None, "refetched before expiry");
         assert_eq!(cache.get(&ChannelId::new(), &h1, 1_000), None);
+    }
+
+    /// A member with no bundle yet keeps the post queued; other refusals
+    /// keep their meaning.
+    #[test]
+    fn missing_bundle_during_discovery_is_retryable() {
+        let retryable = |e: &MessageError| matches!(e, MessageError::Network(n) if n.is_retryable());
+        assert!(!retryable(&MessageError::Network(NetworkError::NotFound("no bundle".into()))));
+        assert!(retryable(&retryable_discovery(MessageError::Network(NetworkError::NotFound("no bundle".into())))));
+        assert!(matches!(
+            retryable_discovery(MessageError::Network(NetworkError::PermissionDenied)),
+            MessageError::Network(NetworkError::PermissionDenied)
+        ));
     }
 }

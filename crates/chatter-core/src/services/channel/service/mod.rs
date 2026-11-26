@@ -380,9 +380,9 @@ impl ChannelService {
         })?;
 
         self.channel_repo.update(&channel)?;
-        self.channel_repo.get(&channel.id)?.ok_or_else(|| {
-            ChannelError::InvalidInput("updated channel is missing".into())
-        })
+        self.channel_repo
+            .get(&channel.id)?
+            .ok_or(ChannelError::ChannelNotFound(channel.id))
     }
 
     /// Delete a channel.

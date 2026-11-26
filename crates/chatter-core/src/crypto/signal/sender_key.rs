@@ -317,13 +317,21 @@ impl SenderKeyManager {
         let result = group_decrypt(ciphertext, sender_key_store, sender)
             .await
             .map_err(|e| {
+                // No SKDM from this sender yet: a typed error, so the caller
+                // can hold the ciphertext and ask for the key.
                 if matches!(e, libsignal_protocol::SignalProtocolError::NoSenderKeyState { .. }) {
+                    tracing::warn!(
+                        target: "chatter::crypto::decrypt_failure",
+                        kind = "group_missing_sender_key",
+                        error = %e,
+                        "decryption failure"
+                    );
                     return CryptoError::MissingSenderKey;
                 }
                 // `DuplicatedMessage` ("message with old counter") returns
                 // before `store_sender_key`. The persisted chain is unchanged.
-                // A missing SKDM and a ciphertext that might still open stay
-                // on the failure path below.
+                // A ciphertext that might still open stays on the failure
+                // path below.
                 if matches!(
                     e,
                     libsignal_protocol::SignalProtocolError::DuplicatedMessage(_, _)

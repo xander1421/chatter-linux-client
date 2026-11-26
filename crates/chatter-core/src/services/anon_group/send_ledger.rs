@@ -17,13 +17,24 @@ struct Ledger {
     held_content: Option<Vec<u8>>,
 }
 
+/// The post's identity without its timer stamp: a held post is re-stamped
+/// with the group's timer at release (`messaging.rs`) and keeps its ledger.
 pub(crate) fn key(owner: &str, group: &str, inner: &chatter_proto::content_v1::Content) -> String {
+    use chatter_proto::content_v1::content::Content;
+    let mut unstamped = inner.clone();
+    if let Some(Content::DataMessage(data)) = unstamped.content.as_mut() {
+        data.ephemeral = false;
+        data.ephemeral_ttl_seconds = 0;
+        data.expire_timer_version = 0;
+        data.disappearing_enabled_until = 0;
+        data.disappearing_activation_seconds = 0;
+    }
     let mut hash = Sha256::new();
     hash.update(owner.as_bytes());
     hash.update([0]);
     hash.update(group.as_bytes());
     hash.update([0]);
-    hash.update(inner.encode_to_vec());
+    hash.update(unstamped.encode_to_vec());
     format!("send.group.completion.v1:{}", hex::encode(hash.finalize()))
 }
 fn encode(ledger: &Ledger) -> Result<String, StorageError> {
@@ -58,7 +69,8 @@ pub(super) fn register(db: &Database, key: &str, message_id: &str) -> Result<(),
     Ok(())
 }
 
-/// Preserve the exact post while the joining member awaits its first roster.
+/// Preserve the post while the joining member awaits its first roster or
+/// the group's timer.
 pub(super) fn hold(
     db: &Database,
     key: &str,

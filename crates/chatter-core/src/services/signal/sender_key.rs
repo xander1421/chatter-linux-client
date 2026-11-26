@@ -311,8 +311,10 @@ impl SignalService {
     // as new. Stored as comma-separated `user.device.registration_id`; an
     // entry in any other shape is not recognized.
 
+    const HOLDERS_PREFIX: &str = "sender_key_delivered:";
+
     fn sender_key_holders_key(channel_id: &ChannelId) -> String {
-        format!("sender_key_delivered:{}", channel_id)
+        format!("{}{channel_id}", Self::HOLDERS_PREFIX)
     }
 
     /// Devices that have received an SKDM for our CURRENT sender key.
@@ -361,6 +363,43 @@ impl SignalService {
         self.settings_repo
             .delete(&Self::sender_key_holders_key(channel_id))
             .map_err(ServiceError::Storage)?;
+        Ok(())
+    }
+
+    /// `removed` devices of `user_id` are gone from the server (revoked or
+    /// unlinked) but may still hold our current sender key. Every channel
+    /// where one of them is a holder rotates before its next post, as a
+    /// roster removal does.
+    pub(crate) fn rotate_after_device_removal(
+        &self,
+        user_id: &str,
+        removed: &[u32],
+    ) -> Result<(), ServiceError> {
+        if removed.is_empty() {
+            return Ok(());
+        }
+        let prefix = Self::HOLDERS_PREFIX;
+        let channels: Vec<String> = {
+            let conn = self.settings_repo.database().read_connection().map_err(ServiceError::Storage)?;
+            let mut stmt = conn
+                .prepare("SELECT key FROM settings WHERE key LIKE ?1 || '%'")
+                .map_err(|e| ServiceError::Storage(e.into()))?;
+            let rows = stmt
+                .query_map([prefix], |row| row.get::<_, String>(0))
+                .map_err(|e| ServiceError::Storage(e.into()))?;
+            rows.collect::<Result<_, _>>().map_err(|e| ServiceError::Storage(e.into()))?
+        };
+        for key in channels {
+            let Ok(channel_id) = key[prefix.len()..].parse::<ChannelId>() else { continue };
+            if self
+                .sender_key_holders(&channel_id)?
+                .iter()
+                .any(|(u, d, _)| u == user_id && removed.contains(d))
+            {
+                tracing::info!(%channel_id, user_id, ?removed, "Removed device held our sender key: rotation required");
+                self.mark_channel_for_rotation(&channel_id)?;
+            }
+        }
         Ok(())
     }
 

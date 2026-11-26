@@ -660,6 +660,7 @@ async fn private_post_server_trace_is_independent_of_author() {
     );
 }
 
+#[cfg(feature = "onion")]
 fn private_actions(
     channel: ChannelId,
     target: UserId,
@@ -687,6 +688,7 @@ fn private_actions(
     ]
 }
 
+#[cfg(feature = "onion")]
 async fn receive_group_messages(
     client: &Arc<ChatterClient>,
     author: UserId,

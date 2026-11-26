@@ -242,13 +242,10 @@ impl MessageService {
             wrap.encode_to_vec()
         };
 
-        let private = require_encryption;
-        let previous_distribution = if private {
+        // Only a private channel encrypts (`channel_send_requires_encryption`).
+        let previous_distribution = if require_encryption {
             Some(self.create_sender_key_for_channel(channel_id).await?)
         } else {
-            if require_encryption {
-                self.distribute_sender_key_to_new_members(channel_id).await?;
-            }
             None
         };
 
@@ -262,15 +259,9 @@ impl MessageService {
             )
             .await?;
 
-        // If a new sender key was created, distribute SKDM to channel members
-        let private_distribution = if private {
-            skdm_opt.or(previous_distribution)
-        } else {
-            if let Some(skdm) = skdm_opt {
-                self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
-            }
-            None
-        };
+        // A rotated sender key rides with the anonymous post (group_send.rs);
+        // plaintext preparation never returns one.
+        let private_distribution = skdm_opt.or(previous_distribution);
 
         // Call server
         tracing::debug!(

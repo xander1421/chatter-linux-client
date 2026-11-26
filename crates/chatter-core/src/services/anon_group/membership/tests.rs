@@ -100,6 +100,16 @@ async fn real_group_fanout_refuses_replaced_session_after_recipient_preparation(
                 ..AnonGroupMember::with_mailbox(f.group_id, me, AnonGroupRole::Member, [3; 32])
             })
             .unwrap();
+        // A member that knows the group's timer (posts wait until it does).
+        let groups = f._client.anon_groups();
+        crate::services::disappearing::initialize_secret_chat_timer(
+            &groups.settings_repo,
+            &groups.message_service.message_repo,
+            crate::services::disappearing::SecretChat::Group(f.group_id),
+            &me,
+            1,
+        )
+        .unwrap();
         state.set_logged_in(me, 1, "old".into());
         let captured = SendSession::capture(state);
         let ready = std::sync::Arc::new(tokio::sync::Notify::new());

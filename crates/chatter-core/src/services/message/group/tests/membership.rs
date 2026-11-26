@@ -72,7 +72,6 @@
         }
     }
 
-    #[cfg(feature = "dev-trust-root")]
     mod private_wire_fixture {
         use crate::domain::UserId;
         use chatter_proto::chat_v1 as pb;
@@ -154,7 +153,6 @@
 
     }
 
-    #[cfg(feature = "dev-trust-root")]
     #[tokio::test]
     async fn private_submit_fetches_bundles_anonymously_only_when_needed() {
         use chatter_proto::chat_v1 as pb;
@@ -704,6 +702,31 @@
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// A device the server reports gone (revoked or unlinked) rotates every
+    /// channel where it holds our current key, whichever send noticed it.
+    #[tokio::test]
+    async fn a_removed_holder_device_rotates_the_channel_key() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        let other = ChannelId::new();
+        store_session(&t.alice, t.bob_id, 2, 202).await;
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(2, 202)]));
+        alice.record_sender_key_holders(&other, &bob, &reached(&[(1, 101)]));
+
+        // Identified (DM) and private-post reconciliation both route here.
+        let mut auth = alice.auth_client();
+        alice.signal_service.reconcile_devices(&mut auth, &bob, &[], &[2], &[]).await.unwrap();
+        assert!(alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
+        assert!(!alice.signal_service.check_and_clear_rotation_needed(&other).unwrap(), "device 2 never held this key");
+
+        // Extra devices only: nothing is fetched from the source.
+        let mut source = crate::services::signal::PreKeySource::Identified(&mut auth);
+        let extra = chatter_proto::chat_v1::MismatchedDevices { extra_devices: vec![1], ..Default::default() };
+        alice.signal_service.reconcile_private_post_devices(&mut source, &bob, &extra).await.unwrap();
+        assert!(alice.signal_service.check_and_clear_rotation_needed(&other).unwrap());
     }
 
     /// A new key has reached nobody: rotation clears every holder. The old

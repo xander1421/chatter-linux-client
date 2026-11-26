@@ -131,8 +131,9 @@ impl ChannelRepository {
             .optional()?)
     }
 
-    /// A public route requires creator intent or a verified membership pin.
-    /// An older private row still requires encryption and verified membership.
+    /// Public and private routes require creator intent or a verified
+    /// membership pin. Server metadata alone routes nowhere (`None`) until the
+    /// signed log is caught up; only the local Saved Messages row needs no pin.
     pub(crate) fn routing_type(&self, id: &ChannelId) -> Result<Option<ChannelType>, StorageError> {
         Self::routing_type_in(&*self.db.connection()?, id)
     }
@@ -143,7 +144,7 @@ impl ChannelRepository {
         let value: Option<i32> = conn.query_row(
             "SELECT COALESCE(
                 (SELECT channel_type FROM channel_type_pins WHERE channel_id=?1),
-                (SELECT channel_type FROM channels WHERE id=?1 AND channel_type IN (1,3))
+                (SELECT channel_type FROM channels WHERE id=?1 AND channel_type=3)
             )",
             params![id.to_string()],
             |row| row.get(0),
@@ -173,7 +174,10 @@ impl ChannelRepository {
             return Err(StorageError::InvalidData("channel type contradicts its pin".into()));
         }
         conn.execute(
-            "UPDATE channels SET channel_type=?2, require_encryption=(?2!=0) WHERE id=?1",
+            // Same rule as `encryption_for_type`: Saved Messages keeps its flag.
+            "UPDATE channels SET channel_type=?2,
+             require_encryption=CASE ?2 WHEN 0 THEN 0 WHEN 1 THEN 1 ELSE require_encryption END
+             WHERE id=?1",
             params![id, kind],
         )?;
         Ok(())
@@ -985,6 +989,19 @@ mod tests {
         let db = Arc::new(Database::open(&dir.path().join("types.db"), "test-passphrase").unwrap());
         db.run_migrations().unwrap();
         (ChannelRepository::new(db), dir)
+    }
+
+    /// A pin applies the same encryption rule as a row write: Saved Messages
+    /// keeps its configured flag.
+    #[test]
+    fn pinning_saved_messages_keeps_its_encryption_flag() {
+        let (repo, _dir) = create_test_repo();
+        let mut channel = make_channel(ChannelId::new());
+        channel.channel_type = ChannelType::SavedMessages;
+        channel.config.require_encryption = false;
+        repo.upsert(&channel).unwrap();
+        repo.pin_created_type(&channel.id, ChannelType::SavedMessages).unwrap();
+        assert!(!repo.get(&channel.id).unwrap().unwrap().config.require_encryption);
     }
 
     #[test]

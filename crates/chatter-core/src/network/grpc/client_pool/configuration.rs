@@ -94,7 +94,8 @@ impl GrpcClientPool {
     pub(super) fn validate_direct_url(server_url: &str) -> Result<(), NetworkError> {
         let url = url::Url::parse(server_url)
             .map_err(|_| NetworkError::ConnectionFailed("invalid URL".into()))?;
-        let dev_loopback = cfg!(feature = "dev-trust-root")
+        // The crate's own unit tests run loopback wire fixtures in every build.
+        let dev_loopback = cfg!(any(test, feature = "dev-trust-root"))
             && match url.host() {
                 Some(url::Host::Domain("localhost")) => true,
                 Some(url::Host::Ipv4(ip)) => ip.is_loopback(),

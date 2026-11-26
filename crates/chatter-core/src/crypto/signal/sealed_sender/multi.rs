@@ -133,6 +133,11 @@ impl SealedSenderManager {
             return Err(CryptoError::InvalidKeyFormat);
         }
         let registration = bundle.registration_id().map_err(protocol)?;
+        // Registration id 0 is never issued; an echo stamped with it would be
+        // undeliverable to our own device.
+        if registration == 0 {
+            return Err(CryptoError::InvalidKeyFormat);
+        }
         let local_registration = store.get_local_registration_id().await.map_err(protocol)?;
         let mut scratch = InMemSignalProtocolStore::new(ours, local_registration).map_err(protocol)?;
         crate::crypto::SessionManager::establish_session(
@@ -296,6 +301,23 @@ mod tests {
             assert_eq!(opened.group_id().unwrap(), Some(channel.as_slice()));
             assert_eq!(opened.sender().unwrap().sender_uuid().unwrap(), alice.address.name());
         }
+    }
+
+    #[tokio::test]
+    async fn echo_bundle_with_registration_zero_is_refused() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(916);
+        let alice = party("alice", 1111, &mut rng);
+        assert_eq!(
+            SealedSenderManager::validate_private_echo_bundle(&alice.store, &alice.address, alice.bundle.clone())
+                .await
+                .unwrap(),
+            1111
+        );
+        let zero = alice.bundle.clone().modify(|c| c.registration_id = Some(0)).unwrap();
+        assert!(matches!(
+            SealedSenderManager::validate_private_echo_bundle(&alice.store, &alice.address, zero).await,
+            Err(CryptoError::InvalidKeyFormat)
+        ));
     }
 
     #[tokio::test]

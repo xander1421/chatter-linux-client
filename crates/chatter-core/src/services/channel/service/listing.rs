@@ -137,17 +137,10 @@ impl ChannelService {
                 }
             }
 
-            if self.channel_repo.routing_type(&channel.id)?.is_none()
-                && matches!(channel.channel_type, ChannelType::Public | ChannelType::Private)
-            {
-                if let Err(error) = self.membership_log.catch_up(&channel.id).await {
-                    tracing::debug!(channel_id = %channel.id, %error, "Could not verify channel routing type");
-                }
-            }
-            channels.push(self.channel_repo.get(&channel.id)?.unwrap_or(channel));
+            channels.push(channel);
         }
 
-        Ok(channels)
+        self.with_verified_routes(channels).await
     }
 
     /// Search for channels by query.
@@ -179,17 +172,28 @@ impl ChannelService {
         let mut channels = Vec::with_capacity(response.results.len());
         for proto in &response.results {
             let channel = proto_to_domain_channel(proto)?;
-            if self.channel_repo.routing_type(&channel.id)?.is_none()
-                && matches!(channel.channel_type, ChannelType::Public | ChannelType::Private)
-            {
-                if let Err(error) = self.membership_log.catch_up(&channel.id).await {
-                    tracing::debug!(channel_id = %channel.id, %error, "Could not verify channel routing type");
-                }
-            }
-            channels.push(self.channel_repo.get(&channel.id)?.unwrap_or(channel));
+            channels.push(channel);
         }
 
-        Ok(channels)
+        self.with_verified_routes(channels).await
+    }
+
+    /// Catch up, side by side, every listed channel with no verified route,
+    /// then return each channel as stored (pinned type) where we hold it.
+    async fn with_verified_routes(&self, channels: Vec<Channel>) -> Result<Vec<Channel>, ChannelError> {
+        let mut unrouted = Vec::new();
+        for channel in &channels {
+            if matches!(channel.channel_type, ChannelType::Public | ChannelType::Private)
+                && self.channel_repo.routing_type(&channel.id)?.is_none()
+            {
+                unrouted.push(channel.id);
+            }
+        }
+        self.membership_log.catch_up_all(unrouted).await;
+        channels
+            .into_iter()
+            .map(|channel| Ok(self.channel_repo.get(&channel.id)?.unwrap_or(channel)))
+            .collect()
     }
 
     /// Get all channels the current user is a member of (local query).
