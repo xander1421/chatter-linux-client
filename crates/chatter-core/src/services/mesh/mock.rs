@@ -251,6 +251,7 @@ impl RelayConnector for OfflineConnector {
 pub struct LoopbackConnector {
     /// Frames the client wrote.
     pub sent: Arc<Mutex<Vec<String>>>,
+    pub connects: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for LoopbackConnector {
@@ -264,6 +265,7 @@ impl LoopbackConnector {
     pub fn new() -> Self {
         Self {
             sent: Arc::new(Mutex::new(Vec::new())),
+            connects: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -309,6 +311,8 @@ impl RelayConnector for LoopbackConnector {
         &'a self,
         _url: &'a str,
     ) -> RelayBoxFuture<'a, Result<RelayConnection, NostrError>> {
+        self.connects
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let sink = LoopbackSink {
             sent: Arc::clone(&self.sent),
         };

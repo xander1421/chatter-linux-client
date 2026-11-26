@@ -169,6 +169,7 @@ object MeshBleBridge {
     private var advertisingSet: AdvertisingSet? = null
     private var pairingBeacons = ByteArray(0)
     private var beaconSlot = 0
+    private var advertisingRestartPending = false
     private var beaconUpdatePending = false
     private val beaconCycle = Runnable { synchronized(lock) { cycleBeaconLocked() } }
     // Leave one start of headroom below Android's five-in-30s scan throttle.
@@ -432,9 +433,11 @@ object MeshBleBridge {
         if (payload.isEmpty() || payload.size % PAIRING_BEACON_SIZE != 0) return@synchronized false
         if (!pairingBeacons.contentEquals(payload)) {
             pairingBeacons = payload
-            beaconSlot = -1
-            handler.removeCallbacks(beaconCycle)
-            if (!beaconUpdatePending) handler.post(beaconCycle)
+            if (started && serviceReady) {
+                if (advertiseCallback == null) beginAdvertisingLocked()
+                else if (advertisingSet != null) restartAdvertisingLocked()
+                // A start already in flight will compare its slots on completion.
+            }
         }
         true
     }
@@ -701,13 +704,13 @@ object MeshBleBridge {
                     return@synchronized
                 }
                 MeshBleBridge.advertisingSet = advertisingSet
-                beaconSlot = if (pairingBeacons === startingSlots) 0 else -1
-                scheduleNextBeacon()
+                if (pairingBeacons === startingSlots) scheduleNextBeacon()
+                else restartAdvertisingLocked()
             }
 
             override fun onScanResponseDataSet(advertisingSet: AdvertisingSet?, status: Int): Unit =
                 synchronized(lock) {
-                    if (advertiseCallback !== this) return@synchronized
+                    if (advertiseCallback !== this || advertisingRestartPending) return@synchronized
                     beaconUpdatePending = false
                     if (status != ADVERTISE_SUCCESS) {
                         Log.w(TAG, "pairing beacon update failed: code=$status")
@@ -717,7 +720,10 @@ object MeshBleBridge {
 
             override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?): Unit =
                 synchronized(lock) {
-                    if (advertiseCallback === this) clearAdvertisingLocked()
+                    if (advertiseCallback !== this) return@synchronized
+                    val restart = advertisingRestartPending
+                    clearAdvertisingLocked()
+                    if (restart && started && serviceReady) beginAdvertisingLocked()
                 }
         }
         advertiseCallback = callback
@@ -740,12 +746,29 @@ object MeshBleBridge {
 
     private fun scheduleNextBeacon() {
         handler.removeCallbacks(beaconCycle)
-        handler.postDelayed(beaconCycle, if (beaconSlot < 0) 0L else BEACON_SLOT_MS)
+        handler.postDelayed(beaconCycle, BEACON_SLOT_MS)
+    }
+
+    private fun restartAdvertisingLocked() {
+        val callback = advertiseCallback ?: return
+        if (advertisingRestartPending) return
+        val advertiser = meshAdvertiser() ?: return
+        // Give Android a new advertising set for each beacon window. The
+        // controller still owns private address selection.
+        advertisingRestartPending = true
+        handler.removeCallbacks(beaconCycle)
+        if (!guard("stopAdvertisingSet for new beacon window", false) {
+                advertiser.stopAdvertisingSet(callback)
+                true
+            }
+        ) {
+            advertisingRestartPending = false
+        }
     }
 
     private fun cycleBeaconLocked() {
         val set = advertisingSet ?: return
-        if (beaconUpdatePending || pairingBeacons.isEmpty()) return
+        if (advertisingRestartPending || beaconUpdatePending || pairingBeacons.isEmpty()) return
         beaconSlot = (beaconSlot + 1) % (pairingBeacons.size / PAIRING_BEACON_SIZE)
         beaconUpdatePending = guard("setScanResponseData", false) {
             set.setScanResponseData(scanResponse(beaconSlot))
@@ -765,6 +788,7 @@ object MeshBleBridge {
         handler.removeCallbacks(beaconCycle)
         advertiseCallback = null
         advertisingSet = null
+        advertisingRestartPending = false
         beaconSlot = 0
         beaconUpdatePending = false
     }

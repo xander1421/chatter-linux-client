@@ -153,7 +153,7 @@ impl NostrRuntime {
             tokio::select! {
                 command = commands.recv() => match command {
                     Some(NostrCommand::Stop) | None => break,
-                    Some(command) => self.on_command(command).await,
+                    Some(command) => self.on_command(command, &mut relay_events).await,
                 },
                 event = relay_events.recv() => match event {
                     Some(event) => self.on_relay_event(event).await,
@@ -169,10 +169,16 @@ impl NostrRuntime {
 
     // ---------------------------------------------------------------- commands
 
-    async fn on_command(&mut self, command: NostrCommand) {
+    async fn on_command(
+        &mut self,
+        command: NostrCommand,
+        relay_events: &mut UnboundedReceiver<RelayEvent>,
+    ) {
         match command {
             NostrCommand::Stop => {}
-            NostrCommand::RotateIdentity(identity) => self.rotate_identity(&identity).await,
+            NostrCommand::RotateIdentity(identity) => {
+                *relay_events = self.rotate_identity(&identity).await;
+            }
             NostrCommand::Join(cell) => self.join(&cell).await,
             NostrCommand::Leave(cell) => self.leave(&cell).await,
             NostrCommand::GeohashMessage {
@@ -232,6 +238,11 @@ impl NostrRuntime {
             return;
         }
 
+        self.subscribe_cell(cell).await;
+        self.events.send(MeshEvent::GeohashJoined(cell.to_string()));
+    }
+
+    async fn subscribe_cell(&mut self, cell: &str) {
         let since = now_secs() as i64 - 3_600;
         let chat = RelayFilter::geohash_ephemeral(cell, Some(since), GEOHASH_LIMIT);
         if let Err(error) = self
@@ -243,16 +254,30 @@ impl NostrRuntime {
         }
 
         self.watch_cell_dms(cell).await;
-        self.events.send(MeshEvent::GeohashJoined(cell.to_string()));
     }
 
-    async fn rotate_identity(&mut self, identity: &chatter_mesh_noise::MeshIdentity) {
+    async fn rotate_identity(
+        &mut self,
+        identity: &chatter_mesh_noise::MeshIdentity,
+    ) -> UnboundedReceiver<RelayEvent> {
+        self.pool.shutdown().await;
+        self.state.with(|state| state.connected_relays.clear());
+        self.emit_status();
+        for (_, operation) in std::mem::take(&mut self.pending_drops) {
+            self.resolve_drop(operation, false);
+        }
+
+        let (pool, events) = self.pool.fresh_pool();
+        self.pool = pool;
         self.identities = NostrIdentities::from_mesh(identity);
+        self.pool.ensure_relays(&self.relays).await;
         let cells = self.state.with(|state| state.joined.clone());
         for cell in cells {
-            self.pool.unsubscribe(&dm_subscription(&cell)).await;
-            self.watch_cell_dms(&cell).await;
+            self.subscribe_cell(&cell).await;
         }
+        let tags = std::mem::take(&mut self.watching);
+        self.watch_drop_tags(tags).await;
+        events
     }
 
     async fn watch_cell_dms(&mut self, cell: &str) {
@@ -472,7 +497,11 @@ impl NostrRuntime {
     }
 
     async fn watch_tags(&mut self, tags: &[[u8; 16]]) {
-        let hex_tags: Vec<String> = tags.iter().map(hex::encode).collect();
+        self.watch_drop_tags(tags.iter().map(hex::encode).collect())
+            .await;
+    }
+
+    async fn watch_drop_tags(&mut self, hex_tags: Vec<String>) {
         if hex_tags == self.watching {
             return;
         }
@@ -794,10 +823,11 @@ mod tests {
     use chatter_mesh_noise::MeshIdentity;
 
     #[tokio::test]
-    async fn broadcast_rotation_replaces_the_live_cell_dm_subscription() {
+    async fn broadcast_rotation_resubscribes_on_a_fresh_relay_connection() {
         let service = super::super::tests::service(None, None);
         let connector = Arc::new(super::super::mock::LoopbackConnector::new());
-        let (pool, _events) = RelayPool::new(connector.clone());
+        let (pool, mut events) = RelayPool::new(connector.clone());
+        let old_pool = pool.clone();
         let old = MeshIdentity::generate(&mut os_rng());
         let new = MeshIdentity::generate(&mut os_rng());
         let mut runtime = NostrRuntime::new(
@@ -818,8 +848,15 @@ mod tests {
             .unwrap()
             .public_key_hex()
             .to_owned();
+        wait_for_cell_dm_key(&connector, &old_key).await;
+        assert_eq!(
+            connector
+                .connects
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
         runtime
-            .on_command(NostrCommand::RotateIdentity(Arc::new(new)))
+            .on_command(NostrCommand::RotateIdentity(Arc::new(new)), &mut events)
             .await;
         let new_key = runtime
             .cell_identity(cell)
@@ -828,12 +865,24 @@ mod tests {
             .to_owned();
         assert_ne!(old_key, new_key);
         assert!(runtime.state.with(|state| state.joined.contains(cell)));
+        wait_for_cell_dm_key(&connector, &new_key).await;
+        assert!(old_pool.connected_relays().await.is_empty());
+        assert_eq!(
+            connector
+                .connects
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        runtime.pool.shutdown().await;
+    }
+
+    async fn wait_for_cell_dm_key(connector: &super::super::mock::LoopbackConnector, key: &str) {
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 let frames = connector.sent.lock();
                 if frames
                     .iter()
-                    .any(|frame| frame.contains(&new_key) && frame.contains("dm:u4pruy"))
+                    .any(|frame| frame.contains(key) && frame.contains("dm:u4pruy"))
                 {
                     break;
                 }
@@ -843,7 +892,6 @@ mod tests {
         })
         .await
         .unwrap();
-        runtime.pool.shutdown().await;
     }
 
     #[test]

@@ -313,7 +313,7 @@ struct EventQueue {
 struct Roles {
     adapter: Option<BleAdapter>,
     peripheral: Option<PeripheralRole>,
-    alias: Option<adapter::MeshAlias>,
+    alias: Option<crate::alias::MeshAlias>,
     scan: Option<Scan>,
     power: Option<JoinHandle<()>>,
 }
@@ -576,6 +576,8 @@ impl MeshLink for BlueZLink {
                 Some(name) => BleAdapter::acquire_named(name).await?,
                 None => BleAdapter::acquire().await?,
             };
+            let adapter = ble.adapter();
+            let alias = crate::alias::MeshAlias::acquire(&adapter).await?;
             let power_events = ble
                 .adapter()
                 .events()
@@ -588,14 +590,7 @@ impl MeshLink for BlueZLink {
             // stops discovery constantly.
             central::configure_discovery(ble.adapter(), service).await?;
 
-            let adapter = ble.adapter();
-            let mut alias = match adapter::MeshAlias::install(&adapter).await {
-                Ok(alias) => Some(alias),
-                Err(error) => {
-                    tracing::warn!(%error, "could not set a neutral Bluetooth adapter alias");
-                    None
-                }
-            };
+            alias.install().await?;
             let peripheral = match PeripheralRole::start(
                 &adapter,
                 service,
@@ -607,9 +602,7 @@ impl MeshLink for BlueZLink {
             {
                 Ok(peripheral) => peripheral,
                 Err(error) => {
-                    if let Some(alias) = &mut alias
-                        && let Err(restore_error) = alias.restore().await
-                    {
+                    if let Err(restore_error) = alias.restore().await {
                         tracing::warn!(%restore_error, "could not restore the Bluetooth adapter alias");
                     }
                     return Err(error);
@@ -638,7 +631,7 @@ impl MeshLink for BlueZLink {
             }
             roles.adapter = Some(ble);
             roles.peripheral = Some(peripheral);
-            roles.alias = alias;
+            roles.alias = Some(alias);
             roles.power = Some(power);
             Ok(())
         })
@@ -664,7 +657,7 @@ impl MeshLink for BlueZLink {
                     power.abort();
                 }
                 self.inner.drop_all();
-                if let Some(mut alias) = roles.alias.take()
+                if let Some(alias) = roles.alias.take()
                     && let Err(error) = alias.restore().await
                 {
                     tracing::warn!(%error, "could not restore the Bluetooth adapter alias");

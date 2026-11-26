@@ -649,6 +649,17 @@ impl ChatterClient {
     ///
     /// Returns whether the server answered (always false when signed out).
     pub async fn startup_connect(&self, budget: std::time::Duration) -> bool {
+        #[cfg(all(feature = "mesh", target_os = "linux"))]
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            chatter_mesh_ble::recover_desktop_aliases(),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "could not recover a previous Mesh adapter alias"),
+            Err(_) => tracing::warn!("timed out recovering a previous Mesh adapter alias"),
+        }
         if !self.is_logged_in() {
             self.server_contact_deferred.store(true, Ordering::SeqCst);
             tracing::info!("signed out: no server contact until a sign-in action");

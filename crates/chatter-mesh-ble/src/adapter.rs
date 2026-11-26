@@ -25,7 +25,6 @@ use tokio::{process::Command, time::timeout};
 use crate::error;
 
 const CONTROLLER_INFO_TIMEOUT: Duration = Duration::from_secs(2);
-const MESH_ALIAS: &str = "Bluetooth Device";
 
 /// A BlueZ session together with the adapter we run the mesh on.
 pub struct BleAdapter {
@@ -140,74 +139,6 @@ impl BleAdapter {
             "Bluetooth is off on {}. Turn it on in system settings, then turn Mesh off and back on",
             self.name()
         ))
-    }
-}
-
-/// Restore the adapter's name when the radio session ends.
-pub(crate) struct MeshAlias {
-    adapter: Adapter,
-    previous: Option<(String, bool)>,
-}
-
-impl MeshAlias {
-    pub(crate) async fn install(adapter: &Adapter) -> Result<Self, bluer::Error> {
-        let current = adapter.alias().await?;
-        let previous = if current == MESH_ALIAS {
-            None
-        } else {
-            let system_fallback = current == adapter.system_name().await?;
-            Some((current, system_fallback))
-        };
-        let alias = Self {
-            adapter: adapter.clone(),
-            previous,
-        };
-        if alias.previous.is_some() {
-            adapter.set_alias(MESH_ALIAS.to_owned()).await?;
-        }
-        Ok(alias)
-    }
-
-    pub(crate) async fn restore(&mut self) -> Result<(), bluer::Error> {
-        if let Some(previous) = &self.previous {
-            restore_alias(&self.adapter, previous.clone()).await?;
-            self.previous = None;
-        }
-        Ok(())
-    }
-}
-
-async fn restore_alias(
-    adapter: &Adapter,
-    (previous, system_fallback): (String, bool),
-) -> Result<(), bluer::Error> {
-    // Preserve an alias that the user or another application set during mesh.
-    // BlueZ updates its stored alias before the controller reports the change.
-    let current = adapter.alias().await?;
-    if current == MESH_ALIAS || current == previous {
-        // An empty alias restores BlueZ's system-name fallback.
-        let previous = if system_fallback {
-            String::new()
-        } else {
-            previous
-        };
-        adapter.set_alias(previous).await?;
-    }
-    Ok(())
-}
-
-impl Drop for MeshAlias {
-    fn drop(&mut self) {
-        if let Some(previous) = self.previous.take()
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
-        {
-            let adapter = self.adapter.clone();
-            runtime.spawn(async move {
-                if let Err(error) = restore_alias(&adapter, previous).await {
-                    tracing::warn!(%error, "could not restore the Bluetooth adapter alias");
-                }
-            });
-        }
     }
 }
 
