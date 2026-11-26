@@ -869,6 +869,7 @@ mod tests {
     #[tokio::test]
     async fn broadcast_rotation_resubscribes_on_a_fresh_relay_connection() {
         let service = super::super::tests::service(None, None);
+        service.config.set_bridge_mode(true);
         let connector = Arc::new(super::super::mock::LoopbackConnector::new());
         let (pool, mut events) = RelayPool::new(connector.clone());
         let old_pool = pool.clone();
