@@ -61,6 +61,10 @@ impl ConversationHandle {
         let ActiveConversation::Channel(channel) = self.conversation else {
             return Err(ConversationError::NoConversation);
         };
+        // Turned off: the owed receipt is settled unsent.
+        if !self.client.delivery_receipts_enabled().unwrap_or(true) {
+            return Ok(());
+        }
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
             self.client.messages().send_channel_receipt_to_author(channel, author, timestamps.to_vec(), false),
@@ -72,7 +76,8 @@ impl ConversationHandle {
         &self,
         timestamps: &[u64],
     ) -> ConversationResult {
-        if timestamps.is_empty() {
+        // The "delivery receipts" setting (mutual; defaults on).
+        if timestamps.is_empty() || !self.client.delivery_receipts_enabled().unwrap_or(true) {
             return Ok(());
         }
         match &self.conversation {
@@ -126,6 +131,9 @@ impl ConversationHandle {
             && (!self.client.chat_state().is_app_visible()
                 || !self.client.read_receipts_enabled().unwrap_or(true))
         {
+            return Ok(());
+        }
+        if !read && !self.client.delivery_receipts_enabled().unwrap_or(true) {
             return Ok(());
         }
         let auth = self.client.auth_state().get();

@@ -159,6 +159,9 @@ impl AnonInboxBackend for AnonDmService {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
+    fn accepts_delivery_receipts(&self) -> bool {
+        crate::services::configuration_sync::delivery_receipts_enabled(&self.settings_repo)
+    }
 }
 
 impl AnonDmService {

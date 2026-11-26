@@ -139,6 +139,7 @@ impl LinkDeviceService {
             // adopts (`complete_linking`), as a ConfigurationSync would.
             read_receipts: settings.read_receipts,
             typing_indicators: settings.typing_indicators,
+            delivery_receipts: settings.delivery_receipts,
             // Chatter has no link-preview setting (see `configuration_sync`):
             // left at the proto3 default, which is not encoded, and never read.
             provisioning_user_agent: format!("chatter-linux/{}", env!("CARGO_PKG_VERSION"),),

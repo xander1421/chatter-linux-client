@@ -6007,3 +6007,9 @@ msgstr "Non consentito"
 
 msgid "Allow"
 msgstr "Consenti"
+
+msgid "Delivery receipts"
+msgstr "Conferme di consegna"
+
+msgid "Let others know when their messages reach you. When off, you won't see theirs either"
+msgstr "Fai sapere agli altri quando i loro messaggi ti arrivano. Se disattivato, non vedrai nemmeno le loro"

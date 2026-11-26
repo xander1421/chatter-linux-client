@@ -13,7 +13,8 @@ impl MessageService {
     /// (Signal's `ProfileKey.deriveAccessKey()`), so no prekey-bundle fetch —
     /// and no one-time-prekey burn — is needed. Without a profile key we
     /// degrade to identified (Basic auth) delivery, loudly, like
-    /// `deposit_sealed_to_all_devices` does.
+    /// `deposit_sealed_to_all_devices` does; never with a rejected UAK or in
+    /// Shield (`send_sealed_batch`).
     ///
     /// At most [`DEM_RETRY_LIMIT`] reports per failed message; past that
     /// this returns `Ok` without sending.
@@ -60,7 +61,10 @@ impl MessageService {
         let peer_uak = self.sealed_access_key(&peer_id_str, false);
         // To our own user the deposit is identified by design (see
         // `deposit_sealed_to_session_devices`), not a degradation.
-        if peer_uak.is_none() && !self.current_user_id().is_ok_and(|me| me == *peer_id) {
+        if peer_uak.is_none()
+            && !self.current_user_id().is_ok_and(|me| me == *peer_id)
+            && !self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+        {
             tracing::warn!(
                 peer_id = %peer_id,
                 reason = "no stored profile key to derive the peer's UAK",
@@ -73,20 +77,17 @@ impl MessageService {
             registration_id: 0,
             sealed_message: Some(sealed_message),
         };
-        let (_, uak_rejected) = self
-            .send_sealed_batch(
-                &mut self.message_client(),
-                &peer_id_str,
-                vec![message],
-                SealedDelivery::NamedDevices,
-                peer_uak.as_ref(),
-                &uuid::Uuid::new_v4().to_string(),
-            )
-            .await
-            .map_err(MessageError::Network)?;
-        if uak_rejected {
-            tracing::warn!(peer_id = %peer_id, reason = "UAK from our stored profile key rejected", "SEALED SENDER DEGRADED: DecryptionErrorMessage delivered identified");
-        }
+        self.send_sealed_batch(
+            &mut self.message_client(),
+            &peer_id_str,
+            vec![message],
+            SealedDelivery::NamedDevices,
+            peer_uak.as_ref(),
+            false,
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .await
+        .map_err(MessageError::Network)?;
 
         tracing::info!(
             peer_id = %peer_id,

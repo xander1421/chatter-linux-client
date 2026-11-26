@@ -3966,3 +3966,6 @@ msgstr "Разрешите показывать входящие вызовы н
 
 msgid "Not now"
 msgstr "Не сейчас"
+
+msgid "Waiting for contact's new key"
+msgstr "Ожидание нового ключа собеседника"

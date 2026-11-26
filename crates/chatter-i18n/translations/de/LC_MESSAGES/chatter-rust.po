@@ -4032,3 +4032,6 @@ msgstr "Erlaube, dass eingehende Anrufe auf dem Sperrbildschirm angezeigt werden
 
 msgid "Not now"
 msgstr "Jetzt nicht"
+
+msgid "Waiting for contact's new key"
+msgstr "Warte auf den neuen Schlüssel des Kontakts"

@@ -6034,3 +6034,9 @@ msgstr "Nicht erlaubt"
 
 msgid "Allow"
 msgstr "Erlauben"
+
+msgid "Delivery receipts"
+msgstr "Zustellbestätigungen"
+
+msgid "Let others know when their messages reach you. When off, you won't see theirs either"
+msgstr "Andere erfahren, wenn ihre Nachrichten dich erreichen. Wenn aus, siehst du ihre auch nicht"

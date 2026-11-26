@@ -3985,3 +3985,6 @@ msgstr "Permite que las llamadas entrantes se muestren en la pantalla de bloqueo
 
 msgid "Not now"
 msgstr "Ahora no"
+
+msgid "Waiting for contact's new key"
+msgstr "Esperando la nueva clave del contacto"

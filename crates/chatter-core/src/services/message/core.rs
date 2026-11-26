@@ -27,6 +27,9 @@ pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Ta
 
 pub(crate) const WAITING_FOR_ANONYMOUS_CREDENTIALS: &str = "Waiting for anonymous credentials";
 pub(crate) const VERIFYING_KEY: &str = "Verifying key";
+/// A queued DM whose recipient rejected our UAK: it waits, sealed, for the
+/// recipient's next message to bring their new profile key.
+pub(crate) const WAITING_FOR_CONTACT_KEY: &str = "Waiting for contact's new key";
 pub(crate) const IDENTITY_CHANGED: &str = "Identity changed";
 pub(crate) const SHIELD_VERIFYING_KEY: &str = "Verifying key over Tor";
 
@@ -57,6 +60,8 @@ impl MessageError {
             Self::Network(NetworkError::RequestNotSent(_)) => Some("Message not submitted"),
             Self::Network(NetworkError::SecretChatNeedsTor(_)) => Some(NO_TOR_ROUTE),
             Self::Network(NetworkError::AnonymousCredentialsUnavailable) => Some(WAITING_FOR_ANONYMOUS_CREDENTIALS),
+            // Waits for a fresh profile key; never retried identified.
+            Self::Network(NetworkError::SealedAccessUnavailable) => None,
             Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
             Self::Network(NetworkError::MismatchedDevices { .. }) => None,
             // SpiceDB down answers PermissionDenied. That is a delivery miss,

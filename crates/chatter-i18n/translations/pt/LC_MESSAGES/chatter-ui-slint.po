@@ -5998,3 +5998,9 @@ msgstr "Não permitido"
 
 msgid "Allow"
 msgstr "Permitir"
+
+msgid "Delivery receipts"
+msgstr "Confirmações de entrega"
+
+msgid "Let others know when their messages reach you. When off, you won't see theirs either"
+msgstr "Avisa os outros quando as mensagens deles chegam a você. Desativado, você também não verá as deles"

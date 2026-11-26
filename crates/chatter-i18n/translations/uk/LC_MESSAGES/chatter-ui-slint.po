@@ -6036,3 +6036,9 @@ msgstr "Не дозволено"
 
 msgid "Allow"
 msgstr "Дозволити"
+
+msgid "Delivery receipts"
+msgstr "Звіти про доставку"
+
+msgid "Let others know when their messages reach you. When off, you won't see theirs either"
+msgstr "Повідомляти іншим, коли їхні повідомлення дійшли до вас. Якщо вимкнено, ви теж не побачите їхні звіти"

@@ -289,6 +289,7 @@ mod tests {
             master_key: vec![],
             read_receipts: true,
             typing_indicators: true,
+            delivery_receipts: true,
             provisioning_user_agent: "linux-client/0.1".into(),
             primary_device_registration_id: 1234,
             ephemeral_backup_key: None,

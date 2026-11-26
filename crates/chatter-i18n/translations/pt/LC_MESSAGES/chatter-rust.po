@@ -3972,3 +3972,6 @@ msgstr "Permita que as chamadas recebidas apareçam na tela de bloqueio."
 
 msgid "Not now"
 msgstr "Agora não"
+
+msgid "Waiting for contact's new key"
+msgstr "Aguardando a nova chave do contato"

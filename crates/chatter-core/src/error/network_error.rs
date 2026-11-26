@@ -84,6 +84,13 @@ pub enum NetworkError {
     #[error("secret chats need Tor (onion): {0}")]
     SecretChatNeedsTor(&'static str),
 
+    /// No sealed-sender access to the recipient: the server rejected our
+    /// UAK (stale profile key), or there is none and this send must not go
+    /// identified (receipts, typing, Shield). Nothing was queued; the send
+    /// never falls back to Basic auth.
+    #[error("no sealed-sender access to the recipient")]
+    SealedAccessUnavailable,
+
     /// Unknown or unclassified error.
     #[error("unknown error: {0}")]
     Unknown(String),

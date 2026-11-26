@@ -66,6 +66,9 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
                 if !client.read_receipts_enabled().unwrap_or(true) {
                     pending.retain(|entry| !entry.read);
                 }
+                if !client.delivery_receipts_enabled().unwrap_or(true) {
+                    pending.retain(|entry| entry.read);
+                }
                 pending.clone()
             };
             if !connected || tokio::time::Instant::now() < retry_after {

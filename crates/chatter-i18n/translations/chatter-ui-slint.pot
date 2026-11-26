@@ -6000,3 +6000,9 @@ msgstr ""
 
 msgid "Allow"
 msgstr ""
+
+msgid "Delivery receipts"
+msgstr ""
+
+msgid "Let others know when their messages reach you. When off, you won't see theirs either"
+msgstr ""

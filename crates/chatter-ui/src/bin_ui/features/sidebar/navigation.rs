@@ -63,6 +63,10 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                             ui_ctx_settings.read_receipts_enabled().unwrap_or(true),
                         );
                     w.global::<crate::SettingsPane>()
+                        .set_settings_delivery_receipts(
+                            ui_ctx_settings.delivery_receipts_enabled().unwrap_or(true),
+                        );
+                    w.global::<crate::SettingsPane>()
                         .set_settings_typing_indicators(
                             ui_ctx_settings.typing_indicators_enabled().unwrap_or(true),
                         );

@@ -320,6 +320,12 @@ pub trait AnonInboxBackend {
         Ok(())
     }
 
+    /// Whether incoming delivery receipts are honoured: the mutual
+    /// "delivery receipts" setting. Default: true.
+    fn accepts_delivery_receipts(&self) -> bool {
+        true
+    }
+
     /// Whether receipts should emit `MessagesRead` / `MessagesDelivered` events.
     /// Default: true. Group overrides to suppress (receipts are debug-only there).
     fn emit_receipts(&self) -> bool {
@@ -562,7 +568,9 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                         channel_id: Some(channel_id),
                     });
                 }
-            } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
+            } else if receipt.r#type == receipt_message::Type::Delivery as i32
+                && backend.accepts_delivery_receipts()
+            {
                 if let Err(error) =
                     backend.persist_delivery_status(id, &receipt.timestamps, "delivered")
                 {

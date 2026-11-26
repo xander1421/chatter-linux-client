@@ -652,6 +652,7 @@ pub(super) fn adopt_provisioned_settings(
         &chatter_proto::content_v1::ConfigurationSync {
             read_receipts: provision.read_receipts,
             typing_indicators: provision.typing_indicators,
+            delivery_receipts: provision.delivery_receipts,
         },
     )?;
     Ok(())

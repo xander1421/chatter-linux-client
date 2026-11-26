@@ -212,6 +212,7 @@ fn display_failure_reason(reason: &str) -> String {
             chatter_i18n::tr("Secure channel setup timed out. Tap Retry")
         }
         "Waiting for connection" => chatter_i18n::tr("Waiting for connection"),
+        "Waiting for contact's new key" => chatter_i18n::tr("Waiting for contact's new key"),
         other => other.to_string(),
     }
 }

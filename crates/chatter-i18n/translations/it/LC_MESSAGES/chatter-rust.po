@@ -3971,3 +3971,6 @@ msgstr "Consenti la visualizzazione delle chiamate in arrivo sulla schermata di 
 
 msgid "Not now"
 msgstr "Non ora"
+
+msgid "Waiting for contact's new key"
+msgstr "In attesa della nuova chiave del contatto"

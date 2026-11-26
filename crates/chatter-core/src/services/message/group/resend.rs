@@ -476,7 +476,7 @@ impl MessageService {
         };
         let peer = peer_id.to_string();
         let uak = self.sealed_access_key(&peer, false);
-        if uak.is_none() {
+        if uak.is_none() && !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             tracing::warn!(
                 %peer_id,
                 reason = "no stored profile key to derive the peer's UAK",
@@ -484,19 +484,16 @@ impl MessageService {
                  (Basic auth) — the server WILL record us as the sender"
             );
         }
-        let (_, uak_rejected) = self
-            .send_sealed_batch(
-                &mut self.message_client(),
-                &peer,
-                vec![message],
-                chatter_proto::chat_v1::SealedDelivery::NamedDevices,
-                uak.as_ref(),
-                &uuid::Uuid::new_v4().to_string(),
-            )
-            .await?;
-        if uak_rejected {
-            tracing::warn!(%peer_id, reason = "UAK from our stored profile key rejected", "SEALED SENDER DEGRADED: group resend delivered identified");
-        }
+        self.send_sealed_batch(
+            &mut self.message_client(),
+            &peer,
+            vec![message],
+            chatter_proto::chat_v1::SealedDelivery::NamedDevices,
+            uak.as_ref(),
+            false,
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .await?;
         Ok(())
     }
 

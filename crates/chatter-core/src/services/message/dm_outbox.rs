@@ -441,6 +441,11 @@ impl MessageService {
             Err(error) => {
                 let reason = if matches!(error, MessageError::RecipientKeyVerifying { .. }) {
                     super::core::VERIFYING_KEY
+                } else if matches!(
+                    error,
+                    MessageError::Network(NetworkError::SealedAccessUnavailable)
+                ) {
+                    super::core::WAITING_FOR_CONTACT_KEY
                 } else {
                     "Waiting for connection"
                 };

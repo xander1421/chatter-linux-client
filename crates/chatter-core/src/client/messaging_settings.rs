@@ -14,6 +14,19 @@ impl ChatterClient {
         Ok(())
     }
 
+    /// Enable or disable delivery receipts, on every one of our devices.
+    /// Mutual: while off we send none and ignore the ones peers send, so
+    /// our messages stop showing "delivered" too.
+    pub fn set_delivery_receipts_enabled(&self, enabled: bool) -> Result<(), SessionError> {
+        self.sessions()
+            .set_bool_setting(settings_keys::SEND_DELIVERY_RECEIPTS, enabled)?;
+        if !enabled {
+            self.pending_receipts.lock().retain(|entry| entry.is_read());
+        }
+        self.sync_configuration_to_own_devices();
+        Ok(())
+    }
+
     /// Enable or disable typing indicators, on every one of our devices.
     pub fn set_typing_indicators_enabled(&self, enabled: bool) -> Result<(), SessionError> {
         self.sessions()
@@ -47,6 +60,13 @@ impl ChatterClient {
             .sessions()
             .get_bool_setting(settings_keys::SEND_READ_RECEIPTS)?
             .unwrap_or(true))
+    }
+
+    /// Check if delivery receipts are enabled (defaults to true).
+    pub fn delivery_receipts_enabled(&self) -> Result<bool, SessionError> {
+        Ok(crate::services::configuration_sync::delivery_receipts_enabled(
+            &self.messages().settings_repo,
+        ))
     }
 
     /// Check if typing indicators are enabled (defaults to true).

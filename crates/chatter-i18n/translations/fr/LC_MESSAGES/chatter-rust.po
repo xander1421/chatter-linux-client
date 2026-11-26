@@ -3999,3 +3999,6 @@ msgstr "Autorisez l’affichage des appels entrants sur l’écran de verrouilla
 
 msgid "Not now"
 msgstr "Pas maintenant"
+
+msgid "Waiting for contact's new key"
+msgstr "En attente de la nouvelle clé du contact"

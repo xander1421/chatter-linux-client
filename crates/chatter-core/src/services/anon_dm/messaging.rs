@@ -734,7 +734,9 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         message_timestamps: Vec<u64>,
     ) -> Result<(), AnonDmError> {
-        if message_timestamps.is_empty() {
+        if message_timestamps.is_empty()
+            || !crate::services::configuration_sync::delivery_receipts_enabled(&self.settings_repo)
+        {
             return Ok(());
         }
 

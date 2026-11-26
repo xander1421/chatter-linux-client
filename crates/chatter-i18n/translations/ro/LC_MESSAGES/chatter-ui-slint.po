@@ -6035,3 +6035,9 @@ msgstr "Nepermis"
 
 msgid "Allow"
 msgstr "Permite"
+
+msgid "Delivery receipts"
+msgstr "Confirmări de livrare"
+
+msgid "Let others know when their messages reach you. When off, you won't see theirs either"
+msgstr "Le arată altora când mesajele lor ajung la tine. Dezactivat, nu le vei vedea nici tu pe ale lor"

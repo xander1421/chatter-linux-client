@@ -1,7 +1,8 @@
 //! `ConfigurationSync`: our privacy settings, kept the same on every one of
 //! our devices (Signal's `SyncMessage.Configuration`).
 //!
-//! Whenever this device changes the read-receipt or typing-indicator setting
+//! Whenever this device changes the read-receipt, delivery-receipt or
+//! typing-indicator setting
 //! it sends the full current set to our own other devices; a device that
 //! receives one from our own user adopts every value and never answers. One
 //! from anyone else is dropped: a peer must never switch our receipts on.
@@ -22,7 +23,19 @@ pub fn current(settings: &SettingsRepository) -> ConfigurationSync {
     ConfigurationSync {
         read_receipts: read(keys::SEND_READ_RECEIPTS),
         typing_indicators: read(keys::SHOW_TYPING_INDICATORS),
+        delivery_receipts: read(keys::SEND_DELIVERY_RECEIPTS),
     }
+}
+
+/// Whether we send delivery receipts and honour incoming ones (default on).
+/// A storage error reads as on, as the receipt paths always have.
+#[must_use]
+pub fn delivery_receipts_enabled(settings: &SettingsRepository) -> bool {
+    settings
+        .get_bool(keys::SEND_DELIVERY_RECEIPTS)
+        .ok()
+        .flatten()
+        .unwrap_or(true)
 }
 
 /// The `Content` to send our other devices, stamped `sent_at`.
@@ -48,6 +61,7 @@ pub fn apply(
     }
     settings.set_bool(keys::SEND_READ_RECEIPTS, sync.read_receipts)?;
     settings.set_bool(keys::SHOW_TYPING_INDICATORS, sync.typing_indicators)?;
+    settings.set_bool(keys::SEND_DELIVERY_RECEIPTS, sync.delivery_receipts)?;
     Ok(true)
 }
 
@@ -79,12 +93,16 @@ mod tests {
             current(&receiver),
             ConfigurationSync {
                 read_receipts: true,
-                typing_indicators: true
+                typing_indicators: true,
+                delivery_receipts: true
             }
         );
 
         sender
             .set_bool(keys::SEND_READ_RECEIPTS, false)
+            .expect("set");
+        sender
+            .set_bool(keys::SEND_DELIVERY_RECEIPTS, false)
             .expect("set");
         let wire = content(&sender, 7).encode_to_vec();
         let Some(content::Content::ConfigurationSync(sync)) =
@@ -98,7 +116,8 @@ mod tests {
             current(&receiver),
             ConfigurationSync {
                 read_receipts: false,
-                typing_indicators: true
+                typing_indicators: true,
+                delivery_receipts: false
             }
         );
     }
@@ -110,6 +129,7 @@ mod tests {
         let forged = ConfigurationSync {
             read_receipts: false,
             typing_indicators: false,
+            delivery_receipts: false,
         };
 
         assert!(!apply(&settings, &UserId::new(), &forged).expect("apply"));
@@ -117,7 +137,8 @@ mod tests {
             current(&settings),
             ConfigurationSync {
                 read_receipts: true,
-                typing_indicators: true
+                typing_indicators: true,
+                delivery_receipts: true
             },
             "nothing written"
         );

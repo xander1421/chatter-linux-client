@@ -35,6 +35,38 @@ pub(super) fn wire_preferences(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             }
         });
 
+    // Delivery receipts toggle
+    let ui_ctx_delivery = ui_ctx.clone();
+    let weak_delivery = window.as_weak();
+    let saved_delivery = std::cell::Cell::new(
+        ui_ctx_delivery.delivery_receipts_enabled().unwrap_or(
+            window
+                .global::<crate::SettingsPane>()
+                .get_settings_delivery_receipts(),
+        ),
+    );
+    window
+        .global::<crate::SettingsPane>()
+        .on_settings_delivery_receipts_changed(move |enabled: bool| {
+            if let Err(error) = ui_ctx_delivery.set_delivery_receipts_enabled(enabled) {
+                if let Some(w) = weak_delivery.upgrade() {
+                    w.global::<crate::SettingsPane>()
+                        .set_settings_delivery_receipts(
+                            ui_ctx_delivery
+                                .delivery_receipts_enabled()
+                                .unwrap_or(saved_delivery.get()),
+                        );
+                    saved_delivery.set(
+                        w.global::<crate::SettingsPane>()
+                            .get_settings_delivery_receipts(),
+                    );
+                    privacy_save_error(&w, "delivery receipts", &error);
+                }
+            } else {
+                saved_delivery.set(enabled);
+            }
+        });
+
     // Typing indicators toggle
     let ui_ctx_typing = ui_ctx.clone();
     let weak_typing = window.as_weak();

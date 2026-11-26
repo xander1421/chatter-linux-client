@@ -4002,3 +4002,6 @@ msgstr "Permite afișarea apelurilor primite pe ecranul de blocare."
 
 msgid "Not now"
 msgstr "Nu acum"
+
+msgid "Waiting for contact's new key"
+msgstr "Se așteaptă noua cheie a contactului"

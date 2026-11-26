@@ -84,6 +84,7 @@ export component SettingsScreen inherits Rectangle {
 
     // Privacy settings
     in-out property <bool> read-receipts-enabled: true;
+    in-out property <bool> delivery-receipts-enabled: true;
     in-out property <bool> typing-indicators-enabled: true;
     in-out property <string> notification-detail: "none";  // "none" | "name_only" | "name_and_message"
     in-out property <string> search-shortcut: "both";   // "k" | "f" | "both"
@@ -185,6 +186,7 @@ export component SettingsScreen inherits Rectangle {
 
     // Privacy callbacks
     callback read-receipts-changed(bool);
+    callback delivery-receipts-changed(bool);
     callback typing-indicators-changed(bool);
     callback notification-detail-changed(string);
     callback search-shortcut-changed(string);
@@ -464,6 +466,7 @@ export component SettingsScreen inherits Rectangle {
                             profile-visibility-pending : root.profile-visibility-pending;
                             profile-visibility-pin <=> root.profile-visibility-pin;
                             read-receipts-enabled <=> root.read-receipts-enabled;
+                            delivery-receipts-enabled <=> root.delivery-receipts-enabled;
                             shield-switch <=> root.shield-switch;
                             typing-indicators-enabled <=> root.typing-indicators-enabled;
                             username-discoverable <=> root.username-discoverable;
@@ -471,6 +474,7 @@ export component SettingsScreen inherits Rectangle {
                             profile-visibility-confirmed(arg0, arg1) => { root.profile-visibility-confirmed(arg0, arg1); }
                             profile-visibility-selected(arg0) => { root.profile-visibility-selected(arg0); }
                             read-receipts-changed(arg0) => { root.read-receipts-changed(arg0); }
+                            delivery-receipts-changed(arg0) => { root.delivery-receipts-changed(arg0); }
                             shield-toggled() => { root.shield-toggled(); }
                             typing-indicators-changed(arg0) => { root.typing-indicators-changed(arg0); }
                             username-discoverable-changed(arg0) => { root.username-discoverable-changed(arg0); }

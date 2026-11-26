@@ -51,11 +51,36 @@ pub(super) fn validate_sealed_plaintext_size(encoded_len: usize) -> Result<(), M
     Ok(())
 }
 
+/// Receipts and typing indicators travel sealed or not at all: each is sent
+/// automatically, and an identified one names us as the sender of exactly
+/// the timing signal sealed sender exists to hide (NDSS'21 §III-IV). Without
+/// a UAK the server accepts they are dropped, never sent with Basic auth.
+fn is_sealed_only_content(content: &chatter_proto::content_v1::Content) -> bool {
+    use chatter_proto::content_v1::content::Content as Body;
+    matches!(&content.content, Some(Body::Receipt(_) | Body::Typing(_)))
+}
+
+/// A sealed-only send that found no sealed access was dropped, not failed.
+fn drop_without_sealed_access(
+    peer: &impl std::fmt::Display,
+    result: Result<(), MessageError>,
+) -> Result<(), MessageError> {
+    match result {
+        Err(MessageError::Network(crate::error::NetworkError::SealedAccessUnavailable)) => {
+            tracing::info!(%peer, "Receipt/typing dropped: no sealed access to the peer");
+            Ok(())
+        }
+        other => other,
+    }
+}
+
 mod delivery;
 mod deposit;
 mod posts;
 mod profile;
 mod recovery;
+#[cfg(test)]
+mod sealed_only_tests;
 
 pub(super) use deposit::{DepositOutcome, record_deposit_error};
 

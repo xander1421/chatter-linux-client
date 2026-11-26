@@ -6037,3 +6037,9 @@ msgstr "Non autorisé"
 
 msgid "Allow"
 msgstr "Autoriser"
+
+msgid "Delivery receipts"
+msgstr "Accusés de réception"
+
+msgid "Let others know when their messages reach you. When off, you won't see theirs either"
+msgstr "Indique aux autres quand leurs messages vous parviennent. Désactivé, vous ne verrez pas non plus les leurs"
