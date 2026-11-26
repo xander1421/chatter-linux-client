@@ -34,5 +34,7 @@ pub mod scheduler;
 
 pub use error::LinkError;
 pub use link::{
-    BoxFuture, CHARACTERISTIC_UUID, LinkEvent, LinkId, LinkRole, MeshLink, SERVICE_UUID,
+    ADMISSION_BEACON_PREFIX, BoxFuture, CHARACTERISTIC_UUID, InboundAdmission, InboundLink,
+    LinkEvent, LinkId, LinkRole, MeshLink, PairingBeacon, SERVICE_UUID, admission_beacon,
+    admission_preface,
 };

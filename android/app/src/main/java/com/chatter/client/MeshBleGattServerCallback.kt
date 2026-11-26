@@ -37,7 +37,7 @@ internal fun MeshBleBridge.createGattServerCallback(): BluetoothGattServerCallba
             BluetoothProfile.STATE_CONNECTED -> {
                 // Connected, but not writable: the link is announced only once
                 // this central subscribes via its CCCD write.
-                peripheralLinks.computeIfAbsent(id) { PeripheralLink(id, device) }
+                beginPeripheral(device)
                 Log.d(TAG, "peripheral link $id connected (awaiting subscription)")
             }
 
@@ -87,37 +87,38 @@ internal fun MeshBleBridge.createGattServerCallback(): BluetoothGattServerCallba
             BluetoothGatt.GATT_INVALID_OFFSET
         } else {
             val link = peripheralLinks[id]
-            if (value != null && value.isNotEmpty()) {
-                if (link != null && link.announced) {
-                    // Copy: the stack owns and reuses this buffer.
-                    emitData(id, value.copyOf())
-                } else if (link != null) {
-                    // Connected but not yet announced upward: hold it rather
-                    // than lose it. See `PeripheralLink.pendingInbound`.
-                    synchronized(link.pendingInbound) {
-                        while (link.pendingInbound.size >= MAX_PENDING_INBOUND) {
-                            link.pendingInbound.removeFirst()
-                            Log.d(TAG, "pending inbound full for $id, oldest frame dropped")
-                        }
-                        link.pendingInbound.addLast(value.copyOf())
-                    }
-                    if (value.size > link.largestInbound) link.largestInbound = value.size
-                    Log.d(TAG, "write from $id held until the link is announced")
-                    val waited = SystemClock.elapsedRealtime() - link.connectedAt
-                    if (waited >= SUBSCRIBE_GRACE_MS) {
-                        adoptStaleSubscription(link)
-                    } else if (link.adoptionScheduled.compareAndSet(false, true)) {
-                        handler.postDelayed(
-                            { adoptStaleSubscription(link) },
-                            SUBSCRIBE_GRACE_MS - waited,
-                        )
-                    }
+            if (value == null || value.isEmpty() || link == null) {
+                BluetoothGatt.GATT_FAILURE
+            } else synchronized(link) {
+                val firstWrite = !link.admitted
+                if (!admitFirstWrite(link, value)) {
+                    BluetoothGatt.GATT_INSUFFICIENT_AUTHORIZATION
                 } else {
-                    // No link object at all: already torn down, nowhere to put it.
-                    Log.d(TAG, "write from $id on an unknown link, dropped")
+                    val preface = firstWrite && link.admissionBeacon != null
+                    if (!preface) {
+                        if (link.announced) {
+                            emitData(id, value.copyOf())
+                        } else {
+                            synchronized(link.pendingInbound) {
+                                while (link.pendingInbound.size >= MAX_PENDING_INBOUND) {
+                                    link.pendingInbound.removeFirst()
+                                }
+                                link.pendingInbound.addLast(value.copyOf())
+                            }
+                            if (value.size > link.largestInbound) link.largestInbound = value.size
+                            val waited = SystemClock.elapsedRealtime() - link.connectedAt
+                            if (!link.subscribed && link.adoptionScheduled.compareAndSet(false, true)) {
+                                handler.postDelayed(
+                                    { adoptStaleSubscription(link) },
+                                    (SUBSCRIBE_GRACE_MS - waited).coerceAtLeast(0L),
+                                )
+                            }
+                        }
+                    }
+                    if (link.subscribed) announcePeripheral(link, "subscribed and admitted")
+                    BluetoothGatt.GATT_SUCCESS
                 }
             }
-            BluetoothGatt.GATT_SUCCESS
         }
         if (responseNeeded) {
             guard("sendResponse", false) {
@@ -155,23 +156,27 @@ internal fun MeshBleBridge.createGattServerCallback(): BluetoothGattServerCallba
         value: ByteArray?,
     ) {
         var status = BluetoothGatt.GATT_SUCCESS
-        if (descriptor.uuid == CCCD_UUID && value != null) {
-            val id = peripheralId(device.address)
-            val link = peripheralLinks.computeIfAbsent(id) { PeripheralLink(id, device) }
-            link.cccd = value.copyOf()
-            val subscribed =
-                value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ||
-                    value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
-            if (subscribed && !link.announced) {
-                // This is the moment a peripheral link becomes writable.
-                announcePeripheral(link, "subscribed")
-            } else if (!subscribed && link.announced) {
-                // Unsubscribed: still connected, no longer writable, which the
-                // layer above only understands as gone.
-                link.announced = false
-                emitDisconnected(id)
+        if (descriptor.uuid == CCCD_UUID && value != null && !preparedWrite && offset == 0) {
+            val link = beginPeripheral(device)
+            synchronized(link) {
+                if (link.rejected) {
+                    status = BluetoothGatt.GATT_INSUFFICIENT_AUTHORIZATION
+                } else {
+                    link.cccd = value.copyOf()
+                    link.subscribed =
+                        value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ||
+                            value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
+                    if (link.subscribed) {
+                        // The ATT subscription can be prepared before admission.
+                        // No app notifications or data are released until the first write is checked.
+                        announcePeripheral(link, "subscribed and admitted")
+                    } else if (link.announced) {
+                        link.announced = false
+                        emitDisconnected(link.id)
+                    }
+                }
             }
-        } else if (descriptor.uuid != CCCD_UUID) {
+        } else {
             status = BluetoothGatt.GATT_FAILURE
         }
         if (responseNeeded) {

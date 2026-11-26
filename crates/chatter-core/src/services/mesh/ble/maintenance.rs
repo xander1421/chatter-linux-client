@@ -197,8 +197,13 @@ impl BleRuntime {
             let fresh = now_ms.saturating_sub(candidate.discovered_at_ms) <= 5_000;
             #[cfg(not(target_os = "linux"))]
             let fresh = true;
-            if fresh {
-                self.dial(&candidate.address).await;
+            if fresh
+                && let Some(contact) = candidate
+                    .pairing_beacon
+                    .as_ref()
+                    .and_then(|beacon| self.state.paired_contact_for_beacon(beacon))
+            {
+                self.dial_paired(&candidate.address, &contact).await;
             }
         }
 

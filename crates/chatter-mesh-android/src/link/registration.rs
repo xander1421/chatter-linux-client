@@ -55,12 +55,41 @@ pub(crate) fn dispatch(event: LinkEvent) {
     }
 }
 
+pub(crate) fn check_inbound(incoming: &InboundLink) -> bool {
+    let Some(shared) = active("nativeCheckInbound") else {
+        return false;
+    };
+    let hook = shared
+        .inbound_admission
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    hook.is_some_and(|admit| admit(incoming))
+}
+
 /// `nativeOnConnected`: this connection is writable now.
-pub(crate) fn on_connected(handle: &str, role: LinkRole, reported_max_write: i32) {
+pub(crate) fn on_connected(
+    handle: &str,
+    role: LinkRole,
+    reported_max_write: i32,
+    beacon: Option<chatter_mesh_link::PairingBeacon>,
+) {
     let Some(shared) = active("nativeOnConnected") else {
         return;
     };
-    shared.establish(role, handle, sanitise_max_write(reported_max_write));
+    let inbound = handle
+        .strip_prefix("p:")
+        .filter(|_| role == LinkRole::Peripheral)
+        .map(|address| InboundLink {
+            address: address.to_string(),
+            beacon,
+        });
+    shared.establish_with_inbound(
+        role,
+        handle,
+        sanitise_max_write(reported_max_write),
+        inbound,
+    );
 }
 
 /// `nativeOnDisconnected`: this connection is gone.

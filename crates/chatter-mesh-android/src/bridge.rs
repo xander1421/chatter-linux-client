@@ -21,7 +21,7 @@
 //! # `MeshBleBridge` is a Kotlin `object`
 //!
 //! There is no constructor to call. The singleton is reachable as the static
-//! field `INSTANCE`, and every one of the eight bridge methods is an *instance*
+//! field `INSTANCE`, and every bridge method is an *instance*
 //! method on it — `@JvmStatic` is deliberately not used on the Kotlin side,
 //! because on an `external fun` it generates a static bridge over an instance
 //! native that `RegisterNatives` cannot bind.
@@ -55,7 +55,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use chatter_mesh_link::LinkError;
-use jni::objects::{Global, JClass, JMethodID, JObject, JStaticFieldID, JString, JValue};
+use jni::objects::{
+    Global, JByteArray, JClass, JMethodID, JObject, JStaticFieldID, JString, JValue,
+};
 use jni::signature::{JavaType, Primitive, ReturnType};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jvalue};
 use jni::{Env, JavaVM};
@@ -75,6 +77,7 @@ struct Methods {
     start: JMethodID,
     stop: JMethodID,
     set_scanning: JMethodID,
+    set_pairing_beacons: JMethodID,
     connect: JMethodID,
     disconnect: JMethodID,
     send: JMethodID,
@@ -88,6 +91,7 @@ impl Methods {
             start: method_id(env, class, "start")?,
             stop: method_id(env, class, "stop")?,
             set_scanning: method_id(env, class, "setScanning")?,
+            set_pairing_beacons: method_id(env, class, "setPairingBeacons")?,
             connect: method_id(env, class, "connect")?,
             disconnect: method_id(env, class, "disconnect")?,
             send: method_id(env, class, "send")?,
@@ -428,6 +432,29 @@ pub fn set_scanning(on: bool) -> Result<(), LinkError> {
     })
 }
 
+/// Install the current epoch's flattened pairing beacon slots.
+pub fn set_pairing_beacons(bytes: &[u8]) -> Result<(), LinkError> {
+    with_bridge(Op::SetPairingBeacons, "", |env, bridge, instance| {
+        let allocated = env.byte_array_from_slice(bytes);
+        let payload = classify(env, "NewByteArray(pairing beacons)", allocated)?;
+        let args = [JValue::Object(&payload).as_jni()];
+        // SAFETY: setPairingBeacons is resolved from BRIDGE_METHODS as ([B)Z.
+        let called = unsafe {
+            env.call_method_unchecked(
+                instance,
+                bridge.methods.set_pairing_beacons,
+                ReturnType::Primitive(Primitive::Boolean),
+                &args,
+            )
+        };
+        if classify(env, "MeshBleBridge.setPairingBeacons", called)?.z()? {
+            Ok(())
+        } else {
+            Err(Failure::Rejected)
+        }
+    })
+}
+
 /// Ask Kotlin to connect outward to `address`, taking the central role.
 ///
 /// Returns the link id Kotlin will use to name this connection in every later
@@ -442,15 +469,27 @@ pub fn set_scanning(on: bool) -> Result<(), LinkError> {
 ///
 /// `null` means the attempt could not even be started, which is a
 /// [`LinkError::ConnectFailed`] rather than a handle naming nothing.
-pub fn connect(address: &str) -> Result<String, LinkError> {
+pub fn connect(
+    address: &str,
+    beacon: Option<&chatter_mesh_link::PairingBeacon>,
+) -> Result<String, LinkError> {
     with_bridge(Op::Connect, address, |env, bridge, instance| {
         let created = env.new_string(address);
         let peer = classify(env, "NewStringUTF(address)", created)?;
-        let args = [JValue::Object(&peer).as_jni()];
+        let preface = if let Some(beacon) = beacon {
+            let allocated =
+                env.byte_array_from_slice(&chatter_mesh_link::admission_preface(beacon));
+            classify(env, "NewByteArray(pairing preface)", allocated)?
+        } else {
+            JByteArray::null()
+        };
+        let args = [
+            JValue::Object(&peer).as_jni(),
+            JValue::Object(&preface).as_jni(),
+        ];
 
         // SAFETY: `connect` was resolved from BRIDGE_METHODS as
-        // `(Ljava/lang/String;)Ljava/lang/String;` on this exact class, and is
-        // called with one string and read as an object.
+        // `(Ljava/lang/String;[B)Ljava/lang/String;` on this exact class.
         let called = unsafe {
             env.call_method_unchecked(instance, bridge.methods.connect, ReturnType::Object, &args)
         };
@@ -587,11 +626,12 @@ mod tests {
     use super::*;
 
     /// Every method this module resolves an ID for, in `Methods::resolve` order.
-    const RESOLVED: [&str; 8] = [
+    const RESOLVED: [&str; 9] = [
         "attach",
         "start",
         "stop",
         "setScanning",
+        "setPairingBeacons",
         "connect",
         "disconnect",
         "send",
@@ -607,7 +647,7 @@ mod tests {
         assert_eq!(descriptor("start"), Some("()Z"));
         assert_eq!(
             descriptor("connect"),
-            Some("(Ljava/lang/String;)Ljava/lang/String;")
+            Some("(Ljava/lang/String;[B)Ljava/lang/String;")
         );
         assert_eq!(descriptor("send"), Some("(Ljava/lang/String;[B)Z"));
         assert_eq!(descriptor("maxWrite"), Some("(Ljava/lang/String;)I"));

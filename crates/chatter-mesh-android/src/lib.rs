@@ -56,17 +56,12 @@ pub const BRIDGE_CLASS: &str = "com/chatter/client/MeshBleBridge";
 /// strings are checked from both sides rather than trusted.
 pub const NATIVE_METHODS: &[(&str, &str)] = &[
     // (name, JNI descriptor)
-    // The trailing string is the advertised peer id as hex, or null when the
-    // scan response has not been seen. It is what makes a rotated private
-    // address recognisable without connecting to find out.
-    (
-        "nativeOnDiscovered",
-        "(Ljava/lang/String;ILjava/lang/String;)V",
-    ),
-    ("nativeOnConnected", "(Ljava/lang/String;ZI)V"),
+    ("nativeOnDiscovered", "(Ljava/lang/String;I[B)V"),
+    ("nativeOnConnected", "(Ljava/lang/String;ZI[B)V"),
     ("nativeOnDisconnected", "(Ljava/lang/String;)V"),
     ("nativeOnData", "(Ljava/lang/String;[B)V"),
     ("nativeOnAdapterPowerChanged", "(Z)V"),
+    ("nativeCheckInbound", "(Ljava/lang/String;[B)Z"),
 ];
 
 /// Methods this crate calls on the Kotlin bridge, with their exact descriptors.
@@ -84,7 +79,8 @@ pub const BRIDGE_METHODS: &[(&str, &str)] = &[
     ("start", "()Z"),
     ("stop", "()V"),
     ("setScanning", "(Z)Z"),
-    ("connect", "(Ljava/lang/String;)Ljava/lang/String;"),
+    ("setPairingBeacons", "([B)Z"),
+    ("connect", "(Ljava/lang/String;[B)Ljava/lang/String;"),
     ("disconnect", "(Ljava/lang/String;)V"),
     ("send", "(Ljava/lang/String;[B)Z"),
     ("maxWrite", "(Ljava/lang/String;)I"),
@@ -118,14 +114,16 @@ mod tests {
     }
 
     #[test]
-    fn every_callback_returns_void() {
-        // Callbacks run on binder threads. A return value would imply the Kotlin
-        // side waits for Rust, and a blocked binder callback stalls the entire
-        // Bluetooth stack — so "returns void" is a threading invariant, not style.
+    fn callbacks_return_void_except_for_the_admission_decision() {
         for (name, descriptor) in NATIVE_METHODS {
+            let expected = if *name == "nativeCheckInbound" {
+                ")Z"
+            } else {
+                ")V"
+            };
             assert!(
-                descriptor.ends_with(")V"),
-                "{name} must return void so binder threads never wait on Rust"
+                descriptor.ends_with(expected),
+                "unexpected return type for {name}"
             );
         }
     }

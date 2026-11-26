@@ -162,6 +162,7 @@ pub enum Op {
     Start,
     Stop,
     SetScanning,
+    SetPairingBeacons,
     Connect,
     Disconnect,
     Send,
@@ -180,6 +181,7 @@ impl Op {
             Op::Start => "start",
             Op::Stop => "stop",
             Op::SetScanning => "setScanning",
+            Op::SetPairingBeacons => "setPairingBeacons",
             Op::Connect => "connect",
             Op::Disconnect => "disconnect",
             Op::Send => "send",
@@ -246,6 +248,9 @@ pub fn link_error(op: Op, subject: &str, failure: Failure) -> LinkError {
                 "setScanning() returned false: BLUETOOTH_SCAN was refused or the adapter is off"
                     .to_string(),
             ),
+            Op::SetPairingBeacons => {
+                LinkError::PeripheralSetup("Android rejected the pairing beacon slots".to_string())
+            }
             Op::Connect => LinkError::ConnectFailed {
                 address: subject.to_string(),
                 reason: "connect() returned null".to_string(),
@@ -268,6 +273,9 @@ pub fn link_error(op: Op, subject: &str, failure: Failure) -> LinkError {
             // From the caller's point of view "the JVM misbehaved" and "the
             // peer refused" are the same event: no link came up, and the
             // scheduler moves on to another candidate.
+            Op::SetPairingBeacons => {
+                LinkError::PeripheralSetup("Android rejected the pairing beacon slots".to_string())
+            }
             Op::Connect => LinkError::ConnectFailed {
                 address: subject.to_string(),
                 reason: detail,
@@ -318,11 +326,12 @@ mod tests {
     /// A link id as the Kotlin side mints them: role-prefixed and uppercased.
     const HANDLE: &str = "c:AA:BB:CC:DD:EE:FF";
 
-    const EVERY_OP: [Op; 8] = [
+    const EVERY_OP: [Op; 9] = [
         Op::Attach,
         Op::Start,
         Op::Stop,
         Op::SetScanning,
+        Op::SetPairingBeacons,
         Op::Connect,
         Op::Disconnect,
         Op::Send,

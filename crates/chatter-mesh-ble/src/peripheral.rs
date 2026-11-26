@@ -7,7 +7,7 @@
 //!
 //! # What gets published
 //!
-//! One advertisement carrying only the mesh service UUID, and one GATT
+//! One advertisement carrying the mesh service UUID and one pairing beacon, and one GATT
 //! application exposing a single characteristic that carries all traffic in both
 //! directions: write-without-response inbound, notify outbound.
 //!
@@ -35,9 +35,11 @@
 //! inbound bytes that arrive before it are held by
 //! [`Shared`](crate::link::Shared) and replayed once the link is announced.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use bluer::adv::{Advertisement, AdvertisementHandle, Type as AdvertisementType};
+use bluer::adv::{Advertisement, AdvertisementHandle, SecondaryChannel, Type as AdvertisementType};
 use bluer::gatt::local::{
     Application, ApplicationHandle, Characteristic, CharacteristicControl,
     CharacteristicControlEvent, CharacteristicControlHandle, CharacteristicNotify,
@@ -45,10 +47,16 @@ use bluer::gatt::local::{
     characteristic_control,
 };
 use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
-use bluer::{Adapter, Uuid};
-use chatter_mesh_link::{LinkError, LinkEvent, LinkRole};
+use bluer::{Adapter, Address, Uuid};
+use chatter_mesh_link::{
+    InboundLink, LinkError, LinkEvent, LinkRole, PairingBeacon, admission_beacon,
+};
 use futures::StreamExt;
-use tokio::task::JoinHandle;
+use tokio::{
+    sync::{oneshot, watch},
+    task::JoinHandle,
+    time,
+};
 
 use crate::error;
 use crate::link::Shared;
@@ -57,12 +65,22 @@ use crate::link::Shared;
 ///
 /// Separated out and unit-tested because the thing most worth checking about it
 /// is what it does *not* contain.
-fn mesh_advertisement(service: Uuid) -> Advertisement {
+const BEACON_SLOT: Duration = Duration::from_secs(1);
+const INBOUND_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn mesh_advertisement(service: Uuid, beacon: Option<PairingBeacon>) -> Advertisement {
     Advertisement {
         // Connectable. `Broadcast` would advertise without accepting inbound
         // connections, which is exactly the invisible-peripheral failure.
         advertisement_type: AdvertisementType::Peripheral,
         service_uuids: [service].into_iter().collect(),
+        service_data: beacon
+            .into_iter()
+            .map(|beacon| (service, beacon.to_vec()))
+            .collect(),
+        // The service UUID, flags and 13-byte service data exceed a legacy
+        // primary advertisement. BlueZ's ordinary ServiceData uses extended LE.
+        secondary_channel: beacon.map(|_| SecondaryChannel::OneM),
         // Keep this instance non-discoverable even when the host is discoverable.
         // In BlueZ's limited privacy mode a discoverable, bondable advertiser
         // may use its identity address. It can still accept connections.
@@ -120,7 +138,7 @@ fn mesh_application(
 /// closes them.
 pub struct PeripheralRole {
     pump: JoinHandle<()>,
-    _advertisement: AdvertisementHandle,
+    advertisement: JoinHandle<()>,
     _application: ApplicationHandle,
 }
 
@@ -131,6 +149,7 @@ impl PeripheralRole {
         service: Uuid,
         characteristic: Uuid,
         shared: Arc<Shared>,
+        beacons: watch::Receiver<Vec<PairingBeacon>>,
     ) -> Result<Self, LinkError> {
         let (control, control_handle) = characteristic_control();
 
@@ -142,28 +161,91 @@ impl PeripheralRole {
         // Advertise only after the service is actually servable, so a peer that
         // reacts instantly to the first advertising packet does not find an
         // empty GATT database.
-        let advertisement = adapter
-            .advertise(mesh_advertisement(service))
+        let first = beacons.borrow().first().copied();
+        let initial = adapter
+            .advertise(mesh_advertisement(service, first))
             .await
             .map_err(|err| error::classify_peripheral(&err))?;
-
-        let pump = tokio::spawn(serve_control_events(
-            control,
-            adapter.name().to_string(),
-            shared,
+        let advertisement = tokio::spawn(cycle_beacons(
+            adapter.clone(),
+            service,
+            Arc::clone(&shared),
+            beacons,
+            first,
+            initial,
         ));
+
+        let pump = tokio::spawn(serve_control_events(control, adapter.clone(), shared));
 
         Ok(Self {
             pump,
-            _advertisement: advertisement,
+            advertisement,
             _application: application,
         })
+    }
+}
+
+async fn cycle_beacons(
+    adapter: Adapter,
+    service: Uuid,
+    shared: Arc<Shared>,
+    mut beacons: watch::Receiver<Vec<PairingBeacon>>,
+    mut current: Option<PairingBeacon>,
+    mut advertisement: AdvertisementHandle,
+) {
+    let mut slot = 0;
+    loop {
+        tokio::select! {
+            result = beacons.changed() => {
+                if result.is_err() {
+                    return;
+                }
+            }
+            _ = time::sleep(BEACON_SLOT) => {}
+        }
+        let next = {
+            let slots = beacons.borrow_and_update();
+            slot = (slot + 1) % slots.len().max(1);
+            slots.get(slot).copied()
+        };
+        if next == current {
+            continue;
+        }
+        drop(advertisement);
+        // bluer unregisters asynchronously. Wait for capacity before registering
+        // the next slot so a one-instance controller can finish unregistering.
+        let free = matches!(
+            time::timeout(Duration::from_millis(250), async {
+                loop {
+                    match adapter.supported_advertising_instances().await {
+                        Ok(0) => time::sleep(Duration::from_millis(25)).await,
+                        Ok(_) => return true,
+                        Err(_) => return false,
+                    }
+                }
+            })
+            .await,
+            Ok(true)
+        );
+        if !free {
+            shared.emit(LinkEvent::PeripheralRoleEnded);
+            return;
+        }
+        advertisement = match adapter.advertise(mesh_advertisement(service, next)).await {
+            Ok(handle) => handle,
+            Err(_) => {
+                shared.emit(LinkEvent::PeripheralRoleEnded);
+                return;
+            }
+        };
+        current = next;
     }
 }
 
 impl Drop for PeripheralRole {
     fn drop(&mut self) {
         self.pump.abort();
+        self.advertisement.abort();
     }
 }
 
@@ -173,82 +255,147 @@ impl core::fmt::Debug for PeripheralRole {
     }
 }
 
-/// Service the characteristic's control stream for as long as the role lives.
-///
-/// This must stay responsive: `bluer` delivers these events over a channel of
-/// depth one from inside its D-Bus method handlers, so anything slow here blocks
-/// `bluetoothd`'s call into us. Every branch therefore does the minimum and hands
-/// the socket to its own task.
+/// Hand the two BlueZ ATT channels the same one-shot admission decision.
+struct PendingAdmission {
+    write: Option<oneshot::Sender<InboundLink>>,
+    notify: Option<oneshot::Receiver<InboundLink>>,
+    deadline: time::Instant,
+}
+
+impl PendingAdmission {
+    fn new() -> Self {
+        let (write, notify) = oneshot::channel();
+        Self {
+            write: Some(write),
+            notify: Some(notify),
+            deadline: time::Instant::now() + INBOUND_ADMISSION_TIMEOUT,
+        }
+    }
+}
+
 async fn serve_control_events(
     control: CharacteristicControl,
-    adapter_name: String,
+    adapter: Adapter,
     shared: Arc<Shared>,
 ) {
-    // `Box::pin` rather than `futures::pin_mut!`: this crate forbids unsafe code
-    // and that macro expands to an `unsafe` block. One allocation, once per
-    // session, for a stream that lives as long as the role does.
-    let mut control = Box::pin(control);
-
-    // The loop below ends only when the stack closes the control stream, and that
-    // has to be reported: from that moment this device accepts no inbound
-    // connections at all, while every other part of the radio carries on looking
-    // healthy. Returning quietly is what made a half-deaf mesh indistinguishable
-    // from a quiet room.
+    let mut control = std::pin::pin!(control);
+    let mut pending: HashMap<Address, PendingAdmission> = HashMap::new();
     while let Some(event) = control.next().await {
+        pending.retain(|_, gate| gate.deadline > time::Instant::now());
         match event {
             CharacteristicControlEvent::Write(request) => {
-                let address = request.device_address().to_string();
-                // Accepting hands BlueZ one end of a socket pair. A failure here
-                // means the socket pair could not be created at all; there is no
-                // link to report against and nothing useful to say, so the peer's
-                // write simply fails and it may retry.
+                let address = request.device_address();
+                let gate = pending.entry(address).or_insert_with(PendingAdmission::new);
+                let Some(sender) = gate.write.take() else {
+                    continue;
+                };
+                let deadline = gate.deadline;
+                if gate.notify.is_none() {
+                    pending.remove(&address);
+                }
                 if let Ok(reader) = request.accept() {
-                    tokio::spawn(inbound(shared.clone(), address, reader));
+                    tokio::spawn(inbound(
+                        adapter.clone(),
+                        shared.clone(),
+                        address,
+                        reader,
+                        sender,
+                        deadline,
+                    ));
                 }
             }
             CharacteristicControlEvent::Notify(writer) => {
-                let address = writer.device_address().to_string();
-                // `bluer` has already reduced this from the negotiated ATT MTU by
-                // BlueZ's per-operation headroom, so it is the largest payload a
-                // single notification can carry. Reporting anything else — a
-                // constant, or this minus another guess at ATT overhead — either
-                // wastes bytes on every fragment for the life of the link or
-                // produces packets the controller silently discards.
-                let max_write = writer.mtu();
-                let writer = Arc::new(writer);
-
-                shared.open_link(
-                    LinkRole::Peripheral,
-                    &adapter_name,
-                    &address,
-                    max_write,
-                    Some(writer.clone()),
-                );
-                tokio::spawn(outbound(shared.clone(), address, writer));
+                let address = writer.device_address();
+                let gate = pending.entry(address).or_insert_with(PendingAdmission::new);
+                let Some(receiver) = gate.notify.take() else {
+                    continue;
+                };
+                let deadline = gate.deadline;
+                if gate.write.is_none() {
+                    pending.remove(&address);
+                }
+                tokio::spawn(notify_after_admission(
+                    adapter.clone(),
+                    shared.clone(),
+                    address,
+                    writer,
+                    receiver,
+                    deadline,
+                ));
             }
         }
     }
-
     shared.emit(LinkEvent::PeripheralRoleEnded);
 }
 
-/// Read one peer's inbound writes until its channel closes.
-async fn inbound(shared: Arc<Shared>, address: String, reader: CharacteristicReader) {
-    loop {
-        match reader.recv().await {
-            // A zero-length datagram on a SEQPACKET socket is end of stream, and
-            // a zero-length ATT write carries nothing either way.
-            Ok(bytes) if bytes.is_empty() => break,
-            Ok(bytes) => shared.inbound(LinkRole::Peripheral, &address, bytes),
-            Err(_) => break,
+/// The first ATT write is the only one read until core has admitted the peer.
+async fn inbound(
+    adapter: Adapter,
+    shared: Arc<Shared>,
+    remote: Address,
+    reader: CharacteristicReader,
+    gate: oneshot::Sender<InboundLink>,
+    deadline: time::Instant,
+) {
+    let first = match time::timeout_at(deadline, reader.recv()).await {
+        Ok(Ok(bytes)) if !bytes.is_empty() => bytes,
+        _ => {
+            disconnect_inbound(&adapter, remote).await;
+            return;
         }
+    };
+    let address = remote.to_string();
+    let beacon = admission_beacon(&first);
+    let incoming = InboundLink {
+        address: address.clone(),
+        beacon,
+    };
+    if !shared.admit_inbound(&incoming) || gate.send(incoming).is_err() {
+        disconnect_inbound(&adapter, remote).await;
+        return;
     }
-
-    // The peer's write channel is gone, so nothing more is coming that could be
-    // replayed on a future subscription. Its notification channel — and therefore
-    // the link, if there is one — is tracked separately and is unaffected: a peer
-    // that has stopped writing may still be listening.
+    if beacon.is_none() {
+        shared.inbound(LinkRole::Peripheral, &address, first);
+    }
+    while let Ok(bytes) = reader.recv().await {
+        if bytes.is_empty() {
+            break;
+        }
+        shared.inbound(LinkRole::Peripheral, &address, bytes);
+    }
     shared.forget_pending(LinkRole::Peripheral, &address);
+}
+
+async fn notify_after_admission(
+    adapter: Adapter,
+    shared: Arc<Shared>,
+    remote: Address,
+    writer: CharacteristicWriter,
+    gate: oneshot::Receiver<InboundLink>,
+    deadline: time::Instant,
+) {
+    let Ok(Ok(incoming)) = time::timeout_at(deadline, gate).await else {
+        disconnect_inbound(&adapter, remote).await;
+        return;
+    };
+    let address = remote.to_string();
+    let max_write = writer.mtu();
+    let writer = Arc::new(writer);
+    shared.open_link(
+        LinkRole::Peripheral,
+        adapter.name(),
+        &address,
+        max_write,
+        Some(writer.clone()),
+        Some(incoming),
+    );
+    outbound(shared, address, writer).await;
+}
+
+async fn disconnect_inbound(adapter: &Adapter, remote: Address) {
+    if let Ok(device) = adapter.device(remote) {
+        let _ = device.disconnect().await;
+    }
 }
 
 /// Hold a peer's notification session open, and end the link when it closes.
@@ -271,7 +418,7 @@ mod tests {
     #[test]
     fn the_advertisement_carries_no_device_identifier() {
         // Peers find the mesh service UUID without an identifier in its payload.
-        let advertisement = mesh_advertisement(service());
+        let advertisement = mesh_advertisement(service(), None);
         assert_eq!(advertisement.local_name, None);
         assert!(
             advertisement.system_includes.is_empty(),
@@ -284,13 +431,13 @@ mod tests {
     }
 
     #[test]
-    fn the_advertisement_stays_inside_one_legacy_packet() {
+    fn the_unconfigured_smoke_advertisement_fits_in_a_legacy_packet() {
         // Adding service data here is the tempting fix for address-rotation churn
         // and it is the wrong one on this side: it overflows the legacy budget,
         // and BlueZ answers an overflow by forcing extended advertising rather
         // than by spilling into the scan response. A legacy-only scanner then
         // sees nothing at all.
-        let advertisement = mesh_advertisement(service());
+        let advertisement = mesh_advertisement(service(), None);
         let service_uuid_ad = 2 + 16;
         let used: usize = service_uuid_ad
             + advertisement
@@ -306,8 +453,24 @@ mod tests {
     }
 
     #[test]
+    fn the_extended_advertisement_carries_exactly_one_beacon() {
+        let beacon = [7; 13];
+        let advertisement = mesh_advertisement(service(), Some(beacon));
+        assert_eq!(
+            advertisement.secondary_channel,
+            Some(SecondaryChannel::OneM)
+        );
+        assert_eq!(
+            advertisement.service_data,
+            [(service(), beacon.to_vec())].into()
+        );
+        assert_eq!(advertisement.discoverable, Some(false));
+        assert!(advertisement.local_name.is_none());
+    }
+
+    #[test]
     fn the_advertisement_is_connectable_and_carries_the_mainnet_service() {
-        let advertisement = mesh_advertisement(service());
+        let advertisement = mesh_advertisement(service(), None);
         assert_eq!(
             advertisement.advertisement_type,
             AdvertisementType::Peripheral

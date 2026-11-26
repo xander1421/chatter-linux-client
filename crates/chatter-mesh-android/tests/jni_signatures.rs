@@ -552,8 +552,11 @@ public final class com.chatter.client.MeshBleBridge {
   public boolean setScanning(boolean);
     descriptor: (Z)Z
 
-  public java.lang.String connect(java.lang.String);
-    descriptor: (Ljava/lang/String;)Ljava/lang/String;
+  public boolean setPairingBeacons(byte[]);
+    descriptor: ([B)Z
+
+  public java.lang.String connect(java.lang.String, byte[]);
+    descriptor: (Ljava/lang/String;[B)Ljava/lang/String;
 
   public void disconnect(java.lang.String);
     descriptor: (Ljava/lang/String;)V
@@ -582,11 +585,11 @@ public final class com.chatter.client.MeshBleBridge {
   public java.util.List<java.lang.String> peers();
     descriptor: ()Ljava/util/List;
 
-  private native void nativeOnDiscovered(java.lang.String, int, java.lang.String);
-    descriptor: (Ljava/lang/String;ILjava/lang/String;)V
+  private native void nativeOnDiscovered(java.lang.String, int, byte[]);
+    descriptor: (Ljava/lang/String;I[B)V
 
-  private native void nativeOnConnected(java.lang.String, boolean, int);
-    descriptor: (Ljava/lang/String;ZI)V
+  private native void nativeOnConnected(java.lang.String, boolean, int, byte[]);
+    descriptor: (Ljava/lang/String;ZI[B)V
 
   private native void nativeOnDisconnected(java.lang.String);
     descriptor: (Ljava/lang/String;)V
@@ -596,6 +599,9 @@ public final class com.chatter.client.MeshBleBridge {
 
   private native void nativeOnAdapterPowerChanged(boolean);
     descriptor: (Z)V
+
+  private native boolean nativeCheckInbound(java.lang.String, byte[]);
+    descriptor: (Ljava/lang/String;[B)Z
 
   static {};
     descriptor: ()V

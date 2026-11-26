@@ -162,6 +162,7 @@ pub struct BleRuntime {
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     radio: Arc<dyn MeshLink>,
+    recent_pairing_adverts: Arc<parking_lot::Mutex<links::RecentPairingAdverts>>,
     state: Arc<MeshState>,
     /// Read only, so a status event reports both transports rather than
     /// resetting the relay count to zero every time a link changes.
@@ -272,6 +273,9 @@ impl BleRuntime {
             storage,
             sealer,
             radio,
+            recent_pairing_adverts: Arc::new(parking_lot::Mutex::new(
+                links::RecentPairingAdverts::new(),
+            )),
             state,
             nostr_state,
             private_group_identity: identity.clone(),
@@ -524,12 +528,8 @@ impl BleRuntime {
         if self.rotation_stopped() {
             return false;
         }
-        // Before `start`, because an advertiser already running will not pick it
-        // up. This is what lets peers recognise us across a private address
-        // rotation instead of spending a connection to find out who we are.
-        if let Some(peer) = self.broadcast_peer_id().to_routing_bytes() {
-            self.radio.set_local_peer(peer);
-        }
+        self.recent_pairing_adverts.lock().clear();
+        self.install_inbound_admission();
         self.refresh_pairing_beacons();
         if let Err(error) = self.radio.start().await {
             self.degraded(format!("the radio would not start: {error}"));

@@ -77,7 +77,7 @@ async fn main() {
                     discovered += 1;
                     println!("  discovered {address} at {rssi} dBm");
                 }
-                Some(LinkEvent::Connected { link: id, role, max_write }) => {
+                Some(LinkEvent::Connected { link: id, role, max_write, .. }) => {
                     connected += 1;
                     // max_write is the negotiated payload ceiling, reported verbatim.
                     // If this does not change when a peer renegotiates its MTU, the

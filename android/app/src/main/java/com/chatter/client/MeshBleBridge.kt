@@ -11,9 +11,10 @@ import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothStatusCodes
-import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
-import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.AdvertisingSet
+import android.bluetooth.le.AdvertisingSetCallback
+import android.bluetooth.le.AdvertisingSetParameters
 import android.bluetooth.le.BluetoothLeAdvertiser
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
@@ -85,8 +86,9 @@ import java.util.concurrent.atomic.AtomicLong
  * Bluetooth callbacks arrive on binder threads, and a blocked binder callback
  * stalls the whole Bluetooth stack. So callbacks only touch concurrent/volatile
  * state, answer the stack, and hand everything else to the single `mesh-ble`
- * handler thread. Every native callback is dispatched from that one thread, which
- * also gives Rust a total order over events. Binder threads never take [lock].
+ * handler thread. Link events are dispatched from that thread in order. Checking
+ * the first write uses a synchronous, in-memory admission decision so ATT can
+ * return an immediate status. Binder threads never take [lock].
  */
 @SuppressLint("MissingPermission") // Every radio call is permission-checked in start() and SecurityException-guarded.
 object MeshBleBridge {
@@ -105,6 +107,10 @@ object MeshBleBridge {
     internal val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
 
     private val SERVICE_PARCEL_UUID = ParcelUuid(SERVICE_UUID)
+    private const val PAIRING_BEACON_SIZE = 13
+    private const val INBOUND_ADMISSION_MS = 5_000L
+    private val ADMISSION_BEACON_PREFIX = "CHPB".toByteArray(Charsets.US_ASCII)
+    private const val BEACON_SLOT_MS = 1_000L
 
     // --- Tuning ------------------------------------------------------------------
 
@@ -159,7 +165,12 @@ object MeshBleBridge {
 
     /** Scanning as it actually is right now. */
     private var scanActive = false
-    private var advertising = false
+    private var advertiseCallback: AdvertisingSetCallback? = null
+    private var advertisingSet: AdvertisingSet? = null
+    private var pairingBeacons = ByteArray(0)
+    private var beaconSlot = 0
+    private var beaconUpdatePending = false
+    private val beaconCycle = Runnable { synchronized(lock) { cycleBeaconLocked() } }
     // Leave one start of headroom below Android's five-in-30s scan throttle.
     // Keep timestamps across mesh off/on toggles within this process.
     private val scanStarts = ArrayDeque<Long>()
@@ -167,7 +178,7 @@ object MeshBleBridge {
     private val scanResults = AtomicLong(0)
     private val lastScanResultAt = AtomicLong(0)
     private const val DISCOVERY_REFRESH_MS = 1_000L
-    private data class RecentDiscovery(val peer: Long?, val sentAt: Long)
+    private data class RecentDiscovery(val beacon: ByteArray, val sentAt: Long)
     private val recentDiscoveries = HashMap<String, RecentDiscovery>()
     private var silentRestartAt = 0L
     private var watchdogRestartPending = false
@@ -186,7 +197,7 @@ object MeshBleBridge {
                 var recoveredScan = false
                 if (now - lastSummaryAt >= scanSilenceMs) {
                     lastSummaryAt = now
-                    Log.i(TAG, "radio summary: scanResults=${scanResults.get()} scanStarts30s=$recentStarts scanActive=$scanActive deferred=$scanDeferred centralLinks=${centralLinks.size} peripheralLinks=${peripheralLinks.size} advertising=$advertising")
+                    Log.i(TAG, "radio summary: scanResults=${scanResults.get()} scanStarts30s=$recentStarts scanActive=$scanActive deferred=$scanDeferred centralLinks=${centralLinks.size} peripheralLinks=${peripheralLinks.size} advertising=${advertisingSet != null}")
                     // A failed asynchronous start can leave a scan request
                     // with neither a running scan nor a scheduled retry.
                     if (scanRequested && !scanActive && !scanDeferred) {
@@ -354,7 +365,7 @@ object MeshBleBridge {
      * Returns false — rather than throwing — when the radio is unavailable: no
      * context, refused runtime permissions, no adapter, adapter off, or the GATT
      * server refusing to open. Advertising itself only reports failure
-     * asynchronously via [AdvertiseCallback.onStartFailure], which is logged.
+     * asynchronously via [AdvertisingSetCallback.onAdvertisingSetStarted].
      */
     @Suppress("unused")
     fun start(): Boolean = synchronized(lock) {
@@ -415,6 +426,14 @@ object MeshBleBridge {
         Log.i(TAG, "stopped")
     }
 
+    /** Install the padded pairing beacon slots. Each slot occupies 13 bytes. */
+    @Suppress("unused")
+    fun setPairingBeacons(payload: ByteArray): Boolean = synchronized(lock) {
+        if (payload.isEmpty() || payload.size % PAIRING_BEACON_SIZE != 0) return@synchronized false
+        if (!pairingBeacons.contentEquals(payload)) pairingBeacons = payload
+        true
+    }
+
     /**
      * Turn scanning on or off without disturbing the peripheral role. `(Z)Z`
      *
@@ -445,7 +464,7 @@ object MeshBleBridge {
      * Calling this twice for the same address is idempotent.
      */
     @Suppress("unused")
-    fun connect(address: String): String? {
+    fun connect(address: String, firstWrite: ByteArray?): String? {
         if (!started) {
             Log.w(TAG, "connect($address): radio not started")
             return null
@@ -467,7 +486,7 @@ object MeshBleBridge {
             return null
         }
 
-        val link = CentralLink(id, device)
+        val link = CentralLink(id, device, firstWrite)
         centralLinks.putIfAbsent(id, link)?.let { return id }
 
         val gatt = guard("connect/connectGatt", null as BluetoothGatt?) {
@@ -540,16 +559,17 @@ object MeshBleBridge {
     // Public so `javap -s` (which hides private members) can check the descriptors.
     // ==============================================================================
 
-    /** `(Ljava/lang/String;I)V` — a device advertising our service came into range. */
-    external fun nativeOnDiscovered(address: String, rssi: Int, peerHex: String?)
+    /** A scan report contained a pairing beacon. */
+    external fun nativeOnDiscovered(address: String, rssi: Int, beacon: ByteArray)
 
     /**
-     * `(Ljava/lang/String;ZI)V` — a link is up **and writable right now**.
+     * A link is up and writable. An inbound link can report its first-write beacon.
      *
      * `peripheral` is true when a remote central connected to us, false when we
      * connected outward as central. `maxWrite` is the negotiated ATT MTU minus 3.
      */
-    external fun nativeOnConnected(link: String, peripheral: Boolean, maxWrite: Int)
+    external fun nativeOnConnected(link: String, peripheral: Boolean, maxWrite: Int, beacon: ByteArray?)
+    external fun nativeCheckInbound(address: String, beacon: ByteArray?): Boolean
 
     /** `(Ljava/lang/String;)V` — a link is gone; drop state keyed on it. */
     external fun nativeOnDisconnected(link: String)
@@ -578,39 +598,27 @@ object MeshBleBridge {
         }
     }
 
-    private fun emitDiscovered(address: String, rssi: Int, peerHex: String?) =
-        emit("onDiscovered") { nativeOnDiscovered(address, rssi, peerHex) }
+    private fun emitDiscovered(address: String, rssi: Int, beacon: ByteArray) =
+        emit("onDiscovered") { nativeOnDiscovered(address, rssi, beacon) }
 
     /** Preserve the first sighting and peer-id changes; refresh RSSI once a second. */
-    private fun peerHex(peer: Long): String {
-        val digits = "0123456789abcdef"
-        return CharArray(16) { index ->
-            digits[((peer ushr (60 - index * 4)) and 0xfL).toInt()]
-        }.concatToString()
-    }
-
     private fun emitScanResult(scan: ScanResult) {
+        val beacon = scan.scanRecord?.getServiceData(SERVICE_PARCEL_UUID) ?: return
+        if (beacon.size != PAIRING_BEACON_SIZE) return
         val address = scan.device.address
-        val data = scan.scanRecord?.getServiceData(SERVICE_PARCEL_UUID)
-        var peer: Long? = null
-        if (data != null && data.size >= 8) {
-            var value = 0L
-            for (index in 0 until 8) value = (value shl 8) or (data[index].toLong() and 0xffL)
-            peer = value
-        }
         val now = SystemClock.elapsedRealtime()
         synchronized(recentDiscoveries) {
             val previous = recentDiscoveries[address]
-            if (previous != null && previous.peer == peer && now - previous.sentAt < DISCOVERY_REFRESH_MS) return
-            // Bound the cache even if a busy scan sees many rotating addresses.
+            if (previous != null && previous.beacon.contentEquals(beacon) &&
+                now - previous.sentAt < DISCOVERY_REFRESH_MS) return
             if (recentDiscoveries.size >= 256 && previous == null) recentDiscoveries.clear()
-            recentDiscoveries[address] = RecentDiscovery(peer, now)
+            recentDiscoveries[address] = RecentDiscovery(beacon, now)
         }
-        emitDiscovered(address, scan.rssi, peer?.let(::peerHex))
+        emitDiscovered(address, scan.rssi, beacon)
     }
 
-    internal fun emitConnected(link: String, peripheral: Boolean, maxWrite: Int) =
-        emit("onConnected") { nativeOnConnected(link, peripheral, maxWrite) }
+    internal fun emitConnected(link: String, peripheral: Boolean, maxWrite: Int, beacon: ByteArray? = null) =
+        emit("onConnected") { nativeOnConnected(link, peripheral, maxWrite, beacon) }
 
     internal fun emitDisconnected(link: String) =
         emit("onDisconnected") { nativeOnDisconnected(link) }
@@ -665,78 +673,96 @@ object MeshBleBridge {
     }
 
     internal fun beginAdvertisingLocked(): Boolean {
-        if (advertising) return true
-        if (!started || !serviceReady) return false
-        val context = context() ?: return false
-        val adapter = adapterOf(context) ?: return false
-        val advertiser = guard("getBluetoothLeAdvertiser", null as BluetoothLeAdvertiser?) {
-            adapter.bluetoothLeAdvertiser
-        }
-        if (advertiser == null) {
-            Log.e(TAG, "this adapter cannot advertise; peripheral role unavailable")
-            return false
-        }
-
-        val settings = AdvertiseSettings.Builder()
-            // Balanced: continuous advertising is the always-on half of the mesh,
-            // so the interval has to be affordable all day.
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+        if (advertiseCallback != null) return true
+        if (pairingBeacons.isEmpty()) return false
+        val advertiser = meshAdvertiser() ?: return false
+        val parameters = AdvertisingSetParameters.Builder()
+            .setLegacyMode(true)
             .setConnectable(true)
-            .setTimeout(0)
+            .setScannable(true)
+            .setInterval(AdvertisingSetParameters.INTERVAL_MEDIUM)
+            .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
             .build()
+        val data = AdvertiseData.Builder().addServiceUuid(SERVICE_PARCEL_UUID).build()
+        val callback = object : AdvertisingSetCallback() {
+            override fun onAdvertisingSetStarted(
+                advertisingSet: AdvertisingSet?, txPower: Int, status: Int,
+            ): Unit = synchronized(lock) {
+                if (advertiseCallback !== this) return@synchronized
+                if (status != ADVERTISE_SUCCESS || advertisingSet == null) {
+                    Log.e(TAG, "advertising start failed: code=$status")
+                    clearAdvertisingLocked()
+                    return@synchronized
+                }
+                MeshBleBridge.advertisingSet = advertisingSet
+                handler.postDelayed(beaconCycle, BEACON_SLOT_MS)
+            }
 
-        val data = AdvertiseData.Builder()
-            // The device name is a stable identifier broadcast to every passive
-            // scanner in range. Never include it.
-            .setIncludeDeviceName(false)
-            .setIncludeTxPowerLevel(false)
-            .addServiceUuid(SERVICE_PARCEL_UUID)
-            .build()
+            override fun onScanResponseDataSet(advertisingSet: AdvertisingSet?, status: Int): Unit =
+                synchronized(lock) {
+                    if (advertiseCallback !== this) return@synchronized
+                    beaconUpdatePending = false
+                    if (status != ADVERTISE_SUCCESS) {
+                        Log.w(TAG, "pairing beacon update failed: code=$status")
+                    }
+                    handler.postDelayed(beaconCycle, BEACON_SLOT_MS)
+                }
 
-        Log.i(TAG, "advertising start requested")
-        val issued = guard("startAdvertising", false) {
-            // An identifier in a scan response would link successive private addresses.
-            advertiser.startAdvertising(settings, data, advertiseCallback)
+            override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?): Unit =
+                synchronized(lock) {
+                    if (advertiseCallback === this) clearAdvertisingLocked()
+                }
+        }
+        advertiseCallback = callback
+        val issued = guard("startAdvertisingSet", false) {
+            advertiser.startAdvertisingSet(
+                parameters, data, scanResponse(0), null, null, 0, 0, callback, handler,
+            )
             true
         }
-        advertising = issued
-        if (!issued) Log.e(TAG, "advertising start refused")
+        if (!issued) clearAdvertisingLocked()
         return issued
     }
 
-    private fun stopAdvertisingLocked() {
-        if (!advertising) return
-        advertising = false
-        val context = context() ?: return
-        val adapter = adapterOf(context) ?: return
-        val advertiser = guard("getBluetoothLeAdvertiser", null as BluetoothLeAdvertiser?) {
+    private fun scanResponse(slot: Int): AdvertiseData {
+        val offset = slot * PAIRING_BEACON_SIZE
+        return AdvertiseData.Builder()
+            .addServiceData(SERVICE_PARCEL_UUID, pairingBeacons.copyOfRange(offset, offset + PAIRING_BEACON_SIZE))
+            .build()
+    }
+
+    private fun cycleBeaconLocked() {
+        val set = advertisingSet ?: return
+        if (beaconUpdatePending || pairingBeacons.isEmpty()) return
+        beaconSlot = (beaconSlot + 1) % (pairingBeacons.size / PAIRING_BEACON_SIZE)
+        beaconUpdatePending = guard("setScanResponseData", false) {
+            set.setScanResponseData(scanResponse(beaconSlot))
+            true
+        }
+        if (!beaconUpdatePending) handler.postDelayed(beaconCycle, BEACON_SLOT_MS)
+    }
+
+    private fun meshAdvertiser(): BluetoothLeAdvertiser? {
+        val adapter = context()?.let(::adapterOf) ?: return null
+        return guard("getBluetoothLeAdvertiser", null as BluetoothLeAdvertiser?) {
             adapter.bluetoothLeAdvertiser
-        } ?: return
-        guard("stopAdvertising", Unit) { advertiser.stopAdvertising(advertiseCallback) }
-        Log.i(TAG, "advertising stopped")
-    }
-
-    private val advertiseCallback = object : AdvertiseCallback() {
-        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            Log.i(TAG, "advertising start succeeded")
-        }
-
-        override fun onStartFailure(errorCode: Int) {
-            // Asynchronous, so start() has already returned true. Loud, because a
-            // node that only scans is invisible to peers scanning for it.
-            Log.e(TAG, "advertising start failed: code=$errorCode (${advertiseError(errorCode)})")
-            handler.post { synchronized(lock) { advertising = false } }
         }
     }
 
-    private fun advertiseError(code: Int): String = when (code) {
-        AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "already started"
-        AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "advertise data too large"
-        AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "unsupported on this device"
-        AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "internal error"
-        AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "too many advertisers"
-        else -> "code $code"
+    private fun clearAdvertisingLocked() {
+        handler.removeCallbacks(beaconCycle)
+        advertiseCallback = null
+        advertisingSet = null
+        beaconSlot = 0
+        beaconUpdatePending = false
+    }
+
+    private fun stopAdvertisingLocked() {
+        val callback = advertiseCallback
+        clearAdvertisingLocked()
+        if (callback != null) {
+            guard("stopAdvertisingSet", Unit) { meshAdvertiser()?.stopAdvertisingSet(callback) }
+        }
     }
 
     private val gattServerCallback = createGattServerCallback()
@@ -805,6 +831,8 @@ object MeshBleBridge {
                 ScanSettings.SCAN_MODE_BALANCED
             }
             val settings = ScanSettings.Builder()
+                // Include BlueZ's extended advertisements when supported.
+                .setLegacy(!guard("isLeExtendedAdvertisingSupported", false) { adapter.isLeExtendedAdvertisingSupported })
                 .setScanMode(scanMode)
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setReportDelay(0)
@@ -910,6 +938,49 @@ object MeshBleBridge {
         guard("close", Unit) { gatt.close() }
     }
 
+    internal fun beginPeripheral(device: BluetoothDevice): PeripheralLink {
+        val id = peripheralId(device.address)
+        return peripheralLinks.computeIfAbsent(id) {
+            PeripheralLink(id, device).also { link ->
+                handler.postDelayed({
+                    synchronized(link) {
+                        if (!link.admitted) rejectPeripheral(link)
+                    }
+                }, INBOUND_ADMISSION_MS)
+            }
+        }
+    }
+
+    internal fun admitFirstWrite(link: PeripheralLink, value: ByteArray): Boolean {
+        if (link.rejected) return false
+        if (link.admitted) return true
+        if (SystemClock.elapsedRealtime() - link.connectedAt >= INBOUND_ADMISSION_MS) {
+            rejectPeripheral(link)
+            return false
+        }
+        val prefixSize = ADMISSION_BEACON_PREFIX.size
+        val beacon = value.takeIf {
+            it.size == prefixSize + PAIRING_BEACON_SIZE &&
+                ADMISSION_BEACON_PREFIX.indices.all { index -> it[index] == ADMISSION_BEACON_PREFIX[index] }
+        }?.copyOfRange(prefixSize, value.size)
+        if (!nativeCheckInbound(link.device.address, beacon)) {
+            rejectPeripheral(link)
+            return false
+        }
+        link.admitted = true
+        link.admissionBeacon = beacon
+        return true
+    }
+
+    private fun rejectPeripheral(link: PeripheralLink) {
+        if (link.rejected) return
+        link.rejected = true
+        // Let the binder callback send its ATT error before closing the link.
+        handler.post {
+            if (peripheralLinks.remove(link.id, link)) closePeripheral(link)
+        }
+    }
+
     private fun closePeripheral(link: PeripheralLink) {
         // cancelConnection does not deliver onConnectionStateChange, which is why
         // the caller emits the event itself.
@@ -923,22 +994,14 @@ object MeshBleBridge {
      */
     internal fun announcePeripheral(link: PeripheralLink, why: String) {
         synchronized(link) {
-            if (link.announced || peripheralLinks[link.id] !== link) return
+            if (!link.admitted || link.announced || peripheralLinks[link.id] !== link) return
+            emitConnected(link.id, true, link.maxWrite, link.admissionBeacon)
             link.announced = true
-        }
-        emitConnected(link.id, true, link.maxWrite)
-        Log.i(TAG, "peripheral link ${link.id} writable ($why), maxWrite=${link.maxWrite}")
-        // Anything they wrote while we could not yet name this link, in the
-        // order they wrote it. Emitted after Connected so the layer above
-        // already has the link when the data arrives.
-        val held = synchronized(link.pendingInbound) {
-            val frames = link.pendingInbound.toList()
-            link.pendingInbound.clear()
-            frames
-        }
-        if (held.isNotEmpty()) {
-            Log.i(TAG, "flushing ${held.size} held frame(s) for ${link.id}")
-            held.forEach { emitData(link.id, it) }
+            Log.i(TAG, "peripheral link ${link.id} writable ($why), maxWrite=${link.maxWrite}")
+            synchronized(link.pendingInbound) {
+                link.pendingInbound.forEach { emitData(link.id, it) }
+                link.pendingInbound.clear()
+            }
         }
     }
 
@@ -1002,7 +1065,7 @@ object MeshBleBridge {
     }
 
     @Suppress("DEPRECATION")
-    private fun writeCharacteristic(
+    internal fun writeCharacteristic(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
         bytes: ByteArray,
@@ -1129,7 +1192,7 @@ object MeshBleBridge {
         handler.removeCallbacks(scanRetry)
         scanDeferred = false
         watchdogRestartPending = false
-        advertising = false
+        clearAdvertisingLocked()
         if (scanActive) Log.i(TAG, "scan stopped: adapter off")
         scanActive = false
         dropAllLinks()
@@ -1173,6 +1236,7 @@ object MeshBleBridge {
         applyScanLocked("radio stop")
         scanActive = false
         stopAdvertisingLocked()
+        pairingBeacons = ByteArray(0)
         dropAllLinks()
 
         gattServer?.let { server ->

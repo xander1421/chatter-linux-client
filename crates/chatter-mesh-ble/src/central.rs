@@ -13,7 +13,7 @@
 //!
 //! # No gating happens here
 //!
-//! Every peer advertising the mesh service is reported with whatever RSSI BlueZ
+//! Each correctly sized pairing beacon is reported with whatever RSSI BlueZ
 //! last saw, and the scheduler above decides what is worth one of the six scarce
 //! central slots. The discovery filter's own RSSI threshold is therefore set to
 //! the bottom of the range: it exists to make BlueZ emit RSSI updates at all, not
@@ -40,7 +40,7 @@ use bluer::{
     Adapter, AdapterEvent, Address, Device, DeviceEvent, DeviceProperty, DiscoveryFilter,
     DiscoveryTransport, Uuid,
 };
-use chatter_mesh_link::{LinkError, LinkEvent, LinkId, LinkRole};
+use chatter_mesh_link::{LinkError, LinkEvent, LinkId, LinkRole, PairingBeacon, admission_preface};
 use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
 use tokio::sync::oneshot;
@@ -230,39 +230,25 @@ pub(crate) async fn start_scan(
                 continue;
             };
 
-            // BlueZ merges discovery filters across every client on the bus, so
-            // another program scanning without a UUID filter will widen ours.
-            // Check for the service ourselves rather than trusting the filter.
-            let advertised = device.uuids().await.ok().flatten().unwrap_or_default();
-            if !advertised.contains(&service) {
+            // A scan response can arrive after the first sighting. BlueZ
+            // reports subsequent service-data changes through the same stream.
+            let Ok(Some(data)) = device.service_data().await else {
                 continue;
-            }
-
-            // Even after discarding the initial cache replay, a device can
-            // lose its RSSI before we read it. Without one there is no useful
-            // signal measurement for the scheduler.
+            };
+            let Some(beacon) = data
+                .get(&service)
+                .and_then(|bytes| PairingBeacon::try_from(bytes.as_slice()).ok())
+            else {
+                continue;
+            };
             let Ok(Some(rssi)) = device.rssi().await else {
                 continue;
             };
 
-            // The advertised peer id, when the scan response arrived with it.
-            // `None` is "not known yet", not "not a peer": BlueZ fills service
-            // data in from whichever packets it has seen, and the scan response
-            // often lands a beat after the advertisement. The policy layer treats
-            // the unknown case as dialable, so a peer whose id we never learn
-            // behaves exactly as it did before this existed.
-            let peer = device
-                .service_data()
-                .await
-                .ok()
-                .flatten()
-                .and_then(|data| data.get(&service).cloned())
-                .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok());
-
             shared.emit(LinkEvent::Discovered {
                 address: address.to_string(),
                 rssi,
-                peer,
+                beacon,
             });
         }
     });
@@ -283,6 +269,7 @@ pub(crate) async fn connect(
     address: &str,
     service: Uuid,
     characteristic: Uuid,
+    beacon: Option<PairingBeacon>,
 ) -> Result<LinkId, LinkError> {
     let peer: Address = address
         .parse()
@@ -312,6 +299,7 @@ pub(crate) async fn connect(
             &device,
             service,
             characteristic,
+            beacon,
             Arc::clone(&stage),
             Arc::clone(&opened_here),
         ),
@@ -367,6 +355,7 @@ pub(crate) async fn connect(
         address,
         max_write,
         Some(Arc::new(writer)),
+        None,
     );
 
     tokio::spawn(session(shared.clone(), address.to_string(), device, reader));
@@ -379,6 +368,7 @@ async fn establish(
     device: &Device,
     service: Uuid,
     characteristic: Uuid,
+    beacon: Option<PairingBeacon>,
     stage: Arc<AtomicU8>,
     opened_here: Arc<AtomicBool>,
 ) -> Result<(CharacteristicWriter, CharacteristicReader), LinkError> {
@@ -418,6 +408,13 @@ async fn establish(
         .write_io()
         .await
         .map_err(|err| error::classify_connect(&address, &err))?;
+
+    if let Some(beacon) = beacon {
+        writer
+            .send(&admission_preface(&beacon))
+            .await
+            .map_err(|err| error::connect_failed(&address, &err.to_string()))?;
+    }
 
     stage.store(ConnectStage::NotifySocket as u8, Ordering::Relaxed);
     let reader = characteristic

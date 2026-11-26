@@ -202,6 +202,8 @@ pub const CONNECTABLE_SCORE_BONUS: i64 = 1_000;
 pub struct ConnectionCandidate {
     pub address: String,
     pub rssi: i16,
+    /// Radio authorization to recheck if the scheduler defers dialing.
+    pub pairing_beacon: Option<crate::PairingBeacon>,
     /// Whether the advert claimed to accept connections. Adverts that do not are
     /// scored to the bottom and skipped when drained.
     pub is_connectable: bool,
@@ -215,6 +217,7 @@ impl ConnectionCandidate {
         Self {
             address: address.into(),
             rssi,
+            pairing_beacon: None,
             is_connectable: true,
             discovered_at_ms,
         }
