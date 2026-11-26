@@ -155,6 +155,27 @@ impl BleRuntime {
         directed_peer: Option<&PeerId>,
         ingress_link: Option<&LinkId>,
     ) -> bool {
+        self.transmit_selected(packet, directed_peer, ingress_link, None)
+            .await
+    }
+
+    pub(super) async fn transmit_on_link(
+        &self,
+        packet: &BitchatPacket,
+        peer: &PeerId,
+        link: &LinkId,
+    ) -> bool {
+        self.transmit_selected(packet, Some(peer), None, Some(link))
+            .await
+    }
+
+    async fn transmit_selected(
+        &self,
+        packet: &BitchatPacket,
+        directed_peer: Option<&PeerId>,
+        ingress_link: Option<&LinkId>,
+        chosen_link: Option<&LinkId>,
+    ) -> bool {
         let padding = fragment::pads_ble_frame(packet.msg_type);
         let Ok(encoded) = codec::encode(packet, padding) else {
             return false;
@@ -177,7 +198,14 @@ impl BleRuntime {
         let siblings = self.sibling_links_of(ingress_link);
 
         let (plan, frames) = {
-            let links = self.state.link_candidates();
+            let mut links = self.state.link_candidates();
+            if let (Some(link), Some(peer)) = (chosen_link, directed_peer) {
+                links.retain(|candidate| &candidate.id == link);
+                let Some(candidate) = links.first_mut() else {
+                    return false;
+                };
+                candidate.peer = Some(peer.clone());
+            }
             let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
                 .with_ingress_link(ingress_link)
                 .with_excluded_links(&siblings)

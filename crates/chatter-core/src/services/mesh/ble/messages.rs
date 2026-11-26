@@ -26,18 +26,15 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
         verified_key: Option<[u8; 32]>,
-    ) {
-        if self.events.peer_blocked(claimed) {
-            return;
-        }
+    ) -> bool {
         // A `Message` addressed to one recipient is a legacy private message. We
         // do not carry those — private traffic is Noise-encrypted — and showing
         // it as public chat would put a message meant for one person in the room.
         if !packet.is_broadcast() {
-            return;
+            return false;
         }
         let Ok(content) = core::str::from_utf8(&packet.payload) else {
-            return;
+            return false;
         };
         // An empty payload decodes cleanly and is not a message. `send_room` and
         // `send_dm` both refuse to compose one (`require_content`), and bitchat
@@ -59,7 +56,7 @@ impl BleRuntime {
                 bytes = packet.payload.len(),
                 "an empty public message was dropped"
             );
-            return;
+            return false;
         }
 
         // The sender is whoever the packet header says, authenticated against
@@ -94,36 +91,37 @@ impl BleRuntime {
                 target: "mesh::ble",
                 "our own broadcast came back; already shown"
             );
-            return;
+            return false;
         }
-        let (signing_key, nickname, verified) = if is_self {
-            (self.identity.signing_public(), self.config.nickname(), true)
-        } else {
-            let known = self.state.with(|state| {
-                state.peers.info(&sender).map(|peer| {
-                    (
-                        peer.signing_public_key.clone(),
-                        peer.nickname.clone(),
-                        peer.verified_nickname,
-                    )
-                })
-            });
-            let Some((Some(key), nickname, verified)) = known else {
-                return;
-            };
-            let Ok(key) = <[u8; 32]>::try_from(key.as_slice()) else {
-                return;
-            };
-            (key, nickname, verified)
+        let Some(signing_key) = self.matching_signing_key(&sender, packet, verified_key) else {
+            return false;
         };
-        if verified_key != Some(signing_key) && !verify_packet(packet, &signing_key) {
-            tracing::debug!(
-                target: "mesh::ble",
-                peer = %sender,
-                "public message with missing or invalid signature dropped",
-            );
-            return;
+        if self.events.peer_blocked(claimed) {
+            // Keep authenticated broadcasts available to the mesh.
+            return true;
         }
+        let (nickname, verified) = if is_self {
+            (self.config.nickname(), true)
+        } else {
+            self.state.with(|state| {
+                if let Some(pin) = state.peers.pinned(&sender) {
+                    let nickname = state
+                        .peers
+                        .info(&sender)
+                        .filter(|record| record.verified_nickname)
+                        .map_or_else(|| pin.nickname.clone(), |record| record.nickname.clone());
+                    return (nickname, true);
+                }
+                let nickname = state
+                    .peers
+                    .info(&sender)
+                    .filter(|record| {
+                        record.signing_public_key.as_deref() == Some(signing_key.as_slice())
+                    })
+                    .map_or_else(|| sender.to_string(), |record| record.nickname.clone());
+                (nickname, false)
+            })
+        };
 
         tracing::info!(
             target: "mesh::ble",
@@ -156,6 +154,7 @@ impl BleRuntime {
             is_local: is_self,
             sender_verified: verified,
         })));
+        true
     }
 
     pub(super) fn on_channel_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) -> bool {
@@ -303,26 +302,36 @@ impl BleRuntime {
         if invite.creator != self.identity.peer_id().as_str() || invite.target != claimed.as_str() {
             return;
         }
-        let Some(signing_key) = self.state.with(|s| {
-            s.peers
-                .info(claimed)
-                .and_then(|p| p.signing_public_key.clone())
-        }) else {
+        let pending_key = (claimed.clone(), invite.channel_id.clone());
+        let Some(member) = self.state.pinned_member(claimed, true) else {
+            // A QR already issued by this device authorizes requesting the
+            // binding when upgrading with an outstanding invitation.
+            let now = now_secs();
+            if invite.expires_at >= now
+                && self
+                    .private_channels
+                    .load(&invite.channel_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|channel| {
+                        channel
+                            .pending_invites
+                            .iter()
+                            .any(|issued| issued.signature == invite.signature)
+                    })
+            {
+                self.pending_private_joins
+                    .retain(|_, pending| pending.expires_at >= now);
+                if self.pending_private_joins.len() < 512
+                    || self.pending_private_joins.contains_key(&pending_key)
+                {
+                    self.pending_private_joins.insert(pending_key, invite);
+                    self.request_signing_pin(claimed).await;
+                }
+            }
             return;
         };
-        let Some(static_key) = self.state.with(|s| s.sessions.remote_static(claimed)) else {
-            return;
-        };
-        let nickname = self
-            .state
-            .with(|s| s.peers.info(claimed).map(|p| p.nickname.clone()))
-            .unwrap_or_else(|| claimed.to_string());
-        let member = Member {
-            peer: claimed.to_string(),
-            fingerprint: chatter_mesh_noise::fingerprint_of(&static_key),
-            signing_key,
-            nickname,
-        };
+        self.pending_private_joins.remove(&pending_key);
         let Ok(Some(state)) = self
             .private_channels
             .redeem(&invite, &self.identity, member)

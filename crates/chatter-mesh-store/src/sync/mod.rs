@@ -61,7 +61,7 @@
 //! its own capacity, so heavy fragment traffic cannot crowd messages out of the
 //! filter.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 mod config;
 mod limits;
@@ -79,6 +79,7 @@ use chatter_mesh::gcs;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::{BROADCAST_RECIPIENT, BitchatPacket, MessageType, SENDER_ID_LEN};
 use chatter_mesh::sync_flags::SyncTypeFlags;
+use chatter_mesh::tlv::announce::AnnouncementPacket;
 use chatter_mesh::tlv::request_sync::{
     FRAGMENT_ID_LEN, MAX_P, RequestSyncPacket, encode_fragment_id_filter,
 };
@@ -192,17 +193,14 @@ fn max_age_secs(config: &SyncConfig, msg_type: u8) -> u64 {
 
 /// Whether a packet is still inside its type's retention window.
 ///
-/// The boundary is inclusive: a packet exactly `max_age` old is still fresh, which
-/// is Swift's `packet.timestamp >= cutoffMs`.
-///
-/// A device whose clock says the epoch has barely started cannot compute a cutoff,
-/// so everything is accepted rather than everything being purged — Swift's explicit
-/// `guard nowMs >= ageThresholdMs else { return true }`, reproduced here by the
-/// saturating subtraction (the cutoff floors at zero and every timestamp clears it).
+/// The age cutoff is inclusive and floors at zero near the Unix epoch.
+/// Prekey bundles must also be at most 120 seconds ahead of the local clock.
 fn packet_is_fresh(config: &SyncConfig, packet: &BitchatPacket, now_unix_secs: u64) -> bool {
     let now_ms = now_unix_secs.saturating_mul(1000);
     let window_ms = max_age_secs(config, packet.msg_type).saturating_mul(1000);
     packet.timestamp >= now_ms.saturating_sub(window_ms)
+        && (packet.message_type() != Some(MessageType::PrekeyBundle)
+            || packet.timestamp <= now_ms.saturating_add(120_000))
 }
 
 /// Whether an announce still counts its peer as present.
@@ -261,6 +259,37 @@ impl SyncSchedule {
 // The driver
 // ---------------------------------------------------------------------------
 
+// Give each provisional key its own history slot. When the set fills, admit
+// a new key in place of the earliest admission. Refreshes keep their original
+// position and sender timestamps cannot make a candidate unevictable.
+const SIGNING_CANDIDATES_PER_PEER: usize = 4;
+type SigningCandidates = VecDeque<([u8; 32], BitchatPacket)>;
+
+fn insert_candidate(
+    candidates: &mut SigningCandidates,
+    key: [u8; 32],
+    packet: &BitchatPacket,
+    fresh: impl Fn(&BitchatPacket) -> bool,
+    replace_equal: bool,
+) {
+    candidates.retain(|(_, stored)| fresh(stored));
+    if let Some((_, stored)) = candidates
+        .iter_mut()
+        .find(|(candidate, _)| *candidate == key)
+    {
+        if packet.timestamp > stored.timestamp
+            || (replace_equal && packet.timestamp == stored.timestamp)
+        {
+            *stored = packet.clone();
+        }
+    } else {
+        if candidates.len() >= SIGNING_CANDIDATES_PER_PEER {
+            candidates.pop_front();
+        }
+        candidates.push_back((key, packet.clone()));
+    }
+}
+
 /// Gossip-sync driver: carries recent public traffic and reconciles it with peers.
 pub struct GossipSyncManager {
     my_sender_id: [u8; SENDER_ID_LEN],
@@ -272,18 +301,13 @@ pub struct GossipSyncManager {
     fragments: PacketStore,
     file_transfers: PacketStore,
     group_messages: PacketStore,
-    /// Latest announce per sender.
-    latest_announce_by_peer: BTreeMap<PeerId, BitchatPacket>,
-    /// Latest prekey bundle per *owner*.
-    ///
-    /// Keyed by the bundle's own authenticated identity — its Noise static key —
-    /// and never by the packet's sender ID. One valid bundle re-broadcast under a
-    /// hundred fabricated sender IDs must produce one entry, not a hundred, or the
-    /// per-owner cap becomes a trivial way to starve legitimate bundles.
+    /// Latest announce per sender and signing key.
+    latest_announce_by_peer: BTreeMap<PeerId, SigningCandidates>,
+    /// Latest prekey bundle per owner (derived from its Noise static) and signing key.
     ///
     /// Unlike announces these are *not* dropped when their peer goes stale: their
     /// whole purpose is reaching a sender while the owner is away.
-    latest_prekey_bundle_by_owner: BTreeMap<PeerId, BitchatPacket>,
+    latest_prekey_bundle_by_owner: BTreeMap<PeerId, SigningCandidates>,
     /// Board posts, injected by their retention owner. `None` means no board source
     /// is wired up, which skips the board round entirely.
     board_packets: Option<Vec<BitchatPacket>>,
@@ -381,13 +405,26 @@ impl GossipSyncManager {
                 // Announces are the one type without a broadcast-recipient check,
                 // matching Swift: a directed announce is still a claim of presence.
                 let sender = PeerId::from_bytes(&packet.sender_id);
-                if !announcement_is_fresh(&self.config, packet, now_unix_secs) {
-                    // Not merely ignored — an announce this old says the peer left,
-                    // so its carried traffic goes with it.
-                    self.remove_state_for(&sender);
+                let Ok(announcement) = AnnouncementPacket::decode(&packet.payload) else {
+                    return;
+                };
+                let Ok(key) = <[u8; 32]>::try_from(announcement.signing_public_key) else {
+                    return;
+                };
+                let config = &self.config;
+                if !announcement_is_fresh(config, packet, now_unix_secs)
+                    || (self.latest_announce_by_peer.len() >= config.seen_capacity.max(1)
+                        && !self.latest_announce_by_peer.contains_key(&sender))
+                {
                     return;
                 }
-                self.latest_announce_by_peer.insert(sender, packet.clone());
+                insert_candidate(
+                    self.latest_announce_by_peer.entry(sender).or_default(),
+                    key,
+                    packet,
+                    |stored| announcement_is_fresh(config, stored, now_unix_secs),
+                    true,
+                );
             }
             MessageType::Message => {
                 if !is_broadcast_recipient(packet) {
@@ -439,44 +476,40 @@ impl GossipSyncManager {
                 let _ = self.group_messages
                     .insert(packet.packet_id(), packet.clone(), capacity);
             }
-            MessageType::PrekeyBundle => {
-                if !is_broadcast_recipient(packet) {
-                    return;
-                }
-                self.insert_prekey_bundle(packet);
-            }
             _ => {}
         }
     }
 
-    /// Keyed by the bundle's owner, never by the packet's sender.
-    fn insert_prekey_bundle(&mut self, packet: &BitchatPacket) {
-        // Callers feed only verified bundles here (our own at send time, peers'
-        // after signature verification), so gossip never spreads a bundle this node
-        // could not attribute.
+    /// File a bundle whose two signatures the caller verified under `signing_key`.
+    pub fn on_verified_prekey_bundle_seen(
+        &mut self,
+        packet: &BitchatPacket,
+        signing_key: [u8; 32],
+        now_unix_secs: u64,
+    ) {
+        if packet.message_type() != Some(MessageType::PrekeyBundle)
+            || !is_broadcast_recipient(packet)
+            || !packet_is_fresh(&self.config, packet, now_unix_secs)
+        {
+            return;
+        }
         let Ok(bundle) = PrekeyBundle::decode(&packet.payload) else {
             return;
         };
         let owner = PeerId::from_noise_key(&bundle.owner_static);
-
-        if let Some(existing) = self.latest_prekey_bundle_by_owner.get(&owner) {
-            // Older or identical: keep what we have. Ties go to the incumbent so a
-            // replay cannot churn the entry.
-            if existing.timestamp >= packet.timestamp {
-                return;
-            }
-            self.latest_prekey_bundle_by_owner
-                .insert(owner, packet.clone());
+        let config = &self.config;
+        if self.latest_prekey_bundle_by_owner.len() >= config.prekey_bundle_capacity.max(1)
+            && !self.latest_prekey_bundle_by_owner.contains_key(&owner)
+        {
             return;
         }
-
-        // Bounded owner count. Replacing a known owner's bundle above is always
-        // allowed, so the cap can never block a refresh.
-        if self.latest_prekey_bundle_by_owner.len() >= self.config.prekey_bundle_capacity.max(1) {
-            return;
-        }
-        self.latest_prekey_bundle_by_owner
-            .insert(owner, packet.clone());
+        insert_candidate(
+            self.latest_prekey_bundle_by_owner.entry(owner).or_default(),
+            signing_key,
+            packet,
+            |stored| packet_is_fresh(config, stored, now_unix_secs),
+            false,
+        );
     }
 
     /// Whether an inbound RSR packet answers something we actually asked `from`.
@@ -494,7 +527,7 @@ impl GossipSyncManager {
     }
 
     /// Whether `packet` is inside the retention window this store keeps for its
-    /// type. One-sided, like the store: a future timestamp is inside.
+    /// type. Prekey bundles also have a 120-second future timestamp limit.
     pub fn within_retention(&self, packet: &BitchatPacket, now_unix_secs: u64) -> bool {
         packet_is_fresh(&self.config, packet, now_unix_secs)
     }
@@ -509,7 +542,8 @@ impl GossipSyncManager {
             candidates.extend(
                 self.latest_announce_by_peer
                     .values()
-                    .filter(|packet| fresh(packet)),
+                    .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
+                    .filter(|packet| announcement_is_fresh(config, packet, now_unix_secs)),
             );
         }
         if types.contains(MessageType::Message) {
@@ -528,6 +562,7 @@ impl GossipSyncManager {
             candidates.extend(
                 self.latest_prekey_bundle_by_owner
                     .values()
+                    .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
                     .filter(|packet| fresh(packet)),
             );
         }
@@ -589,16 +624,20 @@ impl GossipSyncManager {
         let config = &self.config;
         let fresh = |packet: &BitchatPacket| packet_is_fresh(config, packet, now_unix_secs);
 
-        self.latest_announce_by_peer
-            .retain(|_, packet| fresh(&*packet));
+        self.latest_announce_by_peer.retain(|_, candidates| {
+            candidates.retain(|(_, packet)| fresh(packet));
+            !candidates.is_empty()
+        });
 
         let expired_ids = self.messages.remove_expired(fresh);
 
         let _ = self.fragments.remove_expired(fresh);
         let _ = self.file_transfers.remove_expired(fresh);
         let _ = self.group_messages.remove_expired(fresh);
-        self.latest_prekey_bundle_by_owner
-            .retain(|_, packet| fresh(&*packet));
+        self.latest_prekey_bundle_by_owner.retain(|_, candidates| {
+            candidates.retain(|(_, packet)| fresh(packet));
+            !candidates.is_empty()
+        });
         for id in expired_ids {
             self.mark_archive_changed(id);
         }
@@ -616,7 +655,11 @@ impl GossipSyncManager {
         let stale: Vec<PeerId> = self
             .latest_announce_by_peer
             .iter()
-            .filter(|(_, packet)| !announcement_is_fresh(config, packet, now_unix_secs))
+            .filter(|(_, candidates)| {
+                candidates
+                    .iter()
+                    .all(|(_, packet)| !announcement_is_fresh(config, packet, now_unix_secs))
+            })
             .map(|(peer, _)| peer.clone())
             .collect();
         for peer in stale {
@@ -747,6 +790,35 @@ impl GossipSyncManager {
 
     pub fn has_announcement(&self, peer: &PeerId) -> bool {
         self.latest_announce_by_peer.contains_key(peer)
+    }
+
+    /// Recent signing keys advertised for this sender, with no claim of identity.
+    pub fn announced_signing_keys(
+        &self,
+        peer: &PeerId,
+        now_unix_secs: u64,
+    ) -> impl Iterator<Item = [u8; 32]> + '_ {
+        self.latest_announce_by_peer
+            .get(peer)
+            .into_iter()
+            .flatten()
+            .filter(move |(_, packet)| announcement_is_fresh(&self.config, packet, now_unix_secs))
+            .map(|(key, _)| *key)
+    }
+
+    /// Once a Noise binding proves the owner, only its candidates can be served.
+    pub fn retain_signing_key(&mut self, owner: &PeerId, key: &[u8; 32]) {
+        for store in [
+            &mut self.latest_announce_by_peer,
+            &mut self.latest_prekey_bundle_by_owner,
+        ] {
+            if let Some(candidates) = store.get_mut(owner) {
+                candidates.retain(|(candidate, _)| candidate == key);
+                if candidates.is_empty() {
+                    store.remove(owner);
+                }
+            }
+        }
     }
 
     pub fn has_prekey_bundle(&self, owner: &PeerId) -> bool {

@@ -57,11 +57,9 @@ pub struct LinkCandidate {
     pub id: LinkId,
     /// Which side of this link we are. See the module note on the naming trap.
     pub role: LinkRole,
-    /// The peer this link is bound to, or `None` while it is still pre-announce.
-    ///
-    /// A link is bound only once its peer proved an identity with a signed
-    /// announce. Unbound links are never collapsed away — they are exactly the
-    /// links still waiting for the announce that would bind them.
+    /// The peer associated with this route. Persistent associations require a
+    /// Noise proof. Public sync and Noise opening can explicitly target a
+    /// provisional discovery link. Unbound links stay eligible for broadcast.
     pub peer: Option<PeerId>,
     /// Largest single write this link accepts. Feeds fragment sizing in
     /// [`crate::planner`]; the selection itself ignores it.
@@ -168,10 +166,8 @@ pub struct FanoutRequest<'a> {
     pub excluded_links: &'a [LinkId],
     /// Whether to keep only one link per bound peer.
     ///
-    /// True for everything except a *direct announce*, which is the packet that
-    /// binds a link to its peer in the first place. Collapsing those starves a
-    /// duplicate link of the announce it needs to become bound; it then looks
-    /// pre-announce forever and every later broadcast sprays down all of them.
+    /// Direct announces go to every link so each can discover its peer for
+    /// public sync and Noise opening.
     pub collapse_duplicate_peer_links: bool,
     /// The peer this packet is addressed to, if any. Directed packets are never
     /// subsetted — they go to that peer's link and nowhere else.
@@ -899,8 +895,7 @@ mod tests {
 
     #[test]
     fn unbound_links_survive_the_collapse() {
-        // Pre-announce links are exactly the ones still waiting for the announce
-        // that would bind them. Collapsing them keeps them unbound forever.
+        // Unbound links still need discovery traffic before they can open Noise.
         let bob = peer("bbbb");
         let links = vec![
             central("bob-write").bound_to(bob.clone()),

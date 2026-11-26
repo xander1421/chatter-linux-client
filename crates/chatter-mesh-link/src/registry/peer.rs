@@ -9,8 +9,8 @@ use super::link_state::LinkPresence;
 /// `TransportConfig.bleReachabilityRetentionVerifiedSeconds` (60 s).
 ///
 /// How long a *verified* peer stays reachable after its last sighting. Verified
-/// means we checked a signature against the signing key in its announce, so the
-/// longer window cannot be claimed by simply asserting a nickname.
+/// means the signing key was bound to the Noise static key inside an
+/// authenticated session.
 pub const REACHABILITY_RETENTION_VERIFIED_MS: u64 = 60_000;
 
 /// `TransportConfig.bleReachabilityRetentionUnverifiedSeconds` (45 s).
@@ -42,8 +42,7 @@ pub struct PeerRecord {
     pub connected: bool,
     pub noise_public_key: Option<Vec<u8>>,
     pub signing_public_key: Option<Vec<u8>>,
-    /// The nickname arrived inside an announce whose signature we checked.
-    /// Buys the longer reachability retention, and nothing else.
+    /// The nickname was announced under the peer's Noise-bound signing key.
     pub verified_nickname: bool,
     pub last_seen_ms: u64,
     pub capabilities: PeerCapabilities,
@@ -60,12 +59,9 @@ pub struct AnnounceUpdate {
     /// reconnection, which the UI reports differently from a first sighting.
     pub was_disconnected: bool,
     pub previous_nickname: Option<String>,
-    /// This announce established the pin, so the caller has something new to
-    /// persist.
-    pub pinned_now: bool,
 }
 
-/// The keys a peer ID was first seen with.
+/// The keys proven for a peer ID inside an authenticated session.
 ///
 /// Held apart from [`PeerRecord`] because the two have opposite lifetimes. A
 /// record is presence: it ages out, and a peer that leaves is forgotten. A pin
@@ -92,7 +88,8 @@ pub struct PinnedIdentity {
 pub const MAX_PINNED_IDENTITIES: usize = 4096;
 
 /// First byte of the persisted pin set.
-pub(super) const PIN_BLOB_VERSION: u8 = 1;
+pub(super) const PIN_BLOB_VERSION: u8 = 2;
+const MAX_UNPROVEN_PEERS: usize = 512;
 
 /// The persisted pin set could not be read. Carries nothing: the only thing a
 /// caller can do is refuse to start from it.
@@ -200,7 +197,9 @@ impl PeerRegistry {
             return false;
         }
         let age = now_unix_millis.saturating_sub(record.last_seen_ms);
-        age <= reachability_retention_ms(record.verified_nickname)
+        age <= reachability_retention_ms(
+            record.verified_nickname || self.pins.contains_key(&record.peer),
+        )
     }
 
     pub fn nickname(&self, peer: &PeerId, connected_only: bool) -> Option<&str> {
@@ -275,6 +274,10 @@ impl PeerRegistry {
             Ok(value)
         }
 
+        // Version 1 contained only announce claims, with no Noise binding.
+        if bytes.first() == Some(&1) {
+            return Ok(());
+        }
         let Some((&PIN_BLOB_VERSION, mut rest)) = bytes.split_first() else {
             return Err(MalformedPins);
         };
@@ -317,6 +320,61 @@ impl PeerRegistry {
         }
     }
 
+    /// Record the keys proven by a binding received inside an authenticated Noise session.
+    pub fn pin_noise_identity(
+        &mut self,
+        peer: &PeerId,
+        noise: &[u8; 32],
+        signing: &[u8; 32],
+        now_ms: u64,
+    ) -> bool {
+        if PeerId::from_noise_key(noise) != *peer {
+            return false;
+        }
+        let existing_pin = self.pins.get(peer);
+        if let Some(pin) = existing_pin {
+            if pin.noise_public_key.as_slice() != noise
+                || pin.signing_public_key.as_slice() != signing
+            {
+                return false;
+            }
+        } else if !self.can_pin(peer) {
+            return false;
+        }
+
+        let mut nickname = self
+            .pins
+            .get(peer)
+            .map_or_else(|| peer.to_string(), |pin| pin.nickname.clone());
+        if let Some(record) = self.peers.get_mut(peer) {
+            if record.noise_public_key.as_deref() == Some(noise.as_slice())
+                && record.signing_public_key.as_deref() == Some(signing.as_slice())
+            {
+                if existing_pin.is_none() {
+                    nickname = record.nickname.clone();
+                    record.verified_nickname = true;
+                }
+            } else {
+                // Only the keys were proven. Drop the displaced candidate's metadata.
+                record.nickname = nickname.clone();
+                record.capabilities = Default::default();
+                record.bridge_geohash = None;
+                record.noise_public_key = Some(noise.to_vec());
+                record.signing_public_key = Some(signing.to_vec());
+                record.verified_nickname = false;
+            }
+        }
+        self.pins
+            .entry(peer.clone())
+            .or_insert_with(|| PinnedIdentity {
+                noise_public_key: noise.to_vec(),
+                signing_public_key: signing.to_vec(),
+                nickname,
+                pinned_at_ms: now_ms,
+            });
+        true
+    }
+
     /// Records a peer from an announce whose signature we verified.
     ///
     /// Replaces the record wholesale rather than merging fields, matching Swift:
@@ -330,25 +388,60 @@ impl PeerRegistry {
         connected: bool,
         now_unix_millis: u64,
     ) -> AnnounceUpdate {
-        let pinned_now = !self.pins.contains_key(peer) && self.pins.len() < MAX_PINNED_IDENTITIES;
-        if pinned_now {
-            self.pins.insert(
-                peer.clone(),
-                PinnedIdentity {
-                    noise_public_key: announcement.noise_public_key.clone(),
-                    signing_public_key: announcement.signing_public_key.clone(),
-                    nickname: announcement.nickname.clone(),
-                    pinned_at_ms: now_unix_millis,
-                },
-            );
-        }
+        self.upsert_verified_announce_preserving(
+            peer,
+            announcement,
+            connected,
+            now_unix_millis,
+            |_| false,
+        )
+    }
 
+    /// Protect active links from candidate expiry and eviction under load.
+    pub fn upsert_verified_announce_preserving(
+        &mut self,
+        peer: &PeerId,
+        announcement: &AnnouncementPacket,
+        connected: bool,
+        now_unix_millis: u64,
+        has_live_link: impl Fn(&PeerId) -> bool,
+    ) -> AnnounceUpdate {
+        let verified = self.pins.get(peer).is_some_and(|pin| {
+            pin.noise_public_key == announcement.noise_public_key
+                && pin.signing_public_key == announcement.signing_public_key
+        });
+        if self.pins.contains_key(peer) && !verified {
+            return AnnounceUpdate::default();
+        }
+        if !verified {
+            self.peers.retain(|id, record| {
+                self.pins.contains_key(id)
+                    || has_live_link(id)
+                    || now_unix_millis.saturating_sub(record.last_seen_ms)
+                        < REACHABILITY_RETENTION_UNVERIFIED_MS
+            });
+            if !self.peers.contains_key(peer) {
+                let unproven = self
+                    .peers
+                    .iter()
+                    .filter(|(id, _)| !self.pins.contains_key(*id));
+                if unproven.clone().count() >= MAX_UNPROVEN_PEERS {
+                    let Some((oldest, _)) = unproven
+                        .filter(|(id, _)| !has_live_link(id))
+                        .min_by_key(|(_, record)| record.last_seen_ms)
+                    else {
+                        return AnnounceUpdate::default();
+                    };
+                    let oldest = oldest.clone();
+                    self.peers.remove(&oldest);
+                }
+            }
+        }
         let existing = self.peers.get(peer);
         let update = AnnounceUpdate {
             is_new_peer: existing.is_none(),
             was_disconnected: existing.is_some_and(|e| !e.connected),
             previous_nickname: existing.map(|e| e.nickname.clone()),
-            pinned_now,
         };
 
         self.peers.insert(
@@ -359,7 +452,7 @@ impl PeerRegistry {
                 connected,
                 noise_public_key: Some(announcement.noise_public_key.clone()),
                 signing_public_key: Some(announcement.signing_public_key.clone()),
-                verified_nickname: true,
+                verified_nickname: verified,
                 last_seen_ms: now_unix_millis,
                 capabilities: announcement.capabilities.unwrap_or_default(),
                 bridge_geohash: announcement.bridge_geohash.clone(),
@@ -389,26 +482,34 @@ impl PeerRegistry {
         presence: &BTreeMap<PeerId, LinkPresence>,
     ) -> ConnectivityChanges {
         let mut changes = ConnectivityChanges::default();
-        let snapshot: Vec<(PeerId, bool, bool, u64, String)> = self
+        let snapshot: Vec<_> = self
             .peers
             .values()
             .map(|p| {
+                let verified = p.verified_nickname || self.pins.contains_key(&p.peer);
                 (
                     p.peer.clone(),
                     p.connected,
-                    p.verified_nickname,
+                    verified,
                     p.last_seen_ms,
                     p.nickname.clone(),
+                    !verified && p.noise_public_key.is_some(),
                 )
             })
             .collect();
 
-        for (peer, was_connected, verified, last_seen, nickname) in snapshot {
+        for (peer, was_connected, verified, last_seen, nickname, unproven) in snapshot {
             let age = now_unix_millis.saturating_sub(last_seen);
             let retention = reachability_retention_ms(verified);
 
+            let live = presence.get(&peer).copied().unwrap_or_default();
+            if unproven && age > retention && !live.any() {
+                self.peers.remove(&peer);
+                changes.removed.push(RemovedPeer { peer, nickname });
+                continue;
+            }
+
             if was_connected && age > PEER_INACTIVITY_TIMEOUT_MS {
-                let live = presence.get(&peer).copied().unwrap_or_default();
                 if !live.any() {
                     if let Some(record) = self.peers.get_mut(&peer) {
                         record.connected = false;
@@ -417,7 +518,7 @@ impl PeerRegistry {
                 }
             }
 
-            if !was_connected && age > retention {
+            if !was_connected && age > retention && !live.any() {
                 self.peers.remove(&peer);
                 changes.removed.push(RemovedPeer { peer, nickname });
             }

@@ -66,10 +66,10 @@ fn runtime_parts() -> (
     (runtime, radio, state, timeline)
 }
 
-/// A peer in the registry with a known signing key, as a verified announce
-/// would have left it. Returns the identity that has to sign for it.
-fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> MeshIdentity {
-    let identity = MeshIdentity::generate(&mut os_rng());
+/// Registers the same derived peer ID and Noise-bound signing key used by
+/// production verified records. Reopen fixtures can reuse the same identity.
+fn register_verified_peer(state: &MeshState, identity: &MeshIdentity, nickname: &str) -> PeerId {
+    let peer = identity.peer_id();
     let announcement = AnnouncementPacket::new(
         nickname.to_string(),
         identity.static_public().to_vec(),
@@ -79,18 +79,43 @@ fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> M
         None,
     );
     state.with(|inner| {
+        assert!(inner.peers.pin_noise_identity(
+            &peer,
+            &identity.static_public(),
+            &identity.signing_public(),
+            now_millis(),
+        ));
         inner
             .peers
-            .upsert_verified_announce(peer, &announcement, true, now_millis());
+            .upsert_verified_announce(&peer, &announcement, true, now_millis());
     });
-    identity
+    peer
 }
 
 #[tokio::test]
 async fn leave_requires_the_pinned_signature_and_preserves_the_pin() {
     let (mut runtime, _radio, state) = runtime();
-    let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &peer, "Alice");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let peer = identity.peer_id();
+    assert!(state.with(|inner| inner.peers.pin_noise_identity(
+        &peer,
+        &identity.static_public(),
+        &identity.signing_public(),
+        now_millis(),
+    )));
+    let announce = AnnouncementPacket::new(
+        "Alice".into(),
+        identity.static_public().to_vec(),
+        identity.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    );
+    state.with(|inner| {
+        inner
+            .peers
+            .upsert_verified_announce(&peer, &announce, true, now_millis())
+    });
     let attacker = MeshIdentity::generate(&mut os_rng());
     let link = LinkId::new("/mock/leave");
     let mut packet = BitchatPacket::new(

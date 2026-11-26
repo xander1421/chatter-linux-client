@@ -585,3 +585,56 @@ async fn a_fresh_service_reports_nothing_connected() {
     assert!(service.peers().is_empty());
     assert!(service.joined_geohashes().is_empty());
 }
+
+#[tokio::test]
+async fn direct_group_invite_uses_only_the_noise_pinned_roster_key() {
+    let service = service(None, None);
+    let channel_id = service.create_private_channel("private").unwrap();
+    let owner = MeshIdentity::generate(&mut crate::crypto::os_rng());
+    let competing = MeshIdentity::generate(&mut crate::crypto::os_rng());
+    let peer = owner.peer_id();
+    let announcement = chatter_mesh::tlv::announce::AnnouncementPacket::new(
+        "unproven".into(),
+        owner.static_public().to_vec(),
+        competing.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    );
+    service.state.with(|state| {
+        state
+            .peers
+            .upsert_verified_announce(&peer, &announcement, true, now_millis());
+    });
+    assert!(
+        service
+            .invite_private_channel_direct(&channel_id, &peer)
+            .is_err()
+    );
+    assert!(
+        service
+            .private_channels
+            .load(&channel_id)
+            .unwrap()
+            .unwrap()
+            .member_key(&peer)
+            .is_none()
+    );
+    assert!(service.state.with(|state| state.peers.pin_noise_identity(
+        &peer,
+        &owner.static_public(),
+        &owner.signing_public(),
+        now_millis(),
+    )));
+    service
+        .invite_private_channel_direct(&channel_id, &peer)
+        .unwrap();
+    let roster = service.private_channels.load(&channel_id).unwrap().unwrap();
+    let member = roster
+        .members
+        .iter()
+        .find(|member| member.peer == peer.as_str())
+        .unwrap();
+    assert_eq!(member.signing_key, owner.signing_public());
+    assert_ne!(member.nickname, "unproven");
+}

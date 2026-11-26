@@ -185,10 +185,7 @@ impl MeshState {
         f(&mut guard)
     }
 
-    /// A live link binding to this peer exists.
-    ///
-    /// **Forgeable** — see the `RouterTransport` docs. Link bindings heal on
-    /// announces whose "directness" rides on an unsigned TTL.
+    /// A live link has been bound to this peer by Noise proof.
     #[must_use]
     pub fn is_connected(&self, peer: &PeerId) -> bool {
         self.with(|state| !state.links.links_to(peer).is_empty())
@@ -198,7 +195,11 @@ impl MeshState {
     #[must_use]
     pub fn is_reachable(&self, peer: &PeerId) -> bool {
         let now = now_millis();
-        self.with(|state| state.peers.is_reachable(peer, now))
+        self.with(|state| {
+            state.peers.is_reachable(peer, now)
+                || (state.peers.info(peer).is_some()
+                    && state.links.discovery_links_to(peer).next().is_some())
+        })
     }
 
     /// A write to this peer will actually leave the device: a link bound to it
@@ -216,11 +217,61 @@ impl MeshState {
         })
     }
 
+    pub(super) fn can_open_session_to(&self, peer: &PeerId) -> bool {
+        self.can_write_to(peer)
+            || self.with(|state| state.links.discovery_links_to(peer).next().is_some())
+    }
+
+    pub(super) fn public_sync_peers(&self) -> Vec<PeerId> {
+        self.with(|state| {
+            state
+                .peers
+                .records()
+                .filter(|record| {
+                    record.connected
+                        || state
+                            .links
+                            .discovery_links_to(&record.peer)
+                            .next()
+                            .is_some()
+                })
+                .map(|record| record.peer.clone())
+                .collect()
+        })
+    }
+
     /// An established Noise session exists — the only signal strong enough to
     /// send against without retaining a copy.
     #[must_use]
     pub fn has_session(&self, peer: &PeerId) -> bool {
         self.with(|state| state.sessions.has_session(peer))
+    }
+
+    /// A private-channel roster entry must come from the Noise-bound pin.
+    pub(super) fn pinned_member(
+        &self,
+        peer: &PeerId,
+        require_live_session: bool,
+    ) -> Option<super::private_channel::Member> {
+        self.with(|state| {
+            let pin = state.peers.pinned(peer)?;
+            let static_key: [u8; 32] = pin.noise_public_key.as_slice().try_into().ok()?;
+            match state.sessions.remote_static(peer) {
+                Some(live) if live == static_key => {}
+                None if !require_live_session => {}
+                _ => return None,
+            }
+            Some(super::private_channel::Member {
+                peer: peer.to_string(),
+                fingerprint: chatter_mesh_noise::fingerprint_of(&static_key),
+                signing_key: pin.signing_public_key.clone(),
+                nickname: state
+                    .peers
+                    .info(peer)
+                    .filter(|record| record.verified_nickname)
+                    .map_or_else(|| pin.nickname.clone(), |record| record.nickname.clone()),
+            })
+        })
     }
 
     /// Everything the courier selector needs about every peer we know.
@@ -243,9 +294,9 @@ impl MeshState {
                         announced.or_else(|| state.sessions.remote_static(&record.peer));
                     PeerSnapshot {
                         is_connected: !state.links.links_to(&record.peer).is_empty(),
+                        is_verified: state.peers.pinned(&record.peer).is_some(),
                         peer: record.peer,
                         noise_public_key,
-                        is_verified: record.verified_nickname,
                     }
                 })
                 .collect()
@@ -260,21 +311,28 @@ impl MeshState {
             let records: Vec<PeerRecord> = state.peers.records().cloned().collect();
             let mut peers: Vec<MeshPeer> = records
                 .into_iter()
-                .map(|record| MeshPeer {
-                    chatter_capable: state.chatter_hello.get(&record.peer).is_some(),
-                    connected: !state.links.links_to(&record.peer).is_empty(),
-                    reachable: state.peers.is_reachable(&record.peer, now),
-                    verified: record.verified_nickname,
-                    account_verified: false,
-                    has_session: state.sessions.has_session(&record.peer),
-                    fingerprint: record
-                        .noise_public_key
-                        .as_deref()
-                        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-                        .map(|key| chatter_mesh_noise::fingerprint_of(&key))
-                        .or_else(|| state.sessions.fingerprint(&record.peer)),
-                    peer: record.peer,
-                    nickname: record.nickname,
+                .map(|record| {
+                    let discovered = state
+                        .links
+                        .discovery_links_to(&record.peer)
+                        .next()
+                        .is_some();
+                    MeshPeer {
+                        chatter_capable: state.chatter_hello.get(&record.peer).is_some(),
+                        connected: state.links.presence(&record.peer).any(),
+                        reachable: discovered || state.peers.is_reachable(&record.peer, now),
+                        verified: record.verified_nickname,
+                        account_verified: false,
+                        has_session: state.sessions.has_session(&record.peer),
+                        fingerprint: record
+                            .noise_public_key
+                            .as_deref()
+                            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                            .map(|key| chatter_mesh_noise::fingerprint_of(&key))
+                            .or_else(|| state.sessions.fingerprint(&record.peer)),
+                        peer: record.peer,
+                        nickname: record.nickname,
+                    }
                 })
                 .collect();
             disambiguate_nicknames(&mut peers);
@@ -302,7 +360,11 @@ impl MeshState {
                 radio_running: state.radio_running && state.adapter_powered,
                 adapter_powered: state.adapter_powered,
                 connected_links,
-                connected_peers: state.peers.connected_count(),
+                connected_peers: state
+                    .peers
+                    .records()
+                    .filter(|record| state.links.presence(&record.peer).any())
+                    .count(),
                 connected_relays,
             }
         })

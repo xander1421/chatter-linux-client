@@ -258,7 +258,7 @@ impl BleRuntime {
         self.maintain_prekeys(now_ms).await;
 
         // Gossip sync, which nothing else can schedule.
-        let connected: Vec<PeerId> = self.state.with(|state| state.peers.connected_peer_ids());
+        let connected = self.state.public_sync_peers();
         match self.gossip.maintenance(&connected, now_s) {
             Ok(sends) => {
                 for send in sends {

@@ -321,8 +321,8 @@ async fn a_chunked_transfer_round_trips_into_a_row_with_its_bytes_on_disk() {
     // written straight to disk, digest-checked, and encrypted into place.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
     let spool = isolate_spool(&mut runtime);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let mut events = runtime.events.subscribe();
 
     let bytes = body(2_500);
@@ -392,8 +392,8 @@ async fn a_missing_chunk_is_re_requested_and_the_transfer_then_completes() {
     let (mut runtime, radio, state, timeline) = runtime_parts();
     isolate_spool(&mut runtime);
     writable_link_on(&state, &radio, "/mock/req", 512);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
 
     let bytes = body(3_000);
     let manifest = test_manifest([0x11; 8], &bytes);
@@ -457,8 +457,8 @@ async fn an_unsigned_chunk_is_refused() {
     // that is about to be stored and shown under the manifest sender's name.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
     isolate_spool(&mut runtime);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let mut events = runtime.events.subscribe();
 
     let bytes = body(2_048);
@@ -517,8 +517,8 @@ async fn an_unsigned_manifest_never_opens_a_transfer() {
     // anyone's name — and every chunk after it inherits that attribution.
     let (mut runtime, _radio, state, _timeline) = runtime_parts();
     isolate_spool(&mut runtime);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
 
     let bytes = body(2_048);
     let manifest = test_manifest([0x13; 8], &bytes);
@@ -546,10 +546,10 @@ async fn a_chunk_from_someone_other_than_the_manifests_sender_is_refused() {
     // contributing bytes to a file somebody else opened.
     let (mut runtime, _radio, state, _timeline) = runtime_parts();
     isolate_spool(&mut runtime);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
-    let other = PeerId::from_str("dddddddddddddddd");
-    let other_identity = register_verified_peer(&state, &other, "someone else");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
+    let other_identity = MeshIdentity::generate(&mut os_rng());
+    let other = register_verified_peer(&state, &other_identity, "someone else");
 
     let bytes = body(2_048);
     let manifest = test_manifest([0x14; 8], &bytes);
@@ -581,8 +581,8 @@ async fn a_digest_mismatch_discards_the_transfer_and_asks_for_nothing_more() {
     let (mut runtime, radio, state, timeline) = runtime_parts();
     let spool = isolate_spool(&mut runtime);
     writable_link_on(&state, &radio, "/mock/bad", 512);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let mut events = runtime.events.subscribe();
 
     let bytes = body(2_500);
@@ -642,8 +642,8 @@ async fn a_restart_resumes_a_transfer_instead_of_starting_it_again() {
     // record of which half was in a map.
     let (mut first, _radio, state, _timeline) = runtime_parts();
     let spool = isolate_spool(&mut first);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
 
     let bytes = body(5_000);
     let manifest = test_manifest([0x16; 8], &bytes);
@@ -668,7 +668,7 @@ async fn a_restart_resumes_a_transfer_instead_of_starting_it_again() {
         1,
         "the partial transfer is back"
     );
-    let identity = register_verified_peer(&state2, &sender, "wanderer");
+    assert_eq!(register_verified_peer(&state2, &identity, "wanderer"), sender);
     assert_eq!(
         restarted
             .files_in
@@ -719,8 +719,8 @@ async fn a_transfer_that_completed_but_was_never_stored_is_finished_on_the_next_
     // nothing spends again.
     let (mut first, _radio, state, _timeline) = runtime_parts();
     let spool = isolate_spool(&mut first);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
 
     let bytes = body(2_048);
     let manifest = test_manifest([0x1C; 8], &bytes);
@@ -753,7 +753,7 @@ async fn a_transfer_that_completed_but_was_never_stored_is_finished_on_the_next_
     let (mut restarted, _radio2, state2, timeline2) = runtime_parts();
     restarted.files_in = FileStreamSpool::new(spool);
     assert_eq!(restarted.files_in.restore(now_secs()), 1);
-    register_verified_peer(&state2, &sender, "wanderer");
+    assert_eq!(register_verified_peer(&state2, &identity, "wanderer"), sender);
     assert_eq!(restarted.files_in.completed(), vec![manifest.transfer_id]);
 
     restarted.cleanup(now_millis(), now_secs());

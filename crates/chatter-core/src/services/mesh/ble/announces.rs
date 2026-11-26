@@ -21,53 +21,27 @@ impl BleRuntime {
         let local = self.identity.peer_id();
         let now_ms = now_millis();
         let now_s = now_secs();
+        let (presence, link_bound_elsewhere, pin) = self.state.with(|state| {
+            (
+                state.links.presence(claimed),
+                state
+                    .links
+                    .peer_for(link)
+                    .is_some_and(|bound| bound != claimed),
+                state.peers.pinned(claimed).cloned(),
+            )
+        });
 
-        // What the trust decision needs from our own tables, read before it runs.
-        //
-        // `presence` and `peer_for` are facts about *our* connection state and so
-        // are not forgeable; the recorded Noise key is what a key substitution
-        // would be trying to overwrite, which is why the policy wants it before
-        // it looks at the signature.
-        let (presence, link_bound_elsewhere, existing_noise_key, existing_signing_key) =
-            self.state.with(|state| {
-                let record = state.peers.info(claimed);
-                let pin = state.peers.pinned(claimed);
-                (
-                    state.links.presence(claimed),
-                    state
-                        .links
-                        .peer_for(link)
-                        .is_some_and(|bound| bound != claimed),
-                    pin.map(|p| p.noise_public_key.clone())
-                        .or_else(|| record.and_then(|r| r.noise_public_key.clone())),
-                    pin.map(|p| p.signing_public_key.clone())
-                        .or_else(|| record.and_then(|r| r.signing_public_key.clone())),
-                )
-            });
-
-        // The whole inbound announce policy, in one call: decode, derive the peer
-        // ID from the announced Noise key and refuse a sender that does not match
-        // it, refuse our own announce coming back, refuse a stale one, refuse a
-        // swapped key, and only then spend a signature verification.
-        //
-        // The derivation check is the load-bearing one and it was missing. A
-        // packet signature verified against the signing key the announcement
-        // itself carries proves only that whoever wrote the announce holds that
-        // key — which every attacker does. The mesh ID *is*
-        // `SHA256(noise static key)[..8]` (`MeshIdentity::peer_id`), so binding
-        // the sender ID to the key is free and is what stops a device in radio
-        // range announcing any identity it likes.
+        // The signature proves control of the announced signing key. The
+        // public Noise key alone provides no proof of identity. Only a
+        // Noise-bound pin can veto a later announce for this peer.
         let context = AnnounceLinkContext {
             direct_announce_ttl: DIRECT_ANNOUNCE_TTL,
             has_peripheral_link: presence.as_peripheral,
             has_central_link: presence.as_central,
             link_bound_to_other_peer: link_bound_elsewhere,
-            existing_noise_public_key: existing_noise_key.as_deref(),
-            // §98: the signing key is pinned the same way. The registry has
-            // recorded it since the first announce; nothing compared it, so
-            // "Verified" meant only "signed by the key this packet carries",
-            // which every attacker in radio range also holds.
-            existing_signing_public_key: existing_signing_key.as_deref(),
+            existing_noise_public_key: pin.as_ref().map(|pin| pin.noise_public_key.as_slice()),
+            existing_signing_public_key: pin.as_ref().map(|pin| pin.signing_public_key.as_slice()),
         };
         let accepted = match evaluate_announce(
             packet,
@@ -121,39 +95,45 @@ impl BleRuntime {
             return false;
         }
 
-        if !self.state.with(|state| state.peers.can_pin(claimed)) {
-            self.degraded("Peer identity storage is full; new peers are refused.".to_string());
-            return false;
-        }
-        let announcement = accepted.announcement.clone();
-        // Commit the pin before exposing the peer as trusted. A failed write
-        // leaves no accepted identity that would silently lose its pin on restart.
-        let persisted = self.state.with(|state| -> Result<(), String> {
-            if state.peers.pinned(claimed).is_some() {
-                return Ok(());
+        // Renewals are free. A different unproven key pair for the same peer
+        // is a new candidate and consumes the ingress budget.
+        let announcement = &accepted.announcement;
+        let renewal = pin.is_some()
+            || self.state.with(|state| {
+                state.peers.info(claimed).is_some_and(|record| {
+                    record.noise_public_key.as_deref()
+                        == Some(announcement.noise_public_key.as_slice())
+                        && record.signing_public_key.as_deref()
+                            == Some(announcement.signing_public_key.as_slice())
+                })
+            });
+        if !renewal {
+            let direct = packet.ttl == DIRECT_ANNOUNCE_TTL && !link_bound_elsewhere;
+            let key = (link.to_string(), direct);
+            self.announce_ingress
+                .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
+            if self.announce_ingress.len() >= 128 && !self.announce_ingress.contains_key(&key) {
+                let oldest_relay = self
+                    .announce_ingress
+                    .iter()
+                    .filter(|((_, direct), _)| !direct)
+                    .min_by_key(|(_, (start, _))| *start)
+                    .map(|(key, _)| key.clone());
+                let Some(oldest_relay) = oldest_relay.filter(|_| direct) else {
+                    return false;
+                };
+                self.announce_ingress.remove(&oldest_relay);
             }
-            let mut candidate = state.peers.clone();
-            candidate.upsert_verified_announce(claimed, &announcement, false, now_ms);
-            let sealed = self
-                .sealer
-                .seal(&candidate.pins_to_bytes())
-                .map_err(|e| e.to_string())?;
-            self.storage
-                .save(StorageKey::PeerPins, &sealed)
-                .map_err(|e| e.to_string())
-        });
-        if let Err(error) = persisted {
-            self.degraded(format!("Peer identity pin could not be saved: {error}"));
-            return false;
+            let budget = self.announce_ingress.entry(key).or_insert((now_ms, 0));
+            if budget.1 >= 60 {
+                return false;
+            }
+            budget.1 += 1;
         }
-        let direct = VerifiedDirectAnnounce::from_packet(
-            claimed.clone(),
-            packet,
-            accepted.is_verified(),
-            DIRECT_ANNOUNCE_TTL,
-        );
 
-        let (is_new, newly_bound, link_authenticated, first_sighting, reconnected, bound_peer) =
+        let direct = accepted.direct_hint;
+
+        let (is_new, new_discovery, link_authenticated, first_sighting, reconnected, bound_peer) =
             self.state.with(|state| {
                 // Whether this announce means the peer is *reachable on a link of
                 // its own*, which is not the same as "we heard from it".
@@ -174,75 +154,31 @@ impl BleRuntime {
                 // into "connected".
                 let connected = accepted.connected_flag().unwrap_or(false);
 
-                let update =
-                    state
-                        .peers
-                        .upsert_verified_announce(claimed, &announcement, connected, now_ms);
-                // Bind first, always. `rebind_after_verified_direct` refuses an
-                // *unbound* link by design — it exists for the contested case, where a
-                // link already belongs to someone else and a verified direct announce
-                // is the only evidence strong enough to move it. Calling only rebind
-                // for a direct announce therefore never bound a fresh inbound link at
-                // all, which is the normal first-contact case: the peer registered,
-                // no link was bound to it, so `reconcile_connectivity` saw no live
-                // presence and demoted it 8s later — and the next announce arrived as
-                // a reconnect. bitchat binds a peripheral link to the claimed sender
-                // on a direct announce before any signature check
-                // (`BLEService.swift:2516`), so binding is not the guarded part.
-                //
-                // Rebinding still runs afterwards, and is still fully guarded: on a
-                // link we just bound it refuses as `SamePeer`, and on a contested one
-                // `bind_if_unbound` was the no-op instead.
-                let newly_bound = matches!(
-                    state.links.bind_if_unbound(link, claimed),
-                    chatter_mesh_link::registry::BindOutcome::Bound
+                let update = state.peers.upsert_verified_announce_preserving(
+                    claimed,
+                    announcement,
+                    connected,
+                    now_ms,
+                    |peer| state.links.presence(peer).any(),
                 );
-                if let Some(direct) = direct.as_ref() {
-                    state
-                        .links
-                        .rebind_after_verified_direct(link, direct, now_ms);
-                }
+                // The TTL is unsigned. A direct announce can supply an
+                // address for discovery traffic; only Noise promotes it to a
+                // binding used for routing and registry eviction protection.
+                let new_discovery = direct && state.links.note_discovery_peer(link, claimed);
                 // Per-link proof only: a Noise handshake completed, or traffic
                 // decrypted, on *this* link from this peer. A peer-level session is
-                // not enough — it outlives its link, and a replayed announce can
-                // rebind an attacker's link to the victim's ID.
+                // not enough — it outlives its link, and another link can
+                // advertise the same peer ID.
                 let authenticated = state.links.is_noise_authenticated(link, claimed);
                 (
                     update.is_new_peer || update.was_disconnected,
-                    newly_bound,
+                    new_discovery,
                     authenticated,
                     update.is_new_peer,
                     update.was_disconnected,
                     state.links.peer_for(link).cloned(),
                 )
             });
-
-        // Hang up any duplicate ACL to this peer. The announce is the only thing
-        // that reveals identity — the address rotated out from under us — so this
-        // is the first moment the duplicate can be recognised as one.
-        let redundant = self.state.with(|state| {
-            let doomed = redundant_central_links_locked(state, claimed);
-            // Stop the address being dialled straight back. Closing the link on its
-            // own is a loop: the peer is still advertising that address, discovery
-            // reports it as a device we do not hold, and we dial it again — measured
-            // as a prune at 03:43:34 followed by a redial of the same address 8s
-            // later. The address, not the peer, is what discovery is keyed on.
-            for link in &doomed {
-                if let Some(address) = state.address_of.get(link).cloned() {
-                    state.scheduler.note_duplicate_peer(&address, now_ms);
-                }
-            }
-            doomed
-        });
-        for link in redundant {
-            tracing::info!(
-                target: "mesh::ble",
-                peer = %claimed,
-                %link,
-                "closing a duplicate link to a peer we already hold"
-            );
-            let _ = self.radio.disconnect(&link).await;
-        }
 
         self.emit_peers();
         // The two halves are reported separately on purpose. `is_new` is
@@ -269,12 +205,12 @@ impl BleRuntime {
         // authenticated for this peer right now. A session outlives its link, so
         // "we have a session with X" is not enough — a replayed announce could
         // otherwise rebind X's ID to the replayer's link and drain their mail.
-        let ingress = AnnounceIngress::new(direct.is_some(), link_authenticated);
+        let ingress = AnnounceIngress::new(direct, link_authenticated);
         if let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice()) {
             if ingress.releases_mail() {
                 self.hand_over_courier_mail(claimed, &key, now_s, ingress)
                     .await;
-            } else if direct.is_some()
+            } else if direct
                 && self.couriers.carries_for(&key, now_s)
                 && !self
                     .state
@@ -289,19 +225,20 @@ impl BleRuntime {
         }
 
         self.retry_pending_dm_handshake(claimed).await;
-        // A peer we have authenticated before (pinned) and that is directly in
-        // range, with no session: re-open one now. After either side restarts
-        // its radio, the restarted side has no session and nothing else starts
-        // one until a DM, carried mail or a tap needs it, so private channel
-        // admissions, key updates and leave notices stalled indefinitely.
-        // Strangers are left alone; Noise to them stays on demand.
-        if direct.is_some()
+        // A known peer may return on a new link, where an old session alone
+        // cannot authorize routing. Reopen Noise to restore private delivery.
+        // Strangers still open Noise on demand.
+        if direct
             && self.state.with(|state| {
                 // A handshake whose reply was lost on a link that was still
                 // coming up never completes and was never retried; restart it
                 // once it is older than the stall window.
                 let last_open = state.dm_handshake_at_ms.get(claimed).copied();
-                let attempts = state.known_peer_reopen_attempts.get(claimed).copied().unwrap_or(0);
+                let attempts = state
+                    .known_peer_reopen_attempts
+                    .get(claimed)
+                    .copied()
+                    .unwrap_or(0);
                 let jitter_ms = claimed
                     .to_routing_bytes()
                     .map(|bytes| u64::from_be_bytes(bytes) % 1_000)
@@ -309,14 +246,17 @@ impl BleRuntime {
                 let due = last_open.is_none_or(|last| {
                     now_ms.saturating_sub(last) >= known_peer_retry_delay_ms(attempts, jitter_ms)
                 });
-                state.peers.pinned(claimed).is_some()
-                    && !state.sessions.has_session(claimed)
-                    && due
+                let has_session = state.sessions.has_session(claimed);
+                let known = has_session || state.peers.pinned(claimed).is_some();
+                known && (!has_session || !state.links.presence(claimed).any()) && due
             })
-            && self.state.can_write_to(claimed)
+            && self.state.can_open_session_to(claimed)
         {
             let first_attempt = self.state.with(|state| {
-                let attempts = state.known_peer_reopen_attempts.entry(claimed.clone()).or_default();
+                let attempts = state
+                    .known_peer_reopen_attempts
+                    .entry(claimed.clone())
+                    .or_default();
                 *attempts = attempts.saturating_add(1);
                 *attempts == 1
             });
@@ -325,14 +265,19 @@ impl BleRuntime {
             }
             self.start_handshake(claimed).await;
         }
-        if is_new || newly_bound {
+        let direct_discovery = direct
+            && self
+                .state
+                .with(|state| state.links.discovery_peer_for(link) == Some(claimed));
+        if new_discovery || (is_new && (link_authenticated || direct_discovery)) {
             // Push anything retained for them, and offer them mail for others.
             let _ = self.router.send(RouterCommand::PeerAvailable {
                 peer: claimed.clone(),
             });
             // A peer we have not synced with yet gets our public history.
             if let Ok(send) = self.gossip.initial_sync_to(claimed, now_s) {
-                self.dispatch_sync(send).await;
+                let packet = self.maybe_sign(send.packet, send.sign_before_send);
+                self.transmit_on_link(&packet, claimed, link).await;
             }
             // A newly reachable verified peer can carry previously queued
             // Signal ciphertext for some other verified recipient.
@@ -350,6 +295,33 @@ impl BleRuntime {
         }
 
         true
+    }
+
+    pub(super) async fn prune_duplicate_links(&self, claimed: &PeerId, now_ms: u64) {
+        // Only confirmed link owners can trigger pruning of another link.
+        let redundant = self.state.with(|state| {
+            let doomed = redundant_central_links_locked(state, claimed);
+            // Stop the address being dialled straight back. Closing the link on its
+            // own is a loop: the peer is still advertising that address, discovery
+            // reports it as a device we do not hold, and we dial it again — measured
+            // as a prune at 03:43:34 followed by a redial of the same address 8s
+            // later. The address, not the peer, is what discovery is keyed on.
+            for link in &doomed {
+                if let Some(address) = state.address_of.get(link).cloned() {
+                    state.scheduler.note_duplicate_peer(&address, now_ms);
+                }
+            }
+            doomed
+        });
+        for link in redundant {
+            tracing::info!(
+                target: "mesh::ble",
+                peer = %claimed,
+                %link,
+                "closing a duplicate link to a peer we already hold"
+            );
+            let _ = self.radio.disconnect(&link).await;
+        }
     }
 }
 
