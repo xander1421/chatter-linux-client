@@ -307,27 +307,65 @@ impl CoreServices {
         }
     }
 
-    /// Fetch trending GIFs.
-    ///
-    /// Plain Basic-auth RPC: GifService has no anonymous-credential path on the
-    /// server, so a mailbox token here bought nothing and burned the daily
-    /// budget (OPEN-ITEMS §120).
+    pub(crate) fn uses_anonymous_gif_picker(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+    ) -> bool {
+        self.attachment_service
+            .for_conversation(conversation)
+            .uses_private_channel_route()
+    }
+
+    /// Fetch trending GIFs for the open conversation.
     pub async fn trending_gifs(
         &self,
         limit: u32,
     ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        self.trending_gifs_in(&self.chat_state.active_conversation(), limit)
+            .await
+    }
+
+    pub(crate) async fn trending_gifs_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        limit: u32,
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        if self.uses_anonymous_gif_picker(conversation) {
+            return self
+                .grpc_pool
+                .anonymous_gif_client()
+                .trending(limit as i32)
+                .await;
+        }
         match self.gif_client() {
             Some(mut client) => client.trending(limit as i32).await,
             None => Err(crate::error::NetworkError::Unavailable),
         }
     }
 
-    /// Search GIFs. Basic-auth, no mailbox token — see [`Self::trending_gifs`].
+    /// Search GIFs for the open conversation.
     pub async fn search_gifs(
         &self,
         query: &str,
         limit: u32,
     ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        self.search_gifs_in(&self.chat_state.active_conversation(), query, limit)
+            .await
+    }
+
+    pub(crate) async fn search_gifs_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        if self.uses_anonymous_gif_picker(conversation) {
+            return self
+                .grpc_pool
+                .anonymous_gif_client()
+                .search(query, limit as i32)
+                .await;
+        }
         match self.gif_client() {
             Some(mut client) => client.search(query, limit as i32).await,
             None => Err(crate::error::NetworkError::Unavailable),

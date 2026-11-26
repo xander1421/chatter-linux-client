@@ -315,15 +315,24 @@ impl ChatterClient {
         &self,
         url: &str,
     ) -> Result<Vec<u8>, crate::services::attachment::AttachmentError> {
-        if !self.gif_picker_available() {
+        self.fetch_gif_media_in(&self.active_conversation(), url)
+            .await
+    }
+
+    pub async fn fetch_gif_media_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        url: &str,
+    ) -> Result<Vec<u8>, crate::services::attachment::AttachmentError> {
+        if !self.gif_picker_available_in(conversation) {
             return Err(
                 crate::services::attachment::AttachmentError::InvalidAttachment(
-                    "GIFs are not available in a secret chat".into(),
+                    "GIFs are unavailable in this conversation".into(),
                 ),
             );
         }
         self.attachments()
-            .for_conversation(&self.chat_state().active_conversation())
+            .for_conversation(conversation)
             .fetch_gif_media(url)
             .await
     }
@@ -349,6 +358,13 @@ impl ChatterClient {
         crate::services::attachment::CdnUploadResult,
         crate::services::attachment::AttachmentError,
     > {
+        if !self.gif_picker_available_in(conversation) {
+            return Err(
+                crate::services::attachment::AttachmentError::InvalidAttachment(
+                    "GIFs are unavailable in this conversation".into(),
+                ),
+            );
+        }
         self.attachments()
             .for_conversation(conversation)
             .download_and_upload_gif(url, gif_id)

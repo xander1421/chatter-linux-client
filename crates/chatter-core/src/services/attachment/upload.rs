@@ -843,21 +843,15 @@ impl AttachmentService {
             .await
     }
 
-    /// Fetch a GifResult media URL through the server's GIF media proxy.
-    ///
-    /// The provider CDN is a public-PKI host the pinned client cannot (and must
-    /// not) reach directly; the server fetches it so the provider never sees the
-    /// client's IP. In anon mode the RPC itself already rides the onion channel.
+    /// Fetch picker or selected media on a fresh route before any channel upload.
     pub async fn fetch_gif_media(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
         let pool = self.grpc_pool()?;
-        let result = if let Some(channel) = self.private_channel {
-            pool.private_channel_gif_client(channel)
-                .private_media(url, &self.attachment_repo.attachment_tokens())
-                .await
+        let result = if self.uses_private_channel_route() {
+            pool.anonymous_gif_client().media(url).await
         } else {
             pool.gif_client().media(url).await
         };
-        result.map_err(|e| AttachmentError::NetworkError(format!("GIF media fetch failed: {}", e)))
+        result.map_err(|e| AttachmentError::NetworkError(format!("GIF media fetch failed: {e}")))
     }
 
     /// Extract media metadata from bytes (for in-memory content like downloaded GIFs).

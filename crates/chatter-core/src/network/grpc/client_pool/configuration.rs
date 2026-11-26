@@ -67,6 +67,8 @@ impl GrpcClientPool {
             active_unconsented_media: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             unidentified_channel: Arc::new(RwLock::new(None)),
             private_channels: Default::default(),
+            #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
+            loopback_shield_endpoint: Default::default(),
             #[cfg(feature = "onion")]
             unidentified_health: Arc::new(RwLock::new(None)),
             secret_channel: Arc::new(RwLock::new(None)),

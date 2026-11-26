@@ -35,11 +35,17 @@ use tonic::body::Body;
 /// Records only evidence from an actual request; construction performs no I/O.
 #[derive(Clone)]
 pub struct RecordingTransport<S, R = fn(ServerStatus)> {
-    inner: S,
+    inner: Connection<S, R>,
     record: R,
     route: Route,
     failure_scope: FailureScope,
     generation: Option<GenerationGuard>,
+}
+
+#[derive(Clone)]
+enum Connection<S, R> {
+    Fixed(S),
+    PrivateChannel(std::sync::Arc<dyn Fn() -> RecordingTransport<S, R> + Send + Sync>),
 }
 
 struct GenerationGuard {
@@ -129,11 +135,26 @@ impl GrpcTransport {
             .is_some_and(|guard| guard.token.is_cancelled())
     }
 
+    /// Resolve the channel connection per request so a retained client cannot pin
+    /// a retired route. It stays bound to the transport generation it came from.
+    pub(crate) fn private_channel(
+        select: impl Fn() -> Self + Send + Sync + 'static,
+        generation: CancellationToken,
+    ) -> Self {
+        Self {
+            inner: Connection::PrivateChannel(std::sync::Arc::new(select)),
+            record: set_server_status,
+            route: Route::H2,
+            failure_scope: FailureScope::Unrestricted,
+            generation: Some(GenerationGuard::new(generation)),
+        }
+    }
+
     /// The transport selected for this channel, not a reachability verdict.
     pub fn is_http3(&self) -> bool {
         #[cfg(feature = "quic")]
         {
-            matches!(self.inner, RawTransport::Quic(_))
+            matches!(self.inner, Connection::Fixed(RawTransport::Quic(_)))
         }
         #[cfg(not(feature = "quic"))]
         {
@@ -146,7 +167,7 @@ impl From<tonic::transport::Channel> for GrpcTransport {
     fn from(channel: tonic::transport::Channel) -> Self {
         tracing::event!(target: "network_transport::tcp_channel_created", tracing::Level::INFO, {});
         Self {
-            inner: channel.into(),
+            inner: Connection::Fixed(channel.into()),
             record: set_server_status,
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
@@ -157,7 +178,7 @@ impl From<tonic::transport::Channel> for GrpcTransport {
 
 impl<S, R> tower::Service<Request<Body>> for RecordingTransport<S, R>
 where
-    S: tower::Service<Request<Body>, Response = Response<Body>>,
+    S: tower::Service<Request<Body>, Response = Response<Body>> + Send + 'static,
     S::Error: Into<BoxError>,
     S::Future: Send + 'static,
     R: Fn(ServerStatus) + Clone + Send + Unpin + 'static,
@@ -176,7 +197,10 @@ where
             // transport or consuming a reservation on it.
             return Poll::Ready(Ok(()));
         }
-        self.inner.poll_ready(cx).map_err(|error| {
+        let Connection::Fixed(inner) = &mut self.inner else {
+            return Poll::Ready(Ok(()));
+        };
+        inner.poll_ready(cx).map_err(|error| {
             let error = error.into();
             self.failure_scope.record(&self.record);
             // Tower readiness runs before a request exists.
@@ -204,8 +228,29 @@ where
         {
             return Box::pin(async { Err(transport_changed().into()) });
         }
+        let inner = match &mut self.inner {
+            Connection::Fixed(inner) => inner,
+            Connection::PrivateChannel(select) => {
+                if !permits_private_channel_request(&request) {
+                    return Box::pin(async {
+                        Err(tonic::Status::permission_denied(
+                            "request is not anonymous channel traffic",
+                        )
+                        .into())
+                    });
+                }
+                let transport = select();
+                if generation
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled)
+                {
+                    return Box::pin(async { Err(transport_changed().into()) });
+                }
+                return Box::pin(tower::ServiceExt::oneshot(transport, request));
+            }
+        };
         let request = request.map(|body| fence_body(body, generation.clone()));
-        let future = self.inner.call(request);
+        let future = inner.call(request);
         let record = self.record.clone();
         Box::pin(async move {
             let response = if let Some(generation) = generation.as_ref() {
@@ -330,6 +375,31 @@ impl http_body::Body for GenerationBody {
 
 // Mirror ProductionPublicMethods: rejecting a public credential/proof is not
 // evidence that the current device session ended, even if Basic was attached.
+fn permits_private_channel_request(request: &Request<Body>) -> bool {
+    const IDENTIFYING_HEADERS: &[&str] = &[
+        "authorization",
+        "cookie",
+        "x-client-device-id",
+        "x-device-fingerprint",
+        "x-device-info",
+        "x-internal-api-key",
+    ];
+    matches!(
+        request.uri().path(),
+        "/chat.v1.AuthService/GetPreKeyBundle"
+            | "/chat.v1.MessageService/SendSealedMessage"
+            | "/chat.v1.MessageService/SendGroupMessage"
+            | "/chat.v1.FileService/GetPrivateAttachmentUploadUrl"
+            | "/chat.v1.FileService/GetPrivateAttachmentDownloadUrl"
+            | "/chat.v1.FileService/CreatePrivateAttachmentMultipartUpload"
+            | "/chat.v1.FileService/ConfirmAttachmentUpload"
+            | "/chat.v1.FileService/CompleteAttachmentMultipartUpload"
+            | "/chat.v1.FileService/AbortAttachmentMultipartUpload"
+    ) && !IDENTIFYING_HEADERS
+        .iter()
+        .any(|header| request.headers().contains_key(*header))
+}
+
 fn requires_device_auth(path: &str) -> bool {
     !matches!(
         path,
@@ -616,7 +686,9 @@ mod quic_enabled {
             endpoint,
         ));
         Ok(super::RecordingTransport {
-            inner: RawTransport::Quic(tonic_h3::H3Channel::new(connector, uri, None)),
+            inner: super::Connection::Fixed(RawTransport::Quic(tonic_h3::H3Channel::new(
+                connector, uri, None,
+            ))),
             record: crate::network::connection::set_server_status as fn(super::ServerStatus),
             route: super::Route::H3,
             failure_scope: super::FailureScope::Unrestricted,
@@ -642,6 +714,36 @@ mod quic_enabled {
 #[cfg(test)]
 pub(crate) mod outcome_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn private_channel_rejects_identified_requests_before_selecting_a_connection() {
+        let transport = GrpcTransport::private_channel(
+            || panic!("an identified request reached the route selector"),
+            CancellationToken::new(),
+        );
+        for (endpoint, header) in [
+            ("/chat.v1.ChannelService/GetChannelMembers", None),
+            ("/chat.v1.GifService/SearchPrivateGifs", None),
+            (
+                "/chat.v1.MessageService/SendGroupMessage",
+                Some("authorization"),
+            ),
+            (
+                "/chat.v1.FileService/GetPrivateAttachmentDownloadUrl",
+                Some("x-client-device-id"),
+            ),
+        ] {
+            let mut request = Request::builder().uri(endpoint);
+            if let Some(header) = header {
+                request = request.header(header, "fixture");
+            }
+            let result =
+                tower::ServiceExt::oneshot(transport.clone(), request.body(Body::empty()).unwrap())
+                    .await;
+            let error = result.unwrap_err().downcast::<tonic::Status>().unwrap();
+            assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        }
+    }
 
     #[tokio::test]
     async fn auditclient2_transport_generation_cancels_body_and_refuses_handle() {
@@ -755,7 +857,7 @@ pub(crate) mod outcome_tests {
         let evidence = Arc::new(Mutex::new(vec![ServerStatus::Unreachable]));
         let captured = evidence.clone();
         let transport = RecordingTransport {
-            inner: reply,
+            inner: Connection::Fixed(reply),
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
             generation: None,
@@ -796,11 +898,11 @@ pub(crate) mod outcome_tests {
                     let observed = Arc::new(Mutex::new(Vec::new()));
                     let captured = observed.clone();
                     let transport = RecordingTransport {
-                        inner: Reply {
+                        inner: Connection::Fixed(Reply {
                             code: None,
                             transport_failure,
                             body_failure: !transport_failure,
-                        },
+                        }),
                         record: move |status| captured.lock().unwrap().push(status),
                         route,
                         failure_scope: scope.clone(),
@@ -833,11 +935,11 @@ pub(crate) mod outcome_tests {
         transport_failure: bool,
     ) -> Result<(), tonic::Status> {
         let transport = RecordingTransport {
-            inner: Reply {
+            inner: Connection::Fixed(Reply {
                 code,
                 transport_failure,
                 body_failure: false,
-            },
+            }),
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
             generation: None,
@@ -931,11 +1033,11 @@ pub(crate) mod outcome_tests {
         let evidence = Arc::new(Mutex::new(Vec::new()));
         let captured = evidence.clone();
         let transport = RecordingTransport {
-            inner: Reply {
+            inner: Connection::Fixed(Reply {
                 code: None,
                 transport_failure: false,
                 body_failure: false,
-            },
+            }),
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
             generation: None,
@@ -974,7 +1076,7 @@ pub(crate) mod outcome_tests {
         let evidence = Arc::new(Mutex::new(Vec::new()));
         let captured = evidence.clone();
         let mut transport = RecordingTransport {
-            inner: NotReady,
+            inner: Connection::Fixed(NotReady),
             route: Route::H2,
             failure_scope: FailureScope::Unrestricted,
             generation: None,

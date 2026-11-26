@@ -32,8 +32,8 @@ pub fn conversation_type(kind: ConversationKind) -> ConversationType {
 }
 
 /// Set the open conversation's kind on the header, thread panel and privacy
-/// line, and whether core offers the GIF picker there (not in a secret
-/// chat, not in Shield). `private_channel` only matters for a channel (invite-only). Clears
+/// line, and whether core offers the GIF picker there. `private_channel`
+/// only matters for a channel (invite-only). Clears
 /// the privacy-line override, so a Jarvis statement never survives a switch
 /// into another conversation; the Jarvis view sets it again after this.
 pub fn set_conversation_kind(
@@ -52,7 +52,7 @@ pub fn set_conversation_kind(
     w.global::<crate::ChatPane>()
         .set_private_channel(private_channel);
     w.global::<crate::ChatPane>()
-        .set_composer_gifs_available(ui_ctx.gif_picker_available_for(ct));
+        .set_composer_gifs_available(ct.gif_picker_available() && ui_ctx.gif_picker_available());
     let actions = ui_ctx.conversation_actions(ui_ctx.active_conversation());
     w.global::<crate::ChatPane>()
         .set_header_can_call(actions.can_call);

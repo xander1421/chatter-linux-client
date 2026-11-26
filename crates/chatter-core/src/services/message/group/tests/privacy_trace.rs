@@ -142,7 +142,12 @@ impl ServerState {
             "GetPrivateAttachmentUploadUrl" => (
                 Routing::Other,
                 grpc_reply(pb::GetAttachmentUploadUrlResponse {
-                    cdn_key: "pa_abcdefghijklmnopqrstuv".into(),
+                    cdn_key: if state.phase == "selected GIF" {
+                        "pa_qrstuvwxyzabcdefghijkl"
+                    } else {
+                        "pa_abcdefghijklmnopqrstuv"
+                    }
+                    .into(),
                     upload_url: state.cdn_url.clone(),
                     expires_at: i64::MAX,
                 }),
@@ -157,6 +162,20 @@ impl ServerState {
                     download_url: state.cdn_url.clone(),
                     expires_at: i64::MAX,
                 }),
+            ),
+            "SearchPrivateGifs" => (
+                Routing::Other,
+                grpc_reply(pb::SearchGifsResponse {
+                    results: vec![pb::GifResult {
+                        preview_url: "https://media.example/fixture.gif".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            ),
+            "GetPrivateTrendingGifs" => (
+                Routing::Other,
+                grpc_reply(pb::GetTrendingGifsResponse::default()),
             ),
             "GetPrivateGifMedia" => (
                 Routing::Other,
@@ -802,8 +821,7 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                     .set_logged_in(*member, i as u32 + 1, "fixture".into());
                 prepare_author(client, *member, channel, &bundles).await;
                 if shield {
-                    ms.grpc_pool
-                        .install_loopback_shield_routes(&url, &[channel]);
+                    ms.grpc_pool.install_loopback_shield_routes(&url);
                     ms.shield_mode.store(true, Ordering::Release);
                 }
                 let _ = ms
@@ -822,15 +840,34 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                 .get_attachment_upload_url(512)
                 .await
                 .unwrap();
-            probe.lock().unwrap().phase("GIF media");
+            let attachment_tokens = sending_client
+                .attachments()
+                .attachment_repo()
+                .attachment_tokens();
+            let before_picker = attachment_tokens.available_token_count().unwrap();
+            probe.lock().unwrap().phase("GIF search");
+            let results = sending_client
+                .search_gifs_in(&conversation, "fixture", 20)
+                .await
+                .unwrap();
+            probe.lock().unwrap().phase("GIF trending");
+            sending_client
+                .trending_gifs_in(&conversation, 20)
+                .await
+                .unwrap();
+            probe.lock().unwrap().phase("GIF preview");
+            for _ in 0..2 {
+                assert_eq!(
+                    sending_client
+                        .fetch_gif_media_in(&conversation, &results[0].preview_url)
+                        .await
+                        .unwrap(),
+                    b"GIF89a",
+                );
+            }
             assert_eq!(
-                sending_client
-                    .attachments()
-                    .for_conversation(&conversation)
-                    .fetch_gif_media("https://media.example/fixture.gif")
-                    .await
-                    .unwrap(),
-                b"GIF89a",
+                attachment_tokens.available_token_count().unwrap(),
+                before_picker
             );
             let attachment_id = AttachmentId::from_cdn_key(&attachment.cdn_key);
             let pointer = chatter_proto::content_v1::AttachmentPointer {
@@ -951,13 +988,44 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                 })
                 .unwrap()
                 .connection;
+            let picker: Vec<_> = trace
+                .iter()
+                .filter(|rpc| rpc.phase.starts_with("GIF "))
+                .collect();
+            assert_eq!(
+                picker
+                    .iter()
+                    .map(|rpc| rpc.endpoint.rsplit('/').next().unwrap())
+                    .collect::<Vec<_>>(),
+                [
+                    "SearchPrivateGifs",
+                    "GetPrivateTrendingGifs",
+                    "GetPrivateGifMedia",
+                    "GetPrivateGifMedia"
+                ]
+            );
+            let account_routes: std::collections::HashSet<_> = trace
+                .iter()
+                .filter(|rpc| rpc.authorization.is_some())
+                .map(|rpc| rpc.connection)
+                .collect();
+            assert!(!account_routes.is_empty());
+            let mut picker_connections = std::collections::HashSet::new();
+            for rpc in picker {
+                assert!(rpc.authorization.is_none() && !rpc.blind_credential && !rpc.access_key);
+                assert_ne!(rpc.connection, private);
+                assert!(!account_routes.contains(&rpc.connection));
+                assert!(
+                    picker_connections.insert(rpc.connection),
+                    "picker reused a connection"
+                );
+            }
             assert!(
                 trace
                     .iter()
                     .filter(|rpc| matches!(
                         rpc.phase,
                         "upload URL"
-                            | "GIF media"
                             | "call cancel"
                             | "journal post"
                             | "attachment post"
@@ -975,7 +1043,7 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
             assert!(
                 trace
                     .iter()
-                    .filter(|rpc| matches!(rpc.phase, "upload URL" | "download URL" | "GIF media"))
+                    .filter(|rpc| matches!(rpc.phase, "upload URL" | "download URL"))
                     .all(|rpc| rpc.blind_credential && rpc.authorization.is_none()),
                 "{trace:?}"
             );
@@ -1127,26 +1195,32 @@ async fn private_attachment_credentials_and_connections_are_channel_scoped() {
         prepare_author(&fixture.alice, alice, channels[0], &bundles).await;
         let messages = fixture.alice.messages();
         if shield {
-            messages
-                .grpc_pool
-                .install_loopback_shield_routes(&url, &channels);
+            messages.grpc_pool.install_loopback_shield_routes(&url);
         }
         let token_manager =
             crate::mailbox::token_manager::TokenManager::new(messages.database.clone());
         let original_mailbox_balance = token_manager.available_token_count().unwrap();
-        for channel in [channels[0], channels[1], channels[0]] {
+        let file_client = |channel| {
             fixture
                 .alice
                 .attachments()
                 .for_conversation(&ActiveConversation::Channel(channel))
                 .file_client()
                 .unwrap()
-                .get_attachment_upload_url(512)
-                .await
-                .unwrap();
-        }
+        };
+        let mut retained = file_client(channels[0]);
+        retained.get_attachment_upload_url(512).await.unwrap();
+        file_client(channels[1])
+            .get_attachment_upload_url(512)
+            .await
+            .unwrap();
+        retained.get_attachment_upload_url(512).await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(5 * 60)).await;
+        tokio::time::resume();
+        retained.get_attachment_upload_url(512).await.unwrap();
         let calls = &probe.lock().unwrap().calls;
-        assert_eq!(calls.len(), 3);
+        assert_eq!(calls.len(), 4);
         assert!(
             calls
                 .iter()
@@ -1154,6 +1228,7 @@ async fn private_attachment_credentials_and_connections_are_channel_scoped() {
         );
         assert_ne!(calls[0].connection, calls[1].connection, "Shield={shield}");
         assert_eq!(calls[0].connection, calls[2].connection, "Shield={shield}");
+        assert_ne!(calls[0].connection, calls[3].connection, "Shield={shield}");
         assert_eq!(
             token_manager.available_token_count().unwrap(),
             original_mailbox_balance
@@ -1283,6 +1358,16 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
                 .download_to_filesystem(&ids[0])
                 .await
                 .unwrap();
+            probe.lock().unwrap().phase("selected GIF");
+            fixture
+                .alice
+                .download_and_upload_gif_to(
+                    "https://media.example/selected.gif",
+                    "selected",
+                    &conversation,
+                )
+                .await
+                .unwrap();
         })
         .await;
     https.abort();
@@ -1290,13 +1375,43 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
     let calls = calls.lock().unwrap();
     assert_eq!(
         calls.iter().map(|(method, ..)| method).collect::<Vec<_>>(),
-        [&http::Method::GET, &http::Method::PUT, &http::Method::GET]
+        [
+            &http::Method::GET,
+            &http::Method::PUT,
+            &http::Method::GET,
+            &http::Method::PUT
+        ]
     );
     assert_ne!(calls[0].1, calls[1].1);
     assert_ne!(calls[0].1, calls[2].1);
     assert!(calls[1].2 > b"private attachment".len());
     assert!(calls.iter().all(|call| !call.3));
     let trace = &probe.lock().unwrap().calls;
+    let selected: Vec<_> = trace
+        .iter()
+        .filter(|rpc| rpc.phase == "selected GIF")
+        .collect();
+    assert_eq!(
+        selected
+            .iter()
+            .map(|rpc| rpc.endpoint.rsplit('/').next().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "GetPrivateGifMedia",
+            "GetPrivateAttachmentUploadUrl",
+            "ConfirmAttachmentUpload"
+        ]
+    );
+    assert!(
+        selected
+            .iter()
+            .all(|rpc| rpc.authorization.is_none() && !rpc.access_key)
+    );
+    assert!(!selected[0].blind_credential);
+    assert!(selected[1].blind_credential);
+    assert_ne!(selected[0].connection, selected[1].connection);
+    assert_eq!(selected[1].connection, selected[2].connection);
+    assert_eq!(calls[1].1, calls[3].1);
     for name in [
         "GetPrivateAttachmentUploadUrl",
         "GetPrivateAttachmentDownloadUrl",

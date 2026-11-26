@@ -1,5 +1,7 @@
 use super::*;
 
+const PRIVATE_CHANNEL_ROUTE_LIFETIME: Duration = Duration::from_secs(5 * 60);
+
 impl GrpcClientPool {
     /// Build a fresh onion connector sharing the pool's lazily-bootstrapped
     /// Tor client, so reconnects reuse the same warm circuit.
@@ -37,6 +39,7 @@ impl GrpcClientPool {
 
     fn private_channel_route(&self, channel: crate::domain::ChannelId) -> Arc<PrivateChannelRoute> {
         let mut routes = self.private_channels.lock();
+        routes.retain(|_, route| route.created.elapsed() < PRIVATE_CHANNEL_ROUTE_LIFETIME);
         // Bound retained sockets without ever reusing one for a different channel.
         if routes.len() >= 64 && !routes.contains_key(&channel) {
             routes.clear();
@@ -44,12 +47,29 @@ impl GrpcClientPool {
         routes.entry(channel).or_default().clone()
     }
 
-    pub(super) fn private_post_channel(&self, channel: crate::domain::ChannelId) -> GrpcTransport {
+    pub(super) fn private_post_channel(
+        self: &Arc<Self>,
+        channel: crate::domain::ChannelId,
+    ) -> GrpcTransport {
+        let pool = Arc::clone(self);
+        let generation = self.transport_token.read().clone();
+        GrpcTransport::private_channel(move || pool.private_channel_connection(channel), generation)
+    }
+
+    fn private_channel_connection(&self, channel: crate::domain::ChannelId) -> GrpcTransport {
         let route = self.private_channel_route(channel);
         self.isolated_unidentified_channel(
             &route.grpc,
             #[cfg(feature = "onion")]
             &route.tor,
+        )
+    }
+
+    pub(super) fn one_shot_anonymous_channel(&self) -> GrpcTransport {
+        self.isolated_unidentified_channel(
+            &RwLock::new(None),
+            #[cfg(feature = "onion")]
+            &super::super::onion_transport::SharedTorClient::default(),
         )
     }
 
@@ -84,7 +104,6 @@ impl GrpcClientPool {
     pub(crate) fn install_loopback_shield_routes(
         &self,
         url: &str,
-        channels: &[crate::domain::ChannelId],
     ) {
         self.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         self.set_transport_mode(TransportMode::Onion).unwrap();
@@ -95,9 +114,7 @@ impl GrpcClientPool {
         };
         *self.channel.write() = Some(connect());
         *self.unidentified_channel.write() = Some(connect());
-        for &channel in channels {
-            *self.private_channel_route(channel).grpc.write() = Some(connect());
-        }
+        *self.loopback_shield_endpoint.write() = Some(endpoint);
     }
 
     fn isolated_unidentified_channel(
@@ -127,6 +144,17 @@ impl GrpcClientPool {
 
         let endpoint = self.endpoint.read().clone();
         let generation = self.transport_token.read().clone();
+        #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
+        if mode == TransportMode::Onion
+            && let Some(endpoint) = self.loopback_shield_endpoint.read().as_ref()
+        {
+            let channel =
+                GrpcTransport::from_onion(endpoint.connect_lazy(), self.transport_mode.clone())
+                    .in_generation(generation);
+            *cached = Some(channel.clone());
+            return channel;
+        }
+
         #[cfg(feature = "onion")]
         if mode == TransportMode::Onion {
             let connector = super::super::onion_transport::OnionConnector::new_isolated(

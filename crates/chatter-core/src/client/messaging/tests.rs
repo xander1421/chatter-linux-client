@@ -27,13 +27,12 @@ mod shield_mode_tests {
     }
 
     #[tokio::test]
-    async fn shield_mode_turns_the_gif_picker_off() {
+    async fn shield_mode_refuses_account_gif_requests() {
         let (_dir, client) = build_test_client();
         assert!(client.gif_picker_available_for(&ConversationType::ServerDm));
         assert!(client.gif_picker_available());
         client.anon_mode.store(true, Ordering::Release);
-        // GifService takes account auth: Shield must not reach it, from any
-        // conversation, nor search or fetch through it.
+        // Shield permits only the private channel's credential-free picker.
         assert!(!client.gif_picker_available_for(&ConversationType::ServerDm));
         assert!(!client.gif_picker_available_for(&ConversationType::Channel));
         assert!(!client.gif_picker_available());
@@ -44,6 +43,12 @@ mod shield_mode_tests {
                 .await
                 .is_err()
         );
+        client
+            .chat_state()
+            .set_active_conversation(crate::state::ActiveConversation::Channel(
+                crate::domain::ChannelId::new(),
+            ));
+        assert!(client.gif_picker_available());
     }
 
     #[tokio::test]

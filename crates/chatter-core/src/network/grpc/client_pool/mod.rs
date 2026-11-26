@@ -156,14 +156,28 @@ pub struct GrpcClientPool {
     /// circuit-group apart from both the account's and the unidentified one.
     #[cfg(feature = "onion")]
     secret_onion_tor: super::onion_transport::SharedTorClient,
+    #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
+    loopback_shield_endpoint: Arc<RwLock<Option<Endpoint>>>,
 }
 
-#[derive(Default)]
 struct PrivateChannelRoute {
+    created: tokio::time::Instant,
     grpc: RwLock<Option<GrpcTransport>>,
     cdn: std::sync::OnceLock<Result<reqwest::Client, String>>,
     #[cfg(feature = "onion")]
     tor: super::onion_transport::SharedTorClient,
+}
+
+impl Default for PrivateChannelRoute {
+    fn default() -> Self {
+        Self {
+            created: tokio::time::Instant::now(),
+            grpc: Default::default(),
+            cdn: Default::default(),
+            #[cfg(feature = "onion")]
+            tor: Default::default(),
+        }
+    }
 }
 
 mod anonymous_routes;
@@ -391,7 +405,7 @@ mod tests {
     #[cfg(feature = "onion")]
     #[tokio::test]
     async fn endpoint_swap_clears_secret_probe_health_and_retires_anonymous_channels() {
-        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        let pool = Arc::new(GrpcClientPool::new("https://localhost:50051").unwrap());
         pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         pool.set_transport_mode(TransportMode::Onion).unwrap();
         let anonymous = pool.unidentified_channel();

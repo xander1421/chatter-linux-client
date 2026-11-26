@@ -2792,6 +2792,54 @@ pub mod gif_service_client {
                 .insert(GrpcMethod::new("chat.v1.GifService", "GetGifMedia"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn search_private_gifs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SearchGifsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SearchGifsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.GifService/SearchPrivateGifs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.GifService", "SearchPrivateGifs"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_private_trending_gifs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetTrendingGifsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetTrendingGifsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.GifService/GetPrivateTrendingGifs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.GifService", "GetPrivateTrendingGifs"));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn get_private_gif_media(
             &mut self,
             request: impl tonic::IntoRequest<super::GetGifMediaRequest>,

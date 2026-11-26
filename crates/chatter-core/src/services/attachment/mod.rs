@@ -245,8 +245,8 @@ impl AttachmentService {
     }
 
     /// Get the gRPC pool, returns error if not configured.
-    pub(crate) fn grpc_pool(&self) -> Result<&GrpcClientPool, AttachmentError> {
-        self.grpc_pool.as_ref().map(|p| p.as_ref()).ok_or_else(|| {
+    pub(crate) fn grpc_pool(&self) -> Result<&Arc<GrpcClientPool>, AttachmentError> {
+        self.grpc_pool.as_ref().ok_or_else(|| {
             AttachmentError::NetworkError(
                 "gRPC pool not configured — cannot perform network operations".into(),
             )
@@ -282,6 +282,10 @@ impl AttachmentService {
             conversation if conversation.is_anon() => self.for_secret_chat(),
             _ => self.clone(),
         }
+    }
+
+    pub(crate) fn uses_private_channel_route(&self) -> bool {
+        self.private_channel.is_some()
     }
 
     /// Preserve the most private transport required by the caller or stored origin.
