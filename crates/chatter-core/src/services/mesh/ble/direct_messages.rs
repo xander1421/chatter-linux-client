@@ -151,17 +151,25 @@ impl BleRuntime {
         let due = writable
             && self.state.with(|state| {
                 (!state.sessions.has_session(peer) || !state.links.presence(peer).any())
-                && state.pending_dms.get(peer).is_some_and(|pending| !pending.is_empty())
-                && {
-                    let attempts = state.known_peer_reopen_attempts.get(peer).copied().unwrap_or(0);
-                    let delay = if state.peers.pinned(peer).is_some() && attempts > 0 {
-                        super::announces::known_peer_retry_delay_ms(attempts, 0)
-                    } else {
-                        DM_HANDSHAKE_RETRY_MS
-                    };
-                    now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0)) >= delay
-                }
-        });
+                    && state
+                        .pending_dms
+                        .get(peer)
+                        .is_some_and(|pending| !pending.is_empty())
+                    && {
+                        let attempts = state
+                            .known_peer_reopen_attempts
+                            .get(peer)
+                            .copied()
+                            .unwrap_or(0);
+                        let delay = if state.peers.pinned(peer).is_some() && attempts > 0 {
+                            super::announces::known_peer_retry_delay_ms(attempts, 0)
+                        } else {
+                            DM_HANDSHAKE_RETRY_MS
+                        };
+                        now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
+                            >= delay
+                    }
+            });
         if due {
             let first_attempt = self.state.with(|state| {
                 if state.peers.pinned(peer).is_some() {

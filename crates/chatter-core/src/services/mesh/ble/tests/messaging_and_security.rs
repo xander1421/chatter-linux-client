@@ -733,29 +733,32 @@ async fn qr_join_requires_a_live_noise_session_and_the_pinned_signing_key() {
             .unwrap();
     });
 
-    let mut channel = PrivateChannel::create("private", &runtime.identity, "creator").unwrap();
-    let qr = channel
-        .invite(
-            &runtime.identity,
-            &peer,
-            runtime.identity.static_public(),
-            now_secs(),
-        )
-        .unwrap();
-    let invite = Invite::from_text(&qr, now_secs()).unwrap();
-    runtime.private_channels.save(&channel).unwrap();
-    runtime.on_private_join_request(&peer, invite).await;
-    assert!(
-        runtime
-            .private_channels
-            .load(&channel.id)
-            .unwrap()
-            .unwrap()
-            .member_key(&peer)
-            .is_none()
-    );
-
-    assert!(runtime.pending_private_joins.contains_key(&peer));
+    let mut channel_ids = Vec::new();
+    for name in ["private", "second channel"] {
+        let mut channel = PrivateChannel::create(name, &runtime.identity, "creator").unwrap();
+        let qr = channel
+            .invite(
+                &runtime.identity,
+                &peer,
+                runtime.identity.static_public(),
+                now_secs(),
+            )
+            .unwrap();
+        let invite = Invite::from_text(&qr, now_secs()).unwrap();
+        runtime.private_channels.save(&channel).unwrap();
+        runtime.on_private_join_request(&peer, invite).await;
+        assert!(
+            runtime
+                .private_channels
+                .load(&channel.id)
+                .unwrap()
+                .unwrap()
+                .member_key(&peer)
+                .is_none()
+        );
+        channel_ids.push(channel.id);
+    }
+    assert_eq!(runtime.pending_private_joins.len(), 2);
     let transcript = remote.handshake_hash(&local).unwrap();
     let key = joiner.signing_public();
     let proof = chatter_mesh_noise::sign::sign_bytes(
@@ -782,17 +785,20 @@ async fn qr_join_requires_a_live_noise_session_and_the_pinned_signing_key() {
         .await;
     assert!(state.with(|inner| {
         inner.peers.info(&peer).is_some_and(|record| {
-            record.verified_nickname && record.signing_public_key.as_deref() == Some(key.as_slice())
+            !record.verified_nickname && record.signing_public_key.as_deref() == Some(key.as_slice())
         })
     }));
-    let roster = runtime.private_channels.load(&channel.id).unwrap().unwrap();
-    let member = roster
-        .members
-        .iter()
-        .find(|member| member.peer == peer.as_str())
-        .unwrap();
-    assert_eq!(member.signing_key, joiner.signing_public());
-    assert_ne!(member.nickname, "unproven");
+    assert!(runtime.pending_private_joins.is_empty());
+    for id in channel_ids {
+        let roster = runtime.private_channels.load(&id).unwrap().unwrap();
+        let member = roster
+            .members
+            .iter()
+            .find(|member| member.peer == peer.as_str())
+            .unwrap();
+        assert_eq!(member.signing_key, joiner.signing_public());
+        assert_ne!(member.nickname, "unproven");
+    }
 }
 
 #[tokio::test]

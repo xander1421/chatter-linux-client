@@ -223,7 +223,11 @@ fn the_owner_cap_bounds_the_bundle_store() {
         ..SyncConfig::default()
     });
     for i in 0..4u8 {
-        manager.on_verified_prekey_bundle_seen(&bundle_packet([0xD0 + i; 32], NOW_MS), [7; 32], NOW);
+        manager.on_verified_prekey_bundle_seen(
+            &bundle_packet([0xD0 + i; 32], NOW_MS),
+            [7; 32],
+            NOW,
+        );
     }
     let sends =
         manager.handle_request_sync(&them(), &empty_request(SyncTypeFlags::PREKEY_BUNDLE), NOW);
@@ -613,4 +617,38 @@ fn archive_updates_only_changed_rows_and_deletes_evicted_packets() {
         &us(), config, Some(GossipMessageArchive::new(storage)), NOW,
     );
     assert_eq!(restarted.public_message_packets(NOW), vec![second, third]);
+}
+
+#[test]
+fn a_full_candidate_set_admits_a_new_key_without_using_sender_timestamps_for_eviction() {
+    let mut manager = manager();
+    let owner_static = [0xC1; 32];
+    let owner = PeerId::from_noise_key(&owner_static);
+    let refreshed = bundle_packet(owner_static, NOW_MS + 119_000);
+    for key in 0..4 {
+        manager.on_verified_prekey_bundle_seen(&refreshed, [key; 32], NOW);
+    }
+    manager.on_verified_prekey_bundle_seen(&bundle_packet(owner_static, NOW_MS), [4; 32], NOW);
+
+    let keys: Vec<_> = manager.latest_prekey_bundle_by_owner[&owner]
+        .iter()
+        .map(|(key, _)| key[0])
+        .collect();
+    assert_eq!(keys, [1, 2, 3, 4]);
+}
+
+#[test]
+fn sync_does_not_serve_an_expired_announce_alongside_a_fresh_candidate() {
+    let mut manager = manager();
+    let old = announcement(NOW_MS);
+    let mut current = announcement(NOW_MS + 170_000);
+    let mut payload = AnnouncementPacket::decode(&current.payload).unwrap();
+    payload.signing_public_key = vec![3; 32];
+    current.payload = payload.encode().unwrap();
+    manager.on_public_packet_seen(&old, NOW);
+    manager.on_public_packet_seen(&current, NOW + 170);
+    let sends =
+        manager.handle_request_sync(&them(), &empty_request(SyncTypeFlags::ANNOUNCE), NOW + 181);
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0].packet.payload, current.payload);
 }

@@ -28,7 +28,7 @@ impl BleRuntime {
             .handle_request_sync(claimed, &request, now_secs());
         let mut public_messages = std::collections::HashMap::<_, Vec<_>>::new();
         for send in &sends {
-            if send.packet.message_type() == Some(MessageType::Message) {
+            if !authenticated && send.packet.message_type() == Some(MessageType::Message) {
                 public_messages
                     .entry(send.packet.sender_id)
                     .or_default()
@@ -38,32 +38,30 @@ impl BleRuntime {
         let requester = claimed.to_routing_bytes();
         for send in &sends {
             let kind = send.packet.message_type();
-            if kind == Some(MessageType::Announce) {
-                // Only pair history with an announce whose key actually
-                // verifies that author's messages.
-                if let Some(messages) = public_messages.get(&send.packet.sender_id) {
-                    let Ok(announce) = AnnouncementPacket::decode(&send.packet.payload) else {
-                        continue;
-                    };
-                    let Ok(key) = <[u8; 32]>::try_from(announce.signing_public_key) else {
-                        continue;
-                    };
-                    if !messages.iter().any(|packet| verify_packet(packet, &key)) {
-                        continue;
-                    }
-                }
-                if !authenticated
-                    && (requester == Some(send.packet.sender_id)
-                        || !public_messages.contains_key(&send.packet.sender_id)
-                        || !matches!(
-                            AnnouncementPacket::carries_contact_metadata(&send.packet.payload),
-                            Ok(false)
-                        ))
+            if !authenticated && kind != Some(MessageType::Message) {
+                // An unproven requester gets a contact-free author key only
+                // when it verifies some history included in this response.
+                if kind != Some(MessageType::Announce)
+                    || requester == Some(send.packet.sender_id)
+                    || !matches!(
+                        AnnouncementPacket::carries_contact_metadata(&send.packet.payload),
+                        Ok(false)
+                    )
                 {
                     continue;
                 }
-            } else if !authenticated && kind != Some(MessageType::Message) {
-                continue;
+                let Some(messages) = public_messages.get(&send.packet.sender_id) else {
+                    continue;
+                };
+                let Ok(announce) = AnnouncementPacket::decode(&send.packet.payload) else {
+                    continue;
+                };
+                let Ok(key) = <[u8; 32]>::try_from(announce.signing_public_key) else {
+                    continue;
+                };
+                if !messages.iter().any(|packet| verify_packet(packet, &key)) {
+                    continue;
+                }
             }
             if kind == Some(MessageType::GroupMessage) {
                 // The store carries opaque ciphertext from any group. Only a

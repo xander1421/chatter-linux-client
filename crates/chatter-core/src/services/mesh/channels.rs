@@ -145,9 +145,6 @@ impl MeshService {
         if self.events.peer_blocked(peer) {
             return Err(self.needs_session(peer));
         }
-        let Some(member) = self.state.pinned_member(peer, false) else {
-            return Err(self.needs_signing_binding(peer));
-        };
         let mut state = self
             .private_channels
             .load(id)?
@@ -155,6 +152,9 @@ impl MeshService {
         if state.creator != self.identity.peer_id().as_str() {
             return Err(MeshError::Binding("only the creator can invite".into()));
         }
+        let Some(member) = self.state.pinned_member(peer, false) else {
+            return Err(self.needs_signing_binding(peer));
+        };
         if let Some(existing) = state.members.iter().find(|m| m.peer == peer.as_str()) {
             if existing.fingerprint != member.fingerprint
                 || existing.signing_key != member.signing_key

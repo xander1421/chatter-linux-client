@@ -32,12 +32,17 @@ impl BleRuntime {
         let packet = self.maybe_sign(send.packet, send.sign_before_send);
         if let Some(peer) = send.to.as_ref() {
             if !self.state.can_write_to(peer) {
-                let link = self
-                    .state
-                    .with(|state| state.links.discovery_links_to(peer).next().cloned());
-                if let Some(link) = link {
-                    self.transmit_on_link(&packet, peer, &link).await;
-                    return;
+                let links = self.state.with(|state| {
+                    state
+                        .links
+                        .discovery_links_to(peer)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                });
+                for link in links {
+                    if self.transmit_on_link(&packet, peer, &link).await {
+                        return;
+                    }
                 }
             }
         }

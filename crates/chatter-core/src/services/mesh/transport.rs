@@ -360,8 +360,9 @@ impl RouterTransport for BleTransport {
 
     /// An **established Noise session**, not a live link.
     ///
-    /// The router skips retention only when the peer has a session and a
-    /// confirmed writable route. A discovery hint can only start a handshake.
+    /// The router skips courier deposits for peers with a session and a
+    /// confirmed writable route. Announce TTL is unsigned, so a discovery
+    /// hint can only start a handshake.
     fn can_deliver_securely(&self, peer: &PeerId) -> bool {
         self.state.has_session(peer) && self.state.can_write_to(peer)
     }
@@ -371,10 +372,8 @@ impl RouterTransport for BleTransport {
     }
 
     fn send_private(&self, content: &str, to: &PeerId, message_id: &str) -> bool {
-        // Acceptance is not delivery. What is being claimed here is only that
-        // something can carry it: a writable link, or a session whose link is
-        // momentarily busy. With neither, the router must fall through to the
-        // courier branch rather than believe this was sent.
+        // Queue the send if a confirmed route or a discovery link can open
+        // Noise, or if a session exists while its link is momentarily busy.
         if !self.state.can_open_session_to(to) && !self.state.has_session(to) {
             return false;
         }

@@ -1,12 +1,9 @@
 //! Which physical connection belongs to which peer identity.
 //!
 //! Ported from `BLELinkStateStore.swift`, `BLEPeerRegistry.swift` and
-//! `BLEIngressLinkRegistry.swift`, together with the rebind guards that live in
-//! `BLEService.rebindLinkAfterVerifiedDirectAnnounce`. Three types, one concern
-//! each:
+//! `BLEIngressLinkRegistry.swift`:
 //!
-//! - [`LinkStateStore`] — link↔peer bindings, both directions, plus the guarded
-//!   rebind path.
+//! - [`LinkStateStore`] — discovery hints and Noise-confirmed link↔peer bindings.
 //! - [`PeerRegistry`] — per-peer records, last-seen, staleness eviction.
 //! - [`IngressRegistry`] — which link a packet arrived on, for split-horizon.
 //!
@@ -31,22 +28,20 @@
 //!
 //! No clocks and no async. Every time-dependent entry point takes
 //! `now_unix_millis`. Elapsed times are computed with `saturating_sub`, so a
-//! caller whose clock steps backwards sees "zero elapsed" — which refuses a
-//! rebind and keeps a peer reachable, the conservative direction in both cases.
+//! caller whose clock steps backwards sees "zero elapsed" and keeps a peer
+//! reachable.
 
 mod ingress;
 mod link_state;
 mod peer;
 
-pub use ingress::{IngressRecord, IngressRegistry, INGRESS_RECORD_LIFETIME_MS};
-pub use link_state::{
-    is_direct_announce, BindOutcome, LinkPresence, LinkState, LinkStateStore, Rebind,
-    RebindOutcome, RebindRefusal, VerifiedDirectAnnounce, LINK_REBIND_COOLDOWN_MS,
-};
+pub use ingress::{INGRESS_RECORD_LIFETIME_MS, IngressRecord, IngressRegistry};
+pub use link_state::{BindOutcome, LinkPresence, LinkState, LinkStateStore};
 pub use peer::{
-    reachability_retention_ms, AnnounceUpdate, ConnectivityChanges, MalformedPins, PeerRecord,
-    PeerRegistry, PinnedIdentity, RemovedPeer, MAX_PINNED_IDENTITIES, PEER_INACTIVITY_TIMEOUT_MS,
-    REACHABILITY_RETENTION_UNVERIFIED_MS, REACHABILITY_RETENTION_VERIFIED_MS,
+    AnnounceUpdate, ConnectivityChanges, MAX_PINNED_IDENTITIES, MalformedPins,
+    PEER_INACTIVITY_TIMEOUT_MS, PeerRecord, PeerRegistry, PinnedIdentity,
+    REACHABILITY_RETENTION_UNVERIFIED_MS, REACHABILITY_RETENTION_VERIFIED_MS, RemovedPeer,
+    reachability_retention_ms,
 };
 
 #[cfg(test)]

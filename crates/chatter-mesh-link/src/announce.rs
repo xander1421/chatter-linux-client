@@ -228,8 +228,7 @@ pub struct AnnounceLinkContext<'a> {
     ///
     /// Suppresses the "direct means connected" shortcut. Directness rides on the
     /// unsigned TTL, so a replayed announce can look direct on the replayer's link;
-    /// letting that shortcut mark an absent peer connected would forge presence for
-    /// free. Only a containment-checked rebind may promote such a link.
+    /// an announcement from another peer still needs its own confirmed link.
     pub link_bound_to_other_peer: bool,
     /// The Noise key already recorded for this peer ID, if any.
     pub existing_noise_public_key: Option<&'a [u8]>,
@@ -333,19 +332,6 @@ impl AcceptedAnnounce {
     /// than a transient forgery.
     pub fn should_persist_identity(&self) -> bool {
         self.is_verified()
-    }
-
-    /// Whether this announce may rebind the link it arrived on to its sender.
-    ///
-    /// Both conditions are load-bearing and neither is sufficient. Verified proves
-    /// the sender owns the identity; direct is the (forgeable) claim that they own
-    /// the link. bitchat is explicit that this residue cannot be closed here: a
-    /// replay that wins the containment-checked rebind still forges *presence*.
-    /// What it cannot forge is delivery — private messages stay gated on an
-    /// established Noise session, so a forged presence yields a courier-parked
-    /// message, not a readable one.
-    pub fn may_rebind_link(&self) -> bool {
-        self.is_verified() && self.direct_hint
     }
 }
 
@@ -678,7 +664,6 @@ mod tests {
         assert!(!accepted.should_update_topology());
         assert_eq!(accepted.topology_neighbors(), None);
         assert!(!accepted.should_persist_identity());
-        assert!(!accepted.may_rebind_link());
         // The direct hint is still reported — it is just worthless on its own.
         assert!(accepted.direct_hint);
     }
@@ -745,12 +730,11 @@ mod tests {
         assert!(accepted.should_update_topology());
         assert_eq!(accepted.topology_neighbors(), Some(neighbors.as_slice()));
         assert!(accepted.should_persist_identity());
-        assert!(accepted.may_rebind_link());
         assert_eq!(accepted.peer_id, sender_peer());
     }
 
     #[test]
-    fn a_verified_relayed_announce_may_not_rebind_a_link() {
+    fn a_verified_relayed_announce_does_not_imply_link_presence() {
         // Verified proves identity; it says nothing about which link the peer is on.
         let packet = announce_packet(1_000_000, MESSAGE_TTL_DEFAULT - 1, true);
         let accepted = evaluate_announce(
@@ -766,7 +750,6 @@ mod tests {
 
         assert!(accepted.is_verified());
         assert!(!accepted.direct_hint);
-        assert!(!accepted.may_rebind_link());
         // Nor does a relayed announce alone imply presence.
         assert_eq!(accepted.connected_flag(), Some(false));
     }
@@ -790,8 +773,7 @@ mod tests {
         )
         .expect("a verified announce");
 
-        // Direct is forgeable, so on a link that already belongs to someone else it
-        // buys nothing: only a containment-checked rebind may promote this.
+        // A direct TTL does not override the existing link owner.
         assert!(accepted.direct_hint);
         assert_eq!(accepted.connected_flag(), Some(false));
 

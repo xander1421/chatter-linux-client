@@ -294,9 +294,9 @@ impl MeshState {
                         announced.or_else(|| state.sessions.remote_static(&record.peer));
                     PeerSnapshot {
                         is_connected: !state.links.links_to(&record.peer).is_empty(),
+                        is_verified: state.peers.pinned(&record.peer).is_some(),
                         peer: record.peer,
                         noise_public_key,
-                        is_verified: record.verified_nickname,
                     }
                 })
                 .collect()
@@ -312,22 +312,26 @@ impl MeshState {
             let mut peers: Vec<MeshPeer> = records
                 .into_iter()
                 .map(|record| {
-                    let discovered = state.links.discovery_links_to(&record.peer).next().is_some();
+                    let discovered = state
+                        .links
+                        .discovery_links_to(&record.peer)
+                        .next()
+                        .is_some();
                     MeshPeer {
-                    chatter_capable: state.chatter_hello.get(&record.peer).is_some(),
-                    connected: discovered || !state.links.links_to(&record.peer).is_empty(),
-                    reachable: discovered || state.peers.is_reachable(&record.peer, now),
-                    verified: record.verified_nickname,
-                    account_verified: false,
-                    has_session: state.sessions.has_session(&record.peer),
-                    fingerprint: record
-                        .noise_public_key
-                        .as_deref()
-                        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-                        .map(|key| chatter_mesh_noise::fingerprint_of(&key))
-                        .or_else(|| state.sessions.fingerprint(&record.peer)),
-                    peer: record.peer,
-                    nickname: record.nickname,
+                        chatter_capable: state.chatter_hello.get(&record.peer).is_some(),
+                        connected: state.links.presence(&record.peer).any(),
+                        reachable: discovered || state.peers.is_reachable(&record.peer, now),
+                        verified: record.verified_nickname,
+                        account_verified: false,
+                        has_session: state.sessions.has_session(&record.peer),
+                        fingerprint: record
+                            .noise_public_key
+                            .as_deref()
+                            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                            .map(|key| chatter_mesh_noise::fingerprint_of(&key))
+                            .or_else(|| state.sessions.fingerprint(&record.peer)),
+                        peer: record.peer,
+                        nickname: record.nickname,
                     }
                 })
                 .collect();
@@ -356,7 +360,11 @@ impl MeshState {
                 radio_running: state.radio_running && state.adapter_powered,
                 adapter_powered: state.adapter_powered,
                 connected_links,
-                connected_peers: state.peers.connected_count(),
+                connected_peers: state
+                    .peers
+                    .records()
+                    .filter(|record| state.links.presence(&record.peer).any())
+                    .count(),
                 connected_relays,
             }
         })

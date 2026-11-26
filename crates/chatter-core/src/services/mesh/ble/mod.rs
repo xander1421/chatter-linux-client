@@ -200,7 +200,7 @@ pub struct BleRuntime {
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     prekey_ingress: std::collections::HashMap<LinkId, (u64, u32)>,
-    pending_private_joins: std::collections::HashMap<PeerId, Invite>,
+    pending_private_joins: std::collections::HashMap<(PeerId, String), Invite>,
     last_channel_presence_ms: u64,
     last_private_rekey_ms: u64,
     /// Connect attempts run off the loop and report back here. Awaiting one
@@ -451,7 +451,9 @@ impl BleRuntime {
             if let Some(pin) = state.peers.pinned(peer) {
                 return (pin.signing_public_key.as_slice().try_into().ok(), None);
             }
-            let announced = state.peers.info(peer)
+            let announced = state
+                .peers
+                .info(peer)
                 .and_then(|info| info.signing_public_key.as_deref())
                 .and_then(|key| key.try_into().ok());
             (None, announced)

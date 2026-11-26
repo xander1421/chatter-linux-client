@@ -42,8 +42,7 @@ pub struct PeerRecord {
     pub connected: bool,
     pub noise_public_key: Option<Vec<u8>>,
     pub signing_public_key: Option<Vec<u8>>,
-    /// The nickname arrived inside an announce whose signature we checked.
-    /// Buys the longer reachability retention, and nothing else.
+    /// The nickname was announced under the peer's Noise-bound signing key.
     pub verified_nickname: bool,
     pub last_seen_ms: u64,
     pub capabilities: PeerCapabilities,
@@ -198,7 +197,9 @@ impl PeerRegistry {
             return false;
         }
         let age = now_unix_millis.saturating_sub(record.last_seen_ms);
-        age <= reachability_retention_ms(record.verified_nickname)
+        age <= reachability_retention_ms(
+            record.verified_nickname || self.pins.contains_key(&record.peer),
+        )
     }
 
     pub fn nickname(&self, peer: &PeerId, connected_only: bool) -> Option<&str> {
@@ -330,8 +331,11 @@ impl PeerRegistry {
         if PeerId::from_noise_key(noise) != *peer {
             return false;
         }
-        if let Some(pin) = self.pins.get(peer) {
-            if pin.noise_public_key.as_slice() != noise || pin.signing_public_key.as_slice() != signing {
+        let existing_pin = self.pins.get(peer);
+        if let Some(pin) = existing_pin {
+            if pin.noise_public_key.as_slice() != noise
+                || pin.signing_public_key.as_slice() != signing
+            {
                 return false;
             }
         } else if !self.can_pin(peer) {
@@ -346,7 +350,10 @@ impl PeerRegistry {
             if record.noise_public_key.as_deref() == Some(noise.as_slice())
                 && record.signing_public_key.as_deref() == Some(signing.as_slice())
             {
-                nickname = record.nickname.clone();
+                if existing_pin.is_none() {
+                    nickname = record.nickname.clone();
+                    record.verified_nickname = true;
+                }
             } else {
                 // Only the keys were proven. Drop the displaced candidate's metadata.
                 record.nickname = nickname.clone();
@@ -354,17 +361,17 @@ impl PeerRegistry {
                 record.bridge_geohash = None;
                 record.noise_public_key = Some(noise.to_vec());
                 record.signing_public_key = Some(signing.to_vec());
+                record.verified_nickname = false;
             }
-            record.verified_nickname = true;
         }
-        self.pins.entry(peer.clone()).or_insert_with(|| {
-            PinnedIdentity {
+        self.pins
+            .entry(peer.clone())
+            .or_insert_with(|| PinnedIdentity {
                 noise_public_key: noise.to_vec(),
                 signing_public_key: signing.to_vec(),
                 nickname,
                 pinned_at_ms: now_ms,
-            }
-        });
+            });
         true
     }
 
@@ -479,13 +486,14 @@ impl PeerRegistry {
             .peers
             .values()
             .map(|p| {
+                let verified = p.verified_nickname || self.pins.contains_key(&p.peer);
                 (
                     p.peer.clone(),
                     p.connected,
-                    p.verified_nickname,
+                    verified,
                     p.last_seen_ms,
                     p.nickname.clone(),
-                    !p.verified_nickname && p.noise_public_key.is_some(),
+                    !verified && p.noise_public_key.is_some(),
                 )
             })
             .collect();

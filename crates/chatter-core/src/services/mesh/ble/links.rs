@@ -714,7 +714,8 @@ impl BleRuntime {
             Some(MessageType::FileChunkRequest) => self.on_file_chunk_request(packet, claimed),
             Some(MessageType::PrekeyBundle) => {
                 let now = now_millis();
-                self.prekey_ingress.retain(|_, (start, _)| now.saturating_sub(*start) < 60_000);
+                self.prekey_ingress
+                    .retain(|_, (start, _)| now.saturating_sub(*start) < 60_000);
                 if self.prekey_ingress.len() >= 128 && !self.prekey_ingress.contains_key(link) {
                     return false;
                 }

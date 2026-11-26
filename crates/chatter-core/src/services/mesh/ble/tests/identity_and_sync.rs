@@ -473,6 +473,18 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
     let replies = radio.writes();
     assert_eq!(replies.len(), before + 1);
     assert_eq!(codec::decode(&replies[before].1).unwrap().message_type(), Some(MessageType::Message));
+
+    assert!(state.with(|inner| inner.links.mark_noise_authenticated(&link, &subject_peer)));
+    let before = radio.write_count();
+    runtime.on_request_sync(&link, &packet, &subject_peer).await;
+    runtime.drain_writes().await;
+    assert!(radio.writes()[before..].iter().any(|(_, bytes)| {
+        let reply = codec::decode(bytes).unwrap();
+        AnnouncementPacket::decode(&reply.payload).is_ok_and(|value| {
+            reply.message_type() == Some(MessageType::Announce)
+                && value.signing_public_key == competing.signing_public()
+        })
+    }));
 }
 
 #[tokio::test]
@@ -1133,4 +1145,81 @@ async fn an_announce_is_signed_and_carries_both_public_keys() {
         packet.recipient_id.is_none(),
         "an announce is addressed to everyone by omitting the recipient"
     );
+}
+
+#[tokio::test]
+async fn public_broadcast_from_a_blocked_peer_is_archived_without_display() {
+    let (mut runtime, _radio, state) = runtime();
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let peer = register_verified_peer(&state, &identity, "author");
+    let link = writable_link(&state, "/mock/blocked-author", 512);
+    runtime.events.set_peer_blocked(&peer, true);
+    let mut events = runtime.events.subscribe();
+    let message = signed(
+        &peer,
+        &identity,
+        MessageType::Message,
+        b"public".to_vec(),
+        true,
+    );
+    runtime.on_packet(&link, message.clone()).await;
+    assert!(runtime.gossip.holds(&message));
+    assert_eq!(messages_shown(&mut events), 0);
+}
+
+#[tokio::test]
+async fn sync_tries_the_next_discovery_link_when_the_first_cannot_take_a_write() {
+    let (mut runtime, radio, state) = runtime();
+    let peer = MeshIdentity::generate(&mut os_rng()).peer_id();
+    let unavailable = writable_link(&state, "/mock/a", 512);
+    let available = writable_link_on(&state, &radio, "/mock/b", 512);
+    state.with(|inner| {
+        inner.links.note_discovery_peer(&unavailable, &peer);
+        inner.links.note_discovery_peer(&available, &peer);
+        inner.max_write.remove(&unavailable);
+    });
+
+    let send = runtime.gossip.initial_sync_to(&peer, now_secs()).unwrap();
+    runtime.dispatch_sync(send).await;
+    runtime.drain_writes().await;
+    assert_eq!(radio.writes().len(), 1);
+    assert_eq!(radio.writes()[0].0, available);
+}
+
+#[tokio::test]
+async fn a_renewed_discovery_hint_syncs_after_peer_demotion_without_counting_as_connected() {
+    let (mut runtime, radio, state) = runtime();
+    let link = writable_link_on(&state, &radio, "/mock/discovery", 512);
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let peer = identity.peer_id();
+    let payload = AnnouncementPacket::new(
+        "nearby".into(),
+        identity.static_public().to_vec(),
+        identity.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    )
+    .encode()
+    .unwrap();
+
+    let announce = signed(&peer, &identity, MessageType::Announce, payload, true);
+    assert!(runtime.on_announce(&link, &announce, &peer).await);
+    runtime.drain_writes().await;
+    assert!(!state.peers()[0].connected);
+    assert!(state.peers()[0].reachable);
+    assert_eq!(state.status(0).connected_peers, 0);
+
+    state.with(|inner| inner.peers.update_last_seen(&peer, now_millis() - 9_000));
+    runtime.reconcile_peers();
+    let before = radio.write_count();
+    assert!(runtime.on_announce(&link, &announce, &peer).await);
+    runtime.drain_writes().await;
+    assert!(radio.writes()[before..].iter().any(|(_, bytes)| {
+        codec::decode(bytes).unwrap().message_type() == Some(MessageType::RequestSync)
+    }));
+
+    assert!(state.with(|inner| inner.links.mark_noise_authenticated(&link, &peer)));
+    assert!(state.peers()[0].connected);
+    assert_eq!(state.status(0).connected_peers, 1);
 }

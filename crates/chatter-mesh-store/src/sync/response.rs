@@ -54,8 +54,12 @@ impl GossipSyncManager {
         // Announces are exempt from the since-cursor: they carry the signing keys
         // needed to verify everything else. Each sender has a bounded key set.
         if requested.contains(MessageType::Announce) {
-            for packet in self.latest_announce_by_peer.values().flat_map(BTreeMap::values) {
-                if fresh(packet) && !might_contain(packet) {
+            for packet in self
+                .latest_announce_by_peer
+                .values()
+                .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
+            {
+                if announcement_is_fresh(config, packet, now_unix_secs) && !might_contain(packet) {
                     sends.push(SyncSend::response(from, packet));
                 }
             }
@@ -109,7 +113,11 @@ impl GossipSyncManager {
         // most one per owner and signing key. A joining peer must be able
         // to learn bundles generated long before it arrived.
         if requested.contains(MessageType::PrekeyBundle) {
-            for packet in self.latest_prekey_bundle_by_owner.values().flat_map(BTreeMap::values) {
+            for packet in self
+                .latest_prekey_bundle_by_owner
+                .values()
+                .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
+            {
                 if fresh(packet) && !might_contain(packet) {
                     sends.push(SyncSend::response(from, packet));
                 }

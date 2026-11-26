@@ -15,9 +15,10 @@ impl BleRuntime {
             return;
         };
         let key = self.identity.signing_public();
-        let proof = sign_bytes(&self.identity, &signing_binding_bytes(
-            &self.identity.static_public(), &transcript, &key,
-        ));
+        let proof = sign_bytes(
+            &self.identity,
+            &signing_binding_bytes(&self.identity.static_public(), &transcript, &key),
+        );
         let frame = [SIGNING_BINDING_MAGIC.as_slice(), &key, &proof].concat();
         self.send_private_control(peer, &frame).await;
     }
@@ -85,7 +86,10 @@ impl BleRuntime {
             // The handshake authenticated `claimed`'s static key (the session
             // manager refuses one that does not derive the ID), and it finished
             // on this link: that is the per-link proof courier handover needs.
-            if self.state.with(|state| state.links.mark_noise_authenticated(link, claimed)) {
+            if self
+                .state
+                .with(|state| state.links.mark_noise_authenticated(link, claimed))
+            {
                 self.prune_duplicate_links(claimed, now_millis()).await;
             }
             // The mesh runtime exists only after the user enabled discovery.
@@ -229,6 +233,13 @@ impl BleRuntime {
             tracing::info!(target: "mesh::ble", peer = %claimed, signal_capable, "Chatter Hello accepted");
             if can_bind {
                 self.send_mesh_signing_binding(claimed).await;
+                if self
+                    .signing_pin_intent
+                    .get(claimed)
+                    .is_some_and(|(at, _)| now_millis().saturating_sub(*at) < SIGNING_PIN_INTENT_MS)
+                {
+                    self.request_signing_pin(claimed).await;
+                }
             }
             if signal_capable {
                 if let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device() {
@@ -280,22 +291,31 @@ impl BleRuntime {
             return;
         }
         if let Some(binding) = plaintext.strip_prefix(SIGNING_BINDING_MAGIC) {
-            let Ok(binding) = <&[u8; 96]>::try_from(binding) else { return };
+            let Ok(binding) = <&[u8; 96]>::try_from(binding) else {
+                return;
+            };
             let (key, proof) = binding.split_at(32);
-            let (Ok(key), Ok(proof)) = (<&[u8; 32]>::try_from(key), <&[u8; 64]>::try_from(proof)) else {
+            let (Ok(key), Ok(proof)) = (<&[u8; 32]>::try_from(key), <&[u8; 64]>::try_from(proof))
+            else {
                 return;
             };
             let now = now_millis();
             // An unsolicited handshake proves possession but does not give
             // a radio stranger a slot in the durable contact table.
-            if !self.signing_pin_intent.get(claimed)
+            if !self
+                .signing_pin_intent
+                .get(claimed)
                 .is_some_and(|(at, _)| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS)
             {
                 return;
             }
             let saved = self.state.with(|state| {
-                let Some(noise) = state.sessions.remote_static(claimed) else { return false };
-                let Some(transcript) = state.sessions.handshake_hash(claimed) else { return false };
+                let Some(noise) = state.sessions.remote_static(claimed) else {
+                    return false;
+                };
+                let Some(transcript) = state.sessions.handshake_hash(claimed) else {
+                    return false;
+                };
                 if !verify_bytes(proof, &signing_binding_bytes(&noise, &transcript, key), key) {
                     return false;
                 }
@@ -304,7 +324,9 @@ impl BleRuntime {
                     return false;
                 }
                 if state.peers.pinned(claimed).is_none() {
-                    let Ok(sealed) = self.sealer.seal(&candidate.pins_to_bytes()) else { return false };
+                    let Ok(sealed) = self.sealer.seal(&candidate.pins_to_bytes()) else {
+                        return false;
+                    };
                     if self.storage.save(StorageKey::PeerPins, &sealed).is_err() {
                         return false;
                     }
@@ -316,8 +338,16 @@ impl BleRuntime {
                 self.gossip.retain_signing_key(claimed, key);
                 self.signing_pin_intent.remove(claimed);
                 self.emit_peers();
-                if let Some(invite) = self.pending_private_joins.remove(claimed) {
-                    self.on_private_join_request(claimed, invite).await;
+                let pending: Vec<_> = self
+                    .pending_private_joins
+                    .keys()
+                    .filter(|(peer, _)| peer == claimed)
+                    .cloned()
+                    .collect();
+                for key in pending {
+                    if let Some(invite) = self.pending_private_joins.remove(&key) {
+                        self.on_private_join_request(claimed, invite).await;
+                    }
                 }
             }
             return;
@@ -794,29 +824,22 @@ impl BleRuntime {
             return;
         }
 
-        // Not ours: carry it, if the depositor is signature-verified.
-        let snapshot = self.state.with(|state| {
+        // Carry deposits only from a Noise-bound identity.
+        let depositor_key = self.state.with(|state| {
+            state.peers.info(claimed)?;
             state
                 .peers
-                .info(claimed)
-                .map(|record| (record.noise_public_key.clone(), record.verified_nickname))
+                .pinned(claimed)
+                .map(|pin| pin.noise_public_key.clone())
         });
-        let Some((Some(depositor_key), verified)) = snapshot else {
-            return;
-        };
-        if !verified {
-            // An unverified peer may not deposit mail: without a checked
-            // signature the pool is a free amplifier. Said at debug rather than
-            // warn only because an attacker controls how often it happens — but
-            // said, because a silent return here is indistinguishable from mail
-            // that was never sent.
+        let Some(depositor_key) = depositor_key else {
             tracing::debug!(
                 target: "mesh::ble",
                 peer = %claimed,
                 "courier deposit from an unverified peer refused"
             );
             return;
-        }
+        };
         if let Err(error) = self.couriers.deposit(&envelope, &depositor_key, now_secs()) {
             // Warn: the depositor believes we are carrying this for them, and we
             // are not. Nothing tells them otherwise.

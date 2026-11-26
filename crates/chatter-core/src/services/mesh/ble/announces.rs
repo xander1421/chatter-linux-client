@@ -101,7 +101,8 @@ impl BleRuntime {
         let renewal = pin.is_some()
             || self.state.with(|state| {
                 state.peers.info(claimed).is_some_and(|record| {
-                    record.noise_public_key.as_deref() == Some(announcement.noise_public_key.as_slice())
+                    record.noise_public_key.as_deref()
+                        == Some(announcement.noise_public_key.as_slice())
                         && record.signing_public_key.as_deref()
                             == Some(announcement.signing_public_key.as_slice())
                 })
@@ -163,8 +164,7 @@ impl BleRuntime {
                 // The TTL is unsigned. A direct announce can supply an
                 // address for discovery traffic; only Noise promotes it to a
                 // binding used for routing and registry eviction protection.
-                let new_discovery = direct
-                    && state.links.note_discovery_peer(link, claimed);
+                let new_discovery = direct && state.links.note_discovery_peer(link, claimed);
                 // Per-link proof only: a Noise handshake completed, or traffic
                 // decrypted, on *this* link from this peer. A peer-level session is
                 // not enough — it outlives its link, and another link can
@@ -265,7 +265,11 @@ impl BleRuntime {
             }
             self.start_handshake(claimed).await;
         }
-        if new_discovery || (is_new && link_authenticated) {
+        let direct_discovery = direct
+            && self
+                .state
+                .with(|state| state.links.discovery_peer_for(link) == Some(claimed));
+        if new_discovery || (is_new && (link_authenticated || direct_discovery)) {
             // Push anything retained for them, and offer them mail for others.
             let _ = self.router.send(RouterCommand::PeerAvailable {
                 peer: claimed.clone(),

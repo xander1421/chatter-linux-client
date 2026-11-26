@@ -229,248 +229,6 @@ fn role_counts_and_clear() {
     assert_eq!(store.preferred_links().get(&peer(0xAA)), None);
 }
 
-// -- LinkStateStore: the rebind guards --------------------------------
-
-#[test]
-fn an_unverified_announce_yields_no_rebind_witness_at_all() {
-    // There is no way to call the rebind path without one: the guard is
-    // structural, not a bool a caller can pass wrong.
-    assert!(VerifiedDirectAnnounce::new(peer(0xBB), false, true).is_none());
-    assert!(VerifiedDirectAnnounce::new(peer(0xBB), true, false).is_none());
-    assert!(VerifiedDirectAnnounce::new(peer(0xBB), false, false).is_none());
-    assert!(VerifiedDirectAnnounce::new(peer(0xBB), true, true).is_some());
-}
-
-#[test]
-fn witness_from_packet_requires_the_origination_ttl() {
-    let direct = announce_packet(0xBB);
-    let mut relayed = announce_packet(0xBB);
-    relayed.ttl = DIRECT_TTL - 1;
-    let not_announce = packet(MessageType::Message, 0xBB, DIRECT_TTL, b"hi");
-
-    assert!(VerifiedDirectAnnounce::from_packet(peer(0xBB), &direct, true, DIRECT_TTL).is_some());
-    assert!(VerifiedDirectAnnounce::from_packet(peer(0xBB), &relayed, true, DIRECT_TTL).is_none());
-    assert!(
-        VerifiedDirectAnnounce::from_packet(peer(0xBB), &not_announce, true, DIRECT_TTL).is_none()
-    );
-    assert!(VerifiedDirectAnnounce::from_packet(peer(0xBB), &direct, false, DIRECT_TTL).is_none());
-}
-
-#[test]
-fn a_verified_direct_announce_rebinds_a_rotated_peer_id() {
-    // The legitimate case: the peer relaunched, rotated its ID, and the open
-    // connection still points at the retired one.
-    let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
-    let witness = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-
-    let outcome = store.rebind_after_verified_direct(&link("l1"), &witness, 1_000);
-    let rebind = outcome.rebound().expect("rebind allowed");
-    assert_eq!(rebind.previous_peer, peer(0xAA));
-    assert_eq!(rebind.new_peer, peer(0xBB));
-    assert!(rebind.retired_links.is_empty());
-    assert!(rebind.retire_previous_peer);
-
-    assert_eq!(store.peer_for(&link("l1")), Some(&peer(0xBB)));
-    assert!(store.links_to(&peer(0xAA)).is_empty());
-    assert_eq!(store.preferred_links().get(&peer(0xBB)), Some(&link("l1")));
-    assert_eq!(store.preferred_links().get(&peer(0xAA)), None);
-}
-
-#[test]
-fn rebind_is_refused_when_the_identity_already_owns_a_live_link() {
-    // The containment that matters most: a replayed announce cannot displace
-    // an identity that is genuinely connected elsewhere.
-    let mut store = store_with_bound_link("victim", LinkRole::Central, &peer(0xBB));
-    store.link_up(link("attacker"), LinkRole::Peripheral);
-    store.bind_if_unbound(&link("attacker"), &peer(0xAA));
-
-    let witness = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    let outcome = store.rebind_after_verified_direct(&link("attacker"), &witness, 1_000);
-    assert_eq!(
-        outcome.refusal(),
-        Some(&RebindRefusal::IdentityOwnsAnotherLink)
-    );
-
-    // Nothing moved, and no cooldown was spent on the refusal.
-    assert_eq!(store.peer_for(&link("attacker")), Some(&peer(0xAA)));
-    assert_eq!(store.peer_for(&link("victim")), Some(&peer(0xBB)));
-    assert_eq!(
-        store.links_to(&peer(0xBB)),
-        BTreeSet::from([link("victim")])
-    );
-}
-
-#[test]
-fn rebind_is_refused_inside_the_cooldown_and_allowed_after_it() {
-    let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
-
-    let first = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    assert!(store
-        .rebind_after_verified_direct(&link("l1"), &first, 1_000)
-        .rebound()
-        .is_some());
-
-    // A third identity replays immediately: refused, with the remaining
-    // window reported.
-    let second = VerifiedDirectAnnounce::new(peer(0xCC), true, true).unwrap();
-    assert_eq!(
-        store.rebind_after_verified_direct(&link("l1"), &second, 1_500),
-        RebindOutcome::Refused(RebindRefusal::CooldownActive {
-            remaining_ms: LINK_REBIND_COOLDOWN_MS - 500
-        })
-    );
-    assert_eq!(store.peer_for(&link("l1")), Some(&peer(0xBB)));
-
-    // One millisecond before the window closes: still refused.
-    assert_eq!(
-        store.rebind_after_verified_direct(
-            &link("l1"),
-            &second,
-            1_000 + LINK_REBIND_COOLDOWN_MS - 1
-        ),
-        RebindOutcome::Refused(RebindRefusal::CooldownActive { remaining_ms: 1 })
-    );
-
-    // Exactly at the window: the entry is forgotten, so the rebind is allowed.
-    // (bitchat keeps entries with age strictly < the window.)
-    let outcome =
-        store.rebind_after_verified_direct(&link("l1"), &second, 1_000 + LINK_REBIND_COOLDOWN_MS);
-    assert!(outcome.rebound().is_some());
-    assert_eq!(store.peer_for(&link("l1")), Some(&peer(0xCC)));
-}
-
-#[test]
-fn the_cooldown_is_per_link_not_global() {
-    let mut store = LinkStateStore::new();
-    for id in ["l1", "l2"] {
-        store.link_up(link(id), LinkRole::Central);
-    }
-    store.bind_if_unbound(&link("l1"), &peer(0xAA));
-    store.bind_if_unbound(&link("l2"), &peer(0xBB));
-
-    let to_cc = VerifiedDirectAnnounce::new(peer(0xCC), true, true).unwrap();
-    assert!(store
-        .rebind_after_verified_direct(&link("l1"), &to_cc, 1_000)
-        .rebound()
-        .is_some());
-    let to_dd = VerifiedDirectAnnounce::new(peer(0xDD), true, true).unwrap();
-    assert!(store
-        .rebind_after_verified_direct(&link("l2"), &to_dd, 1_100)
-        .rebound()
-        .is_some());
-}
-
-#[test]
-fn a_clock_that_steps_backwards_keeps_the_cooldown_closed() {
-    let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
-    let first = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    store.rebind_after_verified_direct(&link("l1"), &first, 10_000);
-
-    let second = VerifiedDirectAnnounce::new(peer(0xCC), true, true).unwrap();
-    assert_eq!(
-        store.rebind_after_verified_direct(&link("l1"), &second, 5_000),
-        RebindOutcome::Refused(RebindRefusal::CooldownActive {
-            remaining_ms: LINK_REBIND_COOLDOWN_MS
-        })
-    );
-}
-
-#[test]
-fn rebinding_an_unbound_or_unknown_link_is_not_a_rebind() {
-    let mut store = LinkStateStore::new();
-    store.link_up(link("l1"), LinkRole::Central);
-    let witness = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-
-    assert_eq!(
-        store.rebind_after_verified_direct(&link("l1"), &witness, 1_000),
-        RebindOutcome::Refused(RebindRefusal::LinkUnbound)
-    );
-    assert_eq!(
-        store.rebind_after_verified_direct(&link("ghost"), &witness, 1_000),
-        RebindOutcome::Refused(RebindRefusal::UnknownLink)
-    );
-    // A refused rebind must not have spent the link's cooldown.
-    store.bind_if_unbound(&link("l1"), &peer(0xAA));
-    assert!(store
-        .rebind_after_verified_direct(&link("l1"), &witness, 1_001)
-        .rebound()
-        .is_some());
-}
-
-#[test]
-fn reclaiming_your_own_link_is_a_no_op_that_does_not_spend_the_cooldown() {
-    let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
-    let same = VerifiedDirectAnnounce::new(peer(0xAA), true, true).unwrap();
-    assert_eq!(
-        store.rebind_after_verified_direct(&link("l1"), &same, 1_000),
-        RebindOutcome::Refused(RebindRefusal::SamePeer)
-    );
-
-    let other = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    assert!(store
-        .rebind_after_verified_direct(&link("l1"), &other, 1_000)
-        .rebound()
-        .is_some());
-}
-
-#[test]
-fn rebind_retires_the_rotated_ids_other_outbound_links() {
-    // A relaunch leaves the same device holding several outbound links under
-    // the retired ID; they duplicate every packet until they are cancelled.
-    let mut store = LinkStateStore::new();
-    for id in ["stale1", "stale2", "ingress"] {
-        store.link_up(link(id), LinkRole::Central);
-        store.bind_if_unbound(&link(id), &peer(0xAA));
-    }
-    let witness = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    let outcome = store.rebind_after_verified_direct(&link("ingress"), &witness, 1_000);
-    let rebind = outcome.rebound().expect("rebind allowed");
-
-    assert_eq!(rebind.retired_links, vec![link("stale1"), link("stale2")]);
-    assert!(rebind.retire_previous_peer);
-    assert!(!store.contains(&link("stale1")));
-    assert!(!store.contains(&link("stale2")));
-    assert!(store.contains(&link("ingress")));
-}
-
-#[test]
-fn rebind_leaves_inbound_links_of_the_rotated_id_alone() {
-    // We cannot cancel a connection the peer opened to us; it retires its own
-    // side by running this same policy. So the old identity survives.
-    let mut store = LinkStateStore::new();
-    store.link_up(link("ingress"), LinkRole::Central);
-    store.link_up(link("theirs"), LinkRole::Peripheral);
-    store.bind_if_unbound(&link("ingress"), &peer(0xAA));
-    store.bind_if_unbound(&link("theirs"), &peer(0xAA));
-
-    let witness = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    let outcome = store.rebind_after_verified_direct(&link("ingress"), &witness, 1_000);
-    let rebind = outcome.rebound().expect("rebind allowed");
-    assert!(rebind.retired_links.is_empty());
-    assert!(!rebind.retire_previous_peer);
-    assert_eq!(
-        store.links_to(&peer(0xAA)),
-        BTreeSet::from([link("theirs")])
-    );
-}
-
-#[test]
-fn rebind_drops_the_links_noise_proof() {
-    // The proof belongs to the previous physical binding. Carrying it across
-    // would hand a replayer an authentication it never performed.
-    let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
-    assert!(store.mark_noise_authenticated(&link("l1"), &peer(0xAA)));
-    assert!(store.is_noise_authenticated(&link("l1"), &peer(0xAA)));
-
-    let witness = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    assert!(store
-        .rebind_after_verified_direct(&link("l1"), &witness, 1_000)
-        .rebound()
-        .is_some());
-    assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xAA)));
-    assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xBB)));
-}
-
 #[test]
 fn discovery_hints_do_not_bind_or_protect_a_peer_until_noise_proof() {
     let mut store = LinkStateStore::new();
@@ -509,25 +267,6 @@ fn noise_proof_requires_the_binding_to_agree() {
     let _ = store.link_down(&link("l1"));
     assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xAA)));
     assert!(!store.mark_noise_authenticated(&link("ghost"), &peer(0xAA)));
-}
-
-#[test]
-fn the_cooldown_survives_a_reconnect_of_the_same_link() {
-    // Link IDs are stable per device, so forgetting the cooldown on
-    // disconnect would let a replayer reset the guard by forcing a bounce.
-    let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
-    let first = VerifiedDirectAnnounce::new(peer(0xBB), true, true).unwrap();
-    store.rebind_after_verified_direct(&link("l1"), &first, 1_000);
-
-    let _ = store.link_down(&link("l1"));
-    store.link_up(link("l1"), LinkRole::Central);
-    store.bind_if_unbound(&link("l1"), &peer(0xAA));
-
-    let second = VerifiedDirectAnnounce::new(peer(0xCC), true, true).unwrap();
-    assert!(matches!(
-        store.rebind_after_verified_direct(&link("l1"), &second, 2_000),
-        RebindOutcome::Refused(RebindRefusal::CooldownActive { .. })
-    ));
 }
 
 // -- PeerRegistry -----------------------------------------------------
@@ -740,12 +479,18 @@ fn derived(noise_byte: u8, signing_byte: u8, nickname: &str) -> (PeerId, Announc
 }
 
 fn pin(registry: &mut PeerRegistry, peer: &PeerId, announcement: &AnnouncementPacket, now: u64) {
-    assert!(registry.pin_noise_identity(
-        peer,
-        announcement.noise_public_key.as_slice().try_into().unwrap(),
-        announcement.signing_public_key.as_slice().try_into().unwrap(),
-        now,
-    ));
+    assert!(
+        registry.pin_noise_identity(
+            peer,
+            announcement.noise_public_key.as_slice().try_into().unwrap(),
+            announcement
+                .signing_public_key
+                .as_slice()
+                .try_into()
+                .unwrap(),
+            now,
+        )
+    );
 }
 
 #[test]
@@ -763,7 +508,10 @@ fn first_contact_cannot_pin_a_signing_key_under_someone_elses_noise_id() {
     assert!(registry.info(&alice).unwrap().verified_nickname);
 
     registry.upsert_verified_announce(&alice, &impostor, true, 22);
-    assert_eq!(registry.pinned(&alice).unwrap().signing_public_key, vec![2; 32]);
+    assert_eq!(
+        registry.pinned(&alice).unwrap().signing_public_key,
+        vec![2; 32]
+    );
     assert_eq!(registry.info(&alice).unwrap().nickname, "alice");
 }
 
@@ -922,9 +670,8 @@ fn announce_only_peer_expires_even_when_it_claims_presence() {
     let mut registry = PeerRegistry::new();
     let (alice, announcement) = derived(1, 2, "alice");
     registry.upsert_verified_announce(&alice, &announcement, true, 0);
-    let changes = registry.reconcile_connectivity(
-        REACHABILITY_RETENTION_UNVERIFIED_MS + 1, &BTreeMap::new(),
-    );
+    let changes =
+        registry.reconcile_connectivity(REACHABILITY_RETENTION_UNVERIFIED_MS + 1, &BTreeMap::new());
     assert_eq!(changes.removed.len(), 1);
     assert!(registry.info(&alice).is_none());
 }
@@ -1080,22 +827,11 @@ fn clear_empties_the_ingress_memory() {
 }
 
 #[test]
-fn refusal_and_rejection_render_for_logs() {
-    assert!(RebindRefusal::IdentityOwnsAnotherLink
-        .to_string()
-        .contains("already owns"));
-    assert!(RebindRefusal::CooldownActive { remaining_ms: 5 }
-        .to_string()
-        .contains('5'));
-}
-
-#[test]
 fn constants_match_transport_config() {
     assert_eq!(REACHABILITY_RETENTION_VERIFIED_MS, 60_000);
     assert_eq!(REACHABILITY_RETENTION_UNVERIFIED_MS, 45_000);
     assert_eq!(PEER_INACTIVITY_TIMEOUT_MS, 8_000);
     assert_eq!(INGRESS_RECORD_LIFETIME_MS, 3_000);
-    assert_eq!(LINK_REBIND_COOLDOWN_MS, 60_000);
     assert_eq!(reachability_retention_ms(true), 60_000);
     assert_eq!(reachability_retention_ms(false), 45_000);
 }

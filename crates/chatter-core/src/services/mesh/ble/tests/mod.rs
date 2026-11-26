@@ -85,7 +85,9 @@ fn register_verified_peer(state: &MeshState, identity: &MeshIdentity, nickname: 
             &identity.signing_public(),
             now_millis(),
         ));
-        inner.peers.upsert_verified_announce(&peer, &announcement, true, now_millis());
+        inner
+            .peers
+            .upsert_verified_announce(&peer, &announcement, true, now_millis());
     });
     peer
 }
@@ -96,13 +98,24 @@ async fn leave_requires_the_pinned_signature_and_preserves_the_pin() {
     let identity = MeshIdentity::generate(&mut os_rng());
     let peer = identity.peer_id();
     assert!(state.with(|inner| inner.peers.pin_noise_identity(
-        &peer, &identity.static_public(), &identity.signing_public(), now_millis(),
+        &peer,
+        &identity.static_public(),
+        &identity.signing_public(),
+        now_millis(),
     )));
     let announce = AnnouncementPacket::new(
-        "Alice".into(), identity.static_public().to_vec(), identity.signing_public().to_vec(),
-        None, None, None,
+        "Alice".into(),
+        identity.static_public().to_vec(),
+        identity.signing_public().to_vec(),
+        None,
+        None,
+        None,
     );
-    state.with(|inner| inner.peers.upsert_verified_announce(&peer, &announce, true, now_millis()));
+    state.with(|inner| {
+        inner
+            .peers
+            .upsert_verified_announce(&peer, &announce, true, now_millis())
+    });
     let attacker = MeshIdentity::generate(&mut os_rng());
     let link = LinkId::new("/mock/leave");
     let mut packet = BitchatPacket::new(

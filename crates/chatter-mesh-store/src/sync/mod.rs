@@ -61,7 +61,7 @@
 //! its own capacity, so heavy fragment traffic cannot crowd messages out of the
 //! filter.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 mod config;
 mod limits;
@@ -259,10 +259,11 @@ impl SyncSchedule {
 // The driver
 // ---------------------------------------------------------------------------
 
-// Retain independent keys for an unproven owner, with a fixed bound so that
-// newer packets from one key cannot replace another key's packets.
+// Give each provisional key its own history slot. When the set fills, admit
+// a new key in place of the earliest admission. Refreshes keep their original
+// position and sender timestamps cannot make a candidate unevictable.
 const SIGNING_CANDIDATES_PER_PEER: usize = 4;
-type SigningCandidates = BTreeMap<[u8; 32], BitchatPacket>;
+type SigningCandidates = VecDeque<([u8; 32], BitchatPacket)>;
 
 fn insert_candidate(
     candidates: &mut SigningCandidates,
@@ -271,15 +272,21 @@ fn insert_candidate(
     fresh: impl Fn(&BitchatPacket) -> bool,
     replace_equal: bool,
 ) {
-    candidates.retain(|_, stored| fresh(stored));
-    if let Some(stored) = candidates.get_mut(&key) {
+    candidates.retain(|(_, stored)| fresh(stored));
+    if let Some((_, stored)) = candidates
+        .iter_mut()
+        .find(|(candidate, _)| *candidate == key)
+    {
         if packet.timestamp > stored.timestamp
             || (replace_equal && packet.timestamp == stored.timestamp)
         {
             *stored = packet.clone();
         }
-    } else if candidates.len() < SIGNING_CANDIDATES_PER_PEER {
-        candidates.insert(key, packet.clone());
+    } else {
+        if candidates.len() >= SIGNING_CANDIDATES_PER_PEER {
+            candidates.pop_front();
+        }
+        candidates.push_back((key, packet.clone()));
     }
 }
 
@@ -535,8 +542,8 @@ impl GossipSyncManager {
             candidates.extend(
                 self.latest_announce_by_peer
                     .values()
-                    .flat_map(BTreeMap::values)
-                    .filter(|packet| fresh(packet)),
+                    .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
+                    .filter(|packet| announcement_is_fresh(config, packet, now_unix_secs)),
             );
         }
         if types.contains(MessageType::Message) {
@@ -555,7 +562,7 @@ impl GossipSyncManager {
             candidates.extend(
                 self.latest_prekey_bundle_by_owner
                     .values()
-                    .flat_map(BTreeMap::values)
+                    .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
                     .filter(|packet| fresh(packet)),
             );
         }
@@ -617,22 +624,20 @@ impl GossipSyncManager {
         let config = &self.config;
         let fresh = |packet: &BitchatPacket| packet_is_fresh(config, packet, now_unix_secs);
 
-        self.latest_announce_by_peer
-            .retain(|_, candidates| {
-                candidates.retain(|_, packet| fresh(packet));
-                !candidates.is_empty()
-            });
+        self.latest_announce_by_peer.retain(|_, candidates| {
+            candidates.retain(|(_, packet)| fresh(packet));
+            !candidates.is_empty()
+        });
 
         let expired_ids = self.messages.remove_expired(fresh);
 
         let _ = self.fragments.remove_expired(fresh);
         let _ = self.file_transfers.remove_expired(fresh);
         let _ = self.group_messages.remove_expired(fresh);
-        self.latest_prekey_bundle_by_owner
-            .retain(|_, candidates| {
-                candidates.retain(|_, packet| fresh(packet));
-                !candidates.is_empty()
-            });
+        self.latest_prekey_bundle_by_owner.retain(|_, candidates| {
+            candidates.retain(|(_, packet)| fresh(packet));
+            !candidates.is_empty()
+        });
         for id in expired_ids {
             self.mark_archive_changed(id);
         }
@@ -652,8 +657,8 @@ impl GossipSyncManager {
             .iter()
             .filter(|(_, candidates)| {
                 candidates
-                    .values()
-                    .all(|packet| !announcement_is_fresh(config, packet, now_unix_secs))
+                    .iter()
+                    .all(|(_, packet)| !announcement_is_fresh(config, packet, now_unix_secs))
             })
             .map(|(peer, _)| peer.clone())
             .collect();
@@ -808,7 +813,7 @@ impl GossipSyncManager {
             &mut self.latest_prekey_bundle_by_owner,
         ] {
             if let Some(candidates) = store.get_mut(owner) {
-                candidates.retain(|candidate, _| candidate == key);
+                candidates.retain(|(candidate, _)| candidate == key);
                 if candidates.is_empty() {
                     store.remove(owner);
                 }

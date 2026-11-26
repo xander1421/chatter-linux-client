@@ -27,9 +27,6 @@ impl BleRuntime {
         claimed: &PeerId,
         verified_key: Option<[u8; 32]>,
     ) -> bool {
-        if self.events.peer_blocked(claimed) {
-            return false;
-        }
         // A `Message` addressed to one recipient is a legacy private message. We
         // do not carry those — private traffic is Noise-encrypted — and showing
         // it as public chat would put a message meant for one person in the room.
@@ -99,6 +96,10 @@ impl BleRuntime {
         let Some(signing_key) = self.matching_signing_key(&sender, packet, verified_key) else {
             return false;
         };
+        if self.events.peer_blocked(claimed) {
+            // Keep authenticated broadcasts available to the mesh.
+            return true;
+        }
         let (nickname, verified) = if is_self {
             (self.config.nickname(), true)
         } else {
@@ -301,6 +302,7 @@ impl BleRuntime {
         if invite.creator != self.identity.peer_id().as_str() || invite.target != claimed.as_str() {
             return;
         }
+        let pending_key = (claimed.clone(), invite.channel_id.clone());
         let Some(member) = self.state.pinned_member(claimed, true) else {
             // A QR already issued by this device authorizes requesting the
             // binding when upgrading with an outstanding invitation.
@@ -321,15 +323,15 @@ impl BleRuntime {
                 self.pending_private_joins
                     .retain(|_, pending| pending.expires_at >= now);
                 if self.pending_private_joins.len() < 512
-                    || self.pending_private_joins.contains_key(claimed)
+                    || self.pending_private_joins.contains_key(&pending_key)
                 {
-                    self.pending_private_joins.insert(claimed.clone(), invite);
+                    self.pending_private_joins.insert(pending_key, invite);
                     self.request_signing_pin(claimed).await;
                 }
             }
             return;
         };
-        self.pending_private_joins.remove(claimed);
+        self.pending_private_joins.remove(&pending_key);
         let Ok(Some(state)) = self
             .private_channels
             .redeem(&invite, &self.identity, member)
