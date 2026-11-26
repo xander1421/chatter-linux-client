@@ -750,6 +750,7 @@ class MainActivity : GameActivity() {
             MessagingService.setSignedIn(this, signedIn)
             messagingSignedIn = signedIn
             updateMessagingService()
+            maybeShowUnifiedPushPrompt()
         }
     }
 
@@ -784,6 +785,7 @@ class MainActivity : GameActivity() {
         applySecureScreen()
         refreshFullScreenCallState()
         maybeShowFullScreenCallPrompt()
+        maybeShowUnifiedPushPrompt()
         // A prelaunched Activity can be resumed without ever gaining focus.
         updateAppVisibility(window.decorView.hasWindowFocus())
         if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)
@@ -794,6 +796,7 @@ class MainActivity : GameActivity() {
         if (hasFocus && activityResumed) {
             refreshFullScreenCallState()
             maybeShowFullScreenCallPrompt()
+            maybeShowUnifiedPushPrompt()
         }
         updateAppVisibility(hasFocus)
     }
@@ -1463,7 +1466,7 @@ class MainActivity : GameActivity() {
     private fun maybeShowFullScreenCallPrompt() {
         val prompt = fullScreenCallPrompt ?: return
         if (!activityResumed || !window.decorView.hasWindowFocus() || runtimePermissionRequests.hasRequests() ||
-            isFinishing || isDestroyed || lockScreenCallId != null ||
+            isFinishing || isDestroyed || lockScreenCallId != null || unifiedPushDialog != null ||
             getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return
 
         val prefs = getPreferences(MODE_PRIVATE)
@@ -1510,6 +1513,52 @@ class MainActivity : GameActivity() {
     }
 
     private external fun nativeFullScreenCallState(state: Int)
+
+    // --- UnifiedPush consent -----------------------------------------------------
+    // An installed distributor (e.g. ntfy) is only used once the user picks it
+    // here: it would see when every wake arrives. Declining keeps Chatter's own
+    // socket and is remembered per distributor; a newly installed one is offered.
+    private data class UnifiedPushPrompt(val title: String, val decline: String)
+    private var unifiedPushPrompt: UnifiedPushPrompt? = null
+    private var unifiedPushDialog: android.app.AlertDialog? = null
+
+    @androidx.annotation.Keep
+    fun prepareUnifiedPushPrompt(title: String, decline: String) {
+        runOnUiThread {
+            unifiedPushPrompt = UnifiedPushPrompt(title, decline)
+            maybeShowUnifiedPushPrompt()
+        }
+    }
+
+    private fun maybeShowUnifiedPushPrompt() {
+        val prompt = unifiedPushPrompt ?: return
+        if (!messagingSignedIn || !activityResumed || !window.decorView.hasWindowFocus() ||
+            runtimePermissionRequests.hasRequests() || fullScreenCallDialog != null ||
+            unifiedPushDialog != null || isFinishing || isDestroyed || lockScreenCallId != null) return
+        val offered = UnifiedPushReceiver.distributorsToOffer(this)
+        if (offered.isEmpty()) return
+        val labels = offered.map { pkg ->
+            try {
+                packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+            } catch (_: Exception) {
+                pkg
+            }
+        }.toTypedArray()
+        // Not cancelable: only an explicit pick or decline is an answer, so a
+        // stray tap outside neither enrols nor silences the question.
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle(prompt.title)
+            .setItems(labels) { _, which -> UnifiedPushReceiver.choose(this, offered[which]) }
+            .setNegativeButton(prompt.decline) { _, _ -> UnifiedPushReceiver.decline(this, offered) }
+            .setCancelable(false)
+            .create()
+        dialog.setOnDismissListener {
+            unifiedPushDialog = null
+            updateAppVisibility(window.decorView.hasWindowFocus())
+        }
+        unifiedPushDialog = dialog
+        dialog.show()
+    }
 
     // --- Runtime permissions ---------------------------------------------------
     private val permissionRequest =

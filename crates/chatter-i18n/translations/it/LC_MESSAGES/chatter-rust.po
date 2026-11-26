@@ -3971,3 +3971,9 @@ msgstr "Consenti la visualizzazione delle chiamate in arrivo sulla schermata di 
 
 msgid "Not now"
 msgstr "Non ora"
+
+msgid "Deliver notifications through one of these apps? It will see when messages arrive, not what they say."
+msgstr "Ricevere le notifiche tramite una di queste app? Vedrà quando arrivano i messaggi, non cosa dicono."
+
+msgid "Keep Chatter's own connection"
+msgstr "Mantieni la connessione di Chatter"

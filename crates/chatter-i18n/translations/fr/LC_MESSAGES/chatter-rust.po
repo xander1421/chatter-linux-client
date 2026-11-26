@@ -3999,3 +3999,9 @@ msgstr "Autorisez l’affichage des appels entrants sur l’écran de verrouilla
 
 msgid "Not now"
 msgstr "Pas maintenant"
+
+msgid "Deliver notifications through one of these apps? It will see when messages arrive, not what they say."
+msgstr "Recevoir les notifications via l'une de ces applis ? Elle verra quand les messages arrivent, pas ce qu'ils disent."
+
+msgid "Keep Chatter's own connection"
+msgstr "Garder la connexion propre à Chatter"

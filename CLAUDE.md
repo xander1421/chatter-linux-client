@@ -11,7 +11,9 @@ cargo run -p chatter-ui
 ```
 
 Agents never launch it bare (a bare run pops a keyring prompt on the desktop):
-`CHATTER_NO_KEYRING=1 XDG_DATA_HOME=$(mktemp -d) timeout 120 cargo run -p chatter-ui`.
+`CHATTER_NO_KEYRING=1 XDG_DATA_HOME=$(mktemp -d) timeout 120 cargo run -p chatter-ui --features insecure-no-keyring`.
+The keyring opt-outs exist only in an `insecure-no-keyring` build (refused in a
+release profile); test builds get it through the dev-dependencies.
 
 `cargo check` type-checks (including Slint codegen, which runs in
 `chatter-ui-slint/build.rs`) but does not link; link errors surface only in

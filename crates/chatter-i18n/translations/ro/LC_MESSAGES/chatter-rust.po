@@ -4002,3 +4002,9 @@ msgstr "Permite afișarea apelurilor primite pe ecranul de blocare."
 
 msgid "Not now"
 msgstr "Nu acum"
+
+msgid "Deliver notifications through one of these apps? It will see when messages arrive, not what they say."
+msgstr "Primești notificările printr-una dintre aceste aplicații? Va vedea când sosesc mesajele, nu ce conțin."
+
+msgid "Keep Chatter's own connection"
+msgstr "Păstrează conexiunea proprie Chatter"

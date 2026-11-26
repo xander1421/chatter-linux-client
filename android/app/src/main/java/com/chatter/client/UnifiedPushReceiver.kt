@@ -7,9 +7,11 @@ import org.unifiedpush.android.connector.UnifiedPush
 
 /**
  * Receives UnifiedPush events from a distributor app (e.g. ntfy) and bridges
- * them into the Rust core. When a distributor is present the core drops its own
- * ntfy SSE socket (the battery win); with no distributor installed none of this
- * fires and Chatter keeps its own socket (the default, Signal-style path).
+ * them into the Rust core. Once the user has picked a distributor the core drops
+ * its own ntfy SSE socket (the battery win); until then, and with none
+ * installed, none of this fires and Chatter keeps its own socket (the default,
+ * Signal-style path). A distributor sees when wakes arrive, so it is never
+ * enrolled without the user choosing it.
  *
  * The native methods are no-ops if the core process is not yet running; a wake
  * additionally boots MessagingService so a cold process catches up via its inbox
@@ -48,26 +50,51 @@ class UnifiedPushReceiver : MessagingReceiver() {
     companion object {
         private const val TAG = "UnifiedPushReceiver"
 
+        private const val PREFS = "unified_push"
+        private const val DECLINED = "declined_distributors"
+
         /**
-         * Opt in to UnifiedPush when a distributor is installed: pick the saved
-         * (or first available) distributor and register. No distributor present
-         * means Chatter keeps its own socket — nothing changes. Safe to call
-         * repeatedly (register is idempotent per distributor).
+         * Re-register with the distributor the user chose, if any. Never picks
+         * one: an installed distributor is only used after the user says so in
+         * [MainActivity]'s prompt. Safe to call repeatedly (register is
+         * idempotent per distributor).
          */
-        fun enableIfDistributorPresent(context: Context) {
+        fun registerIfChosen(context: Context) {
             try {
-                val saved = UnifiedPush.getAckDistributor(context)
-                if (saved != null) {
-                    UnifiedPush.registerApp(context)
-                    return
-                }
-                val distributors = UnifiedPush.getDistributors(context)
-                if (distributors.isEmpty()) return
-                UnifiedPush.saveDistributor(context, distributors.first())
+                if (UnifiedPush.getAckDistributor(context) != null) UnifiedPush.registerApp(context)
+            } catch (e: Throwable) {
+                Log.w(TAG, "UnifiedPush register failed", e)
+            }
+        }
+
+        /** Installed distributors the user has not been asked about yet. */
+        fun distributorsToOffer(context: Context): List<String> = try {
+            pickableDistributors(
+                UnifiedPush.getAckDistributor(context),
+                UnifiedPush.getDistributors(context),
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getStringSet(DECLINED, emptySet()).orEmpty(),
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "UnifiedPush distributor lookup failed", e)
+            emptyList()
+        }
+
+        /** The user picked [distributor]: save it and register. */
+        fun choose(context: Context, distributor: String) {
+            try {
+                UnifiedPush.saveDistributor(context, distributor)
                 UnifiedPush.registerApp(context)
             } catch (e: Throwable) {
                 Log.w(TAG, "UnifiedPush enable failed", e)
             }
+        }
+
+        /** The user kept Chatter's own socket: do not ask about these again. */
+        fun decline(context: Context, distributors: List<String>) {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val declined = prefs.getStringSet(DECLINED, emptySet()).orEmpty() + distributors
+            prefs.edit().putStringSet(DECLINED, declined).apply()
         }
 
         /** Stop using UnifiedPush and fall back to the own-SSE socket. */
@@ -80,3 +107,13 @@ class UnifiedPushReceiver : MessagingReceiver() {
         }
     }
 }
+
+/**
+ * Which distributors to offer: none once one is chosen, otherwise every
+ * installed one the user has not already declined.
+ */
+internal fun pickableDistributors(
+    chosen: String?,
+    installed: List<String>,
+    declined: Set<String>,
+): List<String> = if (chosen != null) emptyList() else installed.filterNot { it in declined }

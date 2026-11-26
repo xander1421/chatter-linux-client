@@ -22,6 +22,18 @@ fn main() {
     let insecure_anchors = std::env::var_os("CARGO_FEATURE_INSECURE_TEST_ANCHORS").is_some();
     let profile = std::env::var("PROFILE").unwrap_or_default();
 
+    // Same rule for the keyring opt-out: a release artifact must not read its
+    // database key from a plaintext file because a marker or env var says so.
+    if std::env::var_os("CARGO_FEATURE_INSECURE_NO_KEYRING").is_some() && profile == "release" {
+        panic!(
+            "\n\nchatter-core feature `insecure-no-keyring` is enabled in a RELEASE profile.\n\n\
+             It lets CHATTER_NO_KEYRING, a `no-keyring` file beside the database or \
+             CHATTER_DB_PASSPHRASE_FILE move the SQLCipher passphrase out of the OS \
+             keyring into a plaintext file. It is for headless dev and test rigs, \
+             which build in a dev profile. Drop the feature, or drop --release.\n"
+        );
+    }
+
     if insecure_anchors && profile == "release" {
         panic!(
             "\n\n\

@@ -719,29 +719,15 @@ impl NotificationSink for AndroidNotifications {
                 .l()
                 .map_err(nerr)?;
             let active = env.cast_local::<JObjectArray>(active).map_err(nerr)?;
+            // Everything on the messages channel goes, tagged conversation posts
+            // and untagged toasts alike: the toasts ("New device linked",
+            // friend requests) were the ones left on a locked device. The
+            // calls channel stays: its ringing card already says only
+            // "Chatter" / "Incoming call", and its Accept/Decline are what a
+            // locked user still needs. Foreground-service cards are on their
+            // own channels and cannot be cancelled while their service runs.
             for i in 0..active.len(env).map_err(nerr)? {
                 let status = active.get_element(env, i).map_err(nerr)?;
-                let id = env
-                    .call_method(&status, jni::jni_str!("getId"), jni::jni_sig!("()I"), &[])
-                    .map_err(nerr)?
-                    .i()
-                    .map_err(nerr)?;
-                if id != CONVERSATION_NOTIFICATION_ID {
-                    continue;
-                }
-                let tag = env
-                    .call_method(
-                        &status,
-                        jni::jni_str!("getTag"),
-                        jni::jni_sig!("()Ljava/lang/String;"),
-                        &[],
-                    )
-                    .map_err(nerr)?
-                    .l()
-                    .map_err(nerr)?;
-                if tag.is_null() {
-                    continue;
-                }
                 let notification = env
                     .call_method(
                         &status,
@@ -762,16 +748,36 @@ impl NotificationSink for AndroidNotifications {
                     .map_err(nerr)?
                     .l()
                     .map_err(nerr)?;
-                let channel = env.cast_local::<JString>(channel).map_err(nerr)?;
-                if channel.try_to_string(env).map_err(nerr)? == CHANNEL_ID {
-                    env.call_method(
-                        &manager,
-                        jni::jni_str!("cancel"),
-                        jni::jni_sig!("(Ljava/lang/String;I)V"),
-                        &[JValue::Object(&tag), JValue::Int(id)],
-                    )
-                    .map_err(nerr)?;
+                if channel.is_null() {
+                    continue;
                 }
+                let channel = env.cast_local::<JString>(channel).map_err(nerr)?;
+                if channel.try_to_string(env).map_err(nerr)? != CHANNEL_ID {
+                    continue;
+                }
+                let id = env
+                    .call_method(&status, jni::jni_str!("getId"), jni::jni_sig!("()I"), &[])
+                    .map_err(nerr)?
+                    .i()
+                    .map_err(nerr)?;
+                // Null for an untagged post; cancel(null, id) is cancel(id).
+                let tag = env
+                    .call_method(
+                        &status,
+                        jni::jni_str!("getTag"),
+                        jni::jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )
+                    .map_err(nerr)?
+                    .l()
+                    .map_err(nerr)?;
+                env.call_method(
+                    &manager,
+                    jni::jni_str!("cancel"),
+                    jni::jni_sig!("(Ljava/lang/String;I)V"),
+                    &[JValue::Object(&tag), JValue::Int(id)],
+                )
+                .map_err(nerr)?;
             }
             Ok(true)
         })

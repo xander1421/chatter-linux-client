@@ -3988,3 +3988,9 @@ msgstr "Дозвольте показувати вхідні виклики на
 
 msgid "Not now"
 msgstr "Не зараз"
+
+msgid "Deliver notifications through one of these apps? It will see when messages arrive, not what they say."
+msgstr "Доставляти сповіщення через один із цих застосунків? Він бачитиме, коли надходять повідомлення, але не їхній зміст."
+
+msgid "Keep Chatter's own connection"
+msgstr "Залишити власне з’єднання Chatter"

@@ -1,6 +1,7 @@
 //! UnifiedPush JNI bridge.
 //!
-//! When the user has a UnifiedPush distributor app installed (e.g. ntfy), that
+//! Once the user has picked a UnifiedPush distributor app (e.g. ntfy) in the
+//! Activity's consent prompt (`MainActivity.maybeShowUnifiedPushPrompt`), that
 //! app holds the single persistent push socket and delivers wakes to Chatter
 //! through `UnifiedPushReceiver` (Kotlin), which calls these entry points. The
 //! core then drops its own ntfy SSE socket (see `push_config.rs`), so the device

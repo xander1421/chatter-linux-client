@@ -4032,3 +4032,9 @@ msgstr "Erlaube, dass eingehende Anrufe auf dem Sperrbildschirm angezeigt werden
 
 msgid "Not now"
 msgstr "Jetzt nicht"
+
+msgid "Deliver notifications through one of these apps? It will see when messages arrive, not what they say."
+msgstr "Benachrichtigungen über eine dieser Apps zustellen? Sie sieht, wann Nachrichten eintreffen, aber nicht, was darin steht."
+
+msgid "Keep Chatter's own connection"
+msgstr "Chatters eigene Verbindung behalten"

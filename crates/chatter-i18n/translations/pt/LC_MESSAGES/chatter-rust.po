@@ -3972,3 +3972,9 @@ msgstr "Permita que as chamadas recebidas apareçam na tela de bloqueio."
 
 msgid "Not now"
 msgstr "Agora não"
+
+msgid "Deliver notifications through one of these apps? It will see when messages arrive, not what they say."
+msgstr "Entregar as notificações através de uma destas apps? Ela verá quando as mensagens chegam, não o que dizem."
+
+msgid "Keep Chatter's own connection"
+msgstr "Manter a conexão própria do Chatter"

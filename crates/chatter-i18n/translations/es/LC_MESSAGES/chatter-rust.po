@@ -3985,3 +3985,9 @@ msgstr "Permite que las llamadas entrantes se muestren en la pantalla de bloqueo
 
 msgid "Not now"
 msgstr "Ahora no"
+
+msgid "Deliver notifications through one of these apps? It will see when messages arrive, not what they say."
+msgstr "¿Entregar las notificaciones a través de una de estas apps? Verá cuándo llegan los mensajes, no lo que dicen."
+
+msgid "Keep Chatter's own connection"
+msgstr "Mantener la conexión propia de Chatter"

@@ -20,6 +20,7 @@ set -euo pipefail
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/chatter-linux"
 seal_key_file="$data_dir/mesh-seal-key.dev"
 
+# Honoured only by an `insecure-no-keyring` build (the cargo line below).
 export CHATTER_DB_PASSPHRASE_FILE=1
 
 # Mint the dev seal key once and keep it. Generating a fresh one per run would
@@ -48,4 +49,4 @@ export CHATTER_DEV=1
 # here means the binary is always rebuilt with it.
 #
 # To check a binary by hand:  strings target/debug/chatter-ui | grep 'mesh: started'
-exec cargo run -p chatter-ui --features mesh,dev-auto-register "$@"
+exec cargo run -p chatter-ui --features mesh,dev-auto-register,insecure-no-keyring "$@"

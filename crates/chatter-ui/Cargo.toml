@@ -154,7 +154,7 @@ jni_021 = { package = "jni", version = "=0.21.1" }
 ndk-context = "0.1"
 
 [dev-dependencies]
-chatter-core = { path = "../chatter-core", default-features = false, features = ["testing"] }
+chatter-core = { path = "../chatter-core", default-features = false, features = ["testing", "insecure-no-keyring"] }
 # message_list/viewport.rs visible_preview_tests encrypts a fixture attachment.
 chatter-attachment-crypto = { path = "../chatter-attachment-crypto" }
 # Headless GUI test backend for VALIDATED-UI.md (slint::testing analog).
@@ -177,6 +177,9 @@ webrtc-sys-build = "=0.3.18"
 default = ["desktop", "onion", "quic"]
 # Emit Slint element metadata for the headless UI query suites.
 ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
+# Honour CHATTER_NO_KEYRING / the no-keyring marker (dev and headless rigs only;
+# refused in a release profile). See chatter-core's feature of the same name.
+insecure-no-keyring = ["chatter-core/insecure-no-keyring"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a
 # second device: a default build links no chatter-mesh* crate at all. `mesh`
 # alone gives BLE; add `onion` for geohash channels and Nostr DMs, which are
