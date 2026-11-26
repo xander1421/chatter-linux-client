@@ -491,101 +491,102 @@ pub(crate) async fn download_verified_with_progress(
         generation,
         "network mode changed during update download".into(),
         async {
-        if mode == TransportMode::Onion {
-            #[cfg(feature = "onion")]
-            {
-                crate::network::anon_http::get_to_file_with_progress(
-                    &pool.onion_tor(),
-                    &manifest.url,
-                    &mut file,
-                    manifest.size,
-                    &report_progress,
-                )
-                .await?;
-            }
-            #[cfg(not(feature = "onion"))]
-            {
-                return Err("Tor support is missing".into());
-            }
-        } else {
-            let client = crate::network::storage_http::storage_client()?;
-            let request = if resume {
-                client
-                    .get(&manifest.url)
-                    .header(reqwest::header::RANGE, format!("bytes={partial}-"))
-            } else {
-                client.get(&manifest.url)
-            };
-            let mut response =
-                tokio::time::timeout(std::time::Duration::from_secs(30), request.send())
-                    .await
-                    .map_err(|_| "update download stalled")?
-                    .map_err(|_| "update download failed")?;
-            let mut total = if resume { partial } else { 0 };
-            if resume {
-                let expected = format!("bytes {partial}-{}/{}", manifest.size - 1, manifest.size);
-                if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
-                    || response
-                        .headers()
-                        .get(reqwest::header::CONTENT_RANGE)
-                        .and_then(|v| v.to_str().ok())
-                        != Some(expected.as_str())
+            if mode == TransportMode::Onion {
+                #[cfg(feature = "onion")]
                 {
-                    tracing::info!(
-                        "update server did not support safe resume; restarting download"
-                    );
-                    file.set_len(0)
-                        .await
-                        .map_err(|_| "cannot reset update staging file")?;
-                    file = tokio::fs::OpenOptions::new()
-                        .write(true)
-                        .open(&path)
-                        .await
-                        .map_err(|_| "cannot reopen update staging file")?;
-                    response = tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        client.get(&manifest.url).send(),
+                    crate::network::anon_http::get_to_file_with_progress(
+                        &pool.onion_tor(),
+                        &manifest.url,
+                        &mut file,
+                        manifest.size,
+                        &report_progress,
                     )
-                    .await
-                    .map_err(|_| "update download stalled")?
-                    .map_err(|_| "update download failed")?;
-                    total = 0;
+                    .await?;
+                }
+                #[cfg(not(feature = "onion"))]
+                {
+                    return Err("Tor support is missing".into());
+                }
+            } else {
+                let client = crate::network::storage_http::storage_client()?;
+                let request = if resume {
+                    client
+                        .get(&manifest.url)
+                        .header(reqwest::header::RANGE, format!("bytes={partial}-"))
                 } else {
-                    tracing::info!(bytes = partial, "update download resuming");
-                    report_progress(partial);
+                    client.get(&manifest.url)
+                };
+                let mut response =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), request.send())
+                        .await
+                        .map_err(|_| "update download stalled")?
+                        .map_err(|_| "update download failed")?;
+                let mut total = if resume { partial } else { 0 };
+                if resume {
+                    let expected =
+                        format!("bytes {partial}-{}/{}", manifest.size - 1, manifest.size);
+                    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+                        || response
+                            .headers()
+                            .get(reqwest::header::CONTENT_RANGE)
+                            .and_then(|v| v.to_str().ok())
+                            != Some(expected.as_str())
+                    {
+                        tracing::info!(
+                            "update server did not support safe resume; restarting download"
+                        );
+                        file.set_len(0)
+                            .await
+                            .map_err(|_| "cannot reset update staging file")?;
+                        file = tokio::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&path)
+                            .await
+                            .map_err(|_| "cannot reopen update staging file")?;
+                        response = tokio::time::timeout(
+                            std::time::Duration::from_secs(30),
+                            client.get(&manifest.url).send(),
+                        )
+                        .await
+                        .map_err(|_| "update download stalled")?
+                        .map_err(|_| "update download failed")?;
+                        total = 0;
+                    } else {
+                        tracing::info!(bytes = partial, "update download resuming");
+                        report_progress(partial);
+                    }
+                }
+                if !response.status().is_success() {
+                    return Err(format!("update download returned {}", response.status()));
+                }
+                while let Some(chunk) =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
+                        .await
+                        .map_err(|_| "update download stalled")?
+                        .map_err(|_| "update download read failed")?
+                {
+                    total = crate::network::anon_http::write_storage_chunk(
+                        &mut file,
+                        total,
+                        &chunk,
+                        manifest.size,
+                    )
+                    .await?;
+                    report_progress(total);
                 }
             }
-            if !response.status().is_success() {
-                return Err(format!("update download returned {}", response.status()));
-            }
-            while let Some(chunk) =
-                tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
-                    .await
-                    .map_err(|_| "update download stalled")?
-                    .map_err(|_| "update download read failed")?
-            {
-                total = crate::network::anon_http::write_storage_chunk(
-                    &mut file,
-                    total,
-                    &chunk,
-                    manifest.size,
-                )
-                .await?;
-                report_progress(total);
-            }
-        }
-        file.sync_all()
+            file.sync_all()
+                .await
+                .map_err(|_| "update staging sync failed")?;
+            let path_for_verify = path.clone();
+            let manifest_for_verify = manifest.clone();
+            tokio::task::spawn_blocking(move || {
+                let input = std::fs::File::open(path_for_verify)
+                    .map_err(|_| "update staging read failed")?;
+                verify_artifact(input, &manifest_for_verify)
+            })
             .await
-            .map_err(|_| "update staging sync failed")?;
-        let path_for_verify = path.clone();
-        let manifest_for_verify = manifest.clone();
-        tokio::task::spawn_blocking(move || {
-            let input =
-                std::fs::File::open(path_for_verify).map_err(|_| "update staging read failed")?;
-            verify_artifact(input, &manifest_for_verify)
-        })
-        .await
-        .map_err(|_| "update verification task failed")?
+            .map_err(|_| "update verification task failed")?
         },
     )
     .await;

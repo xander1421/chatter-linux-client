@@ -38,7 +38,12 @@ impl GrpcClientPool {
     /// [`NetworkError::SecretChatNeedsTor`] and never falls back to the direct
     /// transport. Cached until [`Self::disconnect`] or a new onion address.
     pub fn secret_channel(&self) -> Result<GrpcTransport, NetworkError> {
-        if let Some(ch) = self.secret_channel.read().clone().filter(GrpcTransport::is_current) {
+        if let Some(ch) = self
+            .secret_channel
+            .read()
+            .clone()
+            .filter(GrpcTransport::is_current)
+        {
             return Ok(ch);
         }
         let mut guard = self.secret_channel.write();
@@ -60,7 +65,8 @@ impl GrpcClientPool {
             let ch = GrpcTransport::from_onion(
                 endpoint.connect_with_connector_lazy(self.secret_onion_connector()),
                 self.transport_mode.clone(),
-            ).in_generation(token);
+            )
+            .in_generation(token);
             *guard = Some(ch.clone());
             Ok(ch)
         }
@@ -91,7 +97,8 @@ impl GrpcClientPool {
             .connect_with_connector(self.secret_onion_connector())
             .await
             .map_err(|e| NetworkError::ConnectionFailed(format!("secret onion preconnect: {e}")))?;
-        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
+        let channel =
+            GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
         // A completed h2 handshake does not prove the server can answer an
         // RPC after doze. Probe through this same isolated channel before it
         // becomes the cached secret route; the response is never persisted.

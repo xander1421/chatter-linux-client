@@ -8,7 +8,9 @@ fn media_transport(
     shield_confirmed: bool,
 ) -> Result<Option<TransportToken>, CallError> {
     use crate::network::grpc::client_pool::TransportMode;
-    let Some(pool) = pool else { return Ok(None); };
+    let Some(pool) = pool else {
+        return Ok(None);
+    };
     let (mode, token) = pool.route_generation_snapshot();
     if mode == TransportMode::Onion && !shield_confirmed {
         return Err(CallError::ConnectionFailed(chatter_i18n::tr(
@@ -22,7 +24,9 @@ async fn connect_media<T>(
     token: Option<TransportToken>,
     connect: impl std::future::Future<Output = Result<T, CallError>>,
 ) -> Result<T, CallError> {
-    let Some(token) = token else { return connect.await; };
+    let Some(token) = token else {
+        return connect.await;
+    };
     tokio::select! {
         biased;
         _ = token.cancelled() => Err(CallError::CallEnded),
@@ -45,16 +49,19 @@ async fn undo_server_setup(
         } else {
             let _ = call_client.lock().await.leave_call(id).await;
         }
-    }).await;
+    })
+    .await;
 }
 
 fn admit_media(
-    pool: Option<&GrpcClientPool>, confirmed: bool,
+    pool: Option<&GrpcClientPool>,
+    confirmed: bool,
 ) -> Result<Option<crate::network::grpc::client_pool::DirectMediaLease>, CallError> {
     if confirmed {
         return Ok(None);
     }
-    pool.map(GrpcClientPool::admit_unconsented_media).transpose()
+    pool.map(GrpcClientPool::admit_unconsented_media)
+        .transpose()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -111,11 +118,15 @@ pub(super) async fn initiate_call_impl(
         let key_state = CallKeyState::new(encryption_root_key, &response.call_id)
             .map_err(|e| CallError::CryptoError(e.to_string()))?;
         media_lease = admit_media(pool, shield_confirmed)?;
-        connect_media(generation, room_manager.connect(
-            &response.livekit_url,
-            &response.livekit_token,
-            key_state.current_key_vec(),
-        )).await?;
+        connect_media(
+            generation,
+            room_manager.connect(
+                &response.livekit_url,
+                &response.livekit_token,
+                key_state.current_key_vec(),
+            ),
+        )
+        .await?;
         if attempt.is_some_and(|a| a.is_cancelled()) {
             return Err(CallError::CallEnded);
         }
@@ -251,16 +262,21 @@ pub(super) async fn join_call_impl(
     let mut media_lease = None;
     let connected = async {
         media_lease = admit_media(pool, shield_confirmed)?;
-        connect_media(generation, room_manager.connect_timed(
-            &response.livekit_url,
-            &response.livekit_token,
-            key_state.current_key_vec(),
-            timing.clone(),
-        )).await?;
+        connect_media(
+            generation,
+            room_manager.connect_timed(
+                &response.livekit_url,
+                &response.livekit_token,
+                key_state.current_key_vec(),
+                timing.clone(),
+            ),
+        )
+        .await?;
         Ok(())
-    }.await;
+    }
+    .await;
     match connected {
-        Ok(()) => {},
+        Ok(()) => {}
         Err(error) => {
             room_manager.disconnect().await;
             undo_server_setup(call_client, pool, origin, &call_id.to_string()).await;
@@ -554,8 +570,14 @@ async fn a_cancelled_reconnect_retries_on_the_new_transport() {
         if attempts == 1 {
             pool.set_url("https://localhost:50052").unwrap();
         }
-        std::future::ready(if token.is_cancelled() { Err(CallError::CallEnded) } else { Ok(42) })
-    }).await.unwrap();
+        std::future::ready(if token.is_cancelled() {
+            Err(CallError::CallEnded)
+        } else {
+            Ok(42)
+        })
+    })
+    .await
+    .unwrap();
     assert_eq!(attempts, 2);
     assert_eq!(value, 42);
 }
@@ -607,18 +629,24 @@ pub(super) async fn reconnect_impl(
                     call_client.lock().await.join_call(call_id).await
                 };
                 response.map_err(|e| CallError::ServerError(format!("Reconnect failed: {e}")))
-            }).await?;
+            })
+            .await?;
             media_transport(pool, shield_confirmed)?;
-            connect_media(generation, room_manager.connect_reusing_keys_aligned(
-                livekit_url,
-                &response.livekit_token,
-                snapshot,
-                &mut candidate,
-                started_at,
-            )).await?;
+            connect_media(
+                generation,
+                room_manager.connect_reusing_keys_aligned(
+                    livekit_url,
+                    &response.livekit_token,
+                    snapshot,
+                    &mut candidate,
+                    started_at,
+                ),
+            )
+            .await?;
             Ok(candidate)
         }
-    }).await?;
+    })
+    .await?;
     // No await between room initialization and committing its authoritative
     // chain. The actor restarts the timer before restoration can await.
     active_call

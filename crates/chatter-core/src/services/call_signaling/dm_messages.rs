@@ -3,7 +3,8 @@ use super::*;
 impl CallSignalingService {
     pub(crate) fn pending_dm_media_confirmed(&self, call_id: &str, peer: &UserId) -> bool {
         self.pending_dm_call.lock().as_ref().is_some_and(|pending| {
-            pending.call_id.to_string() == call_id && pending.peer_id == *peer
+            pending.call_id.to_string() == call_id
+                && pending.peer_id == *peer
                 && pending.shield_confirmed
         })
     }

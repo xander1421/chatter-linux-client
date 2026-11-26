@@ -60,7 +60,11 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
             super::with_shield_confirmation(
-                &window, &client, revision, Some(call_id_str.clone()), move |confirmed| {
+                &window,
+                &client,
+                revision,
+                Some(call_id_str.clone()),
+                move |confirmed| {
                     if is_current_ring(&ui_ctx, revision, &call_id_str) {
                         queue_accept(weak, ui_ctx, call_id_str, revision, confirmed);
                     }
@@ -104,12 +108,16 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn is_current_ring(client: &ChatterClient, revision: u64, call_id: &str) -> bool {
     client.call_session_is_current(revision)
-        && client.incoming_call_presentation_state().is_some_and(|state| {
-            state.with_snapshot(|snapshot| snapshot.session_revision == Some(revision)
-                && matches!(snapshot.presentations.last(),
+        && client
+            .incoming_call_presentation_state()
+            .is_some_and(|state| {
+                state.with_snapshot(|snapshot| {
+                    snapshot.session_revision == Some(revision)
+                        && matches!(snapshot.presentations.last(),
                     Some(CallOrchestratorEvent::IncomingPresented { call, .. })
-                    if call.as_str() == call_id))
-        })
+                    if call.as_str() == call_id)
+                })
+            })
 }
 
 fn queue_accept(
@@ -178,17 +186,28 @@ fn queue_accept(
             }
         }
         #[cfg(target_os = "ios")]
-        if let Err(error) = chatter_core::media::AudioRecorder::request_microphone_permission().await {
+        if let Err(error) =
+            chatter_core::media::AudioRecorder::request_microphone_permission().await
+        {
             if ui_ctx.call_session_is_current(revision) {
                 fail_incoming_call(&weak, &ui_ctx, revision, &call_id_str, &error);
             }
             tokio::spawn(async move {
-                let _ = ui_ctx.decline_presented_incoming_call_in_session(&call_id_str, revision).await;
+                let _ = ui_ctx
+                    .decline_presented_incoming_call_in_session(&call_id_str, revision)
+                    .await;
             });
             return;
         }
         tracing::info!(target: "call_setup::accept_permissions_ready", "Call setup diagnostic");
-        tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active, revision, shield_confirmed));
+        tokio::spawn(accept(
+            weak,
+            ui_ctx,
+            call_id_str,
+            replaces_active,
+            revision,
+            shield_confirmed,
+        ));
     })
     .unwrap();
 }
@@ -205,7 +224,12 @@ async fn accept(
         return;
     }
     match ui_ctx
-        .accept_presented_incoming_call_in_session(&call_id, replaces_active, revision, shield_confirmed)
+        .accept_presented_incoming_call_in_session(
+            &call_id,
+            replaces_active,
+            revision,
+            shield_confirmed,
+        )
         .await
     {
         Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted, revision),
@@ -819,7 +843,9 @@ fn paint_incoming(
 /// result — which only repaints the view showing its own call id — is dropped,
 /// leaving "Calling..." forever. Load this call's presentation from core first.
 fn load_presented_incoming(w: &MainWindow, ui_ctx: &ChatterClient, revision: u64, call_id: &str) {
-    let Some(state) = ui_ctx.incoming_call_presentation_state() else { return };
+    let Some(state) = ui_ctx.incoming_call_presentation_state() else {
+        return;
+    };
     state.with_snapshot(|snapshot| {
         if snapshot.session_revision != Some(revision) {
             return;

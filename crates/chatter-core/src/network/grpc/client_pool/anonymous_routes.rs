@@ -33,26 +33,32 @@ impl GrpcClientPool {
         #[cfg(feature = "onion")]
         loop {
             {
-            // Match swap_endpoint's lock order. The mode, endpoint and token
-            // must describe the same generation before caching the channel.
-            let _channel = self.channel.read();
-            if *self.transport_mode.read() == TransportMode::Onion {
-                if let Some(ch) = self.unidentified_channel.read().clone().filter(GrpcTransport::is_current) {
+                // Match swap_endpoint's lock order. The mode, endpoint and token
+                // must describe the same generation before caching the channel.
+                let _channel = self.channel.read();
+                if *self.transport_mode.read() == TransportMode::Onion {
+                    if let Some(ch) = self
+                        .unidentified_channel
+                        .read()
+                        .clone()
+                        .filter(GrpcTransport::is_current)
+                    {
+                        return ch;
+                    }
+                    let mut guard = self.unidentified_channel.write();
+                    if let Some(ch) = guard.clone().filter(GrpcTransport::is_current) {
+                        return ch;
+                    }
+                    let token = self.transport_token.read().clone();
+                    let endpoint = self.endpoint.read().clone();
+                    let ch = GrpcTransport::from_onion(
+                        endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
+                        self.transport_mode.clone(),
+                    )
+                    .in_generation(token);
+                    *guard = Some(ch.clone());
                     return ch;
                 }
-                let mut guard = self.unidentified_channel.write();
-                if let Some(ch) = guard.clone().filter(GrpcTransport::is_current) {
-                    return ch;
-                }
-                let token = self.transport_token.read().clone();
-                let endpoint = self.endpoint.read().clone();
-                let ch = GrpcTransport::from_onion(
-                    endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
-                    self.transport_mode.clone(),
-                ).in_generation(token);
-                *guard = Some(ch.clone());
-                return ch;
-            }
             }
             let direct = self.channel();
             let _channel = self.channel.read();
@@ -72,7 +78,8 @@ impl GrpcClientPool {
             (
                 self.endpoint.read().clone(),
                 self.transport_mode(),
-                self.transport_gen.load(std::sync::atomic::Ordering::Acquire),
+                self.transport_gen
+                    .load(std::sync::atomic::Ordering::Acquire),
                 self.transport_token.read().clone(),
             )
         };
@@ -85,7 +92,8 @@ impl GrpcClientPool {
             .map_err(|e| {
                 NetworkError::ConnectionFailed(format!("anonymous onion preconnect: {e}"))
             })?;
-        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
+        let channel =
+            GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
         let mut probe = super::super::AnonymousMailboxClient::new(channel.clone());
         tokio::time::timeout(
             Duration::from_secs(15),

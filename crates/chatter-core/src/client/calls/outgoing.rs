@@ -92,7 +92,10 @@ impl ChatterClient {
                     attempt.cancel();
                     return Err(ClientError::Validation("call session changed".into()));
                 }
-                let start = match self.dispatch_start_call(conversation, call_type, attempt.shield_confirmed).await {
+                let start = match self
+                    .dispatch_start_call(conversation, call_type, attempt.shield_confirmed)
+                    .await
+                {
                     Ok(start) => start,
                     Err(error) => {
                         attempt.cancel();

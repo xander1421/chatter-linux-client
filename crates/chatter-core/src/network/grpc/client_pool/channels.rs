@@ -111,7 +111,8 @@ impl GrpcClientPool {
                         Ok(channel) => {
                             let channel = channel
                                 .for_pool(self.transport_mode.clone(), TransportMode::Direct);
-                            let channel = channel.in_generation(self.transport_token.read().clone());
+                            let channel =
+                                channel.in_generation(self.transport_token.read().clone());
                             tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
                             *guard = Some(channel.clone());
                             return channel;

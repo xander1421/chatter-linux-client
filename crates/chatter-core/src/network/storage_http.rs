@@ -99,7 +99,6 @@ mod tests {
         );
     }
 
-
     #[test]
     #[ignore = "requires live private-CA storage health endpoint"]
     fn storage_client_survives_runtime_restart() {

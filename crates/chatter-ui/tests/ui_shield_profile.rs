@@ -109,7 +109,10 @@ fn shield_banner_morphs_at_phone_and_desktop_widths() {
             assert!(banner_height(&window) < 1.0);
             window.invoke_shield(true, 3);
             advance(80);
-            frame(&window, &format!("{theme}-{width}-02-onion-error-transition.png"));
+            frame(
+                &window,
+                &format!("{theme}-{width}-02-onion-error-transition.png"),
+            );
             let travel_height = banner_height(&window);
             assert!(travel_height > 0.0);
             advance(500);

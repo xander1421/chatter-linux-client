@@ -11,7 +11,10 @@ pub struct CallStartAttempt {
 #[cfg(feature = "media")]
 impl CallStartAttempt {
     pub fn new(shield_confirmed: bool) -> Self {
-        Self { shield_confirmed, ..Self::default() }
+        Self {
+            shield_confirmed,
+            ..Self::default()
+        }
     }
 
     pub fn cancel(&self) {

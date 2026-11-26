@@ -18,8 +18,8 @@ use crate::ai_protocol::{
     LocalAIBackend,
 };
 use crate::network::grpc::client_pool::GrpcClientPool;
-use std::sync::Arc;
 use chatter_proto::chat_v1::ChatTurn;
+use std::sync::Arc;
 
 /// Cloud backend that routes through our own metered broker.
 pub struct BrokerBackend {

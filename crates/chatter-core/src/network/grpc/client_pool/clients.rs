@@ -179,7 +179,8 @@ impl GrpcClientPool {
             let ch = GrpcTransport::from_onion(
                 endpoint.connect_with_connector_lazy(self.onion_connector()),
                 self.transport_mode.clone(),
-            ).in_generation(token);
+            )
+            .in_generation(token);
             Ok(super::super::AuthClient::new(ch, self.auth_clone()))
         }
         #[cfg(not(feature = "onion"))]

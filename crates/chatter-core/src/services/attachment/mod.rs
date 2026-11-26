@@ -315,9 +315,16 @@ impl AttachmentService {
     /// route is an error, never a direct request.
     fn cdn_route(&self) -> Result<(bool, tokio_util::sync::CancellationToken), AttachmentError> {
         use crate::network::grpc::client_pool::TransportMode;
-        let (mode, token) = self.grpc_pool.as_ref()
+        let (mode, token) = self
+            .grpc_pool
+            .as_ref()
             .map(|pool| pool.route_generation_snapshot())
-            .unwrap_or_else(|| (TransportMode::Direct, tokio_util::sync::CancellationToken::new()));
+            .unwrap_or_else(|| {
+                (
+                    TransportMode::Direct,
+                    tokio_util::sync::CancellationToken::new(),
+                )
+            });
         if self.secret_chat {
             let pool = self.grpc_pool()?;
             if !pool.secret_route_available() {
@@ -363,7 +370,11 @@ impl AttachmentService {
         .await
     }
 
-    async fn cdn_http_get_on_route(&self, url: &str, tor: bool) -> Result<Vec<u8>, AttachmentError> {
+    async fn cdn_http_get_on_route(
+        &self,
+        url: &str,
+        tor: bool,
+    ) -> Result<Vec<u8>, AttachmentError> {
         if tor {
             #[cfg(feature = "onion")]
             {
@@ -423,7 +434,11 @@ impl AttachmentService {
     }
 
     async fn cdn_http_get_to_file_on_route(
-        &self, url: &str, file: &mut tokio::fs::File, limit: u64, tor: bool,
+        &self,
+        url: &str,
+        file: &mut tokio::fs::File,
+        limit: u64,
+        tor: bool,
     ) -> Result<u64, AttachmentError> {
         if tor {
             #[cfg(feature = "onion")]
@@ -468,7 +483,11 @@ impl AttachmentService {
 
     /// PUT to a presigned URL on the upload attempt's fenced route.
     async fn cdn_http_put_on_route(
-        &self, url: &str, body: Vec<u8>, content_type: &str, tor: bool,
+        &self,
+        url: &str,
+        body: Vec<u8>,
+        content_type: &str,
+        tor: bool,
     ) -> Result<(u16, Option<String>), AttachmentError> {
         if tor {
             #[cfg(feature = "onion")]

@@ -269,11 +269,14 @@ impl InboxPoller {
             // signal): a completed round-trip = Connected, a timeout = Error. Only
             // touch it on onion — direct mode owns its own connection state.
             if let Some(generation) = onion_generation {
-                use crate::network::connection::TorStatus;
                 use crate::error::NetworkError;
+                use crate::network::connection::TorStatus;
                 let status = match &outcome {
                     Ok(Ok(_)) => Some(TorStatus::Connected),
-                    Err(_) | Ok(Err(NetworkError::RequestNotSent(_) | NetworkError::ConnectionFailed(_))) => Some(TorStatus::Error),
+                    Err(_)
+                    | Ok(Err(
+                        NetworkError::RequestNotSent(_) | NetworkError::ConnectionFailed(_),
+                    )) => Some(TorStatus::Error),
                     _ => None,
                 };
                 if let Some(status) = status {

@@ -292,20 +292,27 @@ mod transport_switch_tests {
         client.services.grpc_pool.set_onion_address(None);
         client.set_anon_mode_enabled(true);
         assert!(!client.anon_mode_enabled());
-        assert!(listed(&client), "an unavailable Shield leaves the channel listed");
+        assert!(
+            listed(&client),
+            "an unavailable Shield leaves the channel listed"
+        );
 
         #[cfg(feature = "onion")]
         {
-            client.services.grpc_pool.set_onion_address(Some(format!(
-                "http://{}.onion:443", "a".repeat(56)
-            )));
+            client
+                .services
+                .grpc_pool
+                .set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
             client.set_anon_mode_enabled(true);
         }
         #[cfg(not(feature = "onion"))]
         client.anon_mode.store(true, Ordering::Release);
 
         assert!(client.anon_mode_enabled());
-        assert!(!listed(&client), "active Shield filters the channel locally");
+        assert!(
+            !listed(&client),
+            "active Shield filters the channel locally"
+        );
         client.set_anon_mode_enabled(false);
         assert!(listed(&client), "leaving Shield lists it again");
     }
@@ -331,14 +338,22 @@ mod transport_switch_tests {
     #[tokio::test]
     async fn auditclient2_shield_call_needs_explicit_confirmation() {
         let (client, _dir) = build_test_client();
-        client.anon_mode.store(true, std::sync::atomic::Ordering::Release);
+        client
+            .anon_mode
+            .store(true, std::sync::atomic::Ordering::Release);
         let attempt = crate::client::calls::CallStartAttempt::default();
-        let err = client.start_call_attempt(
-            crate::state::ActiveConversation::None,
-            crate::domain::call::CallType::Voice,
-            attempt,
-        ).await.unwrap_err();
-        assert!(matches!(err, crate::client::ClientError::ShieldCallConfirmationRequired));
+        let err = client
+            .start_call_attempt(
+                crate::state::ActiveConversation::None,
+                crate::domain::call::CallType::Voice,
+                attempt,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::client::ClientError::ShieldCallConfirmationRequired
+        ));
         assert!(client.call_needs_shield_confirmation());
     }
 

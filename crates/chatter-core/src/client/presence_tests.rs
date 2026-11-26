@@ -40,8 +40,9 @@ async fn stalled_presence_releases_lifecycle_for_actual_accept_entry() {
     // Establish that this exact Accept entry is fenced by lifecycle (the old
     // presence implementation retained that guard across its network wait).
     let blocker = client.auth_lifecycle_lock.lock().await;
-    let mut accept =
-        Box::pin(client.accept_presented_incoming_call_in_session("fixture", false, revision, false));
+    let mut accept = Box::pin(
+        client.accept_presented_incoming_call_in_session("fixture", false, revision, false),
+    );
     assert!(futures::poll!(&mut accept).is_pending());
     drop(blocker);
     assert!(accept.await.is_err()); // No call worker in this offline fixture.

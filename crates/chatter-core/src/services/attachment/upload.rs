@@ -60,10 +60,17 @@ impl AttachmentService {
         F: std::future::Future<Output = Result<T, AttachmentError>> + Send,
     {
         let (tor, generation) = self.cdn_route()?;
-        match super::fence_cdn_transfer(generation, AttachmentError::TransportChanged, attempt(tor)).await {
+        match super::fence_cdn_transfer(generation, AttachmentError::TransportChanged, attempt(tor))
+            .await
+        {
             Err(AttachmentError::TransportChanged) => {
                 let (tor, generation) = self.cdn_route()?;
-                super::fence_cdn_transfer(generation, AttachmentError::TransportChanged, attempt(tor)).await
+                super::fence_cdn_transfer(
+                    generation,
+                    AttachmentError::TransportChanged,
+                    attempt(tor),
+                )
+                .await
             }
             result => result,
         }
@@ -278,7 +285,10 @@ impl AttachmentService {
             .upload_on_current_route(|tor| async move {
                 let thumbnail_upload = async {
                     match thumbnail {
-                        Some(t) => self.upload_thumbnail_sidecar(t, tor).await.unwrap_or_default(),
+                        Some(t) => self
+                            .upload_thumbnail_sidecar(t, tor)
+                            .await
+                            .unwrap_or_default(),
                         None => Default::default(),
                     }
                 };
@@ -417,9 +427,9 @@ impl AttachmentService {
             return Err(super::no_tor());
         }
 
-        let file = tokio::fs::File::open(path).await.map_err(|e| {
-            AttachmentError::FileError(format!("Failed to open temp file: {e}"))
-        })?;
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {e}")))?;
         let stream = tokio_util::io::ReaderStream::new(file);
         let response = super::cdn_client()?
             .put(url)
@@ -457,7 +467,10 @@ impl AttachmentService {
                 return None;
             }
         };
-        let cdn_key = match self.upload_ciphertext_to_cdn(&encrypted.ciphertext, tor).await {
+        let cdn_key = match self
+            .upload_ciphertext_to_cdn(&encrypted.ciphertext, tor)
+            .await
+        {
             Ok(key) => key,
             Err(e) => {
                 tracing::warn!(error = %e, "Thumbnail sidecar upload failed; sending without preview");
@@ -595,7 +608,9 @@ impl AttachmentService {
             let temp_path = temp_path.clone();
             async move {
                 let part_number = (i as u32) + 1;
-                let etag = self.upload_one_part(&url, &temp_path, offset, len, tor).await?;
+                let etag = self
+                    .upload_one_part(&url, &temp_path, offset, len, tor)
+                    .await?;
                 Ok::<chatter_proto::chat_v1::CompletedPart, AttachmentError>(
                     chatter_proto::chat_v1::CompletedPart {
                         number: part_number,
@@ -695,7 +710,10 @@ impl AttachmentService {
             .upload_on_current_route(|tor| async move {
                 let cdn_key = self.upload_ciphertext_to_cdn(ciphertext, tor).await?;
                 let thumbnail = match thumbnail {
-                    Some(t) => self.upload_thumbnail_sidecar(t, tor).await.unwrap_or_default(),
+                    Some(t) => self
+                        .upload_thumbnail_sidecar(t, tor)
+                        .await
+                        .unwrap_or_default(),
                     None => Default::default(),
                 };
                 Ok((cdn_key, thumbnail))
@@ -1283,10 +1301,14 @@ mod part_range_tests {
         assert_eq!(attempts, 2);
 
         attempts = 0;
-        let result: Result<(), _> = service.upload_on_current_route(|_| {
-            attempts += 1;
-            std::future::ready(Err(AttachmentError::NetworkError("unexpected HTTP error".into())))
-        }).await;
+        let result: Result<(), _> = service
+            .upload_on_current_route(|_| {
+                attempts += 1;
+                std::future::ready(Err(AttachmentError::NetworkError(
+                    "unexpected HTTP error".into(),
+                )))
+            })
+            .await;
         assert!(matches!(result, Err(AttachmentError::NetworkError(_))));
         assert_eq!(attempts, 1);
     }

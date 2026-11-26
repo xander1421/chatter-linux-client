@@ -223,8 +223,10 @@ impl GrpcClientPool {
     /// Capture the generation whose onion poll may update the Tor indicator.
     pub(crate) fn tor_poll_generation(&self) -> Option<u64> {
         let _channel = self.channel.read();
-        (self.transport_mode() == TransportMode::Onion)
-            .then(|| self.transport_gen.load(std::sync::atomic::Ordering::Acquire))
+        (self.transport_mode() == TransportMode::Onion).then(|| {
+            self.transport_gen
+                .load(std::sync::atomic::Ordering::Acquire)
+        })
     }
 
     pub(crate) fn note_tor_poll(
@@ -236,7 +238,10 @@ impl GrpcClientPool {
         // this lock, so neither can interleave with checking and publishing.
         let _channel = self.channel.read();
         if self.transport_mode() != TransportMode::Onion
-            || self.transport_gen.load(std::sync::atomic::Ordering::Acquire) != generation
+            || self
+                .transport_gen
+                .load(std::sync::atomic::Ordering::Acquire)
+                != generation
         {
             return false;
         }
@@ -254,13 +259,19 @@ impl GrpcClientPool {
                 "Call media connects directly and can reveal your IP address.",
             )));
         }
-        self.active_unconsented_media.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        Ok(super::DirectMediaLease(self.active_unconsented_media.clone()))
+        self.active_unconsented_media
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Ok(super::DirectMediaLease(
+            self.active_unconsented_media.clone(),
+        ))
     }
 
     #[cfg(feature = "media")]
     pub(crate) fn call_origin(&self) -> (String, Option<String>) {
-        (self.direct_url.read().clone(), self.onion_addr.read().clone())
+        (
+            self.direct_url.read().clone(),
+            self.onion_addr.read().clone(),
+        )
     }
 
     /// Shared handle to the pool's lazily-bootstrapped Tor client, for carrying
@@ -290,7 +301,10 @@ impl GrpcClientPool {
     ) -> Result<(), NetworkError> {
         let mut channel = self.channel.write();
         if mode == TransportMode::Onion
-            && self.active_unconsented_media.load(std::sync::atomic::Ordering::Acquire) != 0
+            && self
+                .active_unconsented_media
+                .load(std::sync::atomic::Ordering::Acquire)
+                != 0
         {
             return Err(NetworkError::ShieldBlockedByActiveCall);
         }

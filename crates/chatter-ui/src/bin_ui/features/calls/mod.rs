@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use crate::MainWindow;
-use slint::ComponentHandle;
 use chatter_core::client::ChatterClient;
+use slint::ComponentHandle;
 
 mod active;
 mod device_picker;
@@ -37,7 +37,11 @@ struct ConfirmedCall {
 
 fn reconcile_shield_confirmation(window: &MainWindow, revision: u64, ringing: Option<&str>) {
     dismiss_shield_confirmation_if(window, |call| {
-        call.revision != revision || call.incoming.as_deref().is_some_and(|id| ringing != Some(id))
+        call.revision != revision
+            || call
+                .incoming
+                .as_deref()
+                .is_some_and(|id| ringing != Some(id))
     });
 }
 
@@ -52,7 +56,9 @@ fn dismiss_shield_confirmation_if(window: &MainWindow, stale: impl FnOnce(&Confi
         }
     });
     if cleared {
-        window.global::<crate::CallView>().set_shield_confirmation_open(false);
+        window
+            .global::<crate::CallView>()
+            .set_shield_confirmation_open(false);
     }
 }
 
@@ -71,9 +77,13 @@ fn with_shield_confirmation(
 ) {
     if client.call_needs_shield_confirmation() {
         let answering = incoming.is_some();
-        SHIELD_CONFIRM.with(|slot| *slot.borrow_mut() = Some(ConfirmedCall {
-            revision, incoming, run: Box::new(call),
-        }));
+        SHIELD_CONFIRM.with(|slot| {
+            *slot.borrow_mut() = Some(ConfirmedCall {
+                revision,
+                incoming,
+                run: Box::new(call),
+            })
+        });
         let view = window.global::<crate::CallView>();
         view.set_shield_confirmation_answering(answering);
         view.set_shield_confirmation_open(true);
@@ -90,17 +100,22 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     #[cfg(target_os = "android")]
     {
         let weak = window.as_weak();
-        window.global::<crate::CallView>().on_leave_keyguard_call(move || {
-            if let Some(w) = weak.upgrade() {
-                let id = w.global::<crate::CallView>().get_keyguard_call_id();
-                crate::platform::android::activity::update_call_window(
-                    jni::jni_str!("requestCallWindowUnlock"), id.as_str(),
-                );
-            }
-        });
-        window.global::<crate::CallView>().on_keyguard_call_ended(|id| {
-            crate::platform::android::activity::clear_incoming_call_window(id.as_str());
-        });
+        window
+            .global::<crate::CallView>()
+            .on_leave_keyguard_call(move || {
+                if let Some(w) = weak.upgrade() {
+                    let id = w.global::<crate::CallView>().get_keyguard_call_id();
+                    crate::platform::android::activity::update_call_window(
+                        jni::jni_str!("requestCallWindowUnlock"),
+                        id.as_str(),
+                    );
+                }
+            });
+        window
+            .global::<crate::CallView>()
+            .on_keyguard_call_ended(|id| {
+                crate::platform::android::activity::clear_incoming_call_window(id.as_str());
+            });
     }
     use slint::{Model, ModelRc, VecModel};
     let weak = window.as_weak();
@@ -109,36 +124,52 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let auth_window = weak.clone();
     let auth_client = client.clone();
     let _ = slint::spawn_local(async move {
-        while !matches!(auth.recv().await, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
-            let Some(window) = auth_window.upgrade() else { break };
+        while !matches!(
+            auth.recv().await,
+            Err(tokio::sync::broadcast::error::RecvError::Closed)
+        ) {
+            let Some(window) = auth_window.upgrade() else {
+                break;
+            };
             let revision = auth_client.auth_snapshot().session_revision;
             dismiss_shield_confirmation_if(&window, |call| call.revision != revision);
         }
     });
-    window.global::<crate::CallView>().on_shield_confirmation_answer(move |confirmed| {
-        if let Some(window) = weak.upgrade() {
-            window.global::<crate::CallView>().set_shield_confirmation_open(false);
-        }
-        let call = SHIELD_CONFIRM.with(|slot| slot.borrow_mut().take());
-        if confirmed {
-            if let Some(call) = call.filter(|call| {
-                call.revision == client.auth_snapshot().session_revision
-            }) {
-                (call.run)(true);
+    window
+        .global::<crate::CallView>()
+        .on_shield_confirmation_answer(move |confirmed| {
+            if let Some(window) = weak.upgrade() {
+                window
+                    .global::<crate::CallView>()
+                    .set_shield_confirmation_open(false);
             }
-        }
-    });
-    window.global::<crate::CallView>().on_select_call_tile_indices(|participants, pinned_id| {
-        let tiles: Vec<crate::CallParticipantData> = participants.iter().collect();
-        let indices = chatter_core::calls::tiles::select_visible_tiles(
-            &tiles,
-            pinned_id.as_str(),
-            |tile| tile.user_id.as_str(),
-            |tile| tile.is_screen_sharing,
-            |tile| tile.is_speaking,
-        );
-        ModelRc::new(VecModel::from(indices.into_iter().map(|index| index as i32).collect::<Vec<_>>()))
-    });
+            let call = SHIELD_CONFIRM.with(|slot| slot.borrow_mut().take());
+            if confirmed {
+                if let Some(call) =
+                    call.filter(|call| call.revision == client.auth_snapshot().session_revision)
+                {
+                    (call.run)(true);
+                }
+            }
+        });
+    window
+        .global::<crate::CallView>()
+        .on_select_call_tile_indices(|participants, pinned_id| {
+            let tiles: Vec<crate::CallParticipantData> = participants.iter().collect();
+            let indices = chatter_core::calls::tiles::select_visible_tiles(
+                &tiles,
+                pinned_id.as_str(),
+                |tile| tile.user_id.as_str(),
+                |tile| tile.is_screen_sharing,
+                |tile| tile.is_speaking,
+            );
+            ModelRc::new(VecModel::from(
+                indices
+                    .into_iter()
+                    .map(|index| index as i32)
+                    .collect::<Vec<_>>(),
+            ))
+        });
     outgoing::wire_start_call(window, ui_ctx);
     incoming::wire_incoming_call(window, ui_ctx);
     incoming::wire_orchestrator_events(window, ui_ctx);

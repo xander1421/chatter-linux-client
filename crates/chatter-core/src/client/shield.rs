@@ -185,6 +185,9 @@ impl ChatterClient {
             return Err(e);
         }
 
+        self.transport_epoch
+            .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+
         // ANONYMITY-CRITICAL: set_transport_mode drops the pool's cached
         // channels so every *new* RPC and per-attempt retry rebuilds over the
         // new transport — but the long-lived loops opened BEFORE the flip hold
@@ -373,5 +376,4 @@ impl ChatterClient {
     pub fn jarvis_state(&self) -> &JarvisState {
         &self.services.jarvis_state
     }
-
 }

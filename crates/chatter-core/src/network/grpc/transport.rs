@@ -29,8 +29,8 @@ use crate::network::connection::{ServerStatus, set_server_status};
 use http::{Request, Response};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tonic::body::Body;
 use tokio_util::sync::CancellationToken;
+use tonic::body::Body;
 
 /// Records only evidence from an actual request; construction performs no I/O.
 #[derive(Clone)]
@@ -123,7 +123,10 @@ impl GrpcTransport {
     }
 
     pub(crate) fn is_current(&self) -> bool {
-        !self.generation.as_ref().is_some_and(|guard| guard.token.is_cancelled())
+        !self
+            .generation
+            .as_ref()
+            .is_some_and(|guard| guard.token.is_cancelled())
     }
 
     /// The transport selected for this channel, not a reachability verdict.
@@ -195,7 +198,10 @@ where
         let route = self.route;
         let failure_scope = self.failure_scope.clone();
         let generation = self.generation.as_ref().map(|guard| guard.token.clone());
-        if generation.as_ref().is_some_and(CancellationToken::is_cancelled) {
+        if generation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
             return Box::pin(async { Err(transport_changed().into()) });
         }
         let request = request.map(|body| fence_body(body, generation.clone()));
@@ -244,14 +250,17 @@ where
                         auth.observe(response.headers());
                     }
                     Ok(response.map(|inner| {
-                        fence_body(Body::new(RecordingBody {
-                            inner,
-                            record,
-                            device_auth,
-                            family,
-                            route,
-                            failure_scope,
-                        }), generation)
+                        fence_body(
+                            Body::new(RecordingBody {
+                                inner,
+                                record,
+                                device_auth,
+                                family,
+                                route,
+                                failure_scope,
+                            }),
+                            generation,
+                        )
                     }))
                 }
                 Err(error) => {
@@ -267,12 +276,16 @@ where
 
 fn transport_changed() -> tonic::Status {
     let mut status = tonic::Status::unavailable("transport changed");
-    status.set_source(std::sync::Arc::new(crate::error::NetworkError::TransportChanged));
+    status.set_source(std::sync::Arc::new(
+        crate::error::NetworkError::TransportChanged,
+    ));
     status
 }
 
 fn fence_body(inner: Body, generation: Option<CancellationToken>) -> Body {
-    let Some(generation) = generation else { return inner };
+    let Some(generation) = generation else {
+        return inner;
+    };
     Body::new(GenerationBody {
         inner,
         cancelled: Box::pin(generation.cancelled_owned()),
@@ -638,8 +651,11 @@ pub(crate) mod outcome_tests {
         let generation = CancellationToken::new();
         let mut handle = GrpcTransport::from(
             tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy(),
-        ).in_generation(generation.clone());
-        let frames = Frames(VecDeque::from([Ok(Frame::data(bytes::Bytes::from_static(b"old")))]));
+        )
+        .in_generation(generation.clone());
+        let frames = Frames(VecDeque::from([Ok(Frame::data(
+            bytes::Bytes::from_static(b"old"),
+        ))]));
         let mut body = fence_body(Body::new(frames), Some(generation.clone()));
         generation.cancel();
 
@@ -649,10 +665,14 @@ pub(crate) mod outcome_tests {
         let err = handle.call(Request::new(Body::empty())).await.unwrap_err();
         assert!(err.to_string().contains("transport changed"));
         let mut kt = chatter_proto::chat_v1::key_transparency_service_client::KeyTransparencyServiceClient::new(handle);
-        let status = kt.get_proof(chatter_proto::chat_v1::GetProofRequest::default())
-            .await.unwrap_err();
-        assert!(matches!(crate::error::NetworkError::from_status(&status),
-            crate::error::NetworkError::TransportChanged));
+        let status = kt
+            .get_proof(chatter_proto::chat_v1::GetProofRequest::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            crate::error::NetworkError::from_status(&status),
+            crate::error::NetworkError::TransportChanged
+        ));
         let frame = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;
         let status = frame.unwrap().unwrap_err();
         assert!(matches!(

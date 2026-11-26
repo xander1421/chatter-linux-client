@@ -33,7 +33,9 @@ impl ChannelEventService {
                 });
                 match outcome {
                     Ok(()) => tracing::info!("Channel event stream ended; reconnecting"),
-                    Err(ChannelEventError::Network(crate::error::NetworkError::TransportChanged)) => {
+                    Err(ChannelEventError::Network(
+                        crate::error::NetworkError::TransportChanged,
+                    )) => {
                         continue;
                     }
                     Err(e) => tracing::warn!("Channel event stream error: {}; reconnecting", e),

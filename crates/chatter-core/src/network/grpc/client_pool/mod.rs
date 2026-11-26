@@ -460,7 +460,10 @@ mod tests {
         );
         assert!(pool.try_channel().is_none());
         assert!(!old.is_current(), "an old holder must be fenced");
-        assert!(pool.channel().is_current(), "new holders redial in the new generation");
+        assert!(
+            pool.channel().is_current(),
+            "new holders redial in the new generation"
+        );
     }
 
     #[test]
@@ -650,7 +653,8 @@ mod tests {
         pool.swap_endpoint(
             Endpoint::from_static("http://example.onion:443"),
             TransportMode::Onion,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(pool.quic_probe_task.lock().is_none());
         tokio::time::timeout(Duration::from_secs(1), async {
             while !old_probe.is_finished() {

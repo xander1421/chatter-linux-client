@@ -371,7 +371,9 @@ impl ChatterClient {
         }
         #[cfg(feature = "media")]
         if let Some(worker) = self.ctx.get_call_service() {
-            worker.swap_call_client(self.services.grpc_pool.call_client()).await;
+            worker
+                .swap_call_client(self.services.grpc_pool.call_client())
+                .await;
         }
 
         // ── Event handling ──────────────────────────────────────────
@@ -442,7 +444,7 @@ impl ChatterClient {
         let h_peer_verifier = crate::services::signal::spawn_peer_verifier(
             self.services.signal_service.clone(), self.services.grpc_pool.clone(),
             self.event_bus().clone(), self.auth_state().clone(),
-            self.update_transport_epoch.subscribe(),
+            self.transport_epoch.subscribe(),
         );
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);

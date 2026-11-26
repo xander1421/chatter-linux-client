@@ -116,8 +116,11 @@ impl GrpcClientPool {
         if fresh && channel.is_http3() && !guard.as_ref().is_some_and(GrpcTransport::is_http3) {
             tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
         }
-        *guard = Some(channel.for_pool(self.transport_mode.clone(), mode)
-            .in_generation(self.transport_token.read().clone()));
+        *guard = Some(
+            channel
+                .for_pool(self.transport_mode.clone(), mode)
+                .in_generation(self.transport_token.read().clone()),
+        );
         Ok(crate::network::connection::server_status()
             == crate::network::connection::ServerStatus::Reachable)
     }
