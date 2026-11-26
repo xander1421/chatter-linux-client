@@ -536,7 +536,12 @@ impl MeshLink for BlueZLink {
                 Some(name) => BleAdapter::acquire_named(name).await?,
                 None => BleAdapter::acquire().await?,
             };
-            ble.power_on().await?;
+            let power_events = ble
+                .adapter()
+                .events()
+                .await
+                .map_err(|err| error::classify_adapter(&err))?;
+            ble.require_private_radio().await?;
 
             // Set the discovery filter once, up front: BlueZ refuses to change it
             // while a discovery session is running, and the duty cycle starts and
@@ -547,19 +552,17 @@ impl MeshLink for BlueZLink {
                 PeripheralRole::start(ble.adapter(), service, characteristic, self.inner.clone())
                     .await?;
 
+            self.inner
+                .emit(LinkEvent::AdapterPowerChanged { powered: true });
             let watcher = self.inner.clone();
-            let power = tokio::spawn(adapter::watch_power(
-                ble.adapter().clone(),
-                move |powered| {
-                    watcher.emit(LinkEvent::AdapterPowerChanged { powered });
-                    if !powered {
-                        // Every ACL died with the controller. Say so once per link
-                        // rather than leaving the layer above to discover it one
-                        // failed write at a time.
-                        watcher.drop_all();
-                    }
-                },
-            ));
+            let power = tokio::spawn(async move {
+                adapter::wait_for_power_loss(power_events).await;
+                watcher.emit(LinkEvent::AdapterPowerChanged { powered: false });
+                // End this session so the next start checks privacy again
+                // before registering another advertisement.
+                watcher.drop_all();
+                let _ = watcher.shutdown_tx.send(true);
+            });
 
             {
                 let mut handle = self
@@ -657,9 +660,8 @@ impl MeshLink for BlueZLink {
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         let address = address.to_string();
         Box::pin(async move {
-            // The mesh runs a continuous scan while sparse. BlueZ can keep an
-            // outbound LE connect pending for that whole discovery session, so
-            // settle StopDiscovery before opening the ACL.
+            // BlueZ can keep an outbound LE connect pending while scanning,
+            // so settle StopDiscovery before opening the ACL.
             self.set_scanning(false).await?;
             let service = service_uuid()?;
             let characteristic = characteristic_uuid()?;

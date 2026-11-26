@@ -63,7 +63,10 @@ fn mesh_advertisement(service: Uuid) -> Advertisement {
         // connections, which is exactly the invisible-peripheral failure.
         advertisement_type: AdvertisementType::Peripheral,
         service_uuids: [service].into_iter().collect(),
-        discoverable: Some(true),
+        // Keep this instance non-discoverable even when the host is discoverable.
+        // In BlueZ's limited privacy mode a discoverable, bondable advertiser
+        // may use its identity address. It can still accept connections.
+        discoverable: Some(false),
         local_name: None,
         ..Default::default()
     }
@@ -267,11 +270,7 @@ mod tests {
 
     #[test]
     fn the_advertisement_carries_no_device_identifier() {
-        // The advertisement says "the mesh is here", and about *who* is here it
-        // says only the mesh peer id — never anything tied to the hardware. A
-        // local name would hand a stable device identifier to every passive
-        // scanner in range, and unlike the peer id it would survive reinstalling
-        // the app and identify the machine rather than the identity.
+        // Peers find the mesh service UUID without an identifier in its payload.
         let advertisement = mesh_advertisement(service());
         assert_eq!(advertisement.local_name, None);
         assert!(
@@ -281,7 +280,6 @@ mod tests {
         assert!(advertisement.manufacturer_data.is_empty());
         assert!(advertisement.advertising_data.is_empty());
         assert_eq!(advertisement.appearance, None);
-        // Nothing to say when the runtime has not set an identity yet.
         assert!(advertisement.service_data.is_empty());
     }
 
@@ -291,8 +289,7 @@ mod tests {
         // and it is the wrong one on this side: it overflows the legacy budget,
         // and BlueZ answers an overflow by forcing extended advertising rather
         // than by spilling into the scan response. A legacy-only scanner then
-        // sees nothing at all. Android carries the peer id instead, where the
-        // platform gives a real scan response to put it in.
+        // sees nothing at all.
         let advertisement = mesh_advertisement(service());
         let service_uuid_ad = 2 + 16;
         let used: usize = service_uuid_ad
@@ -301,8 +298,7 @@ mod tests {
                 .iter()
                 .map(|(_, data)| 2 + 16 + data.len())
                 .sum::<usize>();
-        // 31 less the three-byte flags AD that BlueZ prepends for a discoverable
-        // peripheral.
+        // Reserve three bytes for BlueZ's flags AD.
         assert!(
             used <= 31 - 3,
             "{used} bytes will not fit a legacy advertisement"
@@ -316,7 +312,7 @@ mod tests {
             advertisement.advertisement_type,
             AdvertisementType::Peripheral
         );
-        assert_eq!(advertisement.discoverable, Some(true));
+        assert_eq!(advertisement.discoverable, Some(false));
         assert_eq!(advertisement.service_uuids.len(), 1);
         let advertised = advertisement
             .service_uuids

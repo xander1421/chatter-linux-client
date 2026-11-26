@@ -37,6 +37,10 @@ import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
+// MainActivity and the BLE worker use the same visibility signal as Rust.
+// Updating it doesn't initialize the BLE bridge while mesh is off.
+@Volatile internal var meshBleAppVisible = false
+
 /**
  * The Bluetooth LE radio for the mesh transport — both roles, simultaneously.
  *
@@ -168,7 +172,7 @@ object MeshBleBridge {
     private var silentRestartAt = 0L
     private var watchdogRestartPending = false
     private var silentWarningLogged = false
-    private var radioUpAt = 0L
+    private var scanStartedAt = 0L
     private var lastSummaryAt = 0L
     private val scanWindowMs = 30_000L
     private val scanSilenceMs = 60_000L
@@ -195,12 +199,14 @@ object MeshBleBridge {
                         }
                     }
                 }
-                val lastResult = lastScanResultAt.get().takeIf { it > 0 } ?: radioUpAt
+                val lastResult = lastScanResultAt.get()
                 if (lastResult > silentRestartAt && silentRestartAt != 0L) {
                     silentRestartAt = 0L
                     silentWarningLogged = false
                 }
-                if (!recoveredScan && scanActive && !scanDeferred && now - lastResult >= scanSilenceMs) {
+                // A duty-cycled scan normally stops before this watchdog can fire.
+                val silentMs = now - maxOf(lastResult, scanStartedAt)
+                if (!recoveredScan && scanActive && !scanDeferred && silentMs >= scanSilenceMs) {
                     if (silentRestartAt == 0L) {
                         watchdogRestartPending = true
                         Log.w(TAG, "scanner silent for 60s; restarting once, scanResults=${scanResults.get()}")
@@ -216,9 +222,6 @@ object MeshBleBridge {
         }
     }
     internal var serviceReady = false
-
-    /** Our mesh peer id, advertised in the scan response. Set before [start]. */
-    private var localPeer: ByteArray = ByteArray(0)
 
     private var bluetoothManager: BluetoothManager? = null
     internal var gattServer: BluetoothGattServer? = null
@@ -389,8 +392,7 @@ object MeshBleBridge {
         }
         registerAdapterReceiverLocked(context)
         started = true
-        radioUpAt = SystemClock.elapsedRealtime()
-        lastSummaryAt = radioUpAt
+        lastSummaryAt = SystemClock.elapsedRealtime()
         scanResults.set(0)
         lastScanResultAt.set(0)
         silentRestartAt = 0L
@@ -431,24 +433,6 @@ object MeshBleBridge {
         applyScanLocked(if (on) "policy on" else "policy off")
         // A deferred start is accepted and will run when the scan budget opens.
         scanActive == on || (on && scanDeferred)
-    }
-
-    /**
-     * Publish our mesh peer id in the advertisement's scan response. `(Ljava/lang/String;)V`
-     *
-     * A BLE private address rotates, and nothing about it survives the rotation.
-     * A scanner that cannot see who is behind an address has to connect to find
-     * out — and that connection displaces the one it already had, whose loss
-     * restarts this advertiser under yet another address. The id breaks that
-     * loop. bitchat carries the same eight bytes in the same field for the same
-     * reason (`BluetoothGattServerManager.kt`).
-     *
-     * Call before [start]; an advertiser already running will not pick it up.
-     */
-    @Suppress("unused")
-    fun setLocalPeer(peerHex: String) = synchronized(lock) {
-        localPeer = peerHex.hexToBytesOrEmpty()
-        if (localPeer.isEmpty()) Log.w(TAG, "setLocalPeer: could not parse a peer id")
     }
 
     /**
@@ -625,16 +609,6 @@ object MeshBleBridge {
         emitDiscovered(address, scan.rssi, peer?.let(::peerHex))
     }
 
-    /** Sixteen hex characters to eight bytes; empty on anything else. */
-    private fun String.hexToBytesOrEmpty(): ByteArray {
-        if (length != 16) return ByteArray(0)
-        return try {
-            chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        } catch (_: NumberFormatException) {
-            ByteArray(0)
-        }
-    }
-
     internal fun emitConnected(link: String, peripheral: Boolean, maxWrite: Int) =
         emit("onConnected") { nativeOnConnected(link, peripheral, maxWrite) }
 
@@ -720,22 +694,10 @@ object MeshBleBridge {
             .addServiceUuid(SERVICE_PARCEL_UUID)
             .build()
 
-        // The peer id rides in the scan response, not the advertisement: a
-        // 128-bit service UUID plus eight bytes of service data does not fit in
-        // one 31-byte packet, and the scan response is a second 31 bytes.
-        //
-        // Not a privacy regression. This id is already in the clear in every
-        // announce we broadcast, and it names the mesh identity rather than the
-        // hardware — unlike the device name, which stays excluded above.
-        val scanResponse = if (localPeer.isEmpty()) null else AdvertiseData.Builder()
-            .setIncludeDeviceName(false)
-            .setIncludeTxPowerLevel(false)
-            .addServiceData(SERVICE_PARCEL_UUID, localPeer)
-            .build()
-
         Log.i(TAG, "advertising start requested")
         val issued = guard("startAdvertising", false) {
-            advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
+            // An identifier in a scan response would link successive private addresses.
+            advertiser.startAdvertising(settings, data, advertiseCallback)
             true
         }
         advertising = issued
@@ -837,10 +799,13 @@ object MeshBleBridge {
             val filters = listOf(
                 ScanFilter.Builder().setServiceUuid(SERVICE_PARCEL_UUID).build(),
             )
+            val scanMode = if (meshBleAppVisible) {
+                ScanSettings.SCAN_MODE_LOW_LATENCY
+            } else {
+                ScanSettings.SCAN_MODE_BALANCED
+            }
             val settings = ScanSettings.Builder()
-                // The duty cycle is the caller's lever, so each window we do open
-                // is scanned aggressively — a short low-power window finds nothing.
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setScanMode(scanMode)
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setReportDelay(0)
                 .build()
@@ -850,9 +815,12 @@ object MeshBleBridge {
                 scanner.startScan(filters, settings, scanCallback)
                 true
             }
-            if (scanActive && watchdogRestartPending) {
-                silentRestartAt = now
-                watchdogRestartPending = false
+            if (scanActive) {
+                scanStartedAt = now
+                if (watchdogRestartPending) {
+                    silentRestartAt = now
+                    watchdogRestartPending = false
+                }
             }
             Log.i(TAG, "scan start: $reason, active=$scanActive, starts30s=${scanStarts.size}")
         }
@@ -1133,8 +1101,7 @@ object MeshBleBridge {
     /** The adapter came back: rebuild the peripheral role and resume the duty cycle. */
     private fun onAdapterOn() = synchronized(lock) {
         if (started) {
-            radioUpAt = SystemClock.elapsedRealtime()
-            lastSummaryAt = radioUpAt
+            lastSummaryAt = SystemClock.elapsedRealtime()
             scanResults.set(0)
             lastScanResultAt.set(0)
             silentRestartAt = 0L

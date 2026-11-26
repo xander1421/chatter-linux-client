@@ -552,9 +552,6 @@ public final class com.chatter.client.MeshBleBridge {
   public boolean setScanning(boolean);
     descriptor: (Z)Z
 
-  public void setLocalPeer(java.lang.String);
-    descriptor: (Ljava/lang/String;)V
-
   public java.lang.String connect(java.lang.String);
     descriptor: (Ljava/lang/String;)Ljava/lang/String;
 

@@ -22,7 +22,7 @@ chatter-mesh-link = { path = "../chatter-mesh-link" }
 # `bluetoothd` is the D-Bus path, which is where BlueZ exposes advertising and the
 # GATT server. Raw HCI would mean reimplementing the host stack ourselves.
 bluer = { version = "0.17", features = ["bluetoothd"] }
-tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "process"] }
 futures = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

@@ -29,7 +29,7 @@ impl ChatterClient {
         if let Some(provider) = self.services.device_inbox_provider.get() {
             provider.set_app_visible(visible);
         }
-        // BLE scanning runs continuously on screen and duty-cycles off it.
+        // BLE scans in bursts when backgrounded or when no peers are connected.
         #[cfg(feature = "mesh")]
         self.mesh().set_app_active(visible);
         if !visible || was_visible {

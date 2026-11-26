@@ -84,9 +84,6 @@ pub const BRIDGE_METHODS: &[(&str, &str)] = &[
     ("start", "()Z"),
     ("stop", "()V"),
     ("setScanning", "(Z)Z"),
-    // The eight-byte peer id as hex, advertised in the scan response so peers
-    // can recognise us across a private address rotation. Call before `start`.
-    ("setLocalPeer", "(Ljava/lang/String;)V"),
     ("connect", "(Ljava/lang/String;)Ljava/lang/String;"),
     ("disconnect", "(Ljava/lang/String;)V"),
     ("send", "(Ljava/lang/String;[B)Z"),

@@ -2998,6 +2998,10 @@ msgid_plural "On · {n} nearby"
 msgstr[0] "Activada · {n} cerca"
 msgstr[1] "Activada · {n} cerca"
 
+#: ui/mesh/mesh_setup_sheet.slint:114
+msgid "While Mesh is on, nearby devices that connect over Bluetooth may see your device name. You can change it in system settings."
+msgstr "Mientras Mesh esté activado, los dispositivos cercanos que se conecten por Bluetooth podrían ver el nombre de tu dispositivo. Puedes cambiarlo en los ajustes del sistema."
+
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
 msgstr "Los dispositivos cercanos aparecerán aquí cuando se detecten."

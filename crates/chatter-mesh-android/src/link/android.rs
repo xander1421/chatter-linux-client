@@ -119,20 +119,6 @@ impl MeshLink for AndroidLink {
         })
     }
 
-    fn set_local_peer(&self, peer: [u8; 8]) {
-        // Best effort: without it peers cannot recognise us across an address
-        // rotation, which is a churn problem, not a broken radio. Said at warn
-        // because the symptom it produces — a peer reconnecting endlessly under
-        // new addresses — looks like anything but a missing advertisement field.
-        let hex: String = peer.iter().map(|byte| format!("{byte:02x}")).collect();
-        if let Err(error) = bridge::set_local_peer(&hex) {
-            error::log_warn(&format!(
-                "mesh: could not advertise our peer id; peers will not recognise us \
-                 across an address rotation: {error}"
-            ));
-        }
-    }
-
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         let address = address.to_string();
         Box::pin(async move {
