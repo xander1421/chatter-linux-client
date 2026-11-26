@@ -1013,7 +1013,12 @@ impl ChatterClient {
         self.logout_with_retirement(self.auth().do_logout()).await
     }
 
-    pub(super) async fn logout_with_retirement(
+    #[cfg(test)]
+    pub(crate) async fn test_logout_after_retirement(&self) -> Result<(), ClientError> {
+        self.logout_with_retirement(std::future::ready(Ok(()))).await
+    }
+
+    async fn logout_with_retirement(
         &self,
         retire_device: impl std::future::Future<Output = Result<(), AuthError>>,
     ) -> Result<(), ClientError> {

@@ -140,7 +140,7 @@ async fn logout_cancels_active_and_queued_work_drains_crypto_then_publishes_offl
         .test_pause(entered_tx, release_rx)
         .await;
     entered_rx.await.unwrap();
-    let mut logout = Box::pin(client.logout_with_retirement(std::future::ready(Ok(()))));
+    let mut logout = Box::pin(client.test_logout_after_retirement());
     assert!(futures::poll!(&mut logout).is_pending());
     active.await;
     queued.await;

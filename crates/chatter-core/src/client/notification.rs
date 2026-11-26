@@ -455,7 +455,7 @@ mod session_tests {
             })
             .await
             .unwrap();
-            client.logout_with_retirement(std::future::ready(Ok(()))).await.unwrap();
+            client.test_logout_after_retirement().await.unwrap();
             assert!(client.authed_notif_session.lock().is_none());
             assert!(!client
                 .authed_notif_started
@@ -508,10 +508,13 @@ mod session_tests {
         .await
         .unwrap();
         sink.fails.store(true, std::sync::atomic::Ordering::SeqCst);
-        tokio::time::timeout(std::time::Duration::from_secs(6), client.logout())
-            .await
-            .unwrap()
-            .ok();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(6),
+            client.test_logout_after_retirement(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert!(client.notif_stream_handle.lock().is_none());
         assert!(client.call_notification_bridge.lock().is_some());
         assert_eq!(*client.authed_notif_session.lock(), Some(retired));
@@ -574,7 +577,7 @@ mod session_tests {
                 .count(),
             1
         );
-        let _ = client.logout().await;
+        client.test_logout_after_retirement().await.unwrap();
         assert!(client.call_notification_bridge.lock().is_none());
         worker.shutdown();
     }

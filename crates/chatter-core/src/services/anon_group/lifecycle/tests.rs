@@ -388,7 +388,7 @@ async fn retired_registration_and_initialized_retry_have_no_publication() {
             );
             tokio::pin!(accept);
             assert!(futures::poll!(&mut accept).is_pending());
-            let _ = f.client.logout().await;
+            f.client.test_logout_after_retirement().await.unwrap();
             if same_account {
                 service
                     .settings_repo
@@ -444,7 +444,7 @@ async fn retired_join_ack_does_not_consume_pending_invitation() {
     );
     tokio::pin!(accept);
     assert!(futures::poll!(&mut accept).is_pending());
-    let _ = f.client.logout().await;
+    f.client.test_logout_after_retirement().await.unwrap();
     release.send(()).unwrap();
     assert!(accept.await.is_err());
     assert!(
