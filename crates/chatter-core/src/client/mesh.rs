@@ -339,6 +339,21 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_custom_nickname(&self) -> Option<String> {
+        self.mesh().custom_nickname()
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_bridge_mode_enabled(&self) -> bool {
+        self.mesh().bridge_mode_enabled()
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_public_chat_enabled(&self) -> bool {
+        self.mesh().public_chat_enabled()
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_nearby_channels(&self) -> Vec<String> {
         self.mesh().nearby_channels()
     }
@@ -554,14 +569,42 @@ impl ChatterClient {
     pub fn set_mesh_nickname(&self, name: &str) -> Result<(), crate::services::mesh::MeshError> {
         use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         let name = name.trim();
-        if name.is_empty() || name.len() > 32 || name.chars().any(char::is_control) {
+        if name.len() > 32 || name.chars().any(char::is_control) {
             return Err(crate::services::mesh::MeshError::OutOfRange(
                 "mesh nickname must be 1-32 bytes without control characters",
             ));
         }
-        SettingsRepository::new(self.services.database.clone())
-            .set_string(keys::MESH_NICKNAME, name)?;
+        let settings = SettingsRepository::new(self.services.database.clone());
+        if name.is_empty() {
+            settings.delete(keys::MESH_NICKNAME)?;
+        } else {
+            settings.set_string(keys::MESH_NICKNAME, name)?;
+        }
         self.mesh().set_nickname(name.to_owned());
+        Ok(())
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn set_mesh_bridge_mode(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        SettingsRepository::new(self.services.database.clone())
+            .set_bool(keys::MESH_BRIDGE_MODE, enabled)?;
+        self.mesh().set_bridge_mode(enabled);
+        Ok(())
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn set_mesh_public_chat(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        SettingsRepository::new(self.services.database.clone())
+            .set_bool(keys::MESH_PUBLIC_CHAT, enabled)?;
+        self.mesh().set_public_chat(enabled);
         Ok(())
     }
 
@@ -738,6 +781,8 @@ impl ChatterClient {
         let settings = SettingsRepository::new(self.services.database.clone());
         for key in [
             keys::MESH_NICKNAME,
+            keys::MESH_BRIDGE_MODE,
+            keys::MESH_PUBLIC_CHAT,
             keys::MESH_MUTED_CHANNELS,
             keys::MESH_MUTED_PEERS,
             keys::MESH_BLOCKED_PEERS,

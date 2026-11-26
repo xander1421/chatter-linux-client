@@ -268,6 +268,8 @@ impl BleRuntime {
 
         // Gossip sync, which nothing else can schedule.
         let connected = self.state.public_sync_peers();
+        self.gossip
+            .set_public_chat_enabled(self.config.public_chat_enabled());
         match self.gossip.maintenance(&connected, now_s) {
             Ok(sends) => {
                 for send in sends {
@@ -352,6 +354,9 @@ impl BleRuntime {
         // is the only recovery. On the cleanup cadence rather than the tick, so a
         // persistent failure retries occasionally instead of twice a second.
         for id in self.files_in.completed() {
+            if !self.config.public_chat_enabled() {
+                break;
+            }
             let nickname = self
                 .files_in
                 .get(&id)
@@ -469,14 +474,10 @@ impl BleRuntime {
         });
 
         for (link, write) in next {
-            let kind = write.bytes.get(1).copied().and_then(MessageType::from_u8);
-            let group = match kind {
-                Some(MessageType::GroupMessage) => true,
-                Some(MessageType::Fragment) => codec::decode(&write.bytes)
-                    .is_ok_and(|packet| super::transmission::is_private_group_packet(&packet)),
-                _ => false,
-            };
-            if group && !self.group_traffic_allowed(&link) {
+            let kind = broadcasts::frame_kind(&write.bytes);
+            if !self.allows_queued_frame(&write.bytes)
+                || (kind == Some(MessageType::GroupMessage) && !self.group_traffic_allowed(&link))
+            {
                 continue;
             }
             match self.radio.send(&link, &write.bytes).await {

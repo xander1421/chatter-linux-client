@@ -83,9 +83,15 @@ impl GossipSyncManager {
             if schedule.types == SyncTypeFlags::BOARD && !has_board {
                 continue;
             }
-            if schedule.is_due(now_unix_secs) {
+            let mut types = schedule.types;
+            if !self.public_chat_enabled {
+                for kind in [MessageType::Message, MessageType::Fragment, MessageType::FileTransfer] {
+                    types.remove(kind);
+                }
+            }
+            if !types.is_empty() && schedule.is_due(now_unix_secs) {
                 schedule.last_sent_secs = Some(now_unix_secs);
-                due.push(schedule.types);
+                due.push(types);
             }
         }
 

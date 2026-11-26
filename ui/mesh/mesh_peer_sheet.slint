@@ -107,7 +107,7 @@ export component MeshPeerSheet inherits Rectangle {
                     HorizontalLayout {
                         alignment: center; spacing: Spacing.sm;
                         PeerAction { icon: Icons.message-circle; caption: @tr("Message");
-                            disabled: MeshGlobal.sheet-peer-id == "";
+                            disabled: !root.peer-verified;
                             clicked => { MeshGlobal.open-peer-dm(MeshGlobal.sheet-peer-id); } }
                         PeerAction { icon: MeshGlobal.sheet-peer-muted ? Icons.bell : Icons.bell-off;
                             caption: MeshGlobal.sheet-peer-muted ? @tr("Unmute") : @tr("Mute");

@@ -4032,3 +4032,15 @@ msgstr "Erlaube, dass eingehende Anrufe auf dem Sperrbildschirm angezeigt werden
 
 msgid "Not now"
 msgstr "Jetzt nicht"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:557
+msgid "Mesh nickname updated."
+msgstr "Mesh-Spitzname aktualisiert."
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:576
+msgid "Could not change bridge mode: {}"
+msgstr "Bridge-Modus konnte nicht geändert werden: {}"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
+msgid "Could not change nearby public chat: {}"
+msgstr "Öffentlicher Chat in der Nähe konnte nicht geändert werden: {}"

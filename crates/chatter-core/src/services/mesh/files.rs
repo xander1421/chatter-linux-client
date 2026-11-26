@@ -30,6 +30,7 @@ impl MeshService {
     ///
     /// [`send_file_streamed`]: Self::send_file_streamed
     pub fn send_file(&self, path: &Path) -> Result<String, MeshError> {
+        self.require_public_chat()?;
         if !self.has_radio {
             return Err(MeshError::NoRadio);
         }

@@ -79,7 +79,17 @@ impl AnnouncementPacket {
         }
     }
 
+    /// Encode a regular announce without direct neighbours or a bridge cell.
     pub fn encode(&self) -> Result<Vec<u8>, MeshError> {
+        self.encode_with_metadata(false)
+    }
+
+    /// Encode an announce after the sender explicitly opted into bridge mode.
+    pub fn encode_for_bridge(&self) -> Result<Vec<u8>, MeshError> {
+        self.encode_with_metadata(true)
+    }
+
+    fn encode_with_metadata(&self, bridge_mode: bool) -> Result<Vec<u8>, MeshError> {
         let mut out = Vec::with_capacity(
             6 + self.nickname.len() + self.noise_public_key.len() + self.signing_public_key.len(),
         );
@@ -90,24 +100,29 @@ impl AnnouncementPacket {
 
         // The neighbour list is a bare concatenation — there is no count field,
         // because the count is recoverable as `length / 8`.
-        if let Some(neighbors) = &self.direct_neighbors {
-            if !neighbors.is_empty() {
-                let mut packed = Vec::with_capacity(neighbors.len().min(MAX_DIRECT_NEIGHBORS) * 8);
-                for id in neighbors.iter().take(MAX_DIRECT_NEIGHBORS) {
-                    packed.extend_from_slice(id);
-                }
-                put_tlv_u8_len(&mut out, TLV_DIRECT_NEIGHBORS, &packed)?;
+        if bridge_mode
+            && let Some(neighbors) = &self.direct_neighbors
+            && !neighbors.is_empty()
+        {
+            let mut packed =
+                Vec::with_capacity(neighbors.len().min(MAX_DIRECT_NEIGHBORS) * SENDER_ID_LEN);
+            for id in neighbors.iter().take(MAX_DIRECT_NEIGHBORS) {
+                packed.extend_from_slice(id);
             }
+            put_tlv_u8_len(&mut out, TLV_DIRECT_NEIGHBORS, &packed)?;
         }
 
-        if let Some(capabilities) = &self.capabilities {
+        if let Some(mut capabilities) = self.capabilities {
+            if !bridge_mode {
+                capabilities.remove(PeerCapabilities::BRIDGE);
+            }
             put_tlv_u8_len(&mut out, TLV_CAPABILITIES, &capabilities.encode()?)?;
         }
 
         // Swift silently omits an empty or over-long cell rather than failing
         // the whole encode; mirrored, because an announcement without the
         // bridge hint is still a valid announcement.
-        if let Some(geohash) = &self.bridge_geohash {
+        if bridge_mode && let Some(geohash) = &self.bridge_geohash {
             let bytes = geohash.as_bytes();
             if !bytes.is_empty() && bytes.len() <= MAX_BRIDGE_GEOHASH_BYTES {
                 put_tlv_u8_len(&mut out, TLV_BRIDGE_GEOHASH, bytes)?;
@@ -233,8 +248,23 @@ mod tests {
     #[test]
     fn round_trips_a_full_announcement() {
         let packet = sample();
-        let encoded = packet.encode().unwrap();
+        let encoded = packet.encode_for_bridge().unwrap();
         assert_eq!(AnnouncementPacket::decode(&encoded).unwrap(), packet);
+    }
+
+    #[test]
+    fn ordinary_encoding_omits_contact_and_bridge_metadata() {
+        let packet = sample();
+        let encoded = packet.encode().unwrap();
+        assert!(!AnnouncementPacket::carries_contact_metadata(&encoded).unwrap());
+        let decoded = AnnouncementPacket::decode(&encoded).unwrap();
+        assert_eq!(decoded.nickname, packet.nickname);
+        assert_eq!(decoded.direct_neighbors, None);
+        assert_eq!(decoded.bridge_geohash, None);
+        assert_eq!(
+            decoded.capabilities.unwrap().bits(),
+            PeerCapabilities::PREKEYS
+        );
     }
 
     #[test]
@@ -276,7 +306,7 @@ mod tests {
             None,
             None,
         );
-        let encoded = packet.encode().unwrap();
+        let encoded = packet.encode_for_bridge().unwrap();
         // ... nickname(3) + noise(2) + signing(2) = 7 bytes, then the neighbours.
         assert_eq!(encoded.get(7).copied(), Some(TLV_DIRECT_NEIGHBORS));
         assert_eq!(encoded.get(8).copied(), Some(16));
@@ -288,7 +318,7 @@ mod tests {
         let neighbors: Vec<[u8; 8]> = (0..20u8).map(|i| [i; 8]).collect();
         let packet =
             AnnouncementPacket::new("n".to_string(), vec![], vec![], Some(neighbors), None, None);
-        let decoded = AnnouncementPacket::decode(&packet.encode().unwrap()).unwrap();
+        let decoded = AnnouncementPacket::decode(&packet.encode_for_bridge().unwrap()).unwrap();
         let got = decoded.direct_neighbors.unwrap();
         assert_eq!(got.len(), MAX_DIRECT_NEIGHBORS);
         assert_eq!(got.first().copied(), Some([0u8; 8]));
@@ -299,7 +329,7 @@ mod tests {
     fn empty_neighbor_list_emits_no_tlv() {
         let packet =
             AnnouncementPacket::new("n".to_string(), vec![], vec![], Some(vec![]), None, None);
-        let encoded = packet.encode().unwrap();
+        let encoded = packet.encode_for_bridge().unwrap();
         // The three mandatory TLVs are always emitted, even with empty keys:
         // nickname (2 + 1) + noise key (2 + 0) + signing key (2 + 0) = 7.
         assert_eq!(encoded.len(), 7);
@@ -335,14 +365,14 @@ mod tests {
 
     #[test]
     fn a_lone_trailing_byte_is_ignored() {
-        let mut encoded = sample().encode().unwrap();
+        let mut encoded = sample().encode_for_bridge().unwrap();
         encoded.push(0x42);
         assert_eq!(AnnouncementPacket::decode(&encoded).unwrap(), sample());
     }
 
     #[test]
     fn truncated_value_is_rejected() {
-        let encoded = sample().encode().unwrap();
+        let encoded = sample().encode_for_bridge().unwrap();
         // Every prefix must be handled totally: an error, or a decode whose
         // fields are all fully present. Never a panic, never a short key.
         for cut in 0..encoded.len() {
@@ -398,7 +428,7 @@ mod tests {
             Some("0123456789abc".to_string()),
         );
         // 7 = the three mandatory TLVs with a 1-byte nickname and empty keys.
-        assert_eq!(packet.encode().unwrap().len(), 7);
+        assert_eq!(packet.encode_for_bridge().unwrap().len(), 7);
 
         // Decode side: a 13-byte value is skipped.
         let mut bytes = vec![
@@ -430,7 +460,7 @@ mod tests {
             Some(String::new()),
         );
         // 7 = the three mandatory TLVs with a 1-byte nickname and empty keys.
-        assert_eq!(packet.encode().unwrap().len(), 7);
+        assert_eq!(packet.encode_for_bridge().unwrap().len(), 7);
     }
 
     #[test]

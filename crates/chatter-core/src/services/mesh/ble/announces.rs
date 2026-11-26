@@ -295,7 +295,7 @@ impl BleRuntime {
             let _ = self.router.send(RouterCommand::PeerAvailable {
                 peer: self.state.contact(claimed),
             });
-            // A peer we have not synced with yet gets our public history.
+            self.gossip.set_public_chat_enabled(self.config.public_chat_enabled());
             if let Ok(send) = self.gossip.initial_sync_to(claimed, now_s) {
                 let packet = self.maybe_sign(send.packet, send.sign_before_send);
                 self.transmit_on_link(&packet, claimed, link).await;

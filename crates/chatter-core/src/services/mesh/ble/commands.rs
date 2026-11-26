@@ -28,7 +28,10 @@ impl BleRuntime {
             .handle_request_sync(claimed, &request, now_secs());
         let mut public_messages = std::collections::HashMap::<_, Vec<_>>::new();
         for send in &sends {
-            if !authenticated && send.packet.message_type() == Some(MessageType::Message) {
+            if !authenticated
+                && self.config.public_chat_enabled()
+                && send.packet.message_type() == Some(MessageType::Message)
+            {
                 public_messages
                     .entry(send.packet.sender_id)
                     .or_default()

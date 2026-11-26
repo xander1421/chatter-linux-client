@@ -702,7 +702,7 @@ impl BleRuntime {
 }
 
 mod announces;
-mod broadcasts;
+pub(super) mod broadcasts;
 mod commands;
 mod direct_messages;
 mod event_reporting;
@@ -911,10 +911,14 @@ fn link_seq(link: &LinkId) -> u64 {
 /// through the paced queue now, the same as `transmit`.
 async fn transmit_forwarded(
     state: &Arc<MeshState>,
+    config: &MeshConfig,
     packet: &BitchatPacket,
     ingress: &LinkId,
     group_links: Option<&[LinkId]>,
 ) {
+    if !broadcasts::allows_transmission(config, packet) {
+        return;
+    }
     let padding = fragment::pads_ble_frame(packet.msg_type);
     let Ok(encoded) = codec::encode(packet, padding) else {
         return;
@@ -961,13 +965,17 @@ async fn transmit_forwarded(
     for link in plan.selected.iter() {
         for frame in &frames {
             let admitted = state.with(|inner| {
-                inner.writes.enqueue(
+                if !broadcasts::allows_transmission(config, packet) {
+                    return None;
+                }
+                Some(inner.writes.enqueue(
                     link,
                     frame.clone(),
                     write_priority,
                     PENDING_WRITE_BUFFER_CAP_BYTES,
-                )
+                ))
             });
+            let Some(admitted) = admitted else { return };
             if !matches!(admitted, WriteEnqueue::Enqueued { .. }) {
                 tracing::warn!(
                     target: "mesh::ble",

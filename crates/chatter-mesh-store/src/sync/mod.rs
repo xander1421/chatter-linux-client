@@ -294,6 +294,7 @@ fn insert_candidate(
 pub struct GossipSyncManager {
     my_sender_id: [u8; SENDER_ID_LEN],
     config: SyncConfig,
+    public_chat_enabled: bool,
     requests: RequestSyncTracker,
     rate_limiter: SyncResponseRateLimiter,
 
@@ -353,6 +354,7 @@ impl GossipSyncManager {
             // is what its encoder produces from that empty field anyway.
             my_sender_id: my_peer.to_routing_bytes().unwrap_or([0u8; SENDER_ID_LEN]),
             config,
+            public_chat_enabled: true,
             requests,
             rate_limiter,
             messages: PacketStore::default(),
@@ -374,6 +376,11 @@ impl GossipSyncManager {
 
     pub fn config(&self) -> &SyncConfig {
         &self.config
+    }
+
+    /// Keep announce, private-group and prekey sync available without public chat.
+    pub fn set_public_chat_enabled(&mut self, enabled: bool) {
+        self.public_chat_enabled = enabled;
     }
 
     /// Wires up (or refreshes) the board-post source.
@@ -594,14 +601,22 @@ impl GossipSyncManager {
 
     /// Every type an initial sync asks for, honouring the disabled rounds.
     fn initial_sync_types(&self) -> SyncTypeFlags {
-        let mut types = SyncTypeFlags::PUBLIC_MESSAGES;
+        let mut types = if self.public_chat_enabled {
+            SyncTypeFlags::PUBLIC_MESSAGES
+        } else {
+            SyncTypeFlags::ANNOUNCE
+        };
         if self.config.group_message_capacity > 0 {
             types = types.union(SyncTypeFlags::GROUP_MESSAGE);
         }
-        if self.config.fragment_capacity > 0 && self.config.fragment_sync_interval_secs > 0 {
+        if self.public_chat_enabled
+            && self.config.fragment_capacity > 0
+            && self.config.fragment_sync_interval_secs > 0
+        {
             types = types.union(SyncTypeFlags::FRAGMENT);
         }
-        if self.config.file_transfer_capacity > 0
+        if self.public_chat_enabled
+            && self.config.file_transfer_capacity > 0
             && self.config.file_transfer_sync_interval_secs > 0
         {
             types = types.union(SyncTypeFlags::FILE_TRANSFER);

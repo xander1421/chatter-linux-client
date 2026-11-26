@@ -6038,3 +6038,39 @@ msgstr "Nicht erlaubt"
 
 msgid "Allow"
 msgstr "Erlauben"
+
+#: ui/mesh/mesh_list.slint:143
+msgid "Create a private group or pair a contact in Mesh settings."
+msgstr "Erstelle eine private Gruppe oder kopple einen Kontakt in den Mesh-Einstellungen."
+
+#: ui/mesh/mesh_setup_sheet.slint:140
+msgid "Pair a nearby contact"
+msgstr "Kontakt in der Nähe koppeln"
+
+#: ui/mesh/mesh_setup_sheet.slint:156
+msgid "You appear as {} nearby. Choose your contact’s device and verify it in person."
+msgstr "In der Nähe wirst du als {} angezeigt. Wähle das Gerät deines Kontakts und verifiziere es persönlich."
+
+#: ui/mesh/mesh_setup_sheet.slint:165 ui/mesh/mesh_setup_sheet.slint:168
+msgid "Nearby public chat"
+msgstr "Öffentlicher Chat in der Nähe"
+
+#: ui/mesh/mesh_setup_sheet.slint:170
+msgid "Send and receive public messages and files over Bluetooth. Anyone nearby can read them."
+msgstr "Sende und empfange öffentliche Nachrichten und Dateien über Bluetooth. Alle in der Nähe können sie lesen."
+
+#: ui/mesh/mesh_setup_sheet.slint:177 ui/mesh/mesh_setup_sheet.slint:180
+msgid "Bridge mode"
+msgstr "Bridge-Modus"
+
+#: ui/mesh/mesh_setup_sheet.slint:182
+msgid "Share connected device IDs and any configured location cell in Bluetooth announcements."
+msgstr "Teilt die IDs verbundener Geräte und eine ggf. konfigurierte Standortzelle in Bluetooth-Ankündigungen."
+
+#: ui/mesh/mesh_setup_sheet.slint:190
+msgid "Mesh nickname"
+msgstr "Mesh-Spitzname"
+
+#: ui/mesh/mesh_setup_sheet.slint:204
+msgid "Anyone nearby can see your mesh nickname. Leave it blank to use a random name that changes with your mesh identity."
+msgstr "Alle in der Nähe können deinen Mesh-Spitznamen sehen. Lass das Feld leer, um einen Zufallsnamen zu verwenden, der sich mit deiner Mesh-Identität ändert."

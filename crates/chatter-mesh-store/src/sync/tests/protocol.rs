@@ -72,6 +72,32 @@ fn a_backwards_clock_does_not_invalidate_an_open_request() {
 }
 
 #[test]
+fn public_chat_opt_out_requests_only_nonpublic_types() {
+    let mut sync = manager();
+    sync.set_public_chat_enabled(false);
+    let initial = sync.initial_sync_to(&them(), NOW).unwrap();
+    let periodic = sync.maintenance(&[them()], NOW).unwrap();
+    assert!(!periodic.is_empty());
+    for send in std::iter::once(initial).chain(periodic) {
+        let request = RequestSyncPacket::decode(&send.packet.payload).unwrap();
+        let types = SyncTypeFlags::from_raw(request.types.unwrap());
+        assert!(!types.is_empty());
+        for kind in [
+            MessageType::Message,
+            MessageType::Fragment,
+            MessageType::FileTransfer,
+        ] {
+            assert!(!types.contains(kind));
+        }
+    }
+
+    sync.set_public_chat_enabled(true);
+    let initial = sync.initial_sync_to(&them(), NOW).unwrap();
+    let request = RequestSyncPacket::decode(&initial.packet.payload).unwrap();
+    assert!(SyncTypeFlags::from_raw(request.types.unwrap()).contains(MessageType::Message));
+}
+
+#[test]
 fn the_manager_only_opens_a_window_for_unicast_requests() {
     let mut manager = manager();
 

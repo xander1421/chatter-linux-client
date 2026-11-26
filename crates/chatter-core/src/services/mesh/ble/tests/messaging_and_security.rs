@@ -66,6 +66,46 @@ async fn nothing_is_written_when_no_link_is_writable() {
 }
 
 #[tokio::test]
+async fn public_chat_is_off_until_enabled_for_both_transmit_and_ingress() {
+    let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    let author = MeshIdentity::generate(&mut os_rng());
+    let peer = register_verified_peer(&state, &author, "author");
+    let link = LinkId::new("/mock/public");
+    state.with(|inner| {
+        inner.links.link_up(link.clone(), LinkRole::Central);
+        inner.links.set_writable(&link, true);
+        inner.max_write.insert(link.clone(), 512);
+    });
+    let mut events = runtime.events.subscribe();
+    let packet = signed(
+        &peer,
+        &author,
+        MessageType::Message,
+        b"nearby".to_vec(),
+        true,
+    );
+
+    runtime.broadcast_public("MSG-1", "outgoing").await;
+    runtime.on_packet(&link, packet.clone()).await;
+    runtime.drain_writes().await;
+    assert_eq!(radio.write_count(), 0);
+    assert!(!runtime.gossip.holds(&packet));
+    assert!(events.try_recv().is_err());
+
+    runtime.config.set_public_chat(true);
+    runtime.on_packet(&link, packet.clone()).await;
+    assert!(runtime.gossip.holds(&packet));
+    assert!(matches!(events.try_recv(), Ok(MeshEvent::Message(_))));
+
+    runtime
+        .broadcast_public("MSG-2", "queued before disabling")
+        .await;
+    runtime.config.set_public_chat(false);
+    runtime.drain_writes().await;
+    assert_eq!(radio.write_count(), 0);
+}
+
+#[tokio::test]
 async fn a_public_message_is_mirrored_locally_and_recorded_as_our_own() {
     let (mut runtime, radio, state) = runtime();
     let link = LinkId::new("/mock/one");

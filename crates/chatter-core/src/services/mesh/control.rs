@@ -88,7 +88,9 @@ impl MeshService {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.identity.write().take();
         self.private_group_identity.write().take();
-        self.config.set_nickname("anon".to_owned());
+        self.config.set_nickname(String::new());
+        self.config.set_bridge_mode(false);
+        self.config.set_public_chat(false);
         self.events.clear_moderation();
         let mut first_error: Option<MeshError> = None;
         let fail = |error: MeshError, slot: &mut Option<MeshError>| {
