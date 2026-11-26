@@ -110,8 +110,7 @@ impl BleRuntime {
         // through the transfer ID. Transfers may retry within their own epoch.
         self.files_out.clear();
         self.pairing_candidates.clear();
-        self.pairing_proofs_sent.clear();
-        self.pairing_proofs_received.clear();
+        self.pairing_exchanges.clear();
         self.courier_claims.clear();
         self.beacon_cursor = 0;
         self.published_beacons.clear();

@@ -1,44 +1,94 @@
 use super::*;
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use chatter_mesh_link::registry::PairingKey;
 use chatter_mesh_noise::seal::{open_courier, seal_courier};
 use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
 use subtle::ConstantTimeEq;
 
-use super::super::pairing::route_proof;
+use super::super::pairing::{group_identity_key, route_proof};
 
-const ROUTE_MAGIC: &[u8; 8] = b"CHTRPRT2";
+const ROUTE_MAGIC: &[u8; 8] = b"CHTRPRT3";
+const GROUP_MAGIC: &[u8; 8] = b"CHTRPGI1";
 const PULL_MAGIC: &[u8; 8] = b"CHTRPLQ1";
 const CANDIDATE_MS: u64 = 60_000;
+const GROUP_NONCE_LEN: usize = 24;
+const GROUP_PLAINTEXT_LEN: usize = 128;
+type SealedGroupIdentity = [u8; GROUP_NONCE_LEN + GROUP_PLAINTEXT_LEN + 16];
 
-fn sign_route(
-    identity: &MeshIdentity,
-    group: &MeshIdentity,
-    key: &chatter_mesh_link::registry::PairingKey,
-    transcript: &[u8; 32],
-) -> Vec<u8> {
+#[derive(Default)]
+pub(super) struct PairingExchange {
+    transcript: [u8; 32],
+    proof_sent: bool,
+    proof_seen: bool,
+    verified: bool,
+    group_sent: bool,
+    group_received: bool,
+    pending_group: Option<Box<SealedGroupIdentity>>,
+}
+
+fn sign_route(identity: &MeshIdentity, key: &PairingKey, transcript: &[u8; 32]) -> Vec<u8> {
     let signing = identity.signing_public();
-    let group_static = group.static_public();
-    let group_signing = group.signing_public();
     let proof = route_proof(key, transcript, &identity.static_public(), &signing, true);
-    let signed = [
-        ROUTE_MAGIC.as_slice(),
-        transcript,
-        &proof,
-        &group_static,
-        &group_signing,
-    ]
-    .concat();
+    let signed = [ROUTE_MAGIC.as_slice(), transcript, &proof].concat();
     let signature = sign_bytes(identity, &signed);
-    let group_signature = sign_bytes(group, &signed);
-    [
-        ROUTE_MAGIC.as_slice(),
-        &signing,
-        &proof,
-        &group_static,
-        &group_signing,
+    [ROUTE_MAGIC.as_slice(), &signing, &proof, &signature].concat()
+}
+
+fn seal_group_identity(
+    group: &MeshIdentity,
+    key: &PairingKey,
+    transcript: &[u8; 32],
+) -> Option<Vec<u8>> {
+    let noise = group.static_public();
+    let signing = group.signing_public();
+    let aad = [GROUP_MAGIC.as_slice(), transcript].concat();
+    let certificate = sign_bytes(group, &[aad.as_slice(), &noise, &signing].concat());
+    let plaintext = [&noise[..], &signing, &certificate].concat();
+    let key = group_identity_key(key, transcript, true);
+    let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).ok()?;
+    let mut nonce = [0; GROUP_NONCE_LEN];
+    getrandom::fill(&mut nonce).ok()?;
+    let ciphertext = cipher
+        .encrypt(
+            &XNonce::from(nonce),
+            Payload {
+                msg: &plaintext,
+                aad: &aad,
+            },
+        )
+        .ok()?;
+    Some([GROUP_MAGIC.as_slice(), &nonce, &ciphertext].concat())
+}
+
+fn open_group_identity(
+    sealed: &SealedGroupIdentity,
+    key: &PairingKey,
+    transcript: &[u8; 32],
+) -> Option<([u8; 32], [u8; 32])> {
+    let (nonce, ciphertext) = sealed.split_first_chunk::<GROUP_NONCE_LEN>()?;
+    let key = group_identity_key(key, transcript, false);
+    let cipher = XChaCha20Poly1305::new_from_slice(&key[..]).ok()?;
+    let aad = [GROUP_MAGIC.as_slice(), transcript].concat();
+    let plaintext = cipher
+        .decrypt(
+            &XNonce::from(*nonce),
+            Payload {
+                msg: ciphertext,
+                aad: &aad,
+            },
+        )
+        .ok()?;
+    let plaintext = <[u8; GROUP_PLAINTEXT_LEN]>::try_from(plaintext).ok()?;
+    let noise: [u8; 32] = plaintext[..32].try_into().ok()?;
+    let signing: [u8; 32] = plaintext[32..64].try_into().ok()?;
+    let signature = plaintext[64..].try_into().ok()?;
+    verify_bytes(
         &signature,
-        &group_signature,
-    ]
-    .concat()
+        &[aad.as_slice(), &noise, &signing].concat(),
+        &signing,
+    )
+    .then_some((noise, signing))
 }
 
 impl BleRuntime {
@@ -51,6 +101,27 @@ impl BleRuntime {
         }
     }
 
+    fn exchange(&mut self, peer: &PeerId, transcript: [u8; 32]) -> &mut PairingExchange {
+        let exchange = self.pairing_exchanges.entry(peer.clone()).or_default();
+        if exchange.transcript != transcript {
+            *exchange = PairingExchange {
+                transcript,
+                ..PairingExchange::default()
+            };
+        }
+        exchange
+    }
+
+    fn pairing_transcript(&self, peer: &PeerId) -> Option<[u8; 32]> {
+        self.state.with(|state| state.sessions.handshake_hash(peer))
+    }
+
+    pub(super) fn pairing_verified(&self, peer: &PeerId) -> bool {
+        self.pairing_exchanges.get(peer).is_some_and(|exchange| {
+            exchange.verified && self.pairing_transcript(peer) == Some(exchange.transcript)
+        })
+    }
+
     pub(super) async fn send_pairing_proof(&mut self, peer: &PeerId) {
         let contact = self
             .pairing_candidates
@@ -61,20 +132,36 @@ impl BleRuntime {
         let Some(key) = self.state.pairing_key(contact) else {
             return;
         };
-        let Some(transcript) = self.state.with(|state| state.sessions.handshake_hash(peer)) else {
+        let Some(transcript) = self.pairing_transcript(peer) else {
             return;
         };
-        if self.pairing_proofs_sent.get(peer) == Some(&transcript) {
+        if self.exchange(peer, transcript).proof_sent {
             return;
         }
-        let frame = sign_route(
-            &self.identity,
-            &self.private_group_identity,
-            &key,
-            &transcript,
-        );
+        let frame = sign_route(&self.identity, &key, &transcript);
         if self.send_private_control(peer, &frame).await {
-            self.pairing_proofs_sent.insert(peer.clone(), transcript);
+            self.exchange(peer, transcript).proof_sent = true;
+        }
+    }
+
+    async fn send_group_identity(&mut self, peer: &PeerId) {
+        if !self.pairing_verified(peer) {
+            return;
+        }
+        let exchange = &self.pairing_exchanges[peer];
+        if exchange.group_sent {
+            return;
+        }
+        let transcript = exchange.transcript;
+        let Some(key) = self.state.pairing_key(peer) else {
+            return;
+        };
+        let Some(frame) = seal_group_identity(&self.private_group_identity, &key, &transcript)
+        else {
+            return;
+        };
+        if self.send_private_control(peer, &frame).await {
+            self.exchange(peer, transcript).group_sent = true;
         }
     }
 
@@ -83,41 +170,34 @@ impl BleRuntime {
             self.on_courier_pull(peer, pull).await;
             return true;
         }
+        if let Some(content) = plaintext.strip_prefix(GROUP_MAGIC) {
+            if let Ok(sealed) = <&SealedGroupIdentity>::try_from(content) {
+                self.on_group_identity(peer, sealed).await;
+            }
+            return true;
+        }
         let Some(content) = plaintext.strip_prefix(ROUTE_MAGIC) else {
             return false;
         };
-        let Ok(content) = <&[u8; 256]>::try_from(content) else {
+        let Ok(content) = <&[u8; 128]>::try_from(content) else {
             return true;
         };
         let signing: &[u8; 32] = content[..32].try_into().expect("route frame layout");
         let proof: &[u8; 32] = content[32..64].try_into().expect("route frame layout");
-        let group_static: &[u8; 32] = content[64..96].try_into().expect("route frame layout");
-        let group_signing: &[u8; 32] = content[96..128].try_into().expect("route frame layout");
-        let signature: &[u8; 64] = content[128..192].try_into().expect("route frame layout");
-        let group_signature: &[u8; 64] = content[192..].try_into().expect("route frame layout");
-        let Some(transcript) = self.state.with(|state| state.sessions.handshake_hash(peer)) else {
+        let signature: &[u8; 64] = content[64..].try_into().expect("route frame layout");
+        let Some(transcript) = self.pairing_transcript(peer) else {
             return true;
         };
-        if self
-            .pairing_proofs_received
-            .insert(peer.clone(), transcript)
-            == Some(transcript)
-        {
+        let exchange = self.exchange(peer, transcript);
+        if exchange.proof_seen {
             return true;
         }
+        exchange.proof_seen = true;
+        let pending = exchange.pending_group.take();
         let accepted = self.state.with(|state| {
             let noise = state.sessions.remote_static(peer)?;
-            let signed = [
-                ROUTE_MAGIC.as_slice(),
-                &transcript,
-                proof,
-                group_static,
-                group_signing,
-            ]
-            .concat();
-            if PeerId::from_noise_key(&noise) != *peer
-                || !verify_bytes(signature, &signed, signing)
-                || !verify_bytes(group_signature, &signed, group_signing)
+            let signed = [ROUTE_MAGIC.as_slice(), &transcript, proof].concat();
+            if PeerId::from_noise_key(&noise) != *peer || !verify_bytes(signature, &signed, signing)
             {
                 return None;
             }
@@ -131,31 +211,19 @@ impl BleRuntime {
                 return None;
             }
             drop(matches);
-            let moved = prior != *peer;
-            let group_keys = (*group_static, *group_signing);
-            if !moved {
+            if prior == *peer {
                 let pin = state.peers.pinned(peer)?;
-                if pin.noise_public_key.as_slice() != noise
-                    || pin.signing_public_key.as_slice() != signing
-                {
-                    return None;
-                }
-                if pin.private_group_keys == Some(group_keys) {
-                    return Some((contact, false));
-                }
+                return (pin.noise_public_key.as_slice() == noise
+                    && pin.signing_public_key.as_slice() == signing)
+                    .then_some((contact, false));
             }
             let mut candidate = state.peers.clone();
-            if (moved && !candidate.bind_paired_route(&prior, &noise, signing, now_millis()))
-                || !candidate.bind_private_group_keys(peer, group_keys)
-            {
+            if !candidate.bind_paired_route(&prior, &noise, signing, now_millis()) {
                 return None;
             }
             let sealed = self.sealer.seal(&candidate.pins_to_bytes()).ok()?;
             self.storage.save(StorageKey::PeerPins, &sealed).ok()?;
             state.peers = candidate;
-            if !moved {
-                return Some((contact, false));
-            }
             state.sessions.forget_peer(&prior);
             state.chatter_hello.forget_live(&prior);
             state.dm_handshake_at_ms.remove(&prior);
@@ -170,11 +238,15 @@ impl BleRuntime {
             Some((contact, true))
         });
         if let Some((contact, moved)) = accepted {
+            self.exchange(peer, transcript).verified = true;
             self.gossip.retain_signing_key(peer, signing);
             self.pairing_candidates.remove(peer);
             self.send_pairing_proof(peer).await;
+            self.send_group_identity(peer).await;
+            if let Some(sealed) = pending {
+                self.on_group_identity(peer, &sealed).await;
+            }
             self.request_pairing_mail(peer).await;
-            self.sync_private_groups(peer).await;
             if moved {
                 let _ = self
                     .router
@@ -184,6 +256,54 @@ impl BleRuntime {
             }
         }
         true
+    }
+
+    async fn on_group_identity(&mut self, peer: &PeerId, sealed: &SealedGroupIdentity) {
+        let Some(transcript) = self.pairing_transcript(peer) else {
+            return;
+        };
+        let Some(exchange) = self.pairing_exchanges.get_mut(peer) else {
+            return;
+        };
+        if exchange.transcript != transcript || exchange.group_received {
+            return;
+        }
+        if !exchange.verified {
+            // Directed Noise packets can be reordered across links. Save at
+            // most one opaque frame while the corresponding proof is pending.
+            if exchange.proof_sent && !exchange.proof_seen && exchange.pending_group.is_none() {
+                exchange.pending_group = Some(Box::new(*sealed));
+            }
+            return;
+        }
+        let Some(key) = self.state.pairing_key(peer) else {
+            return;
+        };
+        let Some(keys) = open_group_identity(sealed, &key, &transcript) else {
+            return;
+        };
+        let saved = self.state.with(|state| {
+            if state
+                .peers
+                .pinned(peer)
+                .is_some_and(|pin| pin.private_group_keys == Some(keys))
+            {
+                return Some(());
+            }
+            let mut candidate = state.peers.clone();
+            if !candidate.bind_private_group_keys(peer, keys) {
+                return None;
+            }
+            let sealed = self.sealer.seal(&candidate.pins_to_bytes()).ok()?;
+            self.storage.save(StorageKey::PeerPins, &sealed).ok()?;
+            state.peers = candidate;
+            Some(())
+        });
+        if saved.is_some() {
+            self.exchange(peer, transcript).group_received = true;
+            self.send_group_identity(peer).await;
+            self.sync_private_groups(peer).await;
+        }
     }
 
     // A courier never has to learn a stable address in a public announce.
@@ -213,7 +333,7 @@ impl BleRuntime {
     async fn on_courier_pull(&mut self, peer: &PeerId, pull: &[u8]) {
         if pull.len() != PULL_MAGIC.len() + 32 + chatter_mesh_noise::seal::SEAL_OVERHEAD
             || !self.state.is_connected(peer)
-            || !self.state.has_paired_pin(peer)
+            || !self.pairing_verified(peer)
         {
             return;
         }
@@ -299,6 +419,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_noise_endpoint_with_only_admission_receives_no_stable_group_field() {
+        let (mut runtime, radio, state) = super::super::tests::runtime();
+        runtime.private_group_identity =
+            Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
+        let contact = MeshIdentity::generate(&mut crate::crypto::os_rng());
+        pair(&runtime, &contact, 1, true);
+        let endpoint = MeshIdentity::generate(&mut crate::crypto::os_rng());
+        let wire = endpoint.peer_id();
+        let local = runtime.identity.peer_id();
+        let link = LinkId::new("unpaired-noise");
+        // Admission already selected a contact, but the Noise endpoint on the
+        // new route has never completed the in-person pairing.
+        runtime.note_pairing_candidate(&wire, &contact.peer_id(), now_millis());
+        let mut session = super::super::rotation::tests::establish(&runtime, &endpoint);
+        bind_link(&state, &link, &wire);
+        let transcript = session.handshake_hash(&local).unwrap();
+        runtime.send_pairing_proof(&wire).await;
+        runtime.send_group_identity(&wire).await;
+        runtime.drain_writes().await;
+
+        let writes = radio.writes();
+        assert_eq!(writes.len(), 1);
+        let packet = codec::decode(&writes[0].1).unwrap();
+        assert_eq!(packet.message_type(), Some(MessageType::NoiseEncrypted));
+        let opening = session.decrypt(&local, &packet.payload).unwrap();
+        let key = state.pairing_key(&contact.peer_id()).unwrap();
+        assert_eq!(opening, sign_route(&runtime.identity, &key, &transcript));
+        for stable in [
+            runtime.private_group_identity.static_public(),
+            runtime.private_group_identity.signing_public(),
+        ] {
+            assert!(!opening.windows(stable.len()).any(|field| field == stable));
+        }
+
+        let unrelated = PairingKey::new([9; 32], false);
+        let proof = sign_route(&endpoint, &unrelated, &transcript);
+        let packet = BitchatPacket::new(
+            MessageType::NoiseEncrypted,
+            wire.to_routing_bytes().unwrap(),
+            Some(local.to_routing_bytes().unwrap()),
+            now_millis(),
+            session.encrypt(&local, &proof).unwrap(),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        runtime.on_encrypted(&link, &packet, &wire).await;
+        runtime.drain_writes().await;
+        assert!(!runtime.pairing_verified(&wire));
+        assert_eq!(radio.writes(), writes);
+    }
+
+    #[test]
+    fn group_credentials_require_the_pairing_key_direction_and_current_transcript() {
+        let group = MeshIdentity::generate(&mut crate::crypto::os_rng());
+        let sender = PairingKey::new([1; 32], true);
+        let receiver = PairingKey::new([1; 32], false);
+        let stranger = PairingKey::new([2; 32], false);
+        let transcript = [3; 32];
+        let wrapped = seal_group_identity(&group, &sender, &transcript).unwrap();
+        let sealed = wrapped
+            .strip_prefix(GROUP_MAGIC)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            open_group_identity(sealed, &receiver, &transcript),
+            Some((group.static_public(), group.signing_public()))
+        );
+        assert!(open_group_identity(sealed, &stranger, &transcript).is_none());
+        assert!(open_group_identity(sealed, &sender, &transcript).is_none());
+        assert!(open_group_identity(sealed, &receiver, &[4; 32]).is_none());
+    }
+
+    #[tokio::test]
     async fn paired_contacts_reconnect_and_open_courier_mail_after_a_week_offline() {
         let (mut a, a_radio, a_state) = super::super::tests::runtime();
         let (mut b, _, b_state) = super::super::tests::runtime();
@@ -365,19 +558,26 @@ mod tests {
             .unwrap();
         let key_a = a_state.pairing_key(&contact_b).unwrap();
         let key_b = b_state.pairing_key(&contact_a).unwrap();
-        let frame_a = wrap_private_control(
-            &a,
-            &wire_b,
-            &sign_route(&a.identity, &a.private_group_identity, &key_a, &transcript),
-        );
-        let frame_b = wrap_private_control(
-            &b,
-            &wire_a,
-            &sign_route(&b.identity, &b.private_group_identity, &key_b, &transcript),
-        );
+        let frame_a =
+            wrap_private_control(&a, &wire_b, &sign_route(&a.identity, &key_a, &transcript));
+        let frame_b =
+            wrap_private_control(&b, &wire_a, &sign_route(&b.identity, &key_b, &transcript));
+        b.note_pairing_candidate(&wire_a, &contact_a, now_millis());
+        b.send_pairing_proof(&wire_a).await;
+        let sealed = seal_group_identity(&a.private_group_identity, &key_a, &transcript).unwrap();
+        let group_frame = wrap_private_control(&a, &wire_b, &sealed);
+        b.on_encrypted(&link_b, &group_frame, &wire_a).await;
+        assert!(b_state.private_group_keys(&contact_a).is_none());
         a.on_encrypted(&link_a, &frame_b, &wire_b).await;
         b.on_encrypted(&link_b, &frame_a, &wire_a).await;
         assert_eq!(a_state.route(&contact_b), wire_b);
+        assert_eq!(
+            b_state.private_group_keys(&wire_a),
+            Some((
+                a.private_group_identity.static_public(),
+                a.private_group_identity.signing_public()
+            ))
+        );
         assert_eq!(b_state.route(&contact_a), wire_a);
         assert_eq!(directory.noise_key(&contact_b), Some(prior_address));
 
@@ -489,7 +689,6 @@ mod tests {
             .unwrap();
         let frame = sign_route(
             &creator.identity,
-            &creator_group,
             &creator_state.pairing_key(&old_member_wire).unwrap(),
             &transcript,
         );

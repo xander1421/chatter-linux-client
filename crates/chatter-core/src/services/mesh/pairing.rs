@@ -195,6 +195,20 @@ pub(super) fn route_proof(
     )
 }
 
+/// Seal group credentials under a separate directional key for this session.
+pub(super) fn group_identity_key(
+    key: &PairingKey,
+    transcript: &[u8; 32],
+    local: bool,
+) -> zeroize::Zeroizing<[u8; 32]> {
+    let direction = key.local_direction() ^ u8::from(!local);
+    zeroize::Zeroizing::new(mac(
+        key.root(),
+        b"chatter.mesh.group-identity.v1\0",
+        &[transcript, &[direction]],
+    ))
+}
+
 #[derive(Clone)]
 pub(super) struct PairingCourier {
     pub(super) local: Arc<MeshIdentity>,

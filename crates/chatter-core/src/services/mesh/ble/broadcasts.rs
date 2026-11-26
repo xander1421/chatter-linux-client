@@ -96,6 +96,10 @@ impl BleRuntime {
         self.transmit(&packet, Some(peer), None).await
     }
 
+    pub(super) async fn send_group_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
+        self.pairing_verified(peer) && self.send_private_control(peer, bytes).await
+    }
+
     pub(super) async fn send_group_state(&mut self, peer: &PeerId, bytes: &[u8], invite: bool) {
         let Some(wire) = self.state.wire_for_group_peer(peer) else {
             return;
@@ -107,10 +111,11 @@ impl BleRuntime {
             NoisePayloadType::GroupKeyUpdate
         };
         let payload = chatter_mesh::packet::encode_noise_payload(kind, bytes);
-        let sealed = self
-            .state
-            .with(|state| state.sessions.encrypt(peer, &payload));
-        let Ok(ciphertext) = sealed else {
+        let sealed = self.pairing_verified(peer).then(|| {
+            self.state
+                .with(|state| state.sessions.encrypt(peer, &payload))
+        });
+        let Some(Ok(ciphertext)) = sealed else {
             let now = now_millis();
             let due = self.state.with(|state| {
                 state
@@ -118,6 +123,7 @@ impl BleRuntime {
                     .links_to(peer)
                     .iter()
                     .any(|link| state.links.is_writable(link))
+                    && !state.sessions.has_session(peer)
                     && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
                         >= DM_HANDSHAKE_RETRY_MS
             });

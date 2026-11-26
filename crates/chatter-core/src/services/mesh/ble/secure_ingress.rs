@@ -227,6 +227,9 @@ impl BleRuntime {
     }
 
     pub(super) async fn sync_private_groups(&mut self, claimed: &PeerId) {
+        if !self.pairing_verified(claimed) {
+            return;
+        }
         let Some(group) = self.state.group_peer_for_wire(claimed) else {
             return;
         };
@@ -235,7 +238,7 @@ impl BleRuntime {
                 if let Ok(bytes) = serde_json::to_vec(&leave.notice) {
                     let mut control = b"CHTRPCL2".to_vec();
                     control.extend(bytes);
-                    self.send_private_control(claimed, &control).await;
+                    self.send_group_control(claimed, &control).await;
                 }
             }
         }
@@ -260,11 +263,11 @@ impl BleRuntime {
                         if let Ok(bytes) = serde_json::to_vec(notice) {
                             let mut control = b"CHTRPCL2".to_vec();
                             control.extend(bytes);
-                            self.send_private_control(claimed, &control).await;
+                            self.send_group_control(claimed, &control).await;
                         }
                     }
                     if let Some(hint) = state.epoch_proof().encode() {
-                        self.send_private_control(claimed, &hint).await;
+                        self.send_group_control(claimed, &hint).await;
                     }
                     if !state.stale
                         && !state
@@ -616,7 +619,7 @@ impl BleRuntime {
                     if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
                         ack.extend_from_slice(uuid.as_bytes());
                         ack.extend_from_slice(&epoch.to_be_bytes());
-                        self.send_private_control(claimed, &ack).await;
+                        self.send_group_control(claimed, &ack).await;
                     }
                 }
             }

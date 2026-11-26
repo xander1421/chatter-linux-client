@@ -601,7 +601,7 @@ impl BleRuntime {
         );
         ack.extend_from_slice(&update.epoch.to_be_bytes());
         ack.extend_from_slice(&sha2_10::Sha256::digest(&update.signature));
-        self.send_private_control(claimed, &ack).await;
+        self.send_group_control(claimed, &ack).await;
     }
 
     pub(super) fn on_private_epoch_ack(&mut self, claimed: &PeerId, bytes: &[u8]) {

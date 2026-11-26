@@ -159,7 +159,7 @@ impl BleRuntime {
             } => self.broadcast_channel(&message_id, &name, &content).await,
             BleCommand::ChannelPresence { name } => self.broadcast_channel_presence(&name).await,
             BleCommand::PrivateJoinRequest { creator, bytes } => {
-                self.send_private_control(&creator, &bytes).await;
+                self.send_group_control(&creator, &bytes).await;
             }
             BleCommand::PrivateEpoch { peer, bytes } => {
                 self.send_group_state(&peer, &bytes, false).await
@@ -168,7 +168,7 @@ impl BleRuntime {
                 self.send_group_state(&peer, &bytes, true).await
             }
             BleCommand::PrivateDecline { peer, notice } => {
-                self.send_private_control(&peer, &notice).await;
+                self.send_group_control(&peer, &notice).await;
             }
             BleCommand::PrivateEpochAck { peer, id } => {
                 if let Ok(Some(state)) = self.private_channels.load(&id) {
@@ -185,7 +185,7 @@ impl BleRuntime {
             } => {
                 for peer in peers {
                     if let Some(wire) = self.state.wire_for_group_peer(&peer) {
-                        self.send_private_control(&wire, &notice).await;
+                        self.send_group_control(&wire, &notice).await;
                     }
                 }
                 let packet = self.build_packet(MessageType::GroupMessage, None, broadcast, 7);
