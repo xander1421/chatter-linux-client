@@ -50,26 +50,37 @@ impl SignalService {
         recipient_id: &str,
         need_access_policy: bool,
     ) -> Result<(Vec<u32>, bool), ServiceError> {
-        self.ensure_device_sessions(auth_client, recipient_id, need_access_policy, false).await
+        self.ensure_device_sessions(
+            &mut PreKeySource::Identified(auth_client), recipient_id, need_access_policy, false,
+        ).await
     }
 
     /// Reuse admitted sessions for a private-channel send. The anonymous
     /// submit reports missing or stale devices for reconciliation.
     pub(crate) async fn require_group_device_sessions(
         &self,
-        auth_client: &mut AuthClient,
+        source: &mut PreKeySource<'_>,
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
         if let Some(key) = self.get_peer_identity(recipient_id)? {
             self.require_sendable_key(recipient_id, &key).map_err(ServiceError::Crypto)?;
         }
-        self.ensure_device_sessions(auth_client, recipient_id, false, true)
+        self.ensure_device_sessions(source, recipient_id, false, true)
+            .await.map(|(devices, _)| devices)
+    }
+
+    pub(crate) async fn ensure_anonymous_device_sessions(
+        &self,
+        source: &mut PreKeySource<'_>,
+        recipient_id: &str,
+    ) -> Result<Vec<u32>, ServiceError> {
+        self.ensure_device_sessions(source, recipient_id, false, false)
             .await.map(|(devices, _)| devices)
     }
 
     async fn ensure_device_sessions(
         &self,
-        auth_client: &mut AuthClient,
+        source: &mut PreKeySource<'_>,
         recipient_id: &str,
         need_access_policy: bool,
         strict_discovery: bool,
@@ -132,13 +143,10 @@ impl SignalService {
         }
 
         // Fetch prekey bundles for ALL devices using wildcard
-        let response = match auth_client
-            .get_pre_key_bundles_all_devices(recipient_id)
-            .await
-        {
+        let response = match source.fetch(recipient_id, "*").await {
             Ok(r) => r,
-            // A throttled policy read must not fail a send we can already
-            // encrypt: it goes identified, as it would have without the flag.
+            // A throttled policy read can reuse the established sessions.
+            // The caller applies its credential policy to the resulting send.
             Err(crate::error::NetworkError::RateLimited)
                 if !with_session.is_empty() => {
                 tracing::warn!(
@@ -307,13 +315,26 @@ impl SignalService {
         extra: &[u32],
         stale: &[u32],
     ) -> Result<(), ServiceError> {
+        self.reconcile_devices_with_source(
+            &mut PreKeySource::Identified(auth_client), recipient_id, missing, extra, stale,
+        ).await
+    }
+
+    pub(crate) async fn reconcile_devices_with_source(
+        &self,
+        source: &mut PreKeySource<'_>,
+        recipient_id: &str,
+        missing: &[u32],
+        extra: &[u32],
+        stale: &[u32],
+    ) -> Result<(), ServiceError> {
         for &device_id in extra.iter().chain(stale).chain(missing) {
             self.actor
                 .archive_session_for_resend(recipient_id.to_string(), device_id, None)
                 .await?;
         }
         for &device_id in missing.iter().chain(stale) {
-            self.ensure_session(auth_client, recipient_id, device_id)
+            self.ensure_session_with_source(source, recipient_id, device_id)
                 .await?;
         }
         Ok(())

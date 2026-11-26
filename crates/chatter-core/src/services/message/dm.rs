@@ -224,12 +224,21 @@ impl MessageService {
         mut sync: chatter_proto::content_v1::Content,
         strict: bool,
     ) -> (usize, bool) {
-        use crate::storage::repositories::settings_repo::keys;
-
         if let Err(error) = self.populate_sync_receipt_targets(&mut sync) {
             tracing::warn!(%error, "Could not snapshot own-device receipt targets");
             return (0, false);
         }
+        self.send_prepared_own_device_sync(auth_client, sync, strict).await
+    }
+
+    async fn send_prepared_own_device_sync(
+        &self,
+        auth_client: &mut AuthClient,
+        mut sync: chatter_proto::content_v1::Content,
+        strict: bool,
+    ) -> (usize, bool) {
+        use crate::storage::repositories::settings_repo::keys;
+
         let Ok(me_id) = self.current_user_id() else {
             return (0, false);
         };

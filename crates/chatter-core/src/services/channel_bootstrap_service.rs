@@ -175,7 +175,7 @@ impl ChannelBootstrapService {
 
             // Encrypt pairwise for the member using sealed sender
             let sealed_ciphertext = match signal_service
-                .encrypt_message(
+                .encrypt_message_with_existing_session(
                     &mut auth_client,
                     &member_id.to_string(),
                     1, // Default to primary device

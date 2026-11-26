@@ -56,7 +56,7 @@ impl KeyStore {
             )
             .optional()?;
         Ok(match value.as_deref() {
-            Some("legacy" | "legacy-unlisted") => PeerVerification::Legacy,
+            Some("legacy") => PeerVerification::Legacy,
             Some("verified") => PeerVerification::Verified,
             Some("rejected") => PeerVerification::Rejected,
             _ => PeerVerification::UnverifiedInbound,
@@ -166,16 +166,28 @@ impl KeyStore {
     }
 
     pub(crate) fn has_blocking_kt_job(&self, peer: &str, route: KtRoute) -> Result<bool, StorageError> {
-        Ok(self.db.read_connection()?.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM peer_kt_jobs j
-                 LEFT JOIN peer_key_transparency k ON k.account=j.account AND k.identity_key=j.identity_key
-                 WHERE j.account=?1 AND j.route=?2 AND j.archived=0
-                   AND (k.state IS NULL OR k.state='unverified-inbound')
-            )",
-            params![peer, route as i64],
+        const BLOCKING: &str = "SELECT j.account,j.identity_key FROM peer_kt_jobs j
+            LEFT JOIN peer_key_transparency k ON k.account=j.account AND k.identity_key=j.identity_key
+            WHERE j.account=?1 AND j.archived=0 AND (k.state IS NULL OR k.state='unverified-inbound')";
+        let pending: bool = self.db.read_connection()?.query_row(
+            &format!("SELECT EXISTS({BLOCKING})"),
+            [peer],
             |row| row.get(0),
-        )?)
+        )?;
+        if pending {
+            // An outbound session needs this peer on its selected route. Look
+            // up the exact key already queued on another route without popping
+            // another bundle. Secret-chat sends only select AnonymousTor.
+            let added = self.db.connection()?.execute(
+                &format!("INSERT OR IGNORE INTO peer_kt_jobs (account,identity_key,route)
+                          SELECT account,identity_key,?2 FROM ({BLOCKING})"),
+                params![peer, route as i64],
+            )?;
+            if added > 0 {
+                self.kt_work.notify_one();
+            }
+        }
+        Ok(pending)
     }
 
     pub(crate) fn kt_work(&self) -> &tokio::sync::Notify {

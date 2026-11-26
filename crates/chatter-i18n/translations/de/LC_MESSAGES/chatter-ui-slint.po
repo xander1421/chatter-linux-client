@@ -6019,3 +6019,6 @@ msgstr "Die Medienverbindung des Anrufs ist direkt und kann deine IP-Adresse off
 #: ui/anon_mode/shield_network_banner.slint
 msgid "Couldn't reach the server over Tor. Shield is still on."
 msgstr "Der Server konnte über Tor nicht erreicht werden. Shield ist weiterhin aktiv."
+
+msgid "Waiting for anonymous credentials"
+msgstr "Warten auf anonyme Zugangsdaten"

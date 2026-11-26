@@ -5995,3 +5995,6 @@ msgstr "El audio y el vídeo de la llamada se conectan directamente y pueden rev
 #: ui/anon_mode/shield_network_banner.slint
 msgid "Couldn't reach the server over Tor. Shield is still on."
 msgstr "No se pudo conectar con el servidor a través de Tor. Shield sigue activado."
+
+msgid "Waiting for anonymous credentials"
+msgstr "Esperando credenciales anónimas"

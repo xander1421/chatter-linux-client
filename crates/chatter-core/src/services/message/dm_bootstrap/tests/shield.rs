@@ -68,11 +68,10 @@ async fn public_core_shield_refusals_release_admission_including_no_tor_route() 
         &mut StdRng::seed_from_u64(19),
     )
     .await;
-    let mut auth = client.messages().auth_client();
     assert_eq!(
         client
             .messages()
-            .bootstrap_devices(&mut auth, &friend)
+            .bootstrap_devices(&friend)
             .await
             .unwrap(),
         vec![1]
@@ -112,9 +111,8 @@ async fn shield_bootstrap_targets_cached_devices_newest_first() {
         cache_device(ms, &friend, device, &mut rng).await;
     }
 
-    let mut auth = ms.auth_client();
     assert_eq!(
-        ms.bootstrap_devices(&mut auth, &friend).await.unwrap(),
+        ms.bootstrap_devices(&friend).await.unwrap(),
         vec![6, 3, 1]
     );
 
@@ -122,7 +120,7 @@ async fn shield_bootstrap_targets_cached_devices_newest_first() {
         .lock()
         .insert((friend, 6), std::time::Instant::now());
     assert_eq!(
-        ms.bootstrap_devices(&mut auth, &friend).await.unwrap(),
+        ms.bootstrap_devices(&friend).await.unwrap(),
         vec![3, 1]
     );
 }

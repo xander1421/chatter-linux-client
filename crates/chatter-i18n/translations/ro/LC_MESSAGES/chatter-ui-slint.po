@@ -6020,3 +6020,6 @@ msgstr "Fluxul audio și video al apelului folosește o conexiune directă și p
 #: ui/anon_mode/shield_network_banner.slint
 msgid "Couldn't reach the server over Tor. Shield is still on."
 msgstr "Serverul nu a putut fi accesat prin Tor. Shield rămâne activ."
+
+msgid "Waiting for anonymous credentials"
+msgstr "Se așteaptă credențiale anonime"

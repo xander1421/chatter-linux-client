@@ -179,7 +179,7 @@ async fn settle_peer_verification(
 
 fn job_client(pool: &GrpcClientPool, route: KtRoute) -> Result<AnonymousKtClient, NetworkError> {
     match route {
-        KtRoute::Normal => Ok(AnonymousKtClient::new(pool.channel())),
+        KtRoute::Normal => Ok(pool.anonymous_kt_client()),
         KtRoute::AnonymousTor => pool.secret_kt_client(),
     }
 }
@@ -548,7 +548,7 @@ mod kt_pin_tests {
     async fn shield_and_secret_verification_never_fall_back_when_onion_is_missing() {
         use std::sync::atomic::Ordering;
         let (_dir, service, _) = fixture();
-        let pool = GrpcClientPool::new("http://127.0.0.1:1").unwrap();
+        let pool = GrpcClientPool::new("https://127.0.0.1:1").unwrap();
         assert!(job_client(&pool, KtRoute::Normal).is_ok());
         let peer = crate::domain::UserId::new().to_string();
         let shield = service.actor.shield_mode();
@@ -599,12 +599,10 @@ mod kt_pin_tests {
         let peer = crate::domain::UserId::new().to_string();
         let key = [5; 33];
         service.key_store.save_identity(&peer, &key).unwrap();
-        let conn = service.settings_repo.database().connection().unwrap();
-        conn.execute(
-            "UPDATE peer_key_transparency SET state='legacy-unlisted' WHERE account=?1",
+        service.settings_repo.database().connection().unwrap().execute(
+            "UPDATE peer_key_transparency SET state='legacy' WHERE account=?1",
             [&peer],
         ).unwrap();
-        drop(conn);
 
         service.require_sendable_key(&peer, &key).unwrap();
         let job = service.key_store.due_kt_jobs(KtRoute::Normal, i64::MAX).unwrap().remove(0);
@@ -662,8 +660,8 @@ mod kt_pin_tests {
     async fn pending_key_blocks_single_and_wildcard_bundle_refetch() {
         let (_dir, service, _) = fixture();
         let peer = crate::domain::UserId::new().to_string();
-        service.key_store.enqueue_kt(&peer, &[5; 33], KtRoute::Normal).unwrap();
-        let pool = GrpcClientPool::new("http://127.0.0.1:1").unwrap();
+        service.key_store.enqueue_kt(&peer, &[5; 33], KtRoute::AnonymousTor).unwrap();
+        let pool = GrpcClientPool::new("https://127.0.0.1:1").unwrap();
         let mut auth = pool.auth_client();
         for result in [
             service.ensure_session(&mut auth, &peer, 1).await,
@@ -674,6 +672,16 @@ mod kt_pin_tests {
                 Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { peer_id })) if peer_id == peer
             ));
         }
+        assert!(service.key_store.due_kt_jobs(KtRoute::Normal, i64::MAX).unwrap()
+            .iter().any(|job| job.peer == peer && job.key == [5; 33]));
+        let other = crate::domain::UserId::new().to_string();
+        service.key_store.enqueue_kt(&other, &[6; 33], KtRoute::Normal).unwrap();
+        assert!(matches!(
+            service.for_anonymous_route().require_bundle_lookup_ready(&other),
+            Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { peer_id })) if peer_id == other
+        ));
+        assert!(service.key_store.due_kt_jobs(KtRoute::AnonymousTor, i64::MAX).unwrap()
+            .iter().any(|job| job.peer == other && job.key == [6; 33]));
     }
 
     #[tokio::test]
@@ -825,7 +833,7 @@ mod kt_pin_tests {
         );
         drop(pin);
         let initial_pin = kt_anchor::pinned_head(&settings).unwrap();
-        let pool = GrpcClientPool::new("http://127.0.0.1:1").unwrap();
+        let pool = GrpcClientPool::new("https://127.0.0.1:1").unwrap();
         let mut client = AnonymousKtClient::new(pool.channel());
         assert!(matches!(
             svc.hold_peer_head(initial_pin, &head(2), &mut client).await,

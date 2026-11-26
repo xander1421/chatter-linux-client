@@ -105,6 +105,11 @@ impl GrpcClientPool {
         super::super::AnonymousMessageClient::new(self.unidentified_channel())
     }
 
+    /// Isolate anonymous private posts from other unidentified RPCs.
+    pub(crate) fn private_post_client(&self) -> super::super::AnonymousMessageClient {
+        super::super::AnonymousMessageClient::new(self.private_post_channel())
+    }
+
     /// Create an anonymous auth client (no auth headers) on the unidentified
     /// channel.
     pub fn anonymous_auth_client(&self) -> super::super::AnonymousAuthClient {

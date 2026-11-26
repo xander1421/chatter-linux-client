@@ -40,7 +40,8 @@ impl ChatterClient {
         self.services.start_inbox_provider().await
     }
 
-    /// Pre-fetch anonymous tokens for sealed sender messaging.
+    /// Fill the credential pool for an integration-test fixture.
+    #[cfg(any(test, feature = "testing"))]
     pub async fn prefetch_tokens(
         &self,
         target_count: u32,

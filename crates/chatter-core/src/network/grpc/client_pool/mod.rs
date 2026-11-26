@@ -120,6 +120,8 @@ pub struct GrpcClientPool {
     /// connection — an isolated Tor circuit under onion — and the server can't
     /// correlate those ops with authenticated RPCs by connection.
     unidentified_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    // A private post's connection is independent of other anonymous RPCs.
+    private_post_channel: Arc<RwLock<Option<GrpcTransport>>>,
     #[cfg(feature = "onion")]
     unidentified_health: Arc<RwLock<Option<Instant>>>,
     /// Channel for secret chats (anonymous DMs and groups). Always an isolated
@@ -147,6 +149,8 @@ pub struct GrpcClientPool {
     /// first dial.
     #[cfg(feature = "onion")]
     unidentified_onion_tor: super::onion_transport::SharedTorClient,
+    #[cfg(feature = "onion")]
+    private_post_onion_tor: super::onion_transport::SharedTorClient,
     /// Cached ISOLATED Tor client for the secret-chat channel, its own
     /// circuit-group apart from both the account's and the unidentified one.
     #[cfg(feature = "onion")]
@@ -382,14 +386,17 @@ mod tests {
         pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         pool.set_transport_mode(TransportMode::Onion).unwrap();
         let anonymous = pool.unidentified_channel();
+        let private_post = pool.private_post_channel();
         let secret = pool.secret_channel().unwrap();
         *pool.secret_health.write() = Some(std::time::Instant::now());
 
         pool.set_transport_mode(TransportMode::Direct).unwrap();
         assert!(!anonymous.is_current());
+        assert!(!private_post.is_current());
         assert!(!secret.is_current());
         assert!(pool.secret_health.read().is_none());
         assert!(pool.unidentified_channel().is_current());
+        assert!(pool.private_post_channel().is_current());
     }
 
     /// A direct-URL change while on onion (the sign-in form re-applies its

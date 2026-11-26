@@ -232,6 +232,33 @@ pub(super) fn retain_channel_request(
 pub(super) fn has_channel_queue() -> bool {
     CHANNEL_DEPOSIT.try_with(|_| ()).is_ok()
 }
+/// Charge the current lease before processing server-provided device hints.
+pub(super) fn debit_private_send(
+    conn: Option<&rusqlite::Connection>,
+    counter: &str,
+    amount: usize,
+    maximum: usize,
+) -> Result<(), NetworkError> {
+    CHANNEL_DEPOSIT.try_with(|deposit| {
+        let execute = |conn: &rusqlite::Connection| {
+            conn.execute(
+                "UPDATE settings SET value=json_set(value,?3,COALESCE(json_extract(value,?3),0)+?4)
+                 WHERE key=?1 AND json_extract(value,'$.generation')=?2
+                 AND COALESCE(json_extract(value,?3),0)+?4<=?5",
+                params![deposit.key, deposit.generation, counter, amount, maximum],
+            ).map_err(|error| NetworkError::ServerError(error.to_string()))
+        };
+        let updated = match conn {
+            Some(conn) => execute(conn)?,
+            None => execute(&*deposit.db.connection().map_err(|error| NetworkError::ServerError(error.to_string()))?)?,
+        };
+        if updated == 0 {
+            return Err(NetworkError::InvalidRequest("Private-channel send budget exhausted or lease expired".into()));
+        }
+        Ok(())
+    }).unwrap_or(Ok(()))
+}
+
 pub(super) fn retain_channel_response(
     proto: &chatter_proto::chat_v1::Message,
 ) -> Result<(), StorageError> {
@@ -248,14 +275,16 @@ fn record_channel_attempt_failure(
     key: &str,
     generation: &str,
     retryable: bool,
+    credential_retry_at: Option<i64>,
 ) -> Result<usize, StorageError> {
     let conn = db.connection()?;
     Ok(conn.execute(
         "UPDATE settings SET value=json_set(value,'$.phase',CASE WHEN ?3 THEN 'queued' ELSE 'terminal' END,
          '$.attempts',MIN(json_extract(value,'$.attempts')+1,6),
-         '$.next_at',?4+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6))))
+         '$.credential_retry_at',?5,
+         '$.next_at',COALESCE(?5,?4+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6)))))
          WHERE key=?1 AND json_extract(value,'$.generation')=?2",
-        params![key, generation, retryable, now()],
+        params![key, generation, retryable, now(), credential_retry_at],
     )?)
 }
 
@@ -522,18 +551,18 @@ impl MessageService {
         }
         let owner = self.current_user_id()?;
         let row = &entry.row;
-        let members = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.channel_client()
-                .get_all_channel_members(&row.conversation_id.to_string()),
-        )
-        .await
-        .unwrap_or(Err(NetworkError::Timeout))?;
-        if !members
-            .iter()
-            .any(|member| member.user_id == owner.to_string())
-        {
-            return Err(MessageError::NotAuthor);
+        let private = prepared.distribution.is_some();
+        if !private {
+            let members = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.channel_client()
+                    .get_all_channel_members(&row.conversation_id.to_string()),
+            )
+            .await
+            .unwrap_or(Err(NetworkError::Timeout))?;
+            if !members.iter().any(|member| member.user_id == owner.to_string()) {
+                return Err(MessageError::NotAuthor);
+            }
         }
         if let Some(hash) = prepared.state_hash.as_ref() {
             self.sync_channel_state_if_behind(&row.conversation_id);
@@ -569,7 +598,7 @@ impl MessageService {
         let proto = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             // Only a private channel goes out anonymously; an encrypted
             // public channel also carries a state hash but posts to the server.
-            if self.is_private_channel(&row.conversation_id) {
+            if private {
                 let distribution = prepared.distribution.as_deref().ok_or_else(||
                     MessageError::InvalidContent("Private post is missing its original sender key".into()))?;
                 let distribution = chatter_proto::content_v1::SenderKeyDistribution::decode(distribution)
@@ -753,9 +782,11 @@ impl MessageService {
                     )
                     .optional()?
                     .flatten();
+                let mut private = self.is_private_channel(&row.conversation_id);
                 if let Some(raw) = prepared {
                     let prepared: Prepared = serde_json::from_str(&raw)
                         .map_err(|_| invalid("Invalid accepted channel request"))?;
+                    private |= prepared.distribution.is_some();
                     let request = SendMessageRequest::decode(prepared.request.as_slice())
                         .map_err(|_| invalid("Invalid accepted channel request protobuf"))?;
                     if let Some(ttl) = request
@@ -806,7 +837,7 @@ impl MessageService {
                     sent.delivery_status = stored.delivery_status;
                 }
                 let mut auth = self.auth_client();
-                self.sync_channel_receipt_targets(row.conversation_id, sent.sent_at, &mut auth)
+                self.sync_channel_receipt_targets(row.conversation_id, sent.sent_at, &mut auth, private)
                     .await;
                 Ok(sent)
             }
@@ -825,8 +856,14 @@ impl MessageService {
                     } else {
                         matches!(&error, MessageError::Network(e) if e.is_retryable() || e.is_transport_error())
                     };
+                let credential_wait = matches!(
+                    error, MessageError::Network(NetworkError::AnonymousCredentialsUnavailable)
+                );
+                let credential_retry_at = credential_wait.then(|| {
+                    now() + crate::app::core_services::jittered_delay().as_secs() as i64
+                });
                 let changed = record_channel_attempt_failure(
-                    &self.database, journal_key, generation, transient,
+                    &self.database, journal_key, generation, transient, credential_retry_at,
                 )?;
                 if changed == 0 {
                     return self
@@ -840,6 +877,7 @@ impl MessageService {
                     |r| r.get(0),
                 )?;
                 let (status, reason) = match phase.as_str() {
+                    "queued" if credential_wait => ("sending", Some(super::core::WAITING_FOR_ANONYMOUS_CREDENTIALS)),
                     "queued" => ("sending", identity_wait.or(Some("Waiting for connection"))),
                     "submitted" => ("sending", Some("Delivery unconfirmed")),
                     _ => ("failed", error.permanent_send_failure_reason()),
@@ -1036,11 +1074,11 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
                     tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0)
                         WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'
                         AND (?2 OR EXISTS(SELECT 1 FROM messages m WHERE m.id=json_extract(settings.value,'$.entry.row.id')
-                        AND m.failure_reason=?3))",
-                        params![pattern, reconnected, super::core::VERIFYING_KEY])?;
+                        AND m.failure_reason IN (?3,?4)))",
+                        params![pattern, reconnected, super::core::VERIFYING_KEY, super::core::IDENTITY_CHANGED])?;
                 }
                 let rows: Vec<(String, Option<String>, String, Option<String>, Option<u32>)> = {
-                    let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase'),COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
+                    let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase'),COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 AND COALESCE(json_extract(value,'$.credential_retry_at'),0)<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
                     let mapped = stmt.query_map(params![pattern, now()], |r| {
                         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                     })?;
@@ -1186,7 +1224,7 @@ mod tests {
         ] {
             let wait = peer_identity_wait_reason(&error);
             assert_eq!(wait, Some(reason));
-            assert_eq!(record_channel_attempt_failure(&db, &key, "lease", wait.is_some()).unwrap(), 1);
+            assert_eq!(record_channel_attempt_failure(&db, &key, "lease", wait.is_some(), None).unwrap(), 1);
             let retained: serde_json::Value = settings.get(&key).unwrap().unwrap();
             assert_eq!(retained["phase"], "queued");
             assert_eq!(retained["prepared"], prepared);

@@ -6011,3 +6011,6 @@ msgstr "Аудио и видео звонка передаются напрям�
 #: ui/anon_mode/shield_network_banner.slint
 msgid "Couldn't reach the server over Tor. Shield is still on."
 msgstr "Не удалось подключиться к серверу через Tor. Shield всё ещё включён."
+
+msgid "Waiting for anonymous credentials"
+msgstr "Ожидание анонимных учётных данных"

@@ -8,11 +8,11 @@
 //! group send: libsignal sealed_sender_multi_recipient_encrypt +
 //! Signal-Server PUT /v1/messages/multi_recipient with Group-Send-Token.
 //!
-//! The token is fetched once per verified membership state and cached, as
-//! Signal fetches endorsements with a group change rather than per send:
-//! fetching per send would pair an authenticated request with each anonymous
-//! one.
+//! A session maintenance loop fetches endorsements for active private
+//! channels. Posts use its cache, so a server refusing an anonymous submit
+//! cannot make its sender request endorsements on the account connection.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -22,6 +22,8 @@ use crate::crypto::group_send;
 use crate::domain::ids::ChannelId;
 use crate::domain::verified_state::{StateHash, VerifiedChannel};
 use crate::error::NetworkError;
+use crate::mailbox::token_manager::{MailboxToken, TokenManager};
+use crate::services::signal::PreKeySource;
 
 use super::{MessageError, MessageService};
 
@@ -32,10 +34,56 @@ const REFRESH_MARGIN_SECS: u64 = 3 * 3600;
 /// Device reconciliations before a send gives up.
 const MAX_RECONCILE_ROUNDS: usize = 2;
 
+const MAX_DEVICES_PER_MISMATCH: usize = 8;
+const MAX_REPAIRS_PER_POST: usize = 12;
+// Keep enough credentials for a secret-chat start or a mailbox rotation.
+pub(super) const RESERVED_MAILBOX_CREDENTIALS: usize = 4;
+
+struct PostBudget {
+    token_limit: usize,
+    tokens: Cell<usize>,
+    repairs: Cell<usize>,
+}
+tokio::task_local! { static PRIVATE_POST_BUDGET: PostBudget; }
+
+fn budget_exhausted() -> NetworkError {
+    NetworkError::InvalidRequest("Private-channel send exceeded its discovery budget".into())
+}
+
+pub(super) fn claim_private_post_credential(tokens: &TokenManager) -> Result<MailboxToken, NetworkError> {
+    PRIVATE_POST_BUDGET.try_with(|budget| {
+        if budget.tokens.get() >= budget.token_limit {
+            return Err(budget_exhausted());
+        }
+        let token = tokens.claim_budgeted_credential(RESERVED_MAILBOX_CREDENTIALS, |conn| {
+            super::channel_send::debit_private_send(Some(conn), "$.private_tokens", 1, budget.token_limit)?;
+            Ok(())
+        })?;
+        budget.tokens.set(budget.tokens.get() + 1);
+        Ok(token)
+    }).map_err(|_| budget_exhausted())?
+}
+
+pub(super) fn charge_private_repairs(count: usize) -> Result<(), NetworkError> {
+    if count == 0 || count > MAX_DEVICES_PER_MISMATCH {
+        return Err(budget_exhausted());
+    }
+    PRIVATE_POST_BUDGET.try_with(|budget| {
+        let total = budget.repairs.get() + count;
+        if total > MAX_REPAIRS_PER_POST {
+            return Err(budget_exhausted());
+        }
+        super::channel_send::debit_private_send(None, "$.private_repairs", count, MAX_REPAIRS_PER_POST)?;
+        budget.repairs.set(total);
+        Ok(())
+    }).map_err(|_| budget_exhausted())?
+}
+
 #[derive(Clone)]
 struct Cached {
     state_hash: StateHash,
     expiration: u64,
+    checked_at: u64,
     token: Vec<u8>,
 }
 
@@ -50,15 +98,18 @@ impl TokenCache {
             .map(|c| c.token.clone())
     }
 
-    fn forget(&self, channel_id: &ChannelId) {
-        if let Ok(mut map) = self.0.lock() {
-            map.remove(channel_id);
-        }
+    fn recently_checked(&self, channel_id: &ChannelId, state_hash: &StateHash, now: u64) -> bool {
+        const CHECK_INTERVAL_SECS: u64 = 15 * 60;
+        self.0.lock().ok().is_some_and(|map| map.get(channel_id).is_some_and(|c| {
+            c.state_hash == *state_hash
+                && c.expiration > now + REFRESH_MARGIN_SECS
+                && now.saturating_sub(c.checked_at) < CHECK_INTERVAL_SECS
+        }))
     }
 
     pub(super) fn put(&self, channel_id: &ChannelId, state_hash: StateHash, expiration: u64, token: Vec<u8>) {
         if let Ok(mut map) = self.0.lock() {
-            map.insert(*channel_id, Cached { state_hash, expiration, token });
+            map.insert(*channel_id, Cached { state_hash, expiration, checked_at: now_secs(), token });
         }
     }
 }
@@ -90,18 +141,21 @@ impl MessageService {
         })
     }
 
-    /// The serialized `GroupSendFullToken` for our verified state of
-    /// `channel_id`. The issuance must be for exactly our verified revision;
-    /// a server ahead of us starts a catch-up and fails this send (retryable).
-    async fn group_send_token(&self, channel_id: &ChannelId, verified: &VerifiedChannel) -> Result<Vec<u8>, MessageError> {
+    async fn refresh_group_send_token(
+        &self,
+        channel_id: &ChannelId,
+        verified: &VerifiedChannel,
+    ) -> Result<(), MessageError> {
         let now = now_secs();
-        if let Some(token) = self.group_send_tokens.get(channel_id, &verified.state_hash, now) {
-            return Ok(token);
+        if self.group_send_tokens.recently_checked(channel_id, &verified.state_hash, now) {
+            return Ok(());
         }
+        crate::state::send_session::check_send_session()?;
         let resp = self
             .channel_client()
             .get_group_send_endorsements(&channel_id.to_string())
             .await?;
+        crate::state::send_session::check_send_session()?;
         if resp.revision != verified.state.revision {
             // The server issued for a newer membership: record it as a peer
             // ahead so the sync below actually fetches the changes (a bare
@@ -128,8 +182,50 @@ impl MessageService {
             &server,
         )
         .map_err(invalid)?;
-        self.group_send_tokens.put(channel_id, verified.state_hash, expiration, token.clone());
-        Ok(token)
+        crate::state::send_session::check_send_session()?;
+        self.group_send_tokens.put(channel_id, verified.state_hash, expiration, token);
+        Ok(())
+    }
+
+    fn private_memberships(&self, owner: &crate::domain::UserId) -> Result<Vec<ChannelId>, MessageError> {
+        let mut channels = self.channel_repo.list_channels_for_user(owner)?;
+        channels.retain(|channel| self.is_private_channel(channel));
+        channels.sort_unstable_by_key(|channel| *channel.as_uuid());
+        Ok(channels)
+    }
+
+    async fn refresh_private_endorsements(&self, owner: crate::domain::UserId) -> Result<(), MessageError> {
+        let owner_id = owner.to_string();
+        let mut cert_checked = false;
+        for channel in self.private_memberships(&owner)? {
+            crate::state::send_session::check_send_session()?;
+            let Ok(verified) = self.group_gate().for_distribution(&channel) else {
+                continue;
+            };
+            if !verified.state.active_members().any(|(user, member)| {
+                user == &owner_id && !member.is_muted(crate::inbox::ack_policy::now_ns())
+            }) {
+                continue;
+            }
+            if !cert_checked {
+                cert_checked = true;
+                if let Err(error) = self.signal_service.get_or_request_sender_certificate(&mut self.auth_client()).await {
+                    tracing::debug!(%error, "Private-channel sender certificate unavailable");
+                }
+            }
+            if let Err(error) = self.refresh_group_send_token(&channel, &verified).await {
+                tracing::debug!(channel = %channel, %error, "Private-channel endorsements unavailable");
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn private_post_prekeys(&self) -> PreKeySource<'_> {
+        PreKeySource::Anonymous {
+            pool: &self.grpc_pool,
+            tokens: &self.token_manager,
+            claim: claim_private_post_credential,
+        }
     }
 
     /// Send a prepared private-channel request anonymously and return the
@@ -158,12 +254,46 @@ impl MessageService {
         };
         check_distribution(distribution, &contents)?;
         let members = active_members(&verified);
+        if !members.contains(&me) {
+            return Err(MessageError::NotAuthor);
+        }
+        let token = self.group_send_tokens
+            .get(&channel_id, &verified.state_hash, now_secs())
+            .ok_or(NetworkError::Unavailable)?;
+        self.signal_service.get_cached_sender_certificate()
+            .map_err(|error| MessageError::from_signal_send(error, "Sender certificate"))?
+            .ok_or(NetworkError::Unavailable)?;
+        let budget = PostBudget {
+            // A cold member may need two lookups (before and after KT) and
+            // one sender-key deposit. Repairs have their own cumulative cap.
+            token_limit: 3 * members.len() + 2 * MAX_REPAIRS_PER_POST,
+            tokens: Cell::new(0),
+            repairs: Cell::new(0),
+        };
+        PRIVATE_POST_BUDGET.scope(budget, self.submit_verified_group(
+            request, distribution, channel_id, verified, me, members, contents, token,
+        )).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_verified_group(
+        &self,
+        request: &chat_v1::SendMessageRequest,
+        distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+        channel_id: ChannelId,
+        verified: VerifiedChannel,
+        me: String,
+        members: Vec<String>,
+        contents: Vec<u8>,
+        token: Vec<u8>,
+    ) -> Result<chat_v1::Message, MessageError> {
         let mut auth_client = self.auth_client();
+        let mut prekeys = self.private_post_prekeys();
         // Reuse cached sessions. Cold members need initial discovery; the
         // anonymous submit names any missing or stale devices for reconciliation.
         let mut blocked = None;
         for member in &members {
-            match self.signal_service.require_group_device_sessions(&mut auth_client, member).await
+            match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
                 .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
             {
                 Ok(devices) if devices.is_empty() && member != &me => {
@@ -177,7 +307,6 @@ impl MessageService {
         if let Some(error) = blocked {
             return Err(error);
         }
-        let token = self.group_send_token(&channel_id, &verified).await?;
         let current = self.create_sender_key_for_channel(&channel_id).await?;
         let same_next = sender_key_precedes(distribution, &current);
         let holders = if same_next {
@@ -220,23 +349,15 @@ impl MessageService {
             }
             let (sealed, destinations) = self
                 .signal_service
-                .seal_group_message(&mut auth_client, &channel_id, contents.clone(), &members)
+                .seal_group_message(&channel_id, contents.clone(), &members)
                 .await
                 .map_err(|e| MessageError::from_signal_send(e, "group seal"))?;
             crate::services::gateway::submission::mark_submission_started()?;
             let resp = self
                 .grpc_pool
-                .anonymous_message_client()
+                .private_post_client()
                 .send_group_message(&request.channel_id, token.clone(), sealed, &request.client_request_id)
-                .await;
-            // The server refuses every unverifiable send the same way (a
-            // token for a membership that has since changed included): drop
-            // the cached token so the retry fetches endorsements for the
-            // current state, which also starts a catch-up when we are behind.
-            if resp.is_err() {
-                self.group_send_tokens.forget(&channel_id);
-            }
-            let resp = resp?;
+                .await?;
             if resp.success {
                 use prost::Message as _;
                 let original = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())
@@ -247,11 +368,27 @@ impl MessageService {
             if resp.mismatched.is_empty() || round == MAX_RECONCILE_ROUNDS {
                 return Err(invalid("members' devices still mismatched after reconciling"));
             }
+            let count = resp.mismatched.iter().filter_map(|account| account.devices.as_ref())
+                .map(|devices| devices.missing_devices.len() + devices.extra_devices.len() + devices.stale_devices.len())
+                .sum();
+            charge_private_repairs(count)?;
             for account in &resp.mismatched {
-                distributed.retain(|(member, _)| member != &account.user_id);
+                if !members.contains(&account.user_id) {
+                    return Err(invalid("device mismatch for an account outside the verified channel"));
+                }
                 let d = account.devices.clone().unwrap_or_default();
+                if account.user_id == me
+                    && d.missing_devices.iter().chain(&d.extra_devices).chain(&d.stale_devices)
+                        .any(|device| *device == own_device)
+                {
+                    return Err(invalid("device mismatch for the sending device"));
+                }
+                distributed.retain(|(member, _)| member != &account.user_id);
                 self.signal_service
-                    .reconcile_devices(&mut auth_client, &account.user_id, &d.missing_devices, &d.extra_devices, &d.stale_devices)
+                    .reconcile_devices_with_source(
+                        &mut prekeys, &account.user_id, &d.missing_devices,
+                        &d.extra_devices, &d.stale_devices,
+                    )
                     .await
                     .map_err(|e| MessageError::from_signal_send(e, "device reconciliation"))?;
             }
@@ -276,6 +413,38 @@ impl MessageService {
             ..Default::default()
         })
     }
+}
+
+/// Independent of posts and token issuance. Scan all active private memberships
+/// so the selected channels do not disclose which ones have pending posts.
+pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
+    client: &std::sync::Arc<C>,
+) -> tokio::task::JoinHandle<()> {
+    let weak = std::sync::Arc::downgrade(client);
+    tokio::spawn(async move {
+        crate::app::core_services::initial_token_refill_sleep().await;
+        loop {
+            {
+                let Some(client) = weak.upgrade() else { break };
+                let state = client.auth_state().get();
+                if let Some(owner) = state.current_user_id.filter(|_| {
+                    !state.session_ended && client.offline_state().connection_state().is_connected()
+                }) {
+                    let messages = client.messages();
+                    let session = crate::state::send_session::SendSession::capture(client.auth_state());
+                    crate::state::send_session::SEND_SESSION.scope(session, async {
+                        if let Err(error) = messages.refresh_private_endorsements(owner).await {
+                            tracing::warn!(%error, "Private-channel endorsement refresh failed");
+                        }
+                        if let Err(error) = messages.flush_private_receipt_syncs(owner).await {
+                            tracing::warn!(%error, "Private-channel receipt sync failed");
+                        }
+                    }).await;
+                }
+            }
+            crate::app::core_services::jittered_sleep().await;
+        }
+    })
 }
 
 fn distribution_position(

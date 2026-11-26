@@ -45,16 +45,17 @@ impl ChatterClient {
         quote: Option<QuoteIntent>,
         options: Option<SendOptions>,
     ) -> Result<SendResult, (SendError, Option<String>)> {
-        let outcome = self
-            .send_message_attempt_inner(
-                attempt,
-                conversation,
-                text,
-                pending_attachments,
-                quote,
-                options,
-            )
-            .await;
+        // The route and submission futures carry both normal and Shield
+        // send state. Pin them on the heap before nesting their poll frames.
+        let outcome = Box::pin(self.send_message_attempt_inner(
+            attempt,
+            conversation,
+            text,
+            pending_attachments,
+            quote,
+            options,
+        ))
+        .await;
         // A send that stored a row — delivered, queued, or failed and
         // retryable — shows in the conversation, so it moves the row too.
         let stored = match &outcome {
@@ -127,13 +128,13 @@ impl ChatterClient {
             .scope(
                 session,
                 crate::services::gateway::submission::track_submission(
-                    self.send_message_untracked(
+                    Box::pin(self.send_message_untracked(
                         conversation,
                         text,
                         pending_attachments,
                         quote,
                         options,
-                    ),
+                    )),
                     Some((
                         self.services.database.clone(),
                         key.clone(),

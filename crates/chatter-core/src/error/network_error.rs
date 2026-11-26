@@ -24,6 +24,10 @@ pub enum NetworkError {
     #[error("server unavailable")]
     Unavailable,
 
+    /// The local pre-fetched pool is below the amount available for this send.
+    #[error("waiting for anonymous credentials")]
+    AnonymousCredentialsUnavailable,
+
     /// The request or stream used a handle from before a route switch.
     #[error("transport changed")]
     TransportChanged,
@@ -192,6 +196,7 @@ impl NetworkError {
             self,
             NetworkError::RequestNotSent(_)
                 | NetworkError::Unavailable
+                | NetworkError::AnonymousCredentialsUnavailable
                 | NetworkError::TransportChanged
                 | NetworkError::RateLimited
                 | NetworkError::ServerError(_)

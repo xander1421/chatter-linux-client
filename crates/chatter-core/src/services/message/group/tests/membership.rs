@@ -74,22 +74,63 @@
 
     #[cfg(feature = "dev-trust-root")]
     #[tokio::test]
-    async fn private_submit_reuses_cached_sessions_and_blocks_an_unverified_roster() {
+    async fn private_submit_fetches_bundles_anonymously_only_when_needed() {
         use chatter_proto::chat_v1 as pb;
         use crate::services::message::dm_bootstrap::tests::{
-            cache_device, cache_fixture_sender_certificate,
+            cache_device, cache_fixture_sender_certificate, seed_tokens,
         };
         use rand::{SeedableRng, rngs::StdRng};
-        use std::{convert::Infallible, future::Ready, sync::{Arc, Mutex}, task::{Context, Poll}};
+        use std::{
+            collections::VecDeque, convert::Infallible, future::Ready, pin::Pin,
+            sync::{Arc, Mutex}, task::{Context, Poll},
+        };
         use tokio::net::TcpListener;
         use tonic::{body::Body, server::NamedService, transport::Server};
 
-        #[derive(Clone)]
-        struct RpcProbe<const AUTH: bool>(Arc<Mutex<Vec<(String, bool)>>>);
-        impl<const AUTH: bool> NamedService for RpcProbe<AUTH> {
-            const NAME: &'static str = if AUTH { "chat.v1.AuthService" } else { "chat.v1.MessageService" };
+        struct GrpcFrames(VecDeque<http_body::Frame<bytes::Bytes>>);
+        impl http_body::Body for GrpcFrames {
+            type Data = bytes::Bytes;
+            type Error = Infallible;
+
+            fn poll_frame(mut self: Pin<&mut Self>, _: &mut Context<'_>) ->
+                Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
+            {
+                Poll::Ready(self.0.pop_front().map(Ok))
+            }
         }
-        impl<const AUTH: bool> tower::Service<http::Request<Body>> for RpcProbe<AUTH> {
+
+        fn grpc_reply(response: impl prost::Message) -> http::Response<Body> {
+            let mut body = vec![0];
+            body.extend_from_slice(&(response.encoded_len() as u32).to_be_bytes());
+            response.encode(&mut body).unwrap();
+            let mut trailers = http::HeaderMap::new();
+            trailers.insert("grpc-status", "0".parse().unwrap());
+            http::Response::builder()
+                .header("content-type", "application/grpc")
+                .body(Body::new(GrpcFrames(VecDeque::from([
+                    http_body::Frame::data(body.into()),
+                    http_body::Frame::trailers(trailers),
+                ]))))
+                .unwrap()
+        }
+
+        #[derive(Clone, Default)]
+        struct Probe {
+            calls: Arc<Mutex<Vec<(String, bool, bool)>>>,
+            mismatch: Arc<Mutex<Option<(String, Vec<u32>)>>>,
+            receipt_reply: Arc<Mutex<Option<Result<(), tonic::Status>>>>,
+        }
+
+        #[derive(Clone)]
+        struct RpcProbe<const SERVICE: u8>(Probe);
+        impl<const SERVICE: u8> NamedService for RpcProbe<SERVICE> {
+            const NAME: &'static str = match SERVICE {
+                0 => "chat.v1.AuthService",
+                1 => "chat.v1.MessageService",
+                _ => "chat.v1.ChannelService",
+            };
+        }
+        impl<const SERVICE: u8> tower::Service<http::Request<Body>> for RpcProbe<SERVICE> {
             type Response = http::Response<Body>;
             type Error = Infallible;
             type Future = Ready<Result<Self::Response, Self::Error>>;
@@ -99,10 +140,40 @@
             }
 
             fn call(&mut self, request: http::Request<Body>) -> Self::Future {
-                self.0.lock().unwrap().push((
-                    request.uri().path().to_owned(),
+                let path = request.uri().path();
+                self.0.calls.lock().unwrap().push((
+                    path.to_owned(),
                     request.headers().contains_key(http::header::AUTHORIZATION),
+                    request.headers().contains_key("x-anonymous-credential"),
                 ));
+                if path.ends_with("/SendGroupMessage") {
+                    if let Some((user_id, missing_devices)) = self.0.mismatch.lock().unwrap().take() {
+                        let response = pb::SendGroupMessageResponse {
+                            mismatched: vec![pb::AccountMismatchedDevices {
+                                user_id,
+                                devices: Some(pb::MismatchedDevices {
+                                    missing_devices,
+                                    ..Default::default()
+                                }),
+                            }],
+                            ..Default::default()
+                        };
+                        return std::future::ready(Ok(grpc_reply(response)));
+                    }
+                }
+                if path.ends_with("/SendSealedMessage") {
+                    if let Some(result) = self.0.receipt_reply.lock().unwrap().take() {
+                        let response = match result {
+                            Ok(()) => grpc_reply(pb::SendSealedMessageResponse {
+                                success: true,
+                                delivered_to_devices: vec![2],
+                                ..Default::default()
+                            }),
+                            Err(status) => status.into_http(),
+                        };
+                        return std::future::ready(Ok(response));
+                    }
+                }
                 std::future::ready(Ok(tonic::Status::aborted("fixture reached").into_http()))
             }
         }
@@ -112,17 +183,19 @@
         let incoming = futures::stream::unfold(listener, |listener| async {
             Some((listener.accept().await.map(|(stream, _)| stream), listener))
         });
-        let rpc_calls = Arc::new(Mutex::new(Vec::new()));
+        let probe = Probe::default();
         let server = tokio::spawn(Server::builder()
-            .add_service(RpcProbe::<true>(rpc_calls.clone()))
-            .add_service(RpcProbe::<false>(rpc_calls.clone()))
+            .add_service(RpcProbe::<0>(probe.clone()))
+            .add_service(RpcProbe::<1>(probe.clone()))
+            .add_service(RpcProbe::<2>(probe.clone()))
             .serve_with_incoming(incoming));
 
         let t = two_members_at(&url);
         let alice = t.alice.messages();
         alice.grpc_pool.auth().set_basic(format!("{}.1", t.alice_id), "fixture".into());
         let mut rng = StdRng::seed_from_u64(1844);
-        let identity = libsignal_protocol::IdentityKeyPair::generate(&mut rng);
+        let mut own_rng = StdRng::seed_from_u64(t.alice_id.as_uuid().as_u128() as u64);
+        let identity = libsignal_protocol::IdentityKeyPair::generate(&mut own_rng);
         let store = &alice.signal_service.key_store;
         store.set_local_identity(42, &identity.serialize()).unwrap();
         // SSv2 includes Alice's sending device, which needs her own prekeys
@@ -148,9 +221,17 @@
             ..Default::default()
         };
 
-        // The recorder intentionally refuses each send after recording it.
-        for path in ["SendSealedMessage", "SendGroupMessage"] {
-            alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
+        // A cache miss waits for maintenance and never starts identified work.
+        assert!(matches!(
+            alice.submit_group_request(&request, &distribution).await,
+            Err(MessageError::Network(crate::error::NetworkError::Unavailable))
+        ));
+        assert!(probe.calls.lock().unwrap().is_empty());
+
+        // The recorder refuses every send. Repeated rejection leaves the
+        // cached token in place and cannot request identified endorsements.
+        alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
+        for path in ["SendSealedMessage", "SendGroupMessage", "SendGroupMessage"] {
             let result = alice.submit_group_request(&request, &distribution).await;
             assert!(matches!(
                 result,
@@ -158,8 +239,8 @@
                     if detail.contains("fixture reached")
             ), "{result:?}");
             assert_eq!(
-                std::mem::take(&mut *rpc_calls.lock().unwrap()),
-                [(format!("/chat.v1.MessageService/{path}"), false)]
+                std::mem::take(&mut *probe.calls.lock().unwrap()),
+                [(format!("/chat.v1.MessageService/{path}"), false, false)]
             );
             // On the second submit Bob already holds our sender key.
             alice.record_sender_key_holders(&t.channel_id, &bob, &reached(&[(1, registration)]));
@@ -173,7 +254,114 @@
             alice.submit_group_request(&request, &distribution).await,
             Err(MessageError::RecipientKeyVerifying { peer_id }) if peer_id == bob
         ));
-        assert!(rpc_calls.lock().unwrap().is_empty());
+        assert!(probe.calls.lock().unwrap().is_empty());
+
+        // A mismatch on an otherwise warm post triggers anonymous discovery.
+        alice.database.connection().unwrap().execute(
+            "UPDATE peer_key_transparency SET state='verified' WHERE account=?1",
+            [&bob],
+        ).unwrap();
+        seed_tokens(alice, 7);
+        alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
+        *probe.mismatch.lock().unwrap() = Some((bob.clone(), (7..=15).collect()));
+        assert!(matches!(
+            alice.submit_group_request(&request, &distribution).await,
+            Err(MessageError::Network(crate::error::NetworkError::InvalidRequest(_)))
+        ));
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 7);
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [("/chat.v1.MessageService/SendGroupMessage".into(), false, false)]
+        );
+        *probe.mismatch.lock().unwrap() = Some((bob.clone(), vec![7]));
+        assert!(alice.submit_group_request(&request, &distribution).await.is_err());
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [
+                ("/chat.v1.MessageService/SendGroupMessage".into(), false, false),
+                ("/chat.v1.AuthService/GetPreKeyBundle".into(), false, true),
+            ]
+        );
+
+        // A parked session cannot be rebuilt through identified discovery,
+        // either for a private post or for a mailbox bootstrap.
+        assert_eq!(alice.signal_service.archive_peer_sessions(&bob).await.unwrap(), 1);
+        assert!(alice.submit_group_request(&request, &distribution).await.is_err());
+        assert!(alice.bootstrap_devices(&t.bob_id).await.is_err());
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [
+                ("/chat.v1.AuthService/GetPreKeyBundle".into(), false, true),
+                ("/chat.v1.AuthService/GetPreKeyBundle".into(), false, true),
+            ]
+        );
+
+        // Exhaustion waits for an independent refill and sends no RPC.
+        assert!(matches!(
+            alice.submit_group_request(&request, &distribution).await,
+            Err(MessageError::Network(crate::error::NetworkError::AnonymousCredentialsUnavailable))
+        ));
+        assert!(probe.calls.lock().unwrap().is_empty());
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
+
+        // A private post with linked devices saves its receipt transcript and
+        // can be flushed only after the independent delay.
+        cache_device(alice, &t.alice_id, 2, &mut rng).await;
+        let mut auth = alice.auth_client();
+        let before = chrono::Utc::now().timestamp();
+        alice.sync_channel_receipt_targets(t.channel_id, 42, &mut auth, true).await;
+        let conn = alice.database.read_connection().unwrap();
+        let due: i64 = conn.query_row(
+            "SELECT json_extract(value,'$.due') FROM settings WHERE key LIKE 'private.receipt-sync:%'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        drop(conn);
+        assert!((before + 300..=chrono::Utc::now().timestamp() + 900).contains(&due));
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert!(probe.calls.lock().unwrap().is_empty());
+
+        let conn = alice.database.connection().unwrap();
+        conn.execute(
+            "UPDATE settings SET value=json_set(value,'$.due',0) WHERE key LIKE 'private.receipt-sync:%'",
+            [],
+        ).unwrap();
+        drop(conn);
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert!(probe.calls.lock().unwrap().is_empty(), "reserve must be kept");
+
+        let conn = alice.database.connection().unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
+             VALUES ('receipt-1', x'fa', x'fb', x'fc', 'live', '0010'),
+                    ('receipt-2', x'fd', x'fe', x'ff', 'live', '0011')",
+            [],
+        ).unwrap();
+        drop(conn);
+        *probe.receipt_reply.lock().unwrap() = Some(Err(tonic::Status::deadline_exceeded("fixture timeout")));
+        assert!(matches!(
+            alice.flush_private_receipt_syncs(t.alice_id).await,
+            Err(MessageError::Network(crate::error::NetworkError::Timeout))
+        ));
+        let conn = alice.database.read_connection().unwrap();
+        let id: String = conn.query_row(
+            "SELECT json_extract(value,'$.request_id') FROM settings WHERE key LIKE 'private.receipt-sync:%'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        drop(conn);
+
+        *probe.receipt_reply.lock().unwrap() = Some(Ok(()));
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [("/chat.v1.MessageService/SendSealedMessage".into(), false, true),
+             ("/chat.v1.MessageService/SendSealedMessage".into(), false, true)],
+        );
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert!(probe.calls.lock().unwrap().is_empty());
         server.abort();
     }
 

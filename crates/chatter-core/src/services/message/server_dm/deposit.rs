@@ -3,7 +3,7 @@ use super::*;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AccessPolicy {
     FetchIfNeeded,
-    Cached,
+    AnonymousGroup,
 }
 
 impl MessageService {
@@ -55,7 +55,7 @@ impl MessageService {
     ) -> DepositOutcome {
         self.deposit_sealed_to_all_devices_with_policy(
             auth_client, message_client, recipient_id, plaintext, Some(channel_id.as_bytes()),
-            AccessPolicy::Cached,
+            AccessPolicy::AnonymousGroup,
         ).await
     }
 
@@ -101,11 +101,19 @@ impl MessageService {
                 ..Default::default()
             };
         };
-        if let Err(e) = self
-            .signal_service
-            .reconcile_devices(auth_client, recipient_id, missing, extra, stale)
-            .await
-        {
+        let reconciled = match policy {
+            AccessPolicy::FetchIfNeeded => self.signal_service
+                .reconcile_devices(auth_client, recipient_id, missing, extra, stale).await,
+            AccessPolicy::AnonymousGroup => {
+                match super::super::group_send::charge_private_repairs(missing.len() + extra.len() + stale.len()) {
+                    Ok(()) => self.signal_service.reconcile_devices_with_source(
+                        &mut self.private_post_prekeys(), recipient_id, missing, extra, stale,
+                    ).await,
+                    Err(error) => Err(error.into()),
+                }
+            }
+        };
+        if let Err(e) = reconciled {
             let rate_limited = matches!(
                 e,
                 crate::error::service_error::ServiceError::Network(
@@ -180,17 +188,17 @@ impl MessageService {
             })
             .is_some();
 
-        let (sealed, unrestricted) = match self
-            .signal_service
-            .encrypt_message_all_devices_bounded_with_access_policy(
-                auth_client,
-                recipient_id,
-                plaintext,
-                policy == AccessPolicy::FetchIfNeeded && !is_self && !has_profile_key,
-                group_id,
-            )
-            .await
-        {
+        let encrypted = match policy {
+            AccessPolicy::FetchIfNeeded => self.signal_service
+                .encrypt_message_all_devices_bounded_with_access_policy(
+                    auth_client, recipient_id, plaintext, !is_self && !has_profile_key, group_id,
+                ).await,
+            AccessPolicy::AnonymousGroup => self.signal_service
+                .encrypt_group_distribution(
+                    &mut self.private_post_prekeys(), recipient_id, plaintext, group_id,
+                ).await,
+        };
+        let (sealed, unrestricted) = match encrypted {
             Ok(c) => c,
             Err(e) => {
                 let rate_limited = matches!(
@@ -250,7 +258,7 @@ impl MessageService {
         // policy. With an unknown policy, try unrestricted sealed delivery
         // and let the server reject it if the recipient requires their UAK.
         let unrestricted = unrestricted
-            || (policy == AccessPolicy::Cached
+            || (policy == AccessPolicy::AnonymousGroup
                 && self.signal_service.unrestricted_access(recipient_id).is_none());
         let recipient_uak = if is_self {
             None
@@ -265,7 +273,7 @@ impl MessageService {
         // sealed sender entirely. Logged loudly and per-recipient on purpose:
         // a silent fallback here would report "sealed DM sent" while shipping
         // the exact opposite.
-        if recipient_uak.is_none() && !is_self {
+        if policy == AccessPolicy::FetchIfNeeded && recipient_uak.is_none() && !is_self {
             tracing::warn!(
                 recipient = recipient_id,
                 reason = "no profile key held for the recipient to derive their UAK",
@@ -274,17 +282,24 @@ impl MessageService {
             );
         }
 
-        let (response, uak_rejected) = match self
-            .send_sealed_batch(
-                message_client,
-                recipient_id,
-                messages,
-                SealedDelivery::AllDevices,
-                recipient_uak.as_ref(),
-                client_request_id,
-            )
-            .await
-        {
+        let sent = match policy {
+            AccessPolicy::FetchIfNeeded => self.send_sealed_batch(
+                message_client, recipient_id, messages, SealedDelivery::AllDevices,
+                recipient_uak.as_ref(), client_request_id,
+            ).await,
+            AccessPolicy::AnonymousGroup => {
+                // Only the group submit can check the sending account's full
+                // device set: an anonymous SKDM omits this device.
+                let delivery = if is_self { SealedDelivery::NamedDevices } else { SealedDelivery::AllDevices };
+                if is_self && messages.is_empty() {
+                    return Ok(DepositOutcome::default());
+                }
+                self.send_private_distribution(
+                    recipient_id, messages, delivery, recipient_uak.as_ref(), client_request_id,
+                ).await.map(|response| (response, false))
+            }
+        };
+        let (response, uak_rejected) = match sent {
             Ok(r) => r,
             Err(e @ crate::error::NetworkError::MismatchedDevices { .. }) => return Err(e),
             Err(e) => {
@@ -296,7 +311,7 @@ impl MessageService {
             }
         };
         let mut outcome = DepositOutcome::delivered(&response);
-        if !is_self && (recipient_uak.is_none() || uak_rejected) {
+        if policy == AccessPolicy::FetchIfNeeded && !is_self && (recipient_uak.is_none() || uak_rejected) {
             outcome.degraded = outcome.delivered;
         }
         outcome.registration_ids = registration_ids;
@@ -427,6 +442,37 @@ impl MessageService {
             error,
             ..Default::default()
         }
+    }
+
+    /// A private-channel post can trigger this distribution after the server
+    /// names a missing device. Keep both delivery attempts anonymous.
+    async fn send_private_distribution(
+        &self,
+        recipient_id: &str,
+        messages: Vec<SealedDeviceMessage>,
+        delivery: SealedDelivery,
+        uak: Option<&[u8; 16]>,
+        request_id: &str,
+    ) -> Result<SendSealedMessageResponse, crate::error::NetworkError> {
+        use crate::error::NetworkError;
+
+        crate::state::send_session::check_send_session()
+            .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
+        let mut client = self.grpc_pool.anonymous_message_client();
+        if let Some(uak) = uak {
+            match client.send_sealed_messages_with_uak(
+                recipient_id, messages.clone(), delivery, request_id, uak,
+            ).await {
+                Err(error) if error.is_auth_error() => {}
+                result => return result,
+            }
+        }
+        crate::state::send_session::check_send_session()
+            .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
+        let token = super::super::group_send::claim_private_post_credential(&self.token_manager)?;
+        client.send_with_anonymous_credential(
+            request_id, recipient_id, messages, delivery, 0, &token.public_key, &token.signature,
+        ).await
     }
 
     /// One `SendSealedMessage`: with `uak` on the anonymous channel (no

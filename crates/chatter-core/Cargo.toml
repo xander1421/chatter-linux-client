@@ -459,6 +459,7 @@ path = "tests/crypto_hwaccel_test.rs"
 [[test]]
 name = "e2e_two_user_suite"
 path = "tests/e2e_two_user_suite.rs"
+required-features = ["testing"]
 
 [[test]]
 name = "integration_calls"

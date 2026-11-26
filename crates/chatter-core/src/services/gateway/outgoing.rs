@@ -341,7 +341,7 @@ pub async fn route_outgoing_owned(
     intent: OutgoingIntent,
     services: &OwnedOutgoingServices,
 ) -> Result<SendResult, SendError> {
-    route_outgoing(intent, &services.as_borrowed()).await
+    Box::pin(route_outgoing(intent, &services.as_borrowed())).await
 }
 
 impl SendResult {

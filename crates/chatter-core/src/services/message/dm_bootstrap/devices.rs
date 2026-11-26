@@ -6,30 +6,26 @@ impl MessageService {
     ///
     /// The Signal session store is our cache of a peer's devices: every
     /// normal-mode DM send leaves a session per current device (the server
-    /// names one we are missing). Normal mode fetches bundles here only when
-    /// it holds no session at all, and its bootstrap send is checked against
-    /// the peer's registered devices ([`Self::bootstrap_delivery`]); Shield
-    /// must not name the peer in an identified RPC, so it uses only what is
-    /// cached — nothing cached is `NotReachablePrivately`, never a fetch and
-    /// never a device-1 guess.
+    /// names one we are missing). Outside Shield, a cold peer's bundles are
+    /// fetched with a pre-fetched anonymous credential. The bootstrap send
+    /// checks them against the peer's registered devices. Shield retains its
+    /// cached-device policy: a cold peer is `NotReachablePrivately`.
     pub(in crate::services::message) async fn bootstrap_devices(
         &self,
-        auth_client: &mut AuthClient,
         peer_id: &UserId,
     ) -> Result<Vec<u32>, MessageError> {
         let peer_id_str = peer_id.to_string();
         let shield = self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
-        if !shield {
-            if let Err(e) = self
-                .signal_service
-                .ensure_sessions_all_devices(auth_client, &peer_id_str)
+        let discovery = if shield {
+            Ok(Vec::new())
+        } else {
+            self.signal_service
+                .ensure_anonymous_device_sessions(&mut self.anonymous_prekey_source(), &peer_id_str)
                 .await
-            {
-                tracing::warn!(peer_id = %peer_id, error = %e, "Bootstrap: device refresh failed; using cached sessions");
-            }
-        }
+        };
         let devices = bootstrap_device_order(self.live_session_devices(peer_id).await?);
         if devices.is_empty() {
+            discovery.map_err(|error| MessageError::from_signal_send(error, "Bootstrap device discovery"))?;
             return Err(if shield {
                 MessageError::NotReachablePrivately(*peer_id)
             } else {
@@ -64,9 +60,8 @@ impl MessageService {
     /// How a bootstrap to the devices [`Self::bootstrap_devices`] returned is
     /// sent: in normal mode those are every device we hold a live session
     /// with, so the server checks them against the peer's registered devices
-    /// (`AllDevices`) and names one linked since; Shield must not refresh
-    /// sessions with identified prekey fetches, so it sends to the devices it
-    /// has (`NamedDevices`).
+    /// (`AllDevices`) and names one linked since. Shield sends to cached
+    /// devices (`NamedDevices`).
     pub(in crate::services::message) fn bootstrap_delivery(&self) -> SealedDelivery {
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             SealedDelivery::NamedDevices

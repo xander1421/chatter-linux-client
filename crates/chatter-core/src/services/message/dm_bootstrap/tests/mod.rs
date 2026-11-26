@@ -293,7 +293,7 @@ fn seed_half_open(
 }
 
 /// `n` claimable pre-fetched tokens.
-fn seed_tokens(ms: &MessageService, n: usize) {
+pub(in crate::services::message) fn seed_tokens(ms: &MessageService, n: usize) {
     let conn = ms.database.connection().unwrap();
     conn.execute(
         "INSERT OR IGNORE INTO mailbox_server_keys (key_id, public_key_der, valid_until, created_at) VALUES ('live', x'00', ?1, '')",

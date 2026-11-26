@@ -236,15 +236,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     if !session_owner.is_current() {
         return;
     }
-    // Pre-fetch anonymous tokens for sealed sender messaging
-    // This ensures tokens are available before the first SKDM distribution
-    if let Err(e) = ui_ctx.prefetch_tokens(10).await {
-        tracing::warn!("Failed to pre-fetch anonymous tokens: {}", e);
-    }
-
-    if !session_owner.is_current() {
-        return;
-    }
     // Refresh any anon group mailboxes nearing their 30-day expiry so the
     // user can continue receiving messages across long offline gaps.
     match ui_ctx.refresh_expiring_group_mailboxes().await {

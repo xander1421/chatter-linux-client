@@ -22,52 +22,83 @@ impl GrpcClientPool {
     /// The channel for the unidentified (no auth header) clients of the
     /// ordinary sealed-sender DM path. It follows the pool's transport.
     ///
-    /// Under onion transport this is a SEPARATE channel over an isolated Tor
-    /// circuit, so the server cannot correlate unidentified ops with the
-    /// account's authenticated RPCs by connection/circuit. On the direct
-    /// transport isolation is moot (both connections share the client IP), so it
-    /// falls back to the shared channel.
+    /// Unidentified traffic uses its own connection on both transports.
+    /// Onion also isolates the Tor circuit. Direct remains visible to the
+    /// server by IP.
     ///
     /// Secret chats never use this: see [`Self::secret_channel`].
     pub fn unidentified_channel(&self) -> GrpcTransport {
+        self.isolated_unidentified_channel(
+            &self.unidentified_channel,
+            #[cfg(feature = "onion")]
+            &self.unidentified_onion_tor,
+        )
+    }
+
+    pub(super) fn private_post_channel(&self) -> GrpcTransport {
+        self.isolated_unidentified_channel(
+            &self.private_post_channel,
+            #[cfg(feature = "onion")]
+            &self.private_post_onion_tor,
+        )
+    }
+
+    fn isolated_unidentified_channel(
+        &self,
+        cached: &RwLock<Option<GrpcTransport>>,
+        #[cfg(feature = "onion")] circuit: &super::super::onion_transport::SharedTorClient,
+    ) -> GrpcTransport {
+        // Hold the same lock swap_endpoint uses while we select and cache a
+        // route, so a transport change cannot install a direct channel in Shield.
+        let _route = self.channel.read();
+        let mode = self.transport_mode();
+        #[cfg(feature = "quic")]
+        let use_quic = mode == TransportMode::Direct
+            && *self.quic_probe.read() == QuicProbeState::Working;
+        #[cfg(not(feature = "quic"))]
+        let use_quic = false;
+
+        if let Some(channel) = cached.read().clone()
+            .filter(|channel| channel.is_current() && channel.is_http3() == use_quic)
+        {
+            return channel;
+        }
+        let mut cached = cached.write();
+        if let Some(channel) = cached.clone().filter(|channel| channel.is_current() && channel.is_http3() == use_quic) {
+            return channel;
+        }
+
+        let endpoint = self.endpoint.read().clone();
+        let generation = self.transport_token.read().clone();
         #[cfg(feature = "onion")]
-        loop {
+        if mode == TransportMode::Onion {
+            let connector = super::super::onion_transport::OnionConnector::new_isolated(
+                self.onion_tor.clone(), circuit.clone(),
+            );
+            let channel = GrpcTransport::from_onion(
+                endpoint.connect_with_connector_lazy(connector),
+                self.transport_mode.clone(),
+            ).in_generation(generation);
+            *cached = Some(channel.clone());
+            return channel;
+        }
+
+        #[cfg(feature = "quic")]
+        if use_quic {
+            if let Some(channel) = self.direct_url.read().parse::<http::Uri>().ok()
+                .and_then(|uri| super::super::transport::build_quic(uri).ok())
             {
-                // Match swap_endpoint's lock order. The mode, endpoint and token
-                // must describe the same generation before caching the channel.
-                let _channel = self.channel.read();
-                if *self.transport_mode.read() == TransportMode::Onion {
-                    if let Some(ch) = self
-                        .unidentified_channel
-                        .read()
-                        .clone()
-                        .filter(GrpcTransport::is_current)
-                    {
-                        return ch;
-                    }
-                    let mut guard = self.unidentified_channel.write();
-                    if let Some(ch) = guard.clone().filter(GrpcTransport::is_current) {
-                        return ch;
-                    }
-                    let token = self.transport_token.read().clone();
-                    let endpoint = self.endpoint.read().clone();
-                    let ch = GrpcTransport::from_onion(
-                        endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
-                        self.transport_mode.clone(),
-                    )
-                    .in_generation(token);
-                    *guard = Some(ch.clone());
-                    return ch;
-                }
-            }
-            let direct = self.channel();
-            let _channel = self.channel.read();
-            if self.transport_mode() == TransportMode::Direct && direct.is_current() {
-                return direct;
+                let channel = channel.for_pool(self.transport_mode.clone(), mode).in_generation(generation);
+                *cached = Some(channel.clone());
+                return channel;
             }
         }
-        #[cfg(not(feature = "onion"))]
-        self.channel()
+
+        let channel = GrpcTransport::from(endpoint.connect_with_connector_lazy(
+            crate::network::pq_tls::grpc_connector(&endpoint),
+        )).for_pool(self.transport_mode.clone(), mode).in_generation(generation);
+        *cached = Some(channel.clone());
+        channel
     }
 
     /// Establish and health-check Shield's anonymous deposit route in advance.

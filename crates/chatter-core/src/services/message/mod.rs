@@ -24,6 +24,7 @@ mod dm_bootstrap;
 mod dm_resend;
 mod group;
 mod group_send;
+pub(crate) use group_send::spawn_private_channel_maintenance;
 pub use group::ChannelStateSync;
 pub(crate) use group::GroupStateGate;
 mod call_event;
@@ -198,6 +199,16 @@ pub enum MessageError {
         channel_id: ChannelId,
         status: Option<crate::domain::verified_state::VerificationStatus>,
     },
+}
+
+impl MessageService {
+    fn anonymous_prekey_source(&self) -> super::signal::PreKeySource<'_> {
+        super::signal::PreKeySource::Anonymous {
+            pool: &self.grpc_pool,
+            tokens: &self.token_manager,
+            claim: TokenManager::claim_send_credential,
+        }
+    }
 }
 
 impl MessageError {

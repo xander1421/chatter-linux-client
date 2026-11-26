@@ -22,7 +22,7 @@ use rusqlite::OptionalExtension;
 use uuid::Uuid;
 
 use crate::error::MailboxError;
-use crate::mailbox::blind_signature::{blind_key, unblind, BlindingSecret, ServerPublicKey};
+use crate::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
 use crate::network::grpc::{AnonymousKtClient, MailboxClient};
 use crate::storage::repositories::SettingsRepository;
 use crate::storage::Database;
@@ -51,6 +51,13 @@ pub struct MailboxToken {
     pub signature: Vec<u8>,
 }
 
+fn credential_error(error: MailboxError) -> crate::error::NetworkError {
+    match error {
+        MailboxError::NoTokensAvailable => crate::error::NetworkError::AnonymousCredentialsUnavailable,
+        other => crate::error::NetworkError::ServerError(other.to_string()),
+    }
+}
+
 /// Map a GetMailboxTokens failure. The server is the only authority on the
 /// daily token budget; it answers ResourceExhausted once that budget is
 /// spent. The client used to keep its own counter with a hard-coded ceiling
@@ -59,7 +66,7 @@ pub struct MailboxToken {
 fn grant_error(e: crate::error::NetworkError) -> MailboxError {
     match e {
         crate::error::NetworkError::RateLimited => {
-            tracing::warn!("TokenManager: server reports daily token quota exhausted");
+            tracing::debug!("TokenManager: server reports daily token quota exhausted");
             MailboxError::QuotaExhausted
         }
         e => {
@@ -324,8 +331,8 @@ impl TokenManager {
         // count to what is left and answers ResourceExhausted at zero). A local
         // mirror disagreed with it — see `grant_error`. The request itself is
         // capped at 10 (mailbox.proto GetMailboxTokensRequest.count `lte: 10`); a
-        // larger count is rejected outright, so callers get at most 10 and
-        // loop for more (`top_up`).
+        // larger count is rejected outright, so each scheduled batch uses one
+        // request at the protocol limit.
         let request_count = count.min(MAX_TOKENS_PER_REQUEST);
         tracing::info!("TokenManager: will request {} tokens", request_count);
 
@@ -366,25 +373,8 @@ impl TokenManager {
             ));
         }
 
-        tracing::info!(
-            "TokenManager: generated {} keypairs, storing pending blinds...",
-            pending_ops.len()
-        );
-
-        // Store pending blinds
-        for (id, pub_key, priv_key, op) in &pending_ops {
-            self.store_pending_blind(
-                id,
-                pub_key,
-                priv_key,
-                &op.blinded_message,
-                &op.secret,
-                &server_key.key_id,
-            )?;
-        }
-
-        tracing::info!("TokenManager: requesting signatures from server...");
-        // Request signatures from server
+        // The signature response and its blinding secrets belong to this
+        // single RPC. A denial or timeout can discard them with the future.
         let response = client
             .get_mailbox_tokens(
                 request_count as i32,
@@ -417,8 +407,6 @@ impl TokenManager {
                             )
                             .is_ok()
                         {
-                            // Delete pending blind
-                            let _ = self.delete_pending_blind(id);
                             success_count += 1;
                         }
                     }
@@ -429,12 +417,6 @@ impl TokenManager {
             }
         }
 
-        // The server clamps the grant to the remaining budget; blinds past the
-        // returned signatures will never be signed.
-        for (id, ..) in pending_ops.iter().skip(response.blinded_signatures.len()) {
-            let _ = self.delete_pending_blind(id);
-        }
-
         tracing::info!(
             "TokenManager: request_tokens complete, got {} tokens",
             success_count
@@ -442,52 +424,19 @@ impl TokenManager {
         Ok(success_count)
     }
 
-    /// Store a pending blinding operation.
-    #[allow(clippy::too_many_arguments)]
-    fn store_pending_blind(
-        &self,
-        id: &str,
-        ephemeral_pk: &[u8],
-        ephemeral_sk: &[u8],
-        blinded_message: &[u8],
-        secret: &BlindingSecret,
-        server_key_id: &str,
-    ) -> Result<(), MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-
+    /// Fixed-rate batches can arrive even when the device has no work.
+    /// Drop expired, unused credentials. Claimed tokens can be referenced by
+    /// live mailboxes, including a mailbox whose creation is still in flight.
+    pub(crate) fn prune_expired_unused_tokens(&self) -> Result<(), MailboxError> {
+        let conn = self.db.connection()
+            .map_err(|error| MailboxError::Storage(error.to_string()))?;
+        let now = Utc::now().timestamp_nanos_opt().unwrap_or(i64::MAX);
         conn.execute(
-            "INSERT INTO mailbox_pending_blinds
-             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, server_key_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                id,
-                ephemeral_pk,
-                ephemeral_sk,
-                blinded_message,
-                secret.as_bytes(),
-                server_key_id,
-                now
-            ],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Delete a pending blinding operation.
-    fn delete_pending_blind(&self, id: &str) -> Result<(), MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        conn.execute("DELETE FROM mailbox_pending_blinds WHERE id = ?1", [id])
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
+            "DELETE FROM mailbox_tokens
+             WHERE used_at IS NULL AND server_key_id IN
+                (SELECT key_id FROM mailbox_server_keys WHERE valid_until <= ?1)",
+            [now],
+        ).map_err(|error| MailboxError::Storage(error.to_string()))?;
         Ok(())
     }
 
@@ -567,6 +516,13 @@ impl TokenManager {
             .db
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        Self::claim_available_token_in(&conn, 0)
+    }
+
+    fn claim_available_token_in(
+        conn: &rusqlite::Connection,
+        reserve: usize,
+    ) -> Result<Option<MailboxToken>, MailboxError> {
         let now = Utc::now().to_rfc3339();
         // Signing-key validity is stored in nanoseconds. Only claim tokens whose
         // signing key is STILL currently valid: the server verifies anonymous
@@ -587,10 +543,10 @@ impl TokenManager {
                  JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
                  WHERE t.used_at IS NULL AND k.valid_until > ?2 \
                  ORDER BY t.created_at ASC \
-                 LIMIT 1 \
+                 LIMIT 1 OFFSET ?3 \
              ) \
              RETURNING id, ephemeral_public_key, ephemeral_private_key, signature",
-            rusqlite::params![now, now_nanos],
+            rusqlite::params![now, now_nanos, reserve],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -631,6 +587,29 @@ impl TokenManager {
         })
     }
 
+    pub(crate) fn claim_send_credential(&self) -> Result<MailboxToken, crate::error::NetworkError> {
+        self.claim_prefetched_token().map_err(credential_error)
+    }
+
+    /// Debit a durable send and claim its credential together. A dry pool
+    /// rolls back the debit, including when the eligible tokens are reserved.
+    pub(crate) fn claim_budgeted_credential(
+        &self,
+        reserve: usize,
+        debit: impl FnOnce(&rusqlite::Connection) -> Result<(), crate::error::NetworkError>,
+    ) -> Result<MailboxToken, crate::error::NetworkError> {
+        let mut conn = self.db.connection().map_err(|error| {
+            crate::error::NetworkError::ServerError(error.to_string())
+        })?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
+        debit(&tx)?;
+        let token = Self::claim_available_token_in(&tx, reserve).map_err(credential_error)?
+            .ok_or(crate::error::NetworkError::AnonymousCredentialsUnavailable)?;
+        tx.commit().map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
+        Ok(token)
+    }
+
     /// Mark a token as used.
     ///
     /// # Arguments
@@ -658,9 +637,8 @@ impl TokenManager {
     }
 
     /// Count claimable tokens: unused, under a signing key that is still
-    /// valid — the same filter as `claim_available_token`. Counting dead
-    /// tokens would let the refill think the batch is full while every
-    /// claim comes back empty.
+    /// valid — the same filter as `claim_available_token`. Sends can use this
+    /// to park locally while the scheduled issuer continues independently.
     pub fn available_token_count(&self) -> Result<u32, MailboxError> {
         let conn = self
             .db

@@ -52,7 +52,7 @@ impl MessageService {
                 crate::services::gateway::submission::mark_submission_started()?;
                 match self
                     .signal_service
-                    .encrypt_message(auth_client, &peer_id_str, peer_device_id, payload)
+                    .encrypt_message_with_existing_session(auth_client, &peer_id_str, peer_device_id, payload)
                     .await
                 {
                     Ok(sealed_body) => messages.push(SealedDeviceMessage {
@@ -121,6 +121,11 @@ impl MessageService {
                     extra,
                     stale,
                 }) => {
+                    if missing.len() + extra.len() + stale.len() > 8 {
+                        return Err(MessageError::Network(crate::error::NetworkError::InvalidRequest(
+                            "Too many mailbox bootstrap device mismatches".into(),
+                        )));
+                    }
                     tracing::info!(peer_id = %peer_id, ?missing, ?extra, ?stale, "DM bootstrap: peer's devices changed");
                     for &peer_device_id in &extra {
                         self.retire_peer_device(peer_id, peer_device_id).await;
@@ -135,7 +140,9 @@ impl MessageService {
                     if attempt > 0 {
                         break;
                     }
-                    if delivery == SealedDelivery::AllDevices {
+                    if delivery == SealedDelivery::AllDevices
+                        && !self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+                    {
                         // Registered after all: no longer retired here.
                         {
                             let mut retired = self.retired_peer_devices.lock();
@@ -145,7 +152,9 @@ impl MessageService {
                         }
                         if let Err(e) = self
                             .signal_service
-                            .reconcile_devices(auth_client, &peer_id_str, &missing, &[], &stale)
+                            .reconcile_devices_with_source(
+                                &mut self.anonymous_prekey_source(), &peer_id_str, &missing, &[], &stale,
+                            )
                             .await
                         {
                             last_error = Some(MessageError::from_signal_send(
