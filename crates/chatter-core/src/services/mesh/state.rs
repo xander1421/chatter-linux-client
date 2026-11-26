@@ -199,6 +199,21 @@ impl MeshState {
         self.with(|state| state.peers.contact(&peer.to_short()).clone())
     }
 
+    pub(super) fn visible_peers(&self, allow_unpaired: bool) -> Vec<MeshPeer> {
+        let mut peers = self.peers();
+        if !allow_unpaired {
+            self.with(|state| {
+                peers.retain(|peer| {
+                    state
+                        .peers
+                        .pinned(state.peers.route(&peer.peer))
+                        .is_some_and(|pin| pin.paired)
+                });
+            });
+        }
+        peers
+    }
+
     /// A rotated route inherits the private account authorization only via
     /// the durable Noise pin for its previous identity.
     pub(super) fn rotated_keys(&self, peer: &PeerId) -> Option<([u8; 32], [u8; 32])> {

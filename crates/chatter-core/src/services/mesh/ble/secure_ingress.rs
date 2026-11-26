@@ -16,6 +16,24 @@ fn signing_binding_bytes(noise: &[u8; 32], transcript: &[u8; 32], signing: &[u8;
 }
 
 impl BleRuntime {
+    /// Contact-only traffic requires a Noise session matching a paired pin.
+    pub(super) fn paired_session(&self, peer: &PeerId) -> bool {
+        self.state.with(|state| {
+            let Some(pin) = state.peers.pinned(peer).filter(|pin| pin.paired) else {
+                return false;
+            };
+            state
+                .sessions
+                .remote_static(peer)
+                .as_ref()
+                .is_some_and(|key| pin.noise_public_key.as_slice() == key.as_slice())
+        })
+    }
+
+    pub(super) fn allows_chatter_hello(&self, peer: &PeerId) -> bool {
+        self.paired_session(peer) || self.config.is_pairing_peer(peer, std::time::Instant::now())
+    }
+
     fn on_pairing_receipt(&mut self, peer: &PeerId, receipt: &[u8]) {
         let Ok(receipt) = <&[u8; 128]>::try_from(receipt) else {
             return;
@@ -183,6 +201,8 @@ impl BleRuntime {
 
         if let Some(recipient_key) = step.established {
             self.courier_claims.remove(claimed);
+            let paired = self.paired_session(claimed);
+            let application_data_allowed = paired || self.config.public_chat_enabled();
             self.state.with(|state| {
                 state.dm_handshake_at_ms.remove(claimed);
                 state.known_peer_reopen_attempts.remove(claimed);
@@ -197,12 +217,15 @@ impl BleRuntime {
                     .with(|state| state.links.mark_noise_authenticated(link, claimed));
             if direct {
                 self.prune_duplicate_links(claimed, now_millis()).await;
+                if !self.config.public_chat_enabled() && paired {
+                    self.sync_new_peer(link, claimed, now_secs()).await;
+                }
                 let announced_key_matches = self.state.with(|state| {
                     state.peers.info(claimed).is_some_and(|peer| {
                         peer.noise_public_key.as_deref() == Some(recipient_key.as_slice())
                     })
                 });
-                if announced_key_matches {
+                if application_data_allowed && announced_key_matches {
                     self.hand_over_courier_mail(
                         claimed,
                         &recipient_key,
@@ -216,6 +239,9 @@ impl BleRuntime {
             // Keep capability negotiation inside this authenticated Noise link.
             self.send_pairing_proof(claimed).await;
             self.send_chatter_hello(claimed).await;
+            if !application_data_allowed {
+                return;
+            }
             // A session is the only signal strong enough for the router to send
             // without retaining, so this is the moment retained mail can go.
             let _ = self.router.send(RouterCommand::PeerAvailable {
@@ -352,10 +378,21 @@ impl BleRuntime {
         if self.on_pairing_control(claimed, &plaintext).await {
             return;
         }
+        if !self.config.public_chat_enabled()
+            && !self.paired_session(claimed)
+            && !(self
+                .config
+                .is_pairing_peer(claimed, std::time::Instant::now())
+                && (ChatterHello::decode(&plaintext).is_some()
+                    || BindingV1::decode(&plaintext).is_some()
+                    || plaintext.starts_with(SIGNING_BINDING_MAGIC)
+                    || plaintext.starts_with(SIGNING_BINDING_REQUEST)))
+        {
+            return;
+        }
         if let Some(payload) = plaintext.strip_prefix(PAIRED_COURIER_MAGIC) {
-            if self.state.has_paired_pin(claimed) {
-                self.receive_courier(payload, packet.timestamp, claimed)
-                    .await;
+            if self.paired_session(claimed) {
+                self.receive_courier(payload, packet.timestamp, claimed).await;
             }
             return;
         }
@@ -389,6 +426,9 @@ impl BleRuntime {
         }
 
         if let Some(hello) = ChatterHello::decode(&plaintext) {
+            if !self.allows_chatter_hello(claimed) {
+                return;
+            }
             let can_bind = hello.compatible()
                 && hello.capabilities & super::super::chatter_hello::NOISE_SIGNING_BINDING != 0;
             let signal_capable = hello.capabilities & super::super::chatter_hello::SIGNAL_MESH != 0
@@ -414,6 +454,9 @@ impl BleRuntime {
                     None
                 }
             });
+            // If the remote Hello arrived before we selected this peer,
+            // repeat our existing nonce after accepting their retry.
+            self.send_chatter_hello(claimed).await;
             if let Some(key) = recipient_key
                 && let Err(error) =
                     self.couriers

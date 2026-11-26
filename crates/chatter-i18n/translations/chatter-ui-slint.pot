@@ -6030,7 +6030,7 @@ msgid "Bridge mode"
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:182
-msgid "Share connected device IDs and any configured location cell in Bluetooth announcements."
+msgid "Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth."
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:190

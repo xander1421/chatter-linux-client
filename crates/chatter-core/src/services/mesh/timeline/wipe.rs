@@ -95,10 +95,6 @@ impl MeshTimeline {
             first_error = Some(error);
         }
 
-        // The room is not something you join, so it comes back immediately —
-        // an empty room, with nothing in it.
-        self.register(&MeshConversation::Room, None);
-
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),

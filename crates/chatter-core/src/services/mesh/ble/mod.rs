@@ -208,7 +208,8 @@ pub struct BleRuntime {
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     prekey_ingress: std::collections::HashMap<LinkId, (u64, u32)>,
-    last_channel_presence_ms: u64,
+    next_channel_presence_ms: u64,
+    announce_jitter_permille: i64,
     last_private_rekey_ms: u64,
     /// Connect attempts run off the loop and report back here. Awaiting one
     /// inline froze every radio event, command and tick for up to the twenty
@@ -311,7 +312,8 @@ impl BleRuntime {
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
             prekey_ingress: std::collections::HashMap::new(),
-            last_channel_presence_ms: 0,
+            next_channel_presence_ms: 0,
+            announce_jitter_permille: rand::random_range(-1_000..=1_000),
             last_private_rekey_ms: 0,
         }
     }

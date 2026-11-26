@@ -144,9 +144,8 @@ impl NostrRuntime {
         mut commands: UnboundedReceiver<NostrCommand>,
         mut relay_events: UnboundedReceiver<RelayEvent>,
     ) {
-        self.pool.ensure_relays(&self.relays).await;
-        for cell in self.config.geohashes.clone() {
-            self.join(&cell).await;
+        if self.config.bridge_mode_enabled() {
+            self.start_bridge().await;
         }
 
         loop {
@@ -156,7 +155,11 @@ impl NostrRuntime {
                     Some(command) => self.on_command(command, &mut relay_events).await,
                 },
                 event = relay_events.recv() => match event {
-                    Some(event) => self.on_relay_event(event).await,
+                    Some(event) => {
+                        if self.config.bridge_mode_enabled() {
+                            self.on_relay_event(event).await;
+                        }
+                    }
                     // The pool's dispatcher is gone; nothing further will arrive.
                     None => break,
                 },
@@ -167,6 +170,27 @@ impl NostrRuntime {
         self.state.with(|state| state.connected_relays.clear());
     }
 
+    async fn start_bridge(&mut self) {
+        self.pool.ensure_relays(&self.relays).await;
+        for cell in self.config.geohashes.clone() {
+            self.join(&cell).await;
+        }
+    }
+
+    async fn stop_bridge(&mut self) {
+        self.pool.disconnect_relays().await;
+        for cell in self.state.joined_cells() {
+            self.leave(&cell).await;
+        }
+        self.pool.unsubscribe(DROP_SUBSCRIPTION).await;
+        self.watching.clear();
+        for (_, operation) in std::mem::take(&mut self.pending_drops) {
+            self.resolve_drop(operation, false);
+        }
+        self.state.with(|state| state.connected_relays.clear());
+        self.emit_status();
+    }
+
     // ---------------------------------------------------------------- commands
 
     async fn on_command(
@@ -174,11 +198,28 @@ impl NostrRuntime {
         command: NostrCommand,
         relay_events: &mut UnboundedReceiver<RelayEvent>,
     ) {
-        match command {
-            NostrCommand::Stop => {}
-            NostrCommand::RotateIdentity(identity) => {
-                *relay_events = self.rotate_identity(&identity).await;
+        if let NostrCommand::RotateIdentity(identity) = &command {
+            *relay_events = self.rotate_identity(identity).await;
+            return;
+        }
+        if matches!(command, NostrCommand::BridgeModeChanged) {
+            if self.config.bridge_mode_enabled() {
+                self.start_bridge().await;
+            } else {
+                self.stop_bridge().await;
             }
+            return;
+        }
+        if !self.config.bridge_mode_enabled() {
+            if let NostrCommand::PublishDrop { operation, .. } = command {
+                self.resolve_drop(operation, false);
+            }
+            return;
+        }
+        match command {
+            NostrCommand::Stop
+            | NostrCommand::BridgeModeChanged
+            | NostrCommand::RotateIdentity(_) => {}
             NostrCommand::Join(cell) => self.join(&cell).await,
             NostrCommand::Leave(cell) => self.leave(&cell).await,
             NostrCommand::GeohashMessage {
@@ -270,6 +311,9 @@ impl NostrRuntime {
         let (pool, events) = self.pool.fresh_pool();
         self.pool = pool;
         self.identities = NostrIdentities::from_mesh(identity);
+        if !self.config.bridge_mode_enabled() {
+            return events;
+        }
         self.pool.ensure_relays(&self.relays).await;
         let cells = self.state.with(|state| state.joined.clone());
         for cell in cells {

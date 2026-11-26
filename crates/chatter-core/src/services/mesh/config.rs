@@ -4,9 +4,31 @@ use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::MessageType;
 use chatter_mesh_nostr::relay::DEFAULT_RELAYS;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
-use super::{BleCommand, MeshError, MeshService};
+use super::{BleCommand, MeshError, MeshEvent, MeshService, NostrCommand};
+
+const PAIRING_WINDOW: Duration = Duration::from_secs(120);
+
+#[derive(Debug)]
+struct PairingWindow {
+    deadline: Instant,
+    peer: Option<PeerId>,
+}
+
+pub(super) trait PairedAnnounceMatcher {
+    type Announce: ?Sized;
+
+    fn paired_contact_for_announce(&self, announce: &Self::Announce) -> Option<PeerId>;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ConnectionAdmission {
+    Paired(PeerId),
+    PublicChat,
+    Pairing,
+}
 
 #[derive(Debug)]
 struct MeshNickname {
@@ -33,6 +55,7 @@ pub struct MeshConfig {
     nickname: Arc<RwLock<MeshNickname>>,
     bridge_mode: Arc<AtomicBool>,
     public_chat: Arc<AtomicBool>,
+    pairing: Arc<Mutex<Option<PairingWindow>>>,
 
     /// Geohash cells to join on start.
     pub geohashes: Vec<String>,
@@ -68,6 +91,7 @@ impl Default for MeshConfig {
             })),
             bridge_mode: Arc::new(AtomicBool::new(false)),
             public_chat: Arc::new(AtomicBool::new(false)),
+            pairing: Arc::new(Mutex::new(None)),
             geohashes: Vec::new(),
             relays: Vec::new(),
             bridge_enabled: false,
@@ -117,6 +141,73 @@ impl MeshConfig {
         self.public_chat.store(enabled, Ordering::Relaxed);
     }
 
+    pub(super) fn pairing_active(&self, now: Instant) -> bool {
+        self.pairing
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|window| now < window.deadline)
+    }
+
+    pub(super) fn set_pairing(&self, enabled: bool, now: Instant) {
+        *self.pairing.lock().unwrap() = enabled.then(|| PairingWindow {
+            deadline: now + PAIRING_WINDOW,
+            peer: None,
+        });
+    }
+
+    pub(super) fn expire_pairing(&self, now: Instant) -> bool {
+        let mut pairing = self.pairing.lock().unwrap();
+        if pairing
+            .as_ref()
+            .is_some_and(|window| now >= window.deadline)
+        {
+            *pairing = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn select_pairing_peer(&self, peer: PeerId, now: Instant) {
+        if let Some(window) = self
+            .pairing
+            .lock()
+            .unwrap()
+            .as_mut()
+            .filter(|window| now < window.deadline)
+        {
+            window.peer = Some(peer);
+        }
+    }
+
+    pub(super) fn is_pairing_peer(&self, peer: &PeerId, now: Instant) -> bool {
+        self.pairing
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|window| now < window.deadline && window.peer.as_ref() == Some(peer))
+    }
+
+    pub(super) fn connection_admission<M: PairedAnnounceMatcher>(
+        &self,
+        matcher: &M,
+        announce: Option<&M::Announce>,
+        now: Instant,
+    ) -> Option<ConnectionAdmission> {
+        if let Some(contact) =
+            announce.and_then(|announce| matcher.paired_contact_for_announce(announce))
+        {
+            Some(ConnectionAdmission::Paired(contact))
+        } else if self.public_chat_enabled() {
+            Some(ConnectionAdmission::PublicChat)
+        } else if self.pairing_active(now) {
+            Some(ConnectionAdmission::Pairing)
+        } else {
+            None
+        }
+    }
+
     /// The relay set to actually use.
     #[must_use]
     pub fn relay_urls(&self) -> Vec<String> {
@@ -159,6 +250,7 @@ impl MeshService {
         });
         if self.is_running() {
             let _ = self.ble.send(BleCommand::Announce);
+            let _ = self.nostr.send(NostrCommand::BridgeModeChanged);
         }
     }
 
@@ -168,6 +260,27 @@ impl MeshService {
 
     pub fn set_public_chat(&self, enabled: bool) {
         self.config.set_public_chat(enabled);
+        if enabled {
+            self.timeline.open_public_room();
+        }
+        self.events.send(MeshEvent::Peers(self.peers()));
+    }
+
+    pub fn pairing_active(&self) -> bool {
+        self.config.pairing_active(Instant::now())
+    }
+
+    pub fn set_pairing(&self, enabled: bool) {
+        self.config
+            .set_pairing(enabled && self.status().radio_running, Instant::now());
+        self.events.send(MeshEvent::Peers(self.peers()));
+    }
+
+    pub fn select_pairing_peer(&self, peer: &PeerId) {
+        let peer = self.state.route(peer);
+        if self.state.with(|state| state.peers.info(&peer).is_some()) {
+            self.config.select_pairing_peer(peer, Instant::now());
+        }
     }
 
     pub(super) fn require_public_chat(&self) -> Result<(), MeshError> {
@@ -251,5 +364,65 @@ mod tests {
         config.set_bridge_mode(false);
         config.set_public_chat(true);
         assert!(!config.bridge_mode_enabled());
+    }
+
+    #[test]
+    fn pairing_requires_an_explicit_start_and_expires_once() {
+        let config = MeshConfig::default();
+        let now = Instant::now();
+        let peer = PeerId::from_bytes(&[3; 8]);
+        assert!(!config.pairing_active(now));
+        config.select_pairing_peer(peer.clone(), now);
+        assert!(!config.is_pairing_peer(&peer, now));
+
+        config.set_pairing(true, now);
+        assert!(config.pairing_active(now));
+        assert!(!config.is_pairing_peer(&peer, now));
+        config.select_pairing_peer(peer.clone(), now);
+        assert!(config.is_pairing_peer(&peer, now));
+        assert!(!config.is_pairing_peer(&PeerId::from_bytes(&[4; 8]), now));
+        let deadline = now + PAIRING_WINDOW;
+        assert!(!config.pairing_active(deadline));
+        assert!(!config.is_pairing_peer(&peer, deadline));
+        assert!(config.expire_pairing(deadline));
+        assert!(!config.expire_pairing(deadline));
+    }
+
+    #[test]
+    fn new_links_require_a_paired_announcement_or_an_explicit_exception() {
+        struct Matcher;
+        impl PairedAnnounceMatcher for Matcher {
+            type Announce = [u8; 8];
+
+            fn paired_contact_for_announce(&self, announce: &Self::Announce) -> Option<PeerId> {
+                (announce == &[42; 8]).then(|| PeerId::from_bytes(&[1; 8]))
+            }
+        }
+
+        let config = MeshConfig::default();
+        let now = Instant::now();
+        assert_eq!(config.connection_admission(&Matcher, None, now), None);
+        assert_eq!(
+            config.connection_admission(&Matcher, Some(&[7; 8]), now),
+            None
+        );
+        assert_eq!(
+            config.connection_admission(&Matcher, Some(&[42; 8]), now),
+            Some(ConnectionAdmission::Paired(PeerId::from_bytes(&[1; 8]))),
+        );
+        config.set_pairing(true, now);
+        assert_eq!(
+            config.connection_admission(&Matcher, None, now),
+            Some(ConnectionAdmission::Pairing)
+        );
+        assert_eq!(
+            config.connection_admission(&Matcher, None, now + PAIRING_WINDOW),
+            None
+        );
+        config.set_public_chat(true);
+        assert_eq!(
+            config.connection_admission(&Matcher, None, now),
+            Some(ConnectionAdmission::PublicChat)
+        );
     }
 }

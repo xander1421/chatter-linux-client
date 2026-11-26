@@ -144,12 +144,13 @@ impl BleRuntime {
         let Some(payload) = chatter_mesh::channel::encode_presence(name) else {
             return;
         };
-        let packet = self.build_packet(
+        let mut packet = self.build_packet(
             MessageType::ChannelMessage,
             None,
             payload,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
+        packet.timestamp = super::transmission::presence_timestamp(packet.timestamp);
         let packet = self.maybe_sign(packet, true);
         self.originate_broadcast(&packet).await;
     }

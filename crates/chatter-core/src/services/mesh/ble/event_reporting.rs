@@ -47,6 +47,26 @@ impl BleRuntime {
 
     pub(super) async fn dispatch_sync(&self, send: chatter_mesh_store::sync::SyncSend) {
         let packet = self.maybe_sign(send.packet, send.sign_before_send);
+        if !self.config.public_chat_enabled() {
+            let Some(peer) = send.to.as_ref().filter(|peer| self.paired_session(peer)) else {
+                return;
+            };
+            let links = self.state.with(|state| {
+                state
+                    .links
+                    .links_to(peer)
+                    .iter()
+                    .filter(|link| state.links.is_noise_authenticated(link, peer))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            for link in links {
+                if self.transmit_on_link(&packet, peer, &link).await {
+                    return;
+                }
+            }
+            return;
+        }
         if let Some(peer) = send.to.as_ref() {
             if !self.state.can_write_to(peer) {
                 let links = self.state.with(|state| {
@@ -149,7 +169,10 @@ impl BleRuntime {
     }
 
     pub(super) fn emit_peers(&self) {
-        self.events.send(MeshEvent::Peers(self.state.peers()));
+        self.events.send(MeshEvent::Peers(self.state.visible_peers(
+            self.config.public_chat_enabled()
+                || self.config.pairing_active(std::time::Instant::now()),
+        )));
     }
 
     pub(super) fn emit_status(&self) {

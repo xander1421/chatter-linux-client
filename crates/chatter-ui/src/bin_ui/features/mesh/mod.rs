@@ -210,8 +210,21 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
+        global.on_set_pairing(move |enabled| {
+            ui_ctx.set_mesh_pairing(enabled);
+            if let Some(w) = weak.upgrade() {
+                refresh_rows(&w, &ui_ctx);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
         global.on_open_peer(move |peer| {
             if let Some(w) = weak.upgrade() {
+                if ui_ctx.mesh_pairing_active() {
+                    ui_ctx.mesh_select_pairing_peer(peer.as_str());
+                }
                 w.global::<MeshGlobal>().set_private_invite_visible(false);
                 w.global::<MeshGlobal>()
                     .set_private_remove_pending("".into());
@@ -992,6 +1005,7 @@ fn refresh_rows_with_rows(
         })
         .collect();
     let global = window.global::<MeshGlobal>();
+    global.set_pairing_active(ui_ctx.mesh_pairing_active());
     // Count the same core-selected peers shown in the setup sheet. Transport
     // status counts only connected peers, while this list also includes peers
     // still reachable through the mesh after their direct link drops.

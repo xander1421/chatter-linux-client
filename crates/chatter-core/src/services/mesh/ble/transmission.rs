@@ -9,6 +9,12 @@ pub(super) fn is_private_group_packet(packet: &BitchatPacket) -> bool {
     }
 }
 
+/// Presence packets carry whole seconds. Local cadence still uses the full
+/// clock, and message timestamps retain their precision for deduplication.
+pub(super) fn presence_timestamp(now_ms: u64) -> u64 {
+    now_ms / 1_000 * 1_000
+}
+
 impl BleRuntime {
     pub(super) async fn announce(&mut self) {
         self.config.on_identity_rotated(&self.identity.peer_id());
@@ -89,7 +95,7 @@ impl BleRuntime {
             payload,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
-        packet.timestamp = now_ms;
+        packet.timestamp = presence_timestamp(now_ms);
         // Signed over the packet preimage, not over `canonicalAnnounceBytes`.
         // bitchat has both, but `buildAnnounceSignature` has no callers outside
         // its own tests — the wire uses `noiseService.signPacket(packet)`
@@ -98,9 +104,11 @@ impl BleRuntime {
         let packet = self.maybe_sign(packet, true);
 
         self.state.with(|state| state.last_announce_ms = now_ms);
+        self.announce_jitter_permille = rand::random_range(-1_000..=1_000);
         self.originate_broadcast(&packet).await;
-        if now_ms.saturating_sub(self.last_channel_presence_ms) >= 60_000 {
-            self.last_channel_presence_ms = now_ms;
+        if self.config.public_chat_enabled() && now_ms >= self.next_channel_presence_ms {
+            self.next_channel_presence_ms =
+                now_ms.saturating_add(rand::random_range(54_000..=66_000));
             for name in self.events.active_channels() {
                 self.broadcast_channel_presence(&name).await;
             }

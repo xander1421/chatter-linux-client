@@ -16,6 +16,9 @@ impl BleRuntime {
                     .is_some_and(|peer| peer.signing_public_key.is_some());
             (announced, state.links.is_noise_authenticated(link, claimed))
         });
+        if !self.config.public_chat_enabled() && (!authenticated || !self.paired_session(claimed)) {
+            return;
+        }
         if !announced && !authenticated {
             return;
         }
@@ -118,6 +121,8 @@ impl BleRuntime {
                     && (!self.state.has_session(&peer) || !self.state.can_write_to(&peer))
                 {
                     self.start_handshake(&peer).await;
+                } else if self.state.has_session(&peer) && self.state.can_write_to(&peer) {
+                    self.send_chatter_hello(&peer).await;
                 }
             }
             BleCommand::EnsureSigningBinding { peer } => {

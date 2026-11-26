@@ -1164,6 +1164,7 @@ async fn an_announce_is_signed_and_carries_both_public_keys() {
     assert_eq!(writes.len(), 1, "the announce went out on the one link");
     let packet = codec::decode(&writes[0].1).expect("decodable");
     assert_eq!(packet.message_type(), Some(MessageType::Announce));
+    assert_eq!(packet.timestamp % 1_000, 0);
 
     let announcement =
         AnnouncementPacket::decode(&packet.payload).expect("announce payload decodes");

@@ -7,6 +7,9 @@ impl BleRuntime {
         let now_ms = now_millis();
         let now_s = now_secs();
         self.refresh_pairing_beacons();
+        if self.config.expire_pairing(std::time::Instant::now()) {
+            self.emit_peers();
+        }
         let expired = self.state.with(|state| {
             state.declined_group_invites.retain(|_, (_, at)| {
                 now_s.saturating_sub(*at) < super::super::DIRECT_INVITE_LIFETIME_SECS
@@ -220,7 +223,7 @@ impl BleRuntime {
                 state.peers.is_empty(),
                 elapsed,
                 recent_traffic,
-                duty::no_jitter,
+                |bound_ms| (bound_ms as i64) * self.announce_jitter_permille / 1_000,
             );
             state.maintenance_cycle = if plan.should_reset_counter {
                 0
@@ -267,13 +270,18 @@ impl BleRuntime {
         self.maintain_prekeys(now_ms).await;
 
         // Gossip sync, which nothing else can schedule.
-        let connected = self.state.public_sync_peers();
-        self.gossip
-            .set_public_chat_enabled(self.config.public_chat_enabled());
+        let public_chat_enabled = self.config.public_chat_enabled();
+        let mut connected = self.state.public_sync_peers();
+        if !public_chat_enabled {
+            connected.retain(|peer| self.paired_session(peer));
+        }
+        self.gossip.set_public_chat_enabled(public_chat_enabled);
         match self.gossip.maintenance(&connected, now_s) {
             Ok(sends) => {
                 for send in sends {
-                    self.dispatch_sync(send).await;
+                    if public_chat_enabled || send.to.is_some() {
+                        self.dispatch_sync(send).await;
+                    }
                 }
             }
             Err(error) => self.degraded(format!("gossip sync maintenance failed: {error}")),

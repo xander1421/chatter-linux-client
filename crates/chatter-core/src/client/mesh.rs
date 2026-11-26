@@ -354,6 +354,22 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_pairing_active(&self) -> bool {
+        self.mesh().pairing_active()
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn set_mesh_pairing(&self, enabled: bool) {
+        self.mesh().set_pairing(enabled);
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_select_pairing_peer(&self, peer: &str) {
+        self.mesh()
+            .select_pairing_peer(&chatter_mesh::ids::PeerId::from_str(peer));
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_nearby_channels(&self) -> Vec<String> {
         self.mesh().nearby_channels()
     }

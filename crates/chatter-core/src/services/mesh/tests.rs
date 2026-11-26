@@ -299,7 +299,39 @@ async fn it_constructs_and_runs_with_no_radio_at_all() {
     ));
     assert!(matches!(service.announce_now(), Err(MeshError::NoRadio)));
     // The Nostr half still works.
+    service.set_bridge_mode(true);
     assert!(service.join_geohash("u4pruy").is_ok());
+    service.shutdown().await;
+}
+
+#[tokio::test]
+async fn relay_connections_follow_the_explicit_bridge_setting() {
+    let service = service(None, Some(Arc::new(LoopbackConnector::new())));
+    service.start().await.unwrap();
+    assert!(matches!(
+        service.join_geohash("u4pruy"),
+        Err(MeshError::BridgeModeDisabled)
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(service.status().connected_relays, 0);
+
+    let wait_for_relay_count = |connected| {
+        let service = &service;
+        async move {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while (service.status().connected_relays > 0) != connected {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("relay status follows bridge mode");
+        }
+    };
+
+    service.set_bridge_mode(true);
+    wait_for_relay_count(true).await;
+    service.set_bridge_mode(false);
+    wait_for_relay_count(false).await;
     service.shutdown().await;
 }
 
@@ -598,6 +630,12 @@ async fn public_chat_is_disabled_by_default_independently_of_mesh() {
     service.start().await.unwrap();
     assert!(!service.public_chat_enabled());
     assert!(service.conversations().unwrap().is_empty());
+    assert!(
+        service
+            .timeline
+            .conversation_for(&MeshConversation::Room.conversation_id())
+            .is_none()
+    );
     assert!(matches!(
         service.send_room("hello"),
         Err(MeshError::PublicChatDisabled)

@@ -6064,8 +6064,8 @@ msgid "Bridge mode"
 msgstr "Bridge-Modus"
 
 #: ui/mesh/mesh_setup_sheet.slint:182
-msgid "Share connected device IDs and any configured location cell in Bluetooth announcements."
-msgstr "Teilt die IDs verbundener Geräte und eine ggf. konfigurierte Standortzelle in Bluetooth-Ankündigungen."
+msgid "Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth."
+msgstr "Verbindet sich mit öffentlichen Internet-Relays und teilt die IDs verbundener Geräte und eine ggf. konfigurierte Standortzelle über Bluetooth."
 
 #: ui/mesh/mesh_setup_sheet.slint:190
 msgid "Mesh nickname"

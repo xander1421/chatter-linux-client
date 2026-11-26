@@ -72,6 +72,8 @@ export global MeshGlobal {
     callback set-bridge-mode(bool);
     in-out property <bool> public-chat: false;
     callback set-public-chat(bool);
+    in-out property <bool> pairing-active: false;
+    callback set-pairing(bool);
     in-out property <[string]> nearby-channels: [];
     in-out property <[MeshPeerData]> nearby-peers: [];
     callback open-peer(string);

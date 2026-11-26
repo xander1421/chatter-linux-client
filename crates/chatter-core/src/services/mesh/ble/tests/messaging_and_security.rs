@@ -66,6 +66,29 @@ async fn nothing_is_written_when_no_link_is_writable() {
 }
 
 #[tokio::test]
+async fn hello_requires_pairing_even_when_public_chat_is_enabled() {
+    let (mut runtime, _, state) = runtime();
+    let target = PeerId::from_bytes(&[7; 8]);
+    let other = PeerId::from_bytes(&[8; 8]);
+    assert!(runtime.config.public_chat_enabled());
+
+    runtime.send_chatter_hello(&target).await;
+    assert_eq!(
+        state.with(|inner| inner.chatter_hello.local_nonce(&target)),
+        None
+    );
+
+    let now = std::time::Instant::now();
+    runtime.config.set_pairing(true, now);
+    assert!(!runtime.allows_chatter_hello(&target));
+    runtime.config.select_pairing_peer(target.clone(), now);
+    assert!(runtime.allows_chatter_hello(&target));
+    assert!(!runtime.allows_chatter_hello(&other));
+    runtime.config.set_pairing(false, now);
+    assert!(!runtime.allows_chatter_hello(&target));
+}
+
+#[tokio::test]
 async fn public_chat_is_off_until_enabled_for_both_transmit_and_ingress() {
     let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
     let author = MeshIdentity::generate(&mut os_rng());

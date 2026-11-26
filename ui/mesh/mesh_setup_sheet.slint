@@ -56,12 +56,8 @@ export component MeshSetupSheet inherits Rectangle {
     callback close();
     property <string> name-draft: MeshGlobal.custom-nickname;
     property <bool> confirming-wipe: false;
-    property <bool> pairing: false;
-
     changed show-modal => {
-        if !root.show-modal {
-            root.pairing = false;
-        } else {
+        if root.show-modal {
             root.name-draft = MeshGlobal.custom-nickname;
         }
     }
@@ -146,9 +142,9 @@ export component MeshSetupSheet inherits Rectangle {
                                     touch: root.touch;
                                     clickable: MeshGlobal.radio-running;
                                     show-chevron: false;
-                                    clicked => { root.pairing = !root.pairing; }
+                                    clicked => { MeshGlobal.set-pairing(!MeshGlobal.pairing-active); }
                                 }
-                                if root.pairing && MeshGlobal.radio-running: VerticalLayout {
+                                if MeshGlobal.pairing-active && MeshGlobal.radio-running: VerticalLayout {
                                     for peer in MeshGlobal.nearby-peers: NearbyPeerRow {
                                         name: peer.name; detail: peer.binding-label;
                                         touch: root.touch; clicked => { MeshGlobal.open-peer(peer.id); }
@@ -156,7 +152,7 @@ export component MeshSetupSheet inherits Rectangle {
                                 }
                             }
                         }
-                        if root.pairing && MeshGlobal.radio-running: Text {
+                        if MeshGlobal.pairing-active && MeshGlobal.radio-running: Text {
                             width: parent.width;
                             text: @tr("You appear as {} nearby. Choose your contact’s device and verify it in person.", MeshGlobal.nickname);
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
@@ -184,7 +180,7 @@ export component MeshSetupSheet inherits Rectangle {
                                 label-spacing: Spacing.xs;
                                 Text { width: bridge-row.label-width; text: @tr("Bridge mode"); color: Colors.text-primary;
                                     font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
-                                Text { width: bridge-row.label-width; text: @tr("Share connected device IDs and any configured location cell in Bluetooth announcements.");
+                                Text { width: bridge-row.label-width; text: @tr("Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth.");
                                     color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                                 toggled(value) => { MeshGlobal.set-bridge-mode(value); }
                             }

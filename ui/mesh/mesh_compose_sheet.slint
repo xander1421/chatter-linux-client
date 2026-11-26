@@ -156,8 +156,8 @@ export component MeshComposeSheet inherits Rectangle {
                                 ComposeMenuRow { icon: Icons.link; title: @tr("Join with invite"); detail: @tr("Paste or scan a private invite");
                                     tint: Colors.info; touch: root.touch;
                                     clicked => { root.page = "invite"; } }
-                                Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.radio; title: @tr("Join location cell"); detail: @tr("Connect through nearby relays");
+                                if MeshGlobal.bridge-mode: Rectangle { height: 1px; background: Colors.divider; }
+                                if MeshGlobal.bridge-mode: ComposeMenuRow { icon: Icons.radio; title: @tr("Join location cell"); detail: @tr("Connect through nearby relays");
                                     tint: Colors.accent; touch: root.touch;
                                     clicked => { root.page = "cell"; } }
                             }
