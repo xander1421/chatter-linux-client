@@ -38,13 +38,20 @@ impl GrpcClientPool {
     /// [`NetworkError::SecretChatNeedsTor`] and never falls back to the direct
     /// transport. Cached until [`Self::disconnect`] or a new onion address.
     pub fn secret_channel(&self) -> Result<GrpcTransport, NetworkError> {
-        if let Some(ch) = self.secret_channel.read().clone() {
+        if let Some(ch) = self
+            .secret_channel
+            .read()
+            .clone()
+            .filter(GrpcTransport::is_current)
+        {
             return Ok(ch);
         }
         let mut guard = self.secret_channel.write();
-        if let Some(ch) = guard.clone() {
+        if let Some(ch) = guard.clone().filter(GrpcTransport::is_current) {
             return Ok(ch);
         }
+        #[cfg(feature = "onion")]
+        let token = self.transport_token.read().clone();
         let onion = self
             .onion_addr
             .read()
@@ -58,7 +65,8 @@ impl GrpcClientPool {
             let ch = GrpcTransport::from_onion(
                 endpoint.connect_with_connector_lazy(self.secret_onion_connector()),
                 self.transport_mode.clone(),
-            );
+            )
+            .in_generation(token);
             *guard = Some(ch.clone());
             Ok(ch)
         }
@@ -73,6 +81,7 @@ impl GrpcClientPool {
     /// The cached channel retains the connection and its idle keepalives.
     #[cfg(feature = "onion")]
     pub async fn preconnect_secret(&self) -> Result<(), NetworkError> {
+        let token = self.transport_token.read().clone();
         let generation = self
             .transport_gen
             .load(std::sync::atomic::Ordering::Acquire);
@@ -88,7 +97,8 @@ impl GrpcClientPool {
             .connect_with_connector(self.secret_onion_connector())
             .await
             .map_err(|e| NetworkError::ConnectionFailed(format!("secret onion preconnect: {e}")))?;
-        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone());
+        let channel =
+            GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
         // A completed h2 handshake does not prove the server can answer an
         // RPC after doze. Probe through this same isolated channel before it
         // becomes the cached secret route; the response is never persisted.

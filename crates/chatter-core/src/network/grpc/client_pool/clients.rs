@@ -164,6 +164,8 @@ impl GrpcClientPool {
     /// direct transport. Fails closed exactly like [`Self::secret_channel`].
     /// Not cached: the certificate is refreshed about once a day.
     pub fn secret_route_auth_client(&self) -> Result<super::super::AuthClient, NetworkError> {
+        #[cfg(feature = "onion")]
+        let token = self.transport_token.read().clone();
         let onion = self
             .onion_addr
             .read()
@@ -177,7 +179,8 @@ impl GrpcClientPool {
             let ch = GrpcTransport::from_onion(
                 endpoint.connect_with_connector_lazy(self.onion_connector()),
                 self.transport_mode.clone(),
-            );
+            )
+            .in_generation(token);
             Ok(super::super::AuthClient::new(ch, self.auth_clone()))
         }
         #[cfg(not(feature = "onion"))]

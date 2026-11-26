@@ -3950,3 +3950,15 @@ msgstr "Verifica della chiave in corso"
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
 msgstr "Non è stato possibile verificare la cronologia del registro di trasparenza delle chiavi."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "L’audio e il video della chiamata usano una connessione diretta che può rivelare il tuo indirizzo IP."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield non disponibile"
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "End the active call before enabling Shield."
+msgstr "Termina la chiamata in corso prima di attivare Shield."

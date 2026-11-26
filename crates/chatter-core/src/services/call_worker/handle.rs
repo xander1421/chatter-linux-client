@@ -56,6 +56,24 @@ impl CallWorkerHandle {
 
     /// Spawn a new call worker on a dedicated thread.
     pub fn spawn(call_client: CallClient) -> Self {
+        Self::spawn_inner(call_client, None)
+    }
+
+    pub(crate) fn spawn_with_pool(pool: Arc<GrpcClientPool>) -> Self {
+        Self::spawn_inner(pool.call_client(), Some(pool))
+    }
+
+    pub(crate) fn media_confirmed(&self) -> bool {
+        self.shield_confirmed
+    }
+
+    pub(crate) fn with_media_confirmation(&self, shield_confirmed: bool) -> Self {
+        let mut handle = self.clone();
+        handle.shield_confirmed = shield_confirmed;
+        handle
+    }
+
+    fn spawn_inner(call_client: CallClient, pool: Option<Arc<GrpcClientPool>>) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
         let (events_tx, events_rx) = mpsc::channel(256);
         let call_events_tx = CallEventsTx::new(64);
@@ -79,6 +97,7 @@ impl CallWorkerHandle {
                     internal_tx,
                     events_tx,
                     call_client,
+                    pool,
                     shared_frames_for_worker,
                     call_events_for_worker,
                     room_events_broadcast_for_worker,
@@ -96,6 +115,7 @@ impl CallWorkerHandle {
             incoming_presentation,
             presentation_session: None,
             answer_scope: None,
+            shield_confirmed: false,
         }
     }
 
@@ -509,6 +529,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::InitiateCall {
+                shield_confirmed: self.shield_confirmed,
                 attempt: crate::services::call_signaling::START_ATTEMPT
                     .try_with(Clone::clone)
                     .ok(),
@@ -537,6 +558,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::JoinCall {
+                shield_confirmed: self.shield_confirmed,
                 session_revision: self.presentation_session,
                 call_id,
                 encryption_root_key: Some(*encryption_root_key),
@@ -560,6 +582,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::JoinCall {
+                shield_confirmed: self.shield_confirmed,
                 session_revision: self.presentation_session,
                 call_id,
                 encryption_root_key: None,

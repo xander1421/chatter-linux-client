@@ -3,6 +3,9 @@ import { ModalHostState } from "app_modal_host_state.slint";
 import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 export global CallView {
+    in-out property <bool> shield-confirmation-open: false;
+    in-out property <bool> shield-confirmation-answering: false;
+    callback shield-confirmation-answer(bool);
     // Android sets this only for a verified full-screen intent.
     in property <string> keyguard-call-id;
     callback leave-keyguard-call();

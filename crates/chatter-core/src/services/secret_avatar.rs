@@ -149,36 +149,12 @@ async fn upload(
     attachments: &AttachmentService,
     avatar: &[u8],
 ) -> Result<AttachmentPointer, AttachmentError> {
-    let net = |e: crate::error::NetworkError| AttachmentError::NetworkError(e.to_string());
     let encrypted = AttachmentCrypto::encrypt(avatar)
         .map_err(|e| AttachmentError::EncryptionError(e.to_string()))?;
-    let mut files = attachments.file_client()?;
-    let slot = files
-        .get_attachment_upload_url(encrypted.ciphertext.len() as u64)
-        .await
-        .map_err(net)?;
-    let (status, _) = attachments
-        .cdn_http_put(
-            &slot.upload_url,
-            encrypted.ciphertext.clone(),
-            "application/octet-stream",
-        )
+    let cdn_key = attachments
+        .upload_encrypted_blob_to_cdn(&encrypted.ciphertext)
         .await?;
-    if !(200..300).contains(&status) {
-        return Err(AttachmentError::NetworkError(format!(
-            "avatar upload returned status {status}"
-        )));
-    }
-    files
-        .confirm_attachment_upload(&slot.cdn_key)
-        .await
-        .map_err(net)?;
-    Ok(pointer(
-        slot.cdn_key,
-        &encrypted.key,
-        &encrypted.digest,
-        avatar,
-    ))
+    Ok(pointer(cdn_key, &encrypted.key, &encrypted.digest, avatar))
 }
 
 /// The avatar a received pointer names. `current` is the avatar already held

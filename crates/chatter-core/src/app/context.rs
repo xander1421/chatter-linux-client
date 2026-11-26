@@ -197,7 +197,7 @@ impl AppContext {
     #[cfg(feature = "media")]
     pub fn init_call_service(&self, session_revision: Option<u64>) {
         self.call_service.get_or_init(|| {
-            let handle = CallWorkerHandle::spawn(self.infrastructure.grpc_pool.call_client());
+            let handle = CallWorkerHandle::spawn_with_pool(self.infrastructure.grpc_pool.clone());
             if let Some(revision) = session_revision {
                 handle.incoming_presentation_state().begin_session(revision);
             }

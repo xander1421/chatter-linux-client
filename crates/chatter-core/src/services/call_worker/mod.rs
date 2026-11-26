@@ -24,7 +24,7 @@ use crate::domain::ids::{CallId, ChannelId, UserId};
 use crate::error::CallError;
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
-use crate::network::grpc::CallClient;
+use crate::network::grpc::{CallClient, GrpcClientPool};
 use chatter_proto::chat_v1::CallType as ProtoCallType;
 
 // ============================================================================
@@ -537,6 +537,7 @@ pub struct CallVerificationSnapshot {
 enum CallCommand {
     /// Initiate a new call.
     InitiateCall {
+        shield_confirmed: bool,
         attempt: Option<crate::services::call_signaling::CallStartAttempt>,
         channel_id: ChannelId,
         title: String,
@@ -547,6 +548,7 @@ enum CallCommand {
     },
     /// Join an existing call.
     JoinCall {
+        shield_confirmed: bool,
         session_revision: Option<u64>,
         call_id: CallId,
         /// `None`: a channel group call, joined holding no key. We connect
@@ -877,6 +879,7 @@ pub struct CallWorkerHandle {
     incoming_presentation: IncomingCallPresentationState,
     presentation_session: Option<u64>,
     answer_scope: Option<DmAnswerScope>,
+    shield_confirmed: bool,
 }
 
 /// Retained answer ownership travels with each queued mutation.

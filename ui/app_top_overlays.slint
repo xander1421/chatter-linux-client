@@ -390,6 +390,16 @@ export component AppTopOverlays inherits Rectangle {
         confirmed => { ChatPane.confirm-open-message-link(); root.refocus-composer(); }
     }
 
+    if CallView.shield-confirmation-open: CallConfirm {
+        shield: true;
+        answering: CallView.shield-confirmation-answering;
+        cancelled => {
+            CallView.shield-confirmation-answer(false);
+            if !CallView.shield-confirmation-answering { root.refocus-composer(); }
+        }
+        confirmed => { CallView.shield-confirmation-answer(true); }
+    }
+
     if ChatPane.call-confirm-open: CallConfirm {
         channel-name: ChatPane.channel-name;
         video: ChatPane.call-confirm-video;

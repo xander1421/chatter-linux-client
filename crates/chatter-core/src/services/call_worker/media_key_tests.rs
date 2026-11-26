@@ -309,6 +309,8 @@ mod group_key_install_tests {
         let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
         call.id = CALL.parse().unwrap();
         ActiveCallState {
+            shield_confirmed: false,
+            _unconsented_media: None,
             reconnect_media: None,
             fresh_rejoin_used: false,
             call,
@@ -521,6 +523,8 @@ mod media_key_install_failure_tests {
         call.id = "11111111-2222-4333-8444-555555555555".parse().unwrap();
         let key_state = CallKeyState::new(&[1; 32], &call.id.to_string()).unwrap();
         Rc::new(RefCell::new(Some(ActiveCallState {
+            shield_confirmed: false,
+            _unconsented_media: None,
             reconnect_media: None,
             fresh_rejoin_used: false,
             call,

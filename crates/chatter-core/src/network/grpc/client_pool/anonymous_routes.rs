@@ -31,41 +31,69 @@ impl GrpcClientPool {
     /// Secret chats never use this: see [`Self::secret_channel`].
     pub fn unidentified_channel(&self) -> GrpcTransport {
         #[cfg(feature = "onion")]
-        {
-            if *self.transport_mode.read() == TransportMode::Onion {
-                if let Some(ch) = self.unidentified_channel.read().clone() {
+        loop {
+            {
+                // Match swap_endpoint's lock order. The mode, endpoint and token
+                // must describe the same generation before caching the channel.
+                let _channel = self.channel.read();
+                if *self.transport_mode.read() == TransportMode::Onion {
+                    if let Some(ch) = self
+                        .unidentified_channel
+                        .read()
+                        .clone()
+                        .filter(GrpcTransport::is_current)
+                    {
+                        return ch;
+                    }
+                    let mut guard = self.unidentified_channel.write();
+                    if let Some(ch) = guard.clone().filter(GrpcTransport::is_current) {
+                        return ch;
+                    }
+                    let token = self.transport_token.read().clone();
+                    let endpoint = self.endpoint.read().clone();
+                    let ch = GrpcTransport::from_onion(
+                        endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
+                        self.transport_mode.clone(),
+                    )
+                    .in_generation(token);
+                    *guard = Some(ch.clone());
                     return ch;
                 }
-                let mut guard = self.unidentified_channel.write();
-                if let Some(ch) = guard.clone() {
-                    return ch;
-                }
-                let endpoint = self.endpoint.read().clone();
-                let ch = GrpcTransport::from_onion(
-                    endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
-                    self.transport_mode.clone(),
-                );
-                *guard = Some(ch.clone());
-                return ch;
+            }
+            let direct = self.channel();
+            let _channel = self.channel.read();
+            if self.transport_mode() == TransportMode::Direct && direct.is_current() {
+                return direct;
             }
         }
+        #[cfg(not(feature = "onion"))]
         self.channel()
     }
 
     /// Establish and health-check Shield's anonymous deposit route in advance.
     #[cfg(feature = "onion")]
     pub async fn preconnect_unidentified(&self) -> Result<(), NetworkError> {
-        if self.transport_mode() != TransportMode::Onion {
+        let (endpoint, mode, generation, token) = {
+            let _channel = self.channel.read();
+            (
+                self.endpoint.read().clone(),
+                self.transport_mode(),
+                self.transport_gen
+                    .load(std::sync::atomic::Ordering::Acquire),
+                self.transport_token.read().clone(),
+            )
+        };
+        if mode != TransportMode::Onion {
             return Ok(());
         }
-        let (endpoint, _, generation) = self.snapshot();
         let channel = endpoint
             .connect_with_connector(self.unidentified_onion_connector())
             .await
             .map_err(|e| {
                 NetworkError::ConnectionFailed(format!("anonymous onion preconnect: {e}"))
             })?;
-        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone());
+        let channel =
+            GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
         let mut probe = super::super::AnonymousMailboxClient::new(channel.clone());
         tokio::time::timeout(
             Duration::from_secs(15),

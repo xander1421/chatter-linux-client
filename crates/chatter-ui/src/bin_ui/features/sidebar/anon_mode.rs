@@ -41,6 +41,9 @@ fn wire_toggle(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if ui_ctx.anon_mode_enabled() {
                 // Leaving anon mode — no PIN gate.
                 ui_ctx.set_anon_mode_enabled(false);
+                if ui_ctx.anon_mode_enabled() {
+                    return;
+                }
                 w.invoke_refresh_screen_protection();
                 w.global::<AnonMode>().set_enabled(false);
                 w.global::<crate::ChatPane>()
@@ -93,7 +96,18 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     if result == chatter_core::client::PinVerification::Match
                     {
-                        ui_ctx.set_anon_mode_enabled(true);
+                        if let Err(error) = ui_ctx.try_set_anon_mode_enabled(true) {
+                            w.global::<AnonMode>().set_enabled(false);
+                            w.set_anon_mode_pin("".into());
+                            let message = match error {
+                                chatter_core::error::NetworkError::ShieldBlockedByActiveCall => {
+                                    chatter_i18n::tr("End the active call before enabling Shield.")
+                                }
+                                _ => chatter_i18n::tr("Shield unavailable"),
+                            };
+                            w.set_anon_mode_pin_error(message.into());
+                            return;
+                        }
                         #[cfg(target_os = "android")]
                         crate::platform::android::activity::request_shield_background_network();
                         w.invoke_refresh_screen_protection();

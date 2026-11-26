@@ -76,6 +76,7 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         attempt: CallStartAttempt,
     ) -> Result<OutgoingCallStart, ClientError> {
+        self.require_shield_call_confirmation(attempt.shield_confirmed)?;
         self.ensure_call_service();
         let revision = self.auth_state().get().session_revision;
         owned_setup(
@@ -91,7 +92,10 @@ impl ChatterClient {
                     attempt.cancel();
                     return Err(ClientError::Validation("call session changed".into()));
                 }
-                let start = match self.dispatch_start_call(conversation, call_type).await {
+                let start = match self
+                    .dispatch_start_call(conversation, call_type, attempt.shield_confirmed)
+                    .await
+                {
                     Ok(start) => start,
                     Err(error) => {
                         attempt.cancel();
@@ -214,6 +218,7 @@ impl ChatterClient {
         &self,
         conversation: crate::state::ActiveConversation,
         call_type: crate::domain::call::CallType,
+        shield_confirmed: bool,
     ) -> Result<OutgoingCallStart, ClientError> {
         use crate::domain::call::CallType as CT;
         use crate::state::ActiveConversation as AC;
@@ -238,7 +243,7 @@ impl ChatterClient {
                 // from the peer, same as the message conversation_id.
                 let channel_id: crate::domain::ids::ChannelId = peer_id.into();
                 let call_id = self
-                    .start_dm_call(&peer_id, channel_id, call_type, user_id)
+                    .start_dm_call(&peer_id, channel_id, call_type, user_id, shield_confirmed)
                     .await?;
                 let peer = RingingPeer {
                     user_id: peer_id.to_string(),
@@ -256,7 +261,7 @@ impl ChatterClient {
 
             AC::Channel(channel_id) => {
                 let setup = self
-                    .start_group_call(channel_id, call_type, user_id)
+                    .start_group_call(channel_id, call_type, user_id, shield_confirmed)
                     .await?;
                 Ok(OutgoingCallStart {
                     call_id: setup.call_id.to_string(),
@@ -283,13 +288,15 @@ impl ChatterClient {
         channel_id: crate::domain::ids::ChannelId,
         call_type: crate::domain::call::CallType,
         user_id: crate::domain::ids::UserId,
+        shield_confirmed: bool,
     ) -> Result<crate::domain::ids::CallId, ClientError> {
+        self.require_shield_call_confirmation(shield_confirmed)?;
         self.ensure_call_service();
         let call_worker = self
             .call_service()
             .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .clone();
+            .with_media_confirmation(shield_confirmed);
         self.call_signaling()
             .start_dm_call(peer_id, channel_id, call_type, &call_worker, user_id)
             .await
@@ -311,13 +318,15 @@ impl ChatterClient {
         channel_id: crate::domain::ids::ChannelId,
         call_type: crate::domain::call::CallType,
         user_id: crate::domain::ids::UserId,
+        shield_confirmed: bool,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        self.require_shield_call_confirmation(shield_confirmed)?;
         self.ensure_call_service();
         let call_worker = self
             .call_service()
             .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .clone();
+            .with_media_confirmation(shield_confirmed);
 
         let own_key = zeroize::Zeroizing::new(crate::crypto::generate_group_call_key());
 

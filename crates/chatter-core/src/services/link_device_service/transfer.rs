@@ -1,4 +1,38 @@
 use super::*;
+use crate::services::message_backup_service::MessageBackupError;
+
+async fn upload_archive_with_route_retry<Declaration, Upload>(
+    mut declare: impl FnMut() -> Declaration,
+    mut upload: impl FnMut(String) -> Upload,
+) -> Result<(), LinkDeviceError>
+where
+    Declaration: Future<Output = Result<String, NetworkError>>,
+    Upload: Future<Output = Result<(), MessageBackupError>>,
+{
+    async fn attempt<Declaration, Upload>(
+        declare: &mut impl FnMut() -> Declaration,
+        upload: &mut impl FnMut(String) -> Upload,
+    ) -> Result<(), LinkDeviceError>
+    where
+        Declaration: Future<Output = Result<String, NetworkError>>,
+        Upload: Future<Output = Result<(), MessageBackupError>>,
+    {
+        let url = declare().await?;
+        match upload(url).await {
+            Ok(()) => Ok(()),
+            Err(MessageBackupError::Network(error)) => Err(error.into()),
+            Err(error) => Err(LinkDeviceError::Invalid(format!(
+                "upload transfer archive: {error}"
+            ))),
+        }
+    }
+    match attempt(&mut declare, &mut upload).await {
+        Err(LinkDeviceError::Network(NetworkError::TransportChanged)) => {
+            attempt(&mut declare, &mut upload).await
+        }
+        result => result,
+    }
+}
 
 impl LinkDeviceService {
     /// Fetch + import the Link'n'Sync transfer archive on the new device (§30).
@@ -100,14 +134,21 @@ impl LinkDeviceService {
             let (container, stats) = backup
                 .build_link_archive(&kek)
                 .map_err(|e| LinkDeviceError::Invalid(format!("build transfer archive: {e}")))?;
-            let mut client = self.provisioning_client()?;
-            let upload_url = client
-                .set_transfer_archive(uuid, container.len() as u64, false)
-                .await?;
-            backup
-                .upload_link_archive(&container, &upload_url)
-                .await
-                .map_err(|e| LinkDeviceError::Invalid(format!("upload transfer archive: {e}")))?;
+            let backup = &backup;
+            let archive = container.as_slice();
+            let pool = &self.grpc_pool;
+            let bytes = stats.bytes as u64;
+            upload_archive_with_route_retry(
+                move || async move {
+                    // The retired channel may have been cleared before the new route
+                    // connects. Build a fresh lazy handle for each declaration.
+                    ProvisioningClient::new(pool.channel(), pool.auth_clone())
+                        .set_transfer_archive(uuid, bytes, false)
+                        .await
+                },
+                move |url| async move { backup.upload_link_archive(archive, &url).await },
+            )
+            .await?;
             Ok(stats)
         }
         .await;
@@ -134,5 +175,35 @@ impl LinkDeviceService {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    #[tokio::test]
+    async fn retired_archive_upload_mints_a_fresh_url_before_retry() {
+        let declarations = Cell::new(0);
+        let uploaded = RefCell::new(Vec::new());
+        upload_archive_with_route_retry(
+            || {
+                declarations.set(declarations.get() + 1);
+                std::future::ready(Ok(format!("upload-{}", declarations.get())))
+            },
+            |url| {
+                let mut uploaded = uploaded.borrow_mut();
+                uploaded.push(url);
+                std::future::ready(if uploaded.len() == 1 {
+                    Err(NetworkError::TransportChanged.into())
+                } else {
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(*uploaded.borrow(), ["upload-1", "upload-2"]);
     }
 }

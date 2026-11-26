@@ -17,17 +17,18 @@ use crate::ai_protocol::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, ChatRole, GenerateParams,
     LocalAIBackend,
 };
-use crate::network::grpc::ai_client::AiClient;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use chatter_proto::chat_v1::ChatTurn;
+use std::sync::Arc;
 
 /// Cloud backend that routes through our own metered broker.
 pub struct BrokerBackend {
-    client: AiClient,
+    pool: Arc<GrpcClientPool>,
 }
 
 impl BrokerBackend {
-    pub fn new(client: AiClient) -> Self {
-        Self { client }
+    pub fn new(pool: Arc<GrpcClientPool>) -> Self {
+        Self { pool }
     }
 }
 
@@ -65,7 +66,7 @@ impl LocalAIBackend for BrokerBackend {
     async fn health_check(&self) -> Result<bool, BackendError> {
         // Quota is the cheapest authenticated round-trip and also tells us the
         // broker is reachable and our device auth is good.
-        match self.client.get_quota().await {
+        match self.pool.ai_client().get_quota().await {
             Ok(_) => Ok(true),
             Err(e) => Err(BackendError::Unavailable(e.to_string())),
         }
@@ -86,7 +87,8 @@ impl LocalAIBackend for BrokerBackend {
         }
 
         let resp = self
-            .client
+            .pool
+            .ai_client()
             .complete(model, system.as_deref(), turns, params.max_tokens)
             .await
             .map_err(|e| {
@@ -123,7 +125,8 @@ impl LocalAIBackend for BrokerBackend {
 
     async fn list_models(&self) -> Result<Vec<AvailableModel>, BackendError> {
         let resp = self
-            .client
+            .pool
+            .ai_client()
             .list_served_models()
             .await
             .map_err(|e| BackendError::Unavailable(e.to_string()))?;

@@ -105,6 +105,7 @@ impl CallSignalingService {
             ephemeral_key,
             peer_id: *peer_id,
             call_type: call_type_str.to_string(),
+            shield_confirmed: call_worker.media_confirmed(),
             is_video,
         });
 
@@ -443,6 +444,7 @@ mod named_dm_completion_tests {
             ephemeral_key: EphemeralCallKey::generate(),
             peer_id: call.initiator_id,
             call_type: "voice".into(),
+            shield_confirmed: attempt.shield_confirmed,
             is_video: false,
         });
     }
@@ -454,6 +456,23 @@ mod named_dm_completion_tests {
                 "retired answer advertised connected"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn dm_answer_confirmation_belongs_to_the_pending_call_and_peer() {
+        let (_dir, client, _worker, _revision) = fixture();
+        let service = client.call_signaling();
+        let peer = UserId::new();
+        let call = Call::new(ChannelId::new(), peer, CallType::Voice);
+        let id = call.id.to_string();
+        pending(service, &call, &CallStartAttempt::new(true));
+        // Calls started via the public facade need no UI completion attempt.
+        service.start_attempts.lock().clear();
+        assert!(service.pending_dm_media_confirmed(&id, &peer));
+        assert!(!service.pending_dm_media_confirmed(&id, &UserId::new()));
+        assert!(!service.pending_dm_media_confirmed("a different call", &peer));
+        service.take_pending_dm_call();
+        assert!(!service.pending_dm_media_confirmed(&id, &peer));
     }
 
     #[tokio::test]

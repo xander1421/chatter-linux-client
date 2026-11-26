@@ -285,7 +285,7 @@ impl ClientBuilder {
             link_device_service: std::sync::OnceLock::new(),
             anon_mode,
             pending_update: Mutex::new(None),
-            update_transport_epoch: tokio::sync::watch::channel(0u64).0,
+            transport_epoch: tokio::sync::watch::channel(0).0,
             authed_notif_started: AtomicBool::new(false),
             auth_lifecycle_lock: tokio::sync::Mutex::new(()),
             authed_notif_session: Mutex::new(None),
@@ -331,6 +331,11 @@ pub enum ClientError {
     Inbox(String),
     #[error("Call ended")]
     CallEnded,
+    #[error(
+        "{}",
+        chatter_i18n::tr("Call media connects directly and can reveal your IP address.")
+    )]
+    ShieldCallConfirmationRequired,
     #[error("inbox already started")]
     AlreadyStarted,
     #[error("auth error: {0}")]
@@ -595,7 +600,7 @@ pub struct ChatterClient {
     /// restart is the privacy property).
     anon_mode: Arc<AtomicBool>,
     pending_update: Mutex<Option<crate::update::UpdateManifest>>,
-    update_transport_epoch: tokio::sync::watch::Sender<u64>,
+    transport_epoch: tokio::sync::watch::Sender<u64>,
     /// Guards the auth-gated notification streams (gRPC message stream + call
     /// → notification bridge) so they spawn exactly once, after login. They
     /// can't start at boot like the consumer because there's no authenticated

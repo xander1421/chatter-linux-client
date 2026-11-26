@@ -4,6 +4,7 @@
 //! artifact before handing it to a platform installer.
 
 use crate::network::grpc::client_pool::{GrpcClientPool, TransportMode};
+use crate::network::storage_http::fence_cdn_transfer;
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -358,65 +359,62 @@ pub async fn check_latest(
             "In-app updates are not available for {platform} yet"
         ));
     }
-    if shield_requested && pool.transport_mode() != TransportMode::Onion {
+    let (mode, generation) = pool.route_generation_snapshot();
+    if shield_requested && mode != TransportMode::Onion {
         return Err("Shield requires Tor for update checks".into());
     }
-    let mode = pool.transport_mode();
-    let origin = pool.update_origin();
-    let url = update_url(
-        &origin,
-        &format!("/updates/v1/{platform}/{channel}/latest.json"),
-    )?;
-    let bytes = fetch_optional(pool, mode, &url, MAX_MANIFEST_BYTES).await?;
-    if pool.transport_mode() != mode {
-        return Err("network mode changed during update check".into());
-    }
-    let Some(bytes) = bytes else {
-        tracing::info!("update check found no release");
-        return Ok(None);
-    };
-    let (manifest, bundle) = verify_manifest_inner(
-        &bytes,
-        &crate::config::RELEASE_UPDATE_PUBLIC_KEY_BYTES,
-        platform,
-        channel,
-        installed_code,
-        false,
-    )?;
-    if manifest.version_code <= installed_code {
-        tracing::info!("update check found no newer release");
-        return Ok(None);
-    }
-    validate_artifact_url(&origin, &manifest)?;
-    let checkpoint = rekor::verify_release_entry(
-        &bundle,
-        &crate::config::REKOR_LOG_PUBLIC_KEY,
-        &crate::config::RELEASE_TRANSPARENCY_PUBLIC_KEY,
-        &manifest.sha256,
-    )?;
-    let stored = load_checkpoint(data_dir).await;
-    let proofs = if rekor::needs_consistency_proof(stored.as_ref(), &checkpoint) {
+    fence_cdn_transfer(generation, "network mode changed during update check".into(), async {
+        let origin = pool.update_origin();
         let url = update_url(
             &origin,
-            &format!("/updates/v1/{platform}/{channel}/consistency.json"),
+            &format!("/updates/v1/{platform}/{channel}/latest.json"),
         )?;
-        let body = fetch_optional(pool, mode, &url, rekor::MAX_CONSISTENCY_BYTES)
-            .await?
-            .ok_or("Rekor consistency proof is missing")?;
-        if pool.transport_mode() != mode {
-            return Err("network mode changed during update check".into());
+        let bytes = fetch_optional(pool, mode, &url, MAX_MANIFEST_BYTES).await?;
+        let Some(bytes) = bytes else {
+            tracing::info!("update check found no release");
+            return Ok(None);
+        };
+        let (manifest, bundle) = verify_manifest_inner(
+            &bytes,
+            &crate::config::RELEASE_UPDATE_PUBLIC_KEY_BYTES,
+            platform,
+            channel,
+            installed_code,
+            false,
+        )?;
+        if manifest.version_code <= installed_code {
+            tracing::info!("update check found no newer release");
+            return Ok(None);
         }
-        Some(
-            serde_json::from_slice::<rekor::ConsistencyFile>(&body)
-                .map_err(|_| "Rekor consistency proofs are malformed")?,
-        )
-    } else {
-        None
-    };
-    rekor::check_consistency(stored.as_ref(), &checkpoint, proofs.as_ref())?;
-    store_checkpoint(data_dir, &checkpoint).await?;
-    tracing::info!(version = %manifest.version_name, size = manifest.size, rekor_uuid = %bundle.uuid, "update available (Rekor-logged)");
-    Ok(Some(manifest))
+        validate_artifact_url(&origin, &manifest)?;
+        let checkpoint = rekor::verify_release_entry(
+            &bundle,
+            &crate::config::REKOR_LOG_PUBLIC_KEY,
+            &crate::config::RELEASE_TRANSPARENCY_PUBLIC_KEY,
+            &manifest.sha256,
+        )?;
+        let stored = load_checkpoint(data_dir).await;
+        let proofs = if rekor::needs_consistency_proof(stored.as_ref(), &checkpoint) {
+            let url = update_url(
+                &origin,
+                &format!("/updates/v1/{platform}/{channel}/consistency.json"),
+            )?;
+            let body = fetch_optional(pool, mode, &url, rekor::MAX_CONSISTENCY_BYTES)
+                .await?
+                .ok_or("Rekor consistency proof is missing")?;
+            Some(
+                serde_json::from_slice::<rekor::ConsistencyFile>(&body)
+                    .map_err(|_| "Rekor consistency proofs are malformed")?,
+            )
+        } else {
+            None
+        };
+        rekor::check_consistency(stored.as_ref(), &checkpoint, proofs.as_ref())?;
+        store_checkpoint(data_dir, &checkpoint).await?;
+        tracing::info!(version = %manifest.version_name, size = manifest.size, rekor_uuid = %bundle.uuid, "update available (Rekor-logged)");
+        Ok(Some(manifest))
+    })
+    .await
 }
 
 /// Remove staged update downloads other than `keep`. Each is a full release
@@ -450,10 +448,10 @@ pub(crate) async fn download_verified_with_progress(
         .and_then(|url| url.host_str().map(str::to_owned))
         .unwrap_or_default();
     tracing::info!(version = %manifest.version_name, size = manifest.size, origin_host, "update download started");
-    if shield_requested && pool.transport_mode() != TransportMode::Onion {
+    let (mode, generation) = pool.route_generation_snapshot();
+    if shield_requested && mode != TransportMode::Onion {
         return Err("Shield requires Tor for update downloads".into());
     }
-    let mode = pool.transport_mode();
     validate_artifact_url(&pool.update_origin(), manifest)?;
     let folder = data_dir.join("updates");
     tokio::fs::create_dir_all(&folder)
@@ -489,106 +487,108 @@ pub(crate) async fn download_verified_with_progress(
             tracing::info!(percent = step * 10, "update download progress");
         }
     };
-    let result = async {
-        if mode == TransportMode::Onion {
-            #[cfg(feature = "onion")]
-            {
-                crate::network::anon_http::get_to_file_with_progress(
-                    &pool.onion_tor(),
-                    &manifest.url,
-                    &mut file,
-                    manifest.size,
-                    &report_progress,
-                )
-                .await?;
-            }
-            #[cfg(not(feature = "onion"))]
-            {
-                return Err("Tor support is missing".into());
-            }
-        } else {
-            let client = crate::network::storage_http::storage_client()?;
-            let request = if resume {
-                client
-                    .get(&manifest.url)
-                    .header(reqwest::header::RANGE, format!("bytes={partial}-"))
-            } else {
-                client.get(&manifest.url)
-            };
-            let mut response =
-                tokio::time::timeout(std::time::Duration::from_secs(30), request.send())
-                    .await
-                    .map_err(|_| "update download stalled")?
-                    .map_err(|_| "update download failed")?;
-            let mut total = if resume { partial } else { 0 };
-            if resume {
-                let expected = format!("bytes {partial}-{}/{}", manifest.size - 1, manifest.size);
-                if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
-                    || response
-                        .headers()
-                        .get(reqwest::header::CONTENT_RANGE)
-                        .and_then(|v| v.to_str().ok())
-                        != Some(expected.as_str())
+    let result = fence_cdn_transfer(
+        generation,
+        "network mode changed during update download".into(),
+        async {
+            if mode == TransportMode::Onion {
+                #[cfg(feature = "onion")]
                 {
-                    tracing::info!(
-                        "update server did not support safe resume; restarting download"
-                    );
-                    file.set_len(0)
-                        .await
-                        .map_err(|_| "cannot reset update staging file")?;
-                    file = tokio::fs::OpenOptions::new()
-                        .write(true)
-                        .open(&path)
-                        .await
-                        .map_err(|_| "cannot reopen update staging file")?;
-                    response = tokio::time::timeout(
-                        std::time::Duration::from_secs(30),
-                        client.get(&manifest.url).send(),
+                    crate::network::anon_http::get_to_file_with_progress(
+                        &pool.onion_tor(),
+                        &manifest.url,
+                        &mut file,
+                        manifest.size,
+                        &report_progress,
                     )
-                    .await
-                    .map_err(|_| "update download stalled")?
-                    .map_err(|_| "update download failed")?;
-                    total = 0;
+                    .await?;
+                }
+                #[cfg(not(feature = "onion"))]
+                {
+                    return Err("Tor support is missing".into());
+                }
+            } else {
+                let client = crate::network::storage_http::storage_client()?;
+                let request = if resume {
+                    client
+                        .get(&manifest.url)
+                        .header(reqwest::header::RANGE, format!("bytes={partial}-"))
                 } else {
-                    tracing::info!(bytes = partial, "update download resuming");
-                    report_progress(partial);
+                    client.get(&manifest.url)
+                };
+                let mut response =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), request.send())
+                        .await
+                        .map_err(|_| "update download stalled")?
+                        .map_err(|_| "update download failed")?;
+                let mut total = if resume { partial } else { 0 };
+                if resume {
+                    let expected =
+                        format!("bytes {partial}-{}/{}", manifest.size - 1, manifest.size);
+                    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+                        || response
+                            .headers()
+                            .get(reqwest::header::CONTENT_RANGE)
+                            .and_then(|v| v.to_str().ok())
+                            != Some(expected.as_str())
+                    {
+                        tracing::info!(
+                            "update server did not support safe resume; restarting download"
+                        );
+                        file.set_len(0)
+                            .await
+                            .map_err(|_| "cannot reset update staging file")?;
+                        file = tokio::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&path)
+                            .await
+                            .map_err(|_| "cannot reopen update staging file")?;
+                        response = tokio::time::timeout(
+                            std::time::Duration::from_secs(30),
+                            client.get(&manifest.url).send(),
+                        )
+                        .await
+                        .map_err(|_| "update download stalled")?
+                        .map_err(|_| "update download failed")?;
+                        total = 0;
+                    } else {
+                        tracing::info!(bytes = partial, "update download resuming");
+                        report_progress(partial);
+                    }
+                }
+                if !response.status().is_success() {
+                    return Err(format!("update download returned {}", response.status()));
+                }
+                while let Some(chunk) =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
+                        .await
+                        .map_err(|_| "update download stalled")?
+                        .map_err(|_| "update download read failed")?
+                {
+                    total = crate::network::anon_http::write_storage_chunk(
+                        &mut file,
+                        total,
+                        &chunk,
+                        manifest.size,
+                    )
+                    .await?;
+                    report_progress(total);
                 }
             }
-            if !response.status().is_success() {
-                return Err(format!("update download returned {}", response.status()));
-            }
-            while let Some(chunk) =
-                tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
-                    .await
-                    .map_err(|_| "update download stalled")?
-                    .map_err(|_| "update download read failed")?
-            {
-                total = crate::network::anon_http::write_storage_chunk(
-                    &mut file,
-                    total,
-                    &chunk,
-                    manifest.size,
-                )
-                .await?;
-                report_progress(total);
-            }
-        }
-        if pool.transport_mode() != mode {
-            return Err("network mode changed during update download".into());
-        }
-        file.sync_all()
+            file.sync_all()
+                .await
+                .map_err(|_| "update staging sync failed")?;
+            let path_for_verify = path.clone();
+            let manifest_for_verify = manifest.clone();
+            tokio::task::spawn_blocking(move || {
+                let input = std::fs::File::open(path_for_verify)
+                    .map_err(|_| "update staging read failed")?;
+                verify_artifact(input, &manifest_for_verify)
+            })
             .await
-            .map_err(|_| "update staging sync failed")?;
-        let path_for_verify = path.clone();
-        let manifest_for_verify = manifest.clone();
-        tokio::task::spawn_blocking(move || {
-            let input =
-                std::fs::File::open(path_for_verify).map_err(|_| "update staging read failed")?;
-            verify_artifact(input, &manifest_for_verify)
-        })
-        .await
-        .map_err(|_| "update verification task failed")?
-    }
+            .map_err(|_| "update verification task failed")?
+        },
+    )
     .await;
     drop(file);
     if let Err(error) = result {
@@ -892,6 +892,39 @@ mod tests {
             SigningKey::from_bytes(&[27; 32]),
         )
     }
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn shield_entry_cancels_pending_update_download_and_removes_staging_file() {
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("https://{}", listener.local_addr().unwrap());
+        let pool = GrpcClientPool::new(&origin).unwrap();
+        pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+        let dir = tempfile::tempdir().unwrap();
+        let (mut manifest, _) = fixture();
+        manifest.url = format!("{origin}/updates/v1/android/sideload/122.apk");
+        let download =
+            download_verified_with_progress(&pool, false, &manifest, dir.path(), &|_| {});
+        let switch = async {
+            // Hold the connection in the TLS handshake until the download exits.
+            let (socket, _) = listener.accept().await.unwrap();
+            pool.set_transport_mode(TransportMode::Onion).unwrap();
+            socket
+        };
+        let (result, _socket) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(download, switch)
+        })
+        .await
+        .expect("Shield must cancel the pending update request");
+        assert_eq!(
+            result.unwrap_err(),
+            "network mode changed during update download"
+        );
+        assert!(!dir.path().join("updates/android-122.download").exists());
+    }
+
     fn encode(manifest: UpdateManifest, key: &SigningKey) -> Vec<u8> {
         let signature = key.sign(&signed_bytes(&manifest).unwrap());
         let rekor = serde_json::from_str(include_str!("../tests/fixtures/rekor/bundle-shape.json"))

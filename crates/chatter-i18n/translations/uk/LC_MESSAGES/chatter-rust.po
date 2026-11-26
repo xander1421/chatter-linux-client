@@ -3967,3 +3967,15 @@ msgstr "Перевірка ключа"
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
 msgstr "Не вдалося перевірити історію журналу прозорості ключів."
+
+#: crates/chatter-core/src/client/calls/mod.rs
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Аудіо й відео виклику передаються напряму й можуть розкрити вашу IP-адресу."
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "Shield unavailable"
+msgstr "Shield недоступний"
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "End the active call before enabling Shield."
+msgstr "Завершіть поточний виклик, перш ніж увімкнути Shield."

@@ -13,6 +13,7 @@ pub(super) fn run_call_worker(
     internal_tx: mpsc::Sender<CallCommand>,
     events_tx: mpsc::Sender<LiveKitRoomEvent>,
     call_client: CallClient,
+    pool: Option<Arc<GrpcClientPool>>,
     shared_video_frames: SharedVideoFrames,
     call_events_tx: CallEventsTx,
     room_events_broadcast: broadcast::Sender<LiveKitRoomEvent>,
@@ -195,6 +196,7 @@ pub(super) fn run_call_worker(
             match cmd {
                 CallCommand::BeginPeerLeftCheck { .. } | CallCommand::FinishPeerLeftCheck { .. } => unreachable!("normalized above"),
                 CallCommand::InitiateCall {
+                    shield_confirmed,
                     attempt,
                     channel_id,
                     title,
@@ -208,6 +210,8 @@ pub(super) fn run_call_worker(
                         &room_manager,
                         &active_call,
                         attempt.as_ref(),
+                        pool.as_deref(),
+                        shield_confirmed,
                         channel_id,
                         &title,
                         call_type,
@@ -256,6 +260,7 @@ pub(super) fn run_call_worker(
                 }
 
                 CallCommand::JoinCall {
+                    shield_confirmed,
                     session_revision,
                     call_id,
                     encryption_root_key,
@@ -271,6 +276,8 @@ pub(super) fn run_call_worker(
                         &call_client,
                         &room_manager,
                         &active_call,
+                        pool.as_deref(),
+                        shield_confirmed,
                         call_id,
                         encryption_root_key,
                         joiner_id,
@@ -704,6 +711,7 @@ pub(super) fn run_call_worker(
                     let result = recover_session(
                         &call_client, &room_manager, &active_call, &ratchet_cancel,
                         &mut cmd_rx, &mut deferred_commands, &incoming_presentation, &call,
+                        pool.as_deref(),
                         orchestrator.active.as_ref().filter(|active| active.call == call)
                             .map(|active| active.session_revision),
                     ).await;
@@ -754,6 +762,7 @@ pub(super) fn run_call_worker(
                         recover_session(
                             &call_client, &room_manager, &active_call, &ratchet_cancel,
                             &mut cmd_rx, &mut deferred_commands, &incoming_presentation, &call,
+                        pool.as_deref(),
                             orchestrator.active.as_ref().filter(|active| active.call == call)
                                 .map(|active| active.session_revision),
                         ).await
@@ -976,6 +985,8 @@ pub(super) fn run_call_worker(
                     let handle = CallHandle::from(call.id.to_string().as_str());
                     let key_state = CallKeyState::new(&[8; 32], handle.as_str()).unwrap();
                     *active_call.borrow_mut() = Some(ActiveCallState {
+                        shield_confirmed: false,
+                        _unconsented_media: None,
                         reconnect_media: None,
                         fresh_rejoin_used: false,
                         call, key_state,

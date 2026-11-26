@@ -13385,7 +13385,7 @@ async fn accept_group_ring(
         }
     }
     client
-        .accept_presented_incoming_call(call_id, false)
+        .accept_presented_incoming_call(call_id, false, false)
         .await
         .unwrap_or_else(|e| panic!("{label} failed to join group call {call_id}: {e:?}"));
 }
@@ -13472,6 +13472,7 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
             group.id.clone(),
             chatter_core::domain::call::CallType::Voice,
             uid_a,
+            false,
         )
         .await
         .expect("A failed to start the group call");
@@ -13643,6 +13644,7 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
             group.id.clone(),
             chatter_core::domain::call::CallType::Voice,
             uid_c,
+            false,
         )
         .await
         .expect("C failed to join the channel's call");

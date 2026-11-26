@@ -6011,3 +6011,11 @@ msgstr "Schlüssel nicht geprüft"
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr "Identität geändert"
+
+#: ui/chat/call_confirm.slint
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Die Medienverbindung des Anrufs ist direkt und kann deine IP-Adresse offenlegen."
+
+#: ui/anon_mode/shield_network_banner.slint
+msgid "Couldn't reach the server over Tor. Shield is still on."
+msgstr "Der Server konnte über Tor nicht erreicht werden. Shield ist weiterhin aktiv."
