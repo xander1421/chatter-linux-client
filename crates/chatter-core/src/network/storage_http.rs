@@ -24,19 +24,12 @@ fn storage_tls() -> Result<rustls::ClientConfig, String> {
 }
 
 pub(crate) fn storage_client() -> CachedClient {
-    storage_client_for_route(false)
-}
 
-pub(crate) fn private_channel_storage_client() -> CachedClient {
-    storage_client_for_route(true)
-}
-
-fn storage_client_for_route(private_channel: bool) -> CachedClient {
-    static CLIENTS: OnceLock<Mutex<HashMap<(tokio::runtime::Id, bool), Weak<CachedClient>>>> =
+    static CLIENTS: OnceLock<Mutex<HashMap<tokio::runtime::Id, Weak<CachedClient>>>> =
         OnceLock::new();
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|_| "storage HTTP requires a running async runtime".to_string())?;
-    let route = (runtime.id(), private_channel);
+    let route = runtime.id();
     let mut clients = CLIENTS
         .get_or_init(Default::default)
         .lock()
@@ -61,7 +54,7 @@ fn storage_client_for_route(private_channel: bool) -> CachedClient {
     (*client).clone()
 }
 
-fn build_client() -> CachedClient {
+pub(crate) fn build_client() -> CachedClient {
     // Explicit config: no process-global provider, no platform/WebPKI roots
     // beside the pinned Chatter CA, post-quantum key exchange only.
     let tls = storage_tls().map_err(|e| format!("storage TLS: {e}"))?;

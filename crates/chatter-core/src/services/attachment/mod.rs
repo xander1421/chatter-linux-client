@@ -235,7 +235,7 @@ pub struct AttachmentService {
     /// Serving a secret chat (anonymous DM / group): every URL mint and CDN
     /// transfer goes over Tor, whatever the pool's transport, or fails.
     pub(crate) secret_chat: bool,
-    private_channel: bool,
+    private_channel: Option<crate::domain::ChannelId>,
 }
 
 impl AttachmentService {
@@ -270,9 +270,15 @@ impl AttachmentService {
     ) -> Self {
         match conversation {
             crate::state::chat_state::ActiveConversation::Channel(channel)
-                if self.attachment_repo.channel_uses_private_attachments(channel) => {
-                    Self { private_channel: true, ..self.clone() }
+                if self
+                    .attachment_repo
+                    .channel_uses_private_attachments(channel) =>
+            {
+                Self {
+                    private_channel: Some(*channel),
+                    ..self.clone()
                 }
+            }
             conversation if conversation.is_anon() => self.for_secret_chat(),
             _ => self.clone(),
         }
@@ -284,13 +290,16 @@ impl AttachmentService {
             return Ok(self.clone());
         }
         let storage = |e: crate::error::StorageError| AttachmentError::StorageError(e.to_string());
-        Ok(match self.attachment_repo.get(attachment_id).map_err(storage)? {
-            Some(attachment) if attachment.secret_chat => self.for_secret_chat(),
-            Some(attachment) if attachment.private_channel => {
-                Self { private_channel: true, ..self.clone() }
-            }
-            _ => self.clone(),
-        })
+        Ok(
+            match self.attachment_repo.get(attachment_id).map_err(storage)? {
+                Some(attachment) if attachment.secret_chat => self.for_secret_chat(),
+                Some(attachment) if attachment.private_channel.is_some() => Self {
+                    private_channel: attachment.private_channel,
+                    ..self.clone()
+                },
+                _ => self.clone(),
+            },
+        )
     }
 
     /// Use blind credentials for private-channel URL mints and isolate their
@@ -302,8 +311,11 @@ impl AttachmentService {
                 .secret_file_client()
                 .map_err(|e| AttachmentError::NetworkError(e.to_string()));
         }
-        if self.private_channel {
-            return Ok(pool.private_channel_file_client(Arc::new(self.attachment_repo.attachment_tokens())));
+        if let Some(channel) = self.private_channel {
+            return Ok(pool.private_channel_file_client(
+                channel,
+                Arc::new(self.attachment_repo.attachment_tokens()),
+            ));
         }
         Ok(pool.file_client())
     }
@@ -348,8 +360,8 @@ impl AttachmentService {
             pool.secret_storage_tor()
                 .await
                 .map_err(|e| AttachmentError::NetworkError(e.to_string()))
-        } else if self.private_channel {
-            pool.private_channel_storage_tor()
+        } else if let Some(channel) = self.private_channel {
+            pool.private_channel_storage_tor(channel)
                 .await
                 .map_err(|e| AttachmentError::NetworkError(e.to_string()))
         } else {
@@ -358,8 +370,9 @@ impl AttachmentService {
     }
 
     fn cdn_client(&self) -> Result<reqwest::Client, AttachmentError> {
-        if self.private_channel {
-            crate::network::storage_http::private_channel_storage_client()
+        if let Some(channel) = self.private_channel {
+            self.grpc_pool()?
+                .private_channel_storage_client(channel)
                 .map_err(AttachmentError::NetworkError)
         } else {
             cdn_client()
@@ -541,7 +554,7 @@ impl AttachmentService {
             attachment_repo,
             grpc_pool: Some(grpc_pool),
             secret_chat: false,
-            private_channel: false,
+            private_channel: None,
         }
     }
 
@@ -553,7 +566,7 @@ impl AttachmentService {
             attachment_repo,
             grpc_pool: None,
             secret_chat: false,
-            private_channel: false,
+            private_channel: None,
         }
     }
 

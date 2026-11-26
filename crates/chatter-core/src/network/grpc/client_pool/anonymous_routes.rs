@@ -35,31 +35,57 @@ impl GrpcClientPool {
         )
     }
 
-    pub(super) fn private_post_channel(&self) -> GrpcTransport {
+    fn private_channel_route(&self, channel: crate::domain::ChannelId) -> Arc<PrivateChannelRoute> {
+        let mut routes = self.private_channels.lock();
+        // Bound retained sockets without ever reusing one for a different channel.
+        if routes.len() >= 64 && !routes.contains_key(&channel) {
+            routes.clear();
+        }
+        routes.entry(channel).or_default().clone()
+    }
+
+    pub(super) fn private_post_channel(&self, channel: crate::domain::ChannelId) -> GrpcTransport {
+        let route = self.private_channel_route(channel);
         self.isolated_unidentified_channel(
-            &self.private_post_channel,
+            &route.grpc,
             #[cfg(feature = "onion")]
-            &self.private_post_onion_tor,
+            &route.tor,
         )
     }
 
-    /// The CDN route shares the private-post isolation group.
+    pub(crate) fn private_channel_storage_client(
+        &self,
+        channel: crate::domain::ChannelId,
+    ) -> Result<reqwest::Client, String> {
+        self.private_channel_route(channel)
+            .cdn
+            .get_or_init(crate::network::storage_http::build_client)
+            .clone()
+    }
+
     #[cfg(feature = "onion")]
     pub(crate) async fn private_channel_storage_tor(
         &self,
+        channel: crate::domain::ChannelId,
     ) -> Result<super::super::onion_transport::SharedTorClient, NetworkError> {
+        let route = self.private_channel_route(channel);
         let base = super::super::onion_transport::shared_bootstrap(&self.onion_tor)
             .await
             .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
-        self.private_post_onion_tor
+        route
+            .tor
             .get_or_init(|| async { base.isolated_client() })
             .await;
-        Ok(self.private_post_onion_tor.clone())
+        Ok(route.tor.clone())
     }
 
     /// Loopback stand-ins for the three Shield circuit streams in wire tests.
     #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
-    pub(crate) fn install_loopback_shield_routes(&self, url: &str) {
+    pub(crate) fn install_loopback_shield_routes(
+        &self,
+        url: &str,
+        channels: &[crate::domain::ChannelId],
+    ) {
         self.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         self.set_transport_mode(TransportMode::Onion).unwrap();
         let endpoint = tonic::transport::Endpoint::from_shared(url.to_owned()).unwrap();
@@ -69,7 +95,9 @@ impl GrpcClientPool {
         };
         *self.channel.write() = Some(connect());
         *self.unidentified_channel.write() = Some(connect());
-        *self.private_post_channel.write() = Some(connect());
+        for &channel in channels {
+            *self.private_channel_route(channel).grpc.write() = Some(connect());
+        }
     }
 
     fn isolated_unidentified_channel(

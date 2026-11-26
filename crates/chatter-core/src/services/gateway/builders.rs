@@ -553,9 +553,23 @@ pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Con
             },
             timestamp: now,
             device_id: 0,
+            channel_id: String::new(),
         })),
         ..Default::default()
     }
+}
+
+/// Cancel a pending ring within the signed channel's sender-key context.
+#[cfg(feature = "media")]
+pub(crate) fn build_channel_call_cancel(
+    call_id: &str,
+    channel: &crate::domain::ChannelId,
+) -> Content {
+    let mut message = build_call_hangup_content(call_id, CallHangupReason::Normal);
+    if let Some(content::Content::CallHangup(hangup)) = message.content.as_mut() {
+        hangup.channel_id = channel.to_string();
+    }
+    message
 }
 
 /// The copy of an outgoing 1:1 call message our OWN other devices get.
@@ -585,6 +599,7 @@ pub fn build_call_self_sync(content: &Content, our_device_id: u32) -> Option<Con
             reason: reason as i32,
             timestamp: content.timestamp,
             device_id: our_device_id,
+            channel_id: String::new(),
         })),
         ..Default::default()
     })

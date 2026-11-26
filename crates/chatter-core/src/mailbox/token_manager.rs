@@ -111,6 +111,7 @@ fn manifest_skipped_rotation(
 pub struct TokenManager {
     /// Database connection for token storage.
     db: Arc<Database>,
+    attachment: bool,
 }
 
 impl TokenManager {
@@ -120,7 +121,45 @@ impl TokenManager {
     ///
     /// * `db` - Shared database connection
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self {
+            db,
+            attachment: false,
+        }
+    }
+
+    pub(crate) fn for_attachments(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            attachment: true,
+        }
+    }
+
+    fn manifest_key(&self) -> &'static str {
+        if self.attachment {
+            "attachment.libsignal_key_manifest"
+        } else {
+            "mailbox.libsignal_key_manifest"
+        }
+    }
+
+    fn discontinuity_key(&self) -> &'static str {
+        if self.attachment {
+            "attachment.manifest_discontinuity"
+        } else {
+            "mailbox.manifest_discontinuity"
+        }
+    }
+
+    fn verify_purpose(
+        &self,
+        manifest: &GetBlindSignaturePublicKeyResponse,
+    ) -> Result<(), MailboxError> {
+        if manifest.attachment != self.attachment {
+            return Err(MailboxError::InvalidServerKey(
+                "incorrect blind credential purpose".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Refresh the server's blind signature public key.
@@ -179,6 +218,7 @@ impl TokenManager {
                 async move {
                     let response = client.get_blind_signature_public_key(consistency).await
                         .map_err(|error| MailboxError::Network(error.to_string()))?;
+                    self.verify_purpose(&response)?;
                     if let Some(previous) = previous {
                         manifest_skipped_rotation(previous, &response)?;
                     }
@@ -215,14 +255,18 @@ impl TokenManager {
             Self::store_server_key(&tx, &next.key_id, &next.public_key, next.valid_until)?;
         }
         tx.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.libsignal_key_manifest', ?1, ?2)",
-            rusqlite::params![hex::encode(response.encode_to_vec()), now],
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![
+                self.manifest_key(),
+                hex::encode(response.encode_to_vec()),
+                now
+            ],
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
         if let Some(reason) = discontinuity {
             tx.execute(
-                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.manifest_discontinuity', ?1, ?2)",
-                rusqlite::params![reason, now],
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![self.discontinuity_key(), reason, now],
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
         }
@@ -258,8 +302,8 @@ impl TokenManager {
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let encoded: Option<String> = conn
             .query_row(
-                "SELECT value FROM settings WHERE key = 'mailbox.libsignal_key_manifest'",
-                [],
+                "SELECT value FROM settings WHERE key = ?1",
+                [self.manifest_key()],
                 |r| r.get(0),
             )
             .optional()
@@ -273,6 +317,7 @@ impl TokenManager {
         let bytes = hex::decode(encoded).map_err(|e| invalid(&e))?;
         let manifest = GetBlindSignaturePublicKeyResponse::decode(bytes.as_slice())
             .map_err(|e| invalid(&e))?;
+        self.verify_purpose(&manifest)?;
         Ok(Some(manifest))
     }
 
@@ -313,7 +358,9 @@ impl TokenManager {
         pool: &GrpcClientPool,
         count: u32,
     ) -> Result<u32, MailboxError> {
-        let mut client = pool.mailbox_client();
+        let mut client = pool
+            .mailbox_client()
+            .with_attachment_purpose(self.attachment);
         let mut kt = pool.account_kt_client();
         tracing::info!("TokenManager: request_tokens called, count={}", count);
 
@@ -423,9 +470,9 @@ impl TokenManager {
         let now = Utc::now().timestamp_nanos_opt().unwrap_or(i64::MAX);
         conn.execute(
             "DELETE FROM mailbox_tokens
-             WHERE used_at IS NULL AND server_key_id IN
+             WHERE attachment = ?2 AND (used_at IS NULL OR attachment) AND server_key_id IN
                 (SELECT key_id FROM mailbox_server_keys WHERE valid_until <= ?1)",
-            [now],
+            rusqlite::params![now, self.attachment],
         ).map_err(|error| MailboxError::Storage(error.to_string()))?;
         Ok(())
     }
@@ -447,15 +494,16 @@ impl TokenManager {
 
         conn.execute(
             "INSERT INTO mailbox_tokens
-             (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+             (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, used_at, attachment)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             rusqlite::params![
                 id,
                 ephemeral_pk,
                 ephemeral_sk,
                 signature,
                 server_key_id,
-                now
+                now,
+                self.attachment,
             ],
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
@@ -476,8 +524,8 @@ impl TokenManager {
         let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>)> = conn
             .query_row(
                 "SELECT id, ephemeral_public_key, ephemeral_private_key, signature
-                 FROM mailbox_tokens WHERE used_at IS NULL ORDER BY created_at ASC LIMIT 1",
-                [],
+                 FROM mailbox_tokens WHERE used_at IS NULL AND attachment = ?1 ORDER BY created_at ASC LIMIT 1",
+                [self.attachment],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .ok();
@@ -506,12 +554,13 @@ impl TokenManager {
             .db
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        Self::claim_available_token_in(&conn, 0)
+        Self::claim_available_token_in(&conn, 0, self.attachment)
     }
 
     fn claim_available_token_in(
         conn: &rusqlite::Connection,
         reserve: usize,
+        attachment: bool,
     ) -> Result<Option<MailboxToken>, MailboxError> {
         let now = Utc::now().to_rfc3339();
         // Signing-key validity is stored in nanoseconds. Only claim tokens whose
@@ -531,12 +580,12 @@ impl TokenManager {
              WHERE id = ( \
                  SELECT t.id FROM mailbox_tokens t \
                  JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
-                 WHERE t.used_at IS NULL AND k.valid_until > ?2 \
+                 WHERE t.used_at IS NULL AND k.valid_until > ?2 AND t.attachment = ?4 \
                  ORDER BY t.created_at ASC \
                  LIMIT 1 OFFSET ?3 \
              ) \
              RETURNING id, ephemeral_public_key, ephemeral_private_key, signature",
-            rusqlite::params![now, now_nanos, reserve],
+            rusqlite::params![now, now_nanos, reserve, attachment],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -594,7 +643,8 @@ impl TokenManager {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
         debit(&tx)?;
-        let token = Self::claim_available_token_in(&tx, reserve).map_err(credential_error)?
+        let token = Self::claim_available_token_in(&tx, reserve, self.attachment)
+            .map_err(credential_error)?
             .ok_or(crate::error::NetworkError::AnonymousCredentialsUnavailable)?;
         tx.commit().map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
         Ok(token)
@@ -614,8 +664,8 @@ impl TokenManager {
 
         let rows = conn
             .execute(
-                "UPDATE mailbox_tokens SET used_at = ?1 WHERE id = ?2 AND used_at IS NULL",
-                rusqlite::params![now, token_id],
+                "UPDATE mailbox_tokens SET used_at = ?1 WHERE id = ?2 AND used_at IS NULL AND attachment = ?3",
+                rusqlite::params![now, token_id, self.attachment],
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
@@ -643,8 +693,8 @@ impl TokenManager {
             .query_row(
                 "SELECT COUNT(*) FROM mailbox_tokens t \
                  JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
-                 WHERE t.used_at IS NULL AND k.valid_until > ?1",
-                [now_nanos],
+                 WHERE t.used_at IS NULL AND k.valid_until > ?1 AND t.attachment = ?2",
+                rusqlite::params![now_nanos, self.attachment],
                 |row| row.get(0),
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
@@ -746,6 +796,7 @@ mod tests {
     #[test]
     fn manifest_continuity_distinguishes_skipped_rotations_from_contradictions() {
         let mut cached = GetBlindSignaturePublicKeyResponse {
+            attachment: false,
             key_id: "current".into(),
             public_key: vec![1],
             next_key: Some(Default::default()),

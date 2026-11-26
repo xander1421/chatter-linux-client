@@ -40,6 +40,7 @@ const MAX_REPAIRS_PER_POST: usize = 12;
 pub(super) const RESERVED_MAILBOX_CREDENTIALS: usize = 4;
 
 struct PostBudget {
+    channel: ChannelId,
     token_limit: usize,
     tokens: Cell<usize>,
     repairs: Cell<usize>,
@@ -62,6 +63,12 @@ pub(super) fn claim_private_post_credential(tokens: &TokenManager) -> Result<Mai
         budget.tokens.set(budget.tokens.get() + 1);
         Ok(token)
     }).map_err(|_| budget_exhausted())?
+}
+
+pub(super) fn private_post_channel_id() -> Result<ChannelId, NetworkError> {
+    PRIVATE_POST_BUDGET
+        .try_with(|post| post.channel)
+        .map_err(|_| budget_exhausted())
 }
 
 pub(super) fn charge_private_repairs(count: usize) -> Result<(), NetworkError> {
@@ -245,7 +252,9 @@ impl MessageService {
 
     pub(super) fn private_post_prekeys(&self) -> PreKeySource<'_> {
         PreKeySource::Anonymous {
-            client: self.grpc_pool.private_post_auth_client(),
+            client: self
+                .grpc_pool
+                .private_post_auth_client(PRIVATE_POST_BUDGET.with(|post| post.channel)),
             tokens: &self.token_manager,
             claim: claim_private_post_credential,
         }
@@ -331,6 +340,7 @@ impl MessageService {
             .map_err(|error| MessageError::from_signal_send(error, "Sender certificate"))?
             .ok_or(NetworkError::Unavailable)?;
         let budget = PostBudget {
+            channel: channel_id,
             // A cold member may need two lookups (before and after KT) and
             // one sender-key deposit. Repairs have their own cumulative cap.
             token_limit: 3 * members.len() + 2 * MAX_REPAIRS_PER_POST,
@@ -470,7 +480,7 @@ impl MessageService {
             crate::services::gateway::submission::mark_submission_started()?;
             let resp = self
                 .grpc_pool
-                .private_post_client()
+                .private_post_client(channel_id)
                 .send_group_message(&request.channel_id, token.clone(), sealed, &request.client_request_id)
                 .await?;
             if resp.success {

@@ -427,7 +427,8 @@ fn process_decrypted_data_message(
 
     // The sender encrypts a padded `Content` (MessageService prepare), not a
     // bare DataMessage; decoding it as DataMessage failed on every message
-    // and acked it unseen. Anything but a DataMessage is control content.
+    // and acked it unseen. Deletes are carried inside a DataMessage but use
+    // the same control dispatch as the other channel actions.
     let decoded = match sender_key_content(plaintext) {
         Ok(content_proto) if bound_to_channel(&content_proto, outer_channel).is_err() => {
             tracing::warn!(
@@ -445,7 +446,7 @@ fn process_decrypted_data_message(
             );
         }
         Ok(content_proto) => match content_proto {
-            content::Content::DataMessage(dm) => Ok(dm),
+            content::Content::DataMessage(dm) if dm.delete.is_none() => Ok(dm),
             inner => {
                 dispatch_control_content(
                     inner,

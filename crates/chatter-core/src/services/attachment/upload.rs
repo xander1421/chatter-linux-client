@@ -432,7 +432,8 @@ impl AttachmentService {
             .await
             .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {e}")))?;
         let stream = tokio_util::io::ReaderStream::new(file);
-        let response = super::cdn_client()?
+        let response = self
+            .cdn_client()?
             .put(url)
             .header("Content-Type", "application/octet-stream")
             .header("Content-Length", ciphertext_size)
@@ -826,8 +827,6 @@ impl AttachmentService {
         url: &str,
         gif_id: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
-        // The media proxy takes account auth only; a secret chat sends no GIFs
-        // (`ConversationType::gif_picker_available`).
         if self.secret_chat {
             return Err(AttachmentError::InvalidAttachment(
                 "GIFs are not available in a secret chat".into(),
@@ -850,11 +849,15 @@ impl AttachmentService {
     /// not) reach directly; the server fetches it so the provider never sees the
     /// client's IP. In anon mode the RPC itself already rides the onion channel.
     pub async fn fetch_gif_media(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
-        self.grpc_pool()?
-            .gif_client()
-            .media(url)
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("GIF media fetch failed: {}", e)))
+        let pool = self.grpc_pool()?;
+        let result = if let Some(channel) = self.private_channel {
+            pool.private_channel_gif_client(channel)
+                .private_media(url, &self.attachment_repo.attachment_tokens())
+                .await
+        } else {
+            pool.gif_client().media(url).await
+        };
+        result.map_err(|e| AttachmentError::NetworkError(format!("GIF media fetch failed: {}", e)))
     }
 
     /// Extract media metadata from bytes (for in-memory content like downloaded GIFs).

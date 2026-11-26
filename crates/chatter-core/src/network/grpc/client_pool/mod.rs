@@ -120,8 +120,11 @@ pub struct GrpcClientPool {
     /// connection — an isolated Tor circuit under onion — and the server can't
     /// correlate those ops with authenticated RPCs by connection.
     unidentified_channel: Arc<RwLock<Option<GrpcTransport>>>,
-    // A private post's connection is independent of other anonymous RPCs.
-    private_post_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    private_channels: Arc<
+        parking_lot::Mutex<
+            std::collections::HashMap<crate::domain::ChannelId, Arc<PrivateChannelRoute>>,
+        >,
+    >,
     #[cfg(feature = "onion")]
     unidentified_health: Arc<RwLock<Option<Instant>>>,
     /// Channel for secret chats (anonymous DMs and groups). Always an isolated
@@ -149,12 +152,18 @@ pub struct GrpcClientPool {
     /// first dial.
     #[cfg(feature = "onion")]
     unidentified_onion_tor: super::onion_transport::SharedTorClient,
-    #[cfg(feature = "onion")]
-    private_post_onion_tor: super::onion_transport::SharedTorClient,
     /// Cached ISOLATED Tor client for the secret-chat channel, its own
     /// circuit-group apart from both the account's and the unidentified one.
     #[cfg(feature = "onion")]
     secret_onion_tor: super::onion_transport::SharedTorClient,
+}
+
+#[derive(Default)]
+struct PrivateChannelRoute {
+    grpc: RwLock<Option<GrpcTransport>>,
+    cdn: std::sync::OnceLock<Result<reqwest::Client, String>>,
+    #[cfg(feature = "onion")]
+    tor: super::onion_transport::SharedTorClient,
 }
 
 mod anonymous_routes;
@@ -386,7 +395,8 @@ mod tests {
         pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         pool.set_transport_mode(TransportMode::Onion).unwrap();
         let anonymous = pool.unidentified_channel();
-        let private_post = pool.private_post_channel();
+        let channel_id = crate::domain::ChannelId::new();
+        let private_post = pool.private_post_channel(channel_id);
         let secret = pool.secret_channel().unwrap();
         *pool.secret_health.write() = Some(std::time::Instant::now());
 
@@ -396,7 +406,7 @@ mod tests {
         assert!(!secret.is_current());
         assert!(pool.secret_health.read().is_none());
         assert!(pool.unidentified_channel().is_current());
-        assert!(pool.private_post_channel().is_current());
+        assert!(pool.private_post_channel(channel_id).is_current());
     }
 
     /// A direct-URL change while on onion (the sign-in form re-applies its

@@ -48,6 +48,28 @@ impl GifClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    pub(crate) async fn private_media(
+        &mut self,
+        url: &str,
+        tokens: &crate::mailbox::token_manager::TokenManager,
+    ) -> Result<Vec<u8>, NetworkError> {
+        let mut request = tonic::Request::new(GetGifMediaRequest {
+            url: url.to_string(),
+        });
+        let token = tokens.claim_send_credential()?;
+        super::interceptors::insert_blind_credential(
+            &mut request,
+            &token.public_key,
+            &token.signature,
+        )
+        .map_err(|status| NetworkError::from_status(&status))?;
+        self.inner
+            .get_private_gif_media(request)
+            .await
+            .map(|r| r.into_inner().data)
+            .map_err(|status| NetworkError::from_status(&status))
+    }
+
     /// Search for GIFs by query.
     ///
     /// # Arguments

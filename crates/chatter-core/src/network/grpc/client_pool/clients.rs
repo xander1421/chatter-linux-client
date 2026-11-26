@@ -43,9 +43,10 @@ impl GrpcClientPool {
 
     pub(crate) fn private_channel_file_client(
         &self,
+        channel: crate::domain::ChannelId,
         tokens: Arc<crate::mailbox::token_manager::TokenManager>,
     ) -> super::super::FileClient {
-        super::super::FileClient::private_channel(self.private_post_channel(), tokens)
+        super::super::FileClient::private_channel(self.private_post_channel(channel), tokens)
     }
 
     /// Create an authenticated AI broker client.
@@ -69,6 +70,13 @@ impl GrpcClientPool {
     }
 
     /// Create an authenticated GifClient.
+    pub(crate) fn private_channel_gif_client(
+        &self,
+        channel: crate::domain::ChannelId,
+    ) -> super::super::GifClient {
+        super::super::GifClient::new(self.private_post_channel(channel), AuthInterceptor::new())
+    }
+
     pub fn gif_client(&self) -> super::super::GifClient {
         super::super::GifClient::new(self.channel(), self.auth_clone())
     }
@@ -113,12 +121,18 @@ impl GrpcClientPool {
     }
 
     /// Isolate anonymous private posts from other unidentified RPCs.
-    pub(crate) fn private_post_client(&self) -> super::super::AnonymousMessageClient {
-        super::super::AnonymousMessageClient::new(self.private_post_channel())
+    pub(crate) fn private_post_client(
+        &self,
+        channel: crate::domain::ChannelId,
+    ) -> super::super::AnonymousMessageClient {
+        super::super::AnonymousMessageClient::new(self.private_post_channel(channel))
     }
 
-    pub(crate) fn private_post_auth_client(&self) -> super::super::AnonymousAuthClient {
-        super::super::AnonymousAuthClient::new(self.private_post_channel())
+    pub(crate) fn private_post_auth_client(
+        &self,
+        channel: crate::domain::ChannelId,
+    ) -> super::super::AnonymousAuthClient {
+        super::super::AnonymousAuthClient::new(self.private_post_channel(channel))
     }
 
     /// Public KT proofs for the account pin, including the mailbox signing

@@ -632,7 +632,6 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     let mut attachments_and_threads = Vec::new();
     let mut retained_ids = HashSet::new();
     let mut retained_attachments = HashSet::new();
-    let mut private_channel_attachments = HashSet::new();
     let mut retained_scopes = HashSet::new();
     let retained_duplicate = format!(
         "SELECT m.id,m.attachments_blob FROM messages m WHERE {}
@@ -912,21 +911,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                         };
                         if let Some((retained_id, blob)) = retained {
                             retained_ids.insert(retained_id);
-                            let attachments: Vec<_> = attachment_ids(&blob).collect();
-                            if kind == "channel" && !attachments.is_empty() {
-                                let routed_public = text_value(get("conversation_id"))
-                                    .and_then(|id| id.parse::<crate::domain::ChannelId>().ok())
-                                    .map(|channel| {
-                                        super::ChannelRepository::routing_type_in(&tx, &channel)
-                                    })
-                                    .transpose()?
-                                    .flatten()
-                                    == Some(crate::domain::ChannelType::Public);
-                                if !routed_public {
-                                    private_channel_attachments.extend(attachments.iter().cloned());
-                                }
-                            }
-                            retained_attachments.extend(attachments);
+                            retained_attachments.extend(attachment_ids(&blob));
                             if let (Some(conv), Some(sender), SqlValue::Integer(sent_at)) = (
                                 text_value(get("conversation_id")),
                                 text_value(get("sender_id")),
@@ -1026,14 +1011,6 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 .prepare_cached(&sql)?
                 .execute(rusqlite::params_from_iter(values))?;
         }
-    }
-    // Older backups had no stored attachment route. A backed-up message in
-    // a channel with no trusted public pin must still redeem its URLs anonymously.
-    for id in private_channel_attachments {
-        tx.execute(
-            "UPDATE attachments SET private_channel = 1 WHERE id = ?1 AND private_channel = 0",
-            [id],
-        )?;
     }
     // All action evidence is installed before any vote, regardless of frame
     // order. LWW merge applies only to actors absent before this restore.
@@ -1805,10 +1782,6 @@ mod tests {
         msgs.insert(&channel_msg).unwrap();
         msgs.insert(&anon_msg).unwrap();
 
-        src.connection()
-            .unwrap()
-            .execute("ALTER TABLE attachments DROP COLUMN private_channel", [])
-            .unwrap();
         let (payload, _) = dump_frames(&src.connection().unwrap(), "user-a").unwrap();
         import_frames(&mut dst.connection().unwrap(), &payload).unwrap();
 
@@ -1817,10 +1790,6 @@ mod tests {
             .get(&gif_id)
             .unwrap()
             .expect("GIF attachment row must ride the archive");
-        assert!(
-            restored.private_channel,
-            "a legacy channel pointer must keep an anonymous route"
-        );
         let label = restored.metadata.preview_label();
         assert_eq!(
             channel_msg.sidebar_preview(None, Some(&label), None),

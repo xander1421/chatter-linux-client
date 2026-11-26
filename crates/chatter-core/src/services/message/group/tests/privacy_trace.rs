@@ -139,10 +139,10 @@ impl ServerState {
                 Routing::Other,
                 grpc_reply(pb::GetChannelChangesResponse::default()),
             ),
-            "GetAttachmentUploadUrl" => (
+            "GetPrivateAttachmentUploadUrl" => (
                 Routing::Other,
                 grpc_reply(pb::GetAttachmentUploadUrlResponse {
-                    cdn_key: "test_attachment_key_v1".into(),
+                    cdn_key: "pa_abcdefghijklmnopqrstuv".into(),
                     upload_url: state.cdn_url.clone(),
                     expires_at: i64::MAX,
                 }),
@@ -151,11 +151,18 @@ impl ServerState {
                 Routing::Other,
                 grpc_reply(pb::ConfirmAttachmentUploadResponse { confirmed: true }),
             ),
-            "GetAttachmentDownloadUrl" => (
+            "GetPrivateAttachmentDownloadUrl" => (
                 Routing::Other,
                 grpc_reply(pb::GetAttachmentDownloadUrlResponse {
                     download_url: state.cdn_url.clone(),
                     expires_at: i64::MAX,
+                }),
+            ),
+            "GetPrivateGifMedia" => (
+                Routing::Other,
+                grpc_reply(pb::GetGifMediaResponse {
+                    data: b"GIF89a".to_vec(),
+                    ..Default::default()
                 }),
             ),
             "GetDeviceMessages" => (
@@ -371,6 +378,21 @@ async fn prepare_author(
         .set_basic(format!("{owner}.{device}"), "fixture".into());
     cache_fixture_sender_certificate(client, owner);
     seed_tokens(messages, 90);
+    let conn = messages.database.connection().unwrap();
+    conn.execute(
+        "INSERT INTO mailbox_server_keys (key_id, public_key_der, valid_until, created_at)
+         VALUES ('attachment-live', x'00', ?1, '')",
+        [i64::MAX],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, attachment)
+         SELECT 'attachment-' || id, CAST(x'01' || substr(ephemeral_public_key, 2) AS BLOB),
+                ephemeral_private_key, signature, 'attachment-live', created_at, 1
+         FROM mailbox_tokens WHERE attachment = 0",
+        [],
+    ).unwrap();
+    drop(conn);
     let state = messages.group_gate().for_distribution(&channel).unwrap();
     messages
         .group_send_tokens
@@ -608,12 +630,13 @@ fn private_actions(
     ]
 }
 
-async fn receive_group_post(
+async fn receive_group_messages(
     client: &Arc<ChatterClient>,
     author: UserId,
     author_device: u32,
     channel: ChannelId,
     distribution: Option<&chatter_proto::content_v1::SenderKeyDistribution>,
+    controls: bool,
 ) {
     use crate::inbox::{
         InboxConfig, InboxEvent,
@@ -657,9 +680,15 @@ async fn receive_group_post(
         Arc::new(parking_lot::RwLock::new(InboxState::Idle)),
     );
     let (messages, _) = poller.run_once().await.unwrap().unwrap();
-    assert_eq!(messages.len(), 2);
+    let expected = if controls {
+        5 + usize::from(cfg!(feature = "media"))
+    } else {
+        2
+    };
+    assert_eq!(messages.len(), expected);
     let processor = client.inbox_event_processor();
     let mut accepted = Vec::new();
+    let mut received_controls = Vec::new();
     for message in &messages {
         let decision = process_device_message(
             message,
@@ -679,25 +708,49 @@ async fn receive_group_post(
         )
         .await;
         if distribution.is_some() && message.queue_id == 2 {
-            let id = crate::domain::AttachmentId::from_cdn_key("test_attachment_key_v1");
+            let id = crate::domain::AttachmentId::from_cdn_key("pa_abcdefghijklmnopqrstuv");
             let attachment = client.attachments().get(&id).unwrap().unwrap();
             assert!(
-                attachment.private_channel,
+                attachment.private_channel == Some(channel),
                 "store the private route before ACK"
             );
         }
         let mut delivered = false;
         while let Ok(event) = received.try_recv() {
             delivered |= matches!(event, InboxEvent::ChannelMessageReceived { .. });
+            match &event {
+                InboxEvent::ChannelEdit { .. } => received_controls.push("edit"),
+                InboxEvent::ChannelReaction { .. } => received_controls.push("reaction"),
+                InboxEvent::ChannelPin { .. } => received_controls.push("pin"),
+                InboxEvent::ChannelDeleteForEveryone { .. } => received_controls.push("delete"),
+                InboxEvent::GroupCallSignalReceived { .. } => received_controls.push("call ring"),
+                InboxEvent::CallHangup { .. } => received_controls.push("call cancel"),
+                InboxEvent::MessageFailed { error, .. } => panic!("inbound fixture failed: {error}"),
+                InboxEvent::ChannelMessageReceived { text, .. } if controls => {
+                    panic!("control appeared as a message: {text:?}")
+                }
+                _ => {}
+            }
             processor.process(&event).await;
         }
         assert_eq!(decision, AckDecision::Ack);
         assert_eq!(
             delivered,
             distribution.is_some(),
-            "only the other member must retain the post"
+            "a post reached the wrong member, or was missing (queue {}, controls={controls}, events={received_controls:?})",
+            message.queue_id
         );
         accepted.push(message.message_guid.clone());
+    }
+    if controls {
+        let mut expected = Vec::new();
+        if ms.current_user_id().unwrap() != author {
+            expected.extend(["edit", "reaction", "pin", "delete", "call ring"]);
+            if cfg!(feature = "media") {
+                expected.push("call cancel");
+            }
+        }
+        assert_eq!(received_controls, expected);
     }
     poller.acknowledge(accepted).await.unwrap();
 }
@@ -749,7 +802,8 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                     .set_logged_in(*member, i as u32 + 1, "fixture".into());
                 prepare_author(client, *member, channel, &bundles).await;
                 if shield {
-                    ms.grpc_pool.install_loopback_shield_routes(&url);
+                    ms.grpc_pool
+                        .install_loopback_shield_routes(&url, &[channel]);
                     ms.shield_mode.store(true, Ordering::Release);
                 }
                 let _ = ms
@@ -768,6 +822,16 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                 .get_attachment_upload_url(512)
                 .await
                 .unwrap();
+            probe.lock().unwrap().phase("GIF media");
+            assert_eq!(
+                sending_client
+                    .attachments()
+                    .for_conversation(&conversation)
+                    .fetch_gif_media("https://media.example/fixture.gif")
+                    .await
+                    .unwrap(),
+                b"GIF89a",
+            );
             let attachment_id = AttachmentId::from_cdn_key(&attachment.cdn_key);
             let pointer = chatter_proto::content_v1::AttachmentPointer {
                 cdn_key: attachment.cdn_key.clone(),
@@ -824,12 +888,13 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
 
             probe.lock().unwrap().phase("device inbox");
             for (i, (_, client)) in members.iter().enumerate() {
-                receive_group_post(
+                receive_group_messages(
                     client,
                     author,
                     sending.current_device_id_or_zero(),
                     channel,
                     (i != poster).then_some(&distribution),
+                    false,
                 )
                 .await;
             }
@@ -840,6 +905,7 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                     .unwrap()
                     .unwrap()
                     .private_channel
+                    == Some(channel)
             );
             probe.lock().unwrap().phase("download URL");
             receiving_client
@@ -857,11 +923,26 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
             }
 
             probe.lock().unwrap().phase("call ring");
+            let call_id = uuid::Uuid::from_u128(73).to_string();
             sending_client
                 .call_signaling()
-                .ring_group_call(&channel, &uuid::Uuid::from_u128(73).to_string())
+                .ring_group_call(&channel, &call_id)
                 .await
                 .unwrap();
+            #[cfg(feature = "media")]
+            {
+                probe.lock().unwrap().phase("call cancel");
+                sending_client
+                    .call_signaling()
+                    .cancel_channel_start_rings(&channel, &author, &call_id)
+                    .await;
+            }
+            probe.lock().unwrap().phase("receive controls");
+            for (_, client) in &members {
+                receive_group_messages(
+                    client, author, sending.current_device_id_or_zero(), channel, None, true,
+                ).await;
+            }
             let trace = std::mem::take(&mut probe.lock().unwrap().calls);
             let private = trace
                 .iter()
@@ -876,6 +957,8 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                     .filter(|rpc| matches!(
                         rpc.phase,
                         "upload URL"
+                            | "GIF media"
+                            | "call cancel"
                             | "journal post"
                             | "attachment post"
                             | "edit"
@@ -892,7 +975,7 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
             assert!(
                 trace
                     .iter()
-                    .filter(|rpc| matches!(rpc.phase, "upload URL" | "download URL"))
+                    .filter(|rpc| matches!(rpc.phase, "upload URL" | "download URL" | "GIF media"))
                     .all(|rpc| rpc.blind_credential && rpc.authorization.is_none()),
                 "{trace:?}"
             );
@@ -908,20 +991,24 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
                     .iter()
                     .filter(|rpc| matches!(rpc.routing, Routing::Group(..)))
                     .count(),
-                7
+                7 + usize::from(cfg!(feature = "media"))
             );
 
             assert_eq!(
                 trace
                     .iter()
-                    .filter(|rpc| rpc.phase == "device inbox")
+                    .filter(|rpc| matches!(rpc.phase, "device inbox" | "receive controls"))
                     .map(|rpc| rpc.endpoint.as_str())
                     .collect::<Vec<_>>(),
                 [
                     "/chat.v1.MessageService/GetDeviceMessages",
                     "/chat.v1.MessageService/AcknowledgeMessages",
                     "/chat.v1.MessageService/GetDeviceMessages",
-                    "/chat.v1.MessageService/AcknowledgeMessages"
+                    "/chat.v1.MessageService/AcknowledgeMessages",
+                    "/chat.v1.MessageService/GetDeviceMessages",
+                    "/chat.v1.MessageService/AcknowledgeMessages",
+                    "/chat.v1.MessageService/GetDeviceMessages",
+                    "/chat.v1.MessageService/AcknowledgeMessages",
                 ]
             );
             traces.push(trace);
@@ -1018,12 +1105,61 @@ async fn private_attachment_mints_without_account_credentials() {
     let mint = probe
         .calls
         .iter()
-        .find(|rpc| rpc.endpoint.ends_with("/GetAttachmentUploadUrl"))
+        .find(|rpc| rpc.endpoint.ends_with("/GetPrivateAttachmentUploadUrl"))
         .expect("the private attachment requested an upload URL");
     assert!(
         mint.authorization.is_none() && mint.blind_credential,
         "{mint:?}"
     );
+}
+
+#[cfg(feature = "onion")]
+#[tokio::test]
+async fn private_attachment_credentials_and_connections_are_channel_scoped() {
+    use crate::state::ActiveConversation;
+    for shield in [false, true] {
+        let channels = [ChannelId::new(), ChannelId::new()];
+        let alice = UserId::new();
+        let bob = UserId::new();
+        let bundles = roster_bundles([alice, bob]);
+        let (url, probe, server) = start_server(ServerState::new(bundles.clone())).await;
+        let fixture = two_members_with_ids_at(&url, channels[0], alice, bob);
+        prepare_author(&fixture.alice, alice, channels[0], &bundles).await;
+        let messages = fixture.alice.messages();
+        if shield {
+            messages
+                .grpc_pool
+                .install_loopback_shield_routes(&url, &channels);
+        }
+        let token_manager =
+            crate::mailbox::token_manager::TokenManager::new(messages.database.clone());
+        let original_mailbox_balance = token_manager.available_token_count().unwrap();
+        for channel in [channels[0], channels[1], channels[0]] {
+            fixture
+                .alice
+                .attachments()
+                .for_conversation(&ActiveConversation::Channel(channel))
+                .file_client()
+                .unwrap()
+                .get_attachment_upload_url(512)
+                .await
+                .unwrap();
+        }
+        let calls = &probe.lock().unwrap().calls;
+        assert_eq!(calls.len(), 3);
+        assert!(
+            calls
+                .iter()
+                .all(|rpc| rpc.blind_credential && rpc.authorization.is_none())
+        );
+        assert_ne!(calls[0].connection, calls[1].connection, "Shield={shield}");
+        assert_eq!(calls[0].connection, calls[2].connection, "Shield={shield}");
+        assert_eq!(
+            token_manager.available_token_count().unwrap(),
+            original_mailbox_balance
+        );
+        server.abort();
+    }
 }
 
 #[cfg(feature = "onion")]
@@ -1125,15 +1261,14 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
                 .cdn_http_get(&cdn_url)
                 .await
                 .unwrap();
+            let mut source = tempfile::NamedTempFile::new().unwrap();
+            use std::io::Write as _;
+            source.write_all(b"private attachment").unwrap();
             let upload = fixture
                 .alice
                 .attachments()
                 .for_conversation(&conversation)
-                .upload_bytes_to_cdn_encrypted(
-                    b"private attachment",
-                    "file.bin",
-                    "application/octet-stream",
-                )
+                .upload_to_cdn_encrypted(source.path())
                 .await
                 .unwrap();
             let ids = fixture
@@ -1162,7 +1297,10 @@ async fn private_attachment_put_and_get_use_a_separate_https_connection() {
     assert!(calls[1].2 > b"private attachment".len());
     assert!(calls.iter().all(|call| !call.3));
     let trace = &probe.lock().unwrap().calls;
-    for name in ["GetAttachmentUploadUrl", "GetAttachmentDownloadUrl"] {
+    for name in [
+        "GetPrivateAttachmentUploadUrl",
+        "GetPrivateAttachmentDownloadUrl",
+    ] {
         let mint = trace
             .iter()
             .find(|rpc| rpc.endpoint.ends_with(name))

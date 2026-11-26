@@ -2356,6 +2356,99 @@ pub mod file_service_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
+        /** Private-channel mints require a single-use blind attachment credential.
+*/
+        pub async fn get_private_attachment_upload_url(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetAttachmentUploadUrlRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetAttachmentUploadUrlResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.FileService/GetPrivateAttachmentUploadUrl",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.FileService",
+                        "GetPrivateAttachmentUploadUrl",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_private_attachment_download_url(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetAttachmentDownloadUrlRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetAttachmentDownloadUrlResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.FileService/GetPrivateAttachmentDownloadUrl",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.FileService",
+                        "GetPrivateAttachmentDownloadUrl",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn create_private_attachment_multipart_upload(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::CreateAttachmentMultipartUploadRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateAttachmentMultipartUploadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.FileService/CreatePrivateAttachmentMultipartUpload",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.FileService",
+                        "CreatePrivateAttachmentMultipartUpload",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /** Get presigned upload URL (requires authentication for rate limiting)
 */
         pub async fn get_attachment_upload_url(
@@ -2697,6 +2790,30 @@ pub mod gif_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("chat.v1.GifService", "GetGifMedia"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_private_gif_media(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetGifMediaRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetGifMediaResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.GifService/GetPrivateGifMedia",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.GifService", "GetPrivateGifMedia"));
             self.inner.unary(req, path, codec).await
         }
     }

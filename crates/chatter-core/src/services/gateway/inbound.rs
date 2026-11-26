@@ -493,6 +493,9 @@ pub(crate) fn content_channel(inner: &chatter_proto::content_v1::content::Conten
             .strip_prefix("channel:")
             .and_then(|rest| rest.split_once(':'))
             .map(|(channel, _)| channel),
+        content::Content::CallHangup(hangup) if !hangup.channel_id.is_empty() => {
+            Some(&hangup.channel_id)
+        }
         content::Content::CallEvent(event) => Some(&event.channel_id),
         content::Content::GroupCallSignal(signal) => Some(&signal.channel_id),
         content::Content::GroupMailboxAddress(address) => Some(&address.channel_id),

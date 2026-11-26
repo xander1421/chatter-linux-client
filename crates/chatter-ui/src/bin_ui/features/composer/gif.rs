@@ -165,7 +165,7 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             show_gif_pending(&w, &ui_ctx, &send);
             let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
             tokio::spawn(async move {
-                let upload = upload_gif(ctx.clone(), url, id);
+                let upload = upload_gif(ctx.clone(), url, id, send.conversation);
                 if let Some(failed) = finish_gif_send(weak.clone(), ctx.clone(), send, upload).await
                 {
                     let _ = slint::invoke_from_event_loop(move || {
@@ -230,9 +230,10 @@ async fn upload_gif(
     ui_ctx: Arc<ChatterClient>,
     url: String,
     gif_id: String,
+    conversation: chatter_core::state::ActiveConversation,
 ) -> Result<PendingAttachment, String> {
     let upload = ui_ctx
-        .download_and_upload_gif(&url, &gif_id)
+        .download_and_upload_gif_to(&url, &gif_id, &conversation)
         .await
         .map_err(|e| e.to_string())?;
     tracing::info!("GIF uploaded to CDN (encrypted on filesystem)");

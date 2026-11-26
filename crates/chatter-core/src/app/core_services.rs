@@ -357,40 +357,53 @@ impl CoreServices {
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
         let auth = self.auth_state.clone();
-        let refill = async move {
-            const QUOTA_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
-            initial_token_refill_sleep().await;
-            let mut ticks = credential_refill_clock();
-            let mut quota_retry = None;
-            loop {
-                let tick = ticks.tick().await;
-                let state = auth.get();
-                if state.current_user_id.is_none() || state.session_ended {
-                    continue;
-                }
-                if quota_retry.is_some_and(|(revision, next)| {
-                    revision == state.session_revision && tick < next
-                }) {
-                    continue;
-                }
-                match token_manager.request_tokens(
-                    &grpc_pool, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
-                ).await {
-                    Ok(granted) => {
-                        quota_retry = None;
-                        tracing::debug!(granted, "Scheduled credential batch received");
+        let refill = |token_manager: Arc<crate::mailbox::token_manager::TokenManager>| {
+            let grpc_pool = grpc_pool.clone();
+            let auth = auth.clone();
+            async move {
+                const QUOTA_PROBE_INTERVAL: std::time::Duration =
+                    std::time::Duration::from_secs(3600);
+                initial_token_refill_sleep().await;
+                let mut ticks = credential_refill_clock();
+                let mut quota_retry = None;
+                loop {
+                    let tick = ticks.tick().await;
+                    let state = auth.get();
+                    if state.current_user_id.is_none() || state.session_ended {
+                        continue;
                     }
-                    Err(error @ crate::error::MailboxError::QuotaExhausted) => {
-                        quota_retry = Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
+                    if quota_retry.is_some_and(|(revision, next)| {
+                        revision == state.session_revision && tick < next
+                    }) {
+                        continue;
+                    }
+                    match token_manager
+                        .request_tokens(
+                            &grpc_pool,
+                            crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
+                        )
+                        .await
+                    {
+                        Ok(granted) => {
+                            quota_retry = None;
+                            tracing::debug!(granted, "Scheduled credential batch received");
+                        }
+                        Err(error @ crate::error::MailboxError::QuotaExhausted) => {
+                            quota_retry =
+                                Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
+                            trace_token_refill_failure(&error);
+                        }
+                        Err(error) => trace_token_refill_failure(&error),
+                    }
+                    if let Err(error) = token_manager.prune_expired_unused_tokens() {
                         trace_token_refill_failure(&error);
                     }
-                    Err(error) => trace_token_refill_failure(&error),
-                }
-                if let Err(error) = token_manager.prune_expired_unused_tokens() {
-                    trace_token_refill_failure(&error);
                 }
             }
         };
+
+        let mailbox_refill = refill(token_manager.clone());
+        let attachment_refill = refill(Arc::new(token_manager.for_attachments()));
 
         let anon_group_service = self.anon_group_service.clone();
         let mut keys = self.event_bus.subscribe_domain();
@@ -410,7 +423,7 @@ impl CoreServices {
         };
 
         tokio::spawn(async move {
-            tokio::join!(refill, retry_parked);
+            tokio::join!(mailbox_refill, attachment_refill, retry_parked);
         })
     }
 

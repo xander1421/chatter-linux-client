@@ -169,23 +169,8 @@ impl CallSignalingService {
             {
                 if self.is_current_user(&call.initiator_id) {
                     let notify = async {
-                        if let Ok(members) = self
-                            .channel_service
-                            .get_all_channel_members(&call.channel_id)
-                            .await
-                        {
-                            for member in members {
-                                if member.user_id != call.initiator_id {
-                                    let _ = self
-                                        .send_call_hangup_to(
-                                            &member.user_id,
-                                            id,
-                                            CallHangupReason::Normal,
-                                        )
-                                        .await;
-                                }
-                            }
-                        }
+                        self.cancel_channel_start_rings(&call.channel_id, &call.initiator_id, id)
+                            .await;
                         let _ = self
                             .message_service
                             .post_channel_call_event(
@@ -205,6 +190,47 @@ impl CallSignalingService {
         self.start_attempts.lock().remove(id);
         self.start_groups.lock().remove(id);
         worker.orch_mark_ended(CallHandle::from(id.as_str()), CallEndReason::LocalHangup);
+    }
+
+    #[cfg(feature = "media")]
+    pub(crate) async fn cancel_channel_start_rings(
+        &self,
+        channel: &ChannelId,
+        initiator: &UserId,
+        call_id: &str,
+    ) {
+        match self
+            .message_service
+            .channel_send_requires_encryption(channel)
+        {
+            Ok(true) => {
+                let content =
+                    crate::services::gateway::builders::build_channel_call_cancel(call_id, channel);
+                if let Err(error) = self
+                    .message_service
+                    .send_control(channel, content, None)
+                    .await
+                {
+                    tracing::debug!(%error, "Private channel call ring cancellation failed");
+                }
+            }
+            Ok(false) => {
+                if let Ok(members) = self.channel_service.get_all_channel_members(channel).await {
+                    for member in members {
+                        if member.user_id != *initiator {
+                            let _ = self
+                                .send_call_hangup_to(
+                                    &member.user_id,
+                                    call_id,
+                                    CallHangupReason::Normal,
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+            Err(error) => tracing::debug!(%error, "Channel call cancellation has no trusted route"),
+        }
     }
 
     /// Store a pending outgoing DM call.

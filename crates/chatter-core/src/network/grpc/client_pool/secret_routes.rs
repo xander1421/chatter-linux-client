@@ -135,7 +135,7 @@ impl GrpcClientPool {
         if self.transport_mode() == TransportMode::Onion {
             *channel = None;
             *self.unidentified_channel.write() = None;
-            *self.private_post_channel.write() = None;
+            self.private_channels.lock().clear();
             *self.unidentified_health.write() = None;
         }
     }

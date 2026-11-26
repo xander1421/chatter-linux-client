@@ -262,7 +262,7 @@ pub struct Attachment {
     pub secret_chat: bool,
     /// CDN credentials and connections must be isolated from the account route.
     #[serde(default)]
-    pub private_channel: bool,
+    pub private_channel: Option<crate::domain::ChannelId>,
 }
 
 impl Attachment {
@@ -301,7 +301,7 @@ impl Attachment {
             encryption_iv: None,
             created_at: Utc::now(),
             secret_chat: false,
-            private_channel: false,
+            private_channel: None,
         }
     }
 

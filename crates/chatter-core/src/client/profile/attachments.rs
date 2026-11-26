@@ -322,7 +322,10 @@ impl ChatterClient {
                 ),
             );
         }
-        self.attachments().fetch_gif_media(url).await
+        self.attachments()
+            .for_conversation(&self.chat_state().active_conversation())
+            .fetch_gif_media(url)
+            .await
     }
 
     pub async fn download_and_upload_gif(
@@ -333,10 +336,21 @@ impl ChatterClient {
         crate::services::attachment::CdnUploadResult,
         crate::services::attachment::AttachmentError,
     > {
-        // The GIF is sent into the open conversation; a secret chat's upload
-        // goes over Tor or not at all.
+        self.download_and_upload_gif_to(url, gif_id, &self.chat_state().active_conversation())
+            .await
+    }
+
+    pub async fn download_and_upload_gif_to(
+        &self,
+        url: &str,
+        gif_id: &str,
+        conversation: &crate::state::ActiveConversation,
+    ) -> Result<
+        crate::services::attachment::CdnUploadResult,
+        crate::services::attachment::AttachmentError,
+    > {
         self.attachments()
-            .for_conversation(&self.chat_state().active_conversation())
+            .for_conversation(conversation)
             .download_and_upload_gif(url, gif_id)
             .await
     }

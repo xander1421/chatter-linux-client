@@ -82,7 +82,7 @@ impl AttachmentRepository {
     }
 
     pub(crate) fn attachment_tokens(&self) -> crate::mailbox::token_manager::TokenManager {
-        crate::mailbox::token_manager::TokenManager::new(self.db.clone())
+        crate::mailbox::token_manager::TokenManager::new(self.db.clone()).for_attachments()
     }
 
     // ========================================================================
@@ -115,7 +115,9 @@ impl AttachmentRepository {
                 content_location_to_int(attachment.content_location),
                 attachment.created_at.to_rfc3339(),
                 attachment.secret_chat,
-                attachment.private_channel,
+                attachment
+                    .private_channel
+                    .map(|channel| channel.to_string()),
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -203,7 +205,9 @@ impl AttachmentRepository {
                 content_location_to_int(ContentLocation::OnFilesystem),
                 attachment.created_at.to_rfc3339(),
                 attachment.secret_chat,
-                attachment.private_channel,
+                attachment
+                    .private_channel
+                    .map(|channel| channel.to_string()),
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -316,7 +320,9 @@ impl AttachmentRepository {
                 content_location_to_int(attachment.content_location),
                 attachment.created_at.to_rfc3339(),
                 secret,
-                attachment.private_channel,
+                attachment
+                    .private_channel
+                    .map(|channel| channel.to_string()),
             ],
         )? == 1;
         if inserted {
@@ -324,9 +330,15 @@ impl AttachmentRepository {
         } else {
             let rows = tx.execute(
                 "UPDATE attachments SET secret_chat = MAX(secret_chat, ?2),
-                    private_channel = MAX(private_channel, ?3)
+                    private_channel = COALESCE(private_channel, ?3)
                  WHERE id = ?1",
-                params![attachment.id.to_string(), secret, attachment.private_channel],
+                params![
+                    attachment.id.to_string(),
+                    secret,
+                    attachment
+                        .private_channel
+                        .map(|channel| channel.to_string())
+                ],
             )?;
             if rows != 1 {
                 return Err(StorageError::NotFound(format!(
@@ -608,7 +620,7 @@ fn row_to_attachment(
     let content_location_int: i32 = row.get(7).unwrap_or(0); // Default to NotDownloaded for old rows
     let created_at_str: String = row.get(8)?;
     let secret_chat: bool = row.get(9)?;
-    let private_channel: bool = row.get(10)?;
+    let private_channel: Option<String> = row.get(10)?;
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,
@@ -629,6 +641,14 @@ fn row_to_attachment(
     // Load thumbnail bytes from BLOB column (more efficient than metadata)
     metadata.thumbnail = thumbnail_bytes;
 
+    let private_channel = match private_channel.map(|id| id.parse()).transpose() {
+        Ok(channel) => channel,
+        Err(_) => {
+            return Ok(Err(StorageError::InvalidData(
+                "Invalid private attachment channel".into(),
+            )));
+        }
+    };
     Ok(Ok(Attachment {
         id,
         metadata,

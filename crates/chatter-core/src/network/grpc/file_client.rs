@@ -71,9 +71,12 @@ impl FileClient {
         let request = GetAttachmentUploadUrlRequest { encrypted_size };
 
         let request = self.mint_request(request)?;
-        self.inner
-            .get_attachment_upload_url(request)
-            .await
+        let response = if self.private_tokens.is_some() {
+            self.inner.get_private_attachment_upload_url(request).await
+        } else {
+            self.inner.get_attachment_upload_url(request).await
+        };
+        response
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
@@ -110,14 +113,23 @@ impl FileClient {
         &mut self,
         cdn_key: &str,
     ) -> Result<GetAttachmentDownloadUrlResponse, NetworkError> {
+        // A private capability never goes onto a connection carrying account credentials.
+        if self.private_tokens.is_none() && cdn_key.len() == 25 && cdn_key.starts_with("pa_") {
+            return Err(NetworkError::Unavailable);
+        }
         let request = GetAttachmentDownloadUrlRequest {
             cdn_key: cdn_key.to_string(),
         };
 
         let request = self.mint_request(request)?;
-        self.inner
-            .get_attachment_download_url(request)
-            .await
+        let response = if self.private_tokens.is_some() {
+            self.inner
+                .get_private_attachment_download_url(request)
+                .await
+        } else {
+            self.inner.get_attachment_download_url(request).await
+        };
+        response
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
@@ -131,9 +143,14 @@ impl FileClient {
     ) -> Result<CreateAttachmentMultipartUploadResponse, NetworkError> {
         let request = CreateAttachmentMultipartUploadRequest { encrypted_size };
         let request = self.mint_request(request)?;
-        self.inner
-            .create_attachment_multipart_upload(request)
-            .await
+        let response = if self.private_tokens.is_some() {
+            self.inner
+                .create_private_attachment_multipart_upload(request)
+                .await
+        } else {
+            self.inner.create_attachment_multipart_upload(request).await
+        };
+        response
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
