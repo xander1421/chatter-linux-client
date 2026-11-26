@@ -218,6 +218,7 @@ async fn an_unrecognized_pairing_beacon_is_not_dialled() {
 #[tokio::test]
 async fn paired_endpoints_recognise_an_advert_and_admit_its_first_write_without_binding_a_route() {
     use chatter_mesh::tlv::pairing::PAIRING_BEACON_SLOTS;
+    use chatter_mesh_link::admission_preface;
     use chatter_mesh_link::registry::PairingKey;
 
     let (mut alice, alice_radio, alice_state) = runtime();
@@ -245,6 +246,16 @@ async fn paired_endpoints_recognise_an_advert_and_admit_its_first_write_without_
     bob.identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
     let alice_epoch = alice.broadcast_peer_id();
     bob.install_inbound_admission();
+    let alice_advert = alice_state
+        .pairing_beacons(&alice_epoch)
+        .into_iter()
+        .find(|beacon| bob_state.paired_contact_for_beacon(beacon) == Some(alice_contact.clone()))
+        .expect("Alice's advertised slot is recognizable by Bob");
+    assert!(!bob_radio.admits_first_write(
+        "66:E0:8F:D7:6B:84",
+        &admission_preface(&alice_advert),
+    ));
+
     let slots = bob_state.pairing_beacons(&bob.broadcast_peer_id());
     assert_eq!(slots.len(), PAIRING_BEACON_SLOTS);
     let recognized: Vec<_> = slots

@@ -530,7 +530,10 @@ impl BleRuntime {
         }
         self.recent_pairing_adverts.lock().clear();
         self.install_inbound_admission();
-        self.refresh_pairing_beacons();
+        self.published_beacons.clear();
+        if !self.refresh_pairing_beacons() {
+            return false;
+        }
         if let Err(error) = self.radio.start().await {
             self.degraded(format!("the radio would not start: {error}"));
             return false;
@@ -682,17 +685,19 @@ impl BleRuntime {
         stopped.is_ok()
     }
 
-    fn refresh_pairing_beacons(&mut self) {
+    fn refresh_pairing_beacons(&mut self) -> bool {
         let beacons = self.state.pairing_beacons(&self.broadcast_peer_id());
         if self.published_beacons == beacons {
-            return;
+            return true;
         }
         if let Err(error) = self.radio.set_pairing_beacons(&beacons) {
             self.degraded(format!(
                 "the radio could not install pairing beacons: {error}"
             ));
+            return false;
         }
         self.published_beacons = beacons;
+        true
     }
 }
 

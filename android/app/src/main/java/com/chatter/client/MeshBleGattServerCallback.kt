@@ -76,53 +76,59 @@ internal fun MeshBleBridge.createGattServerCallback(): BluetoothGattServerCallba
         offset: Int,
         value: ByteArray?,
     ) {
+        val server = gattServer ?: return
         val id = peripheralId(device.address)
-        val status = if (characteristic.uuid != CHARACTERISTIC_UUID) {
-            BluetoothGatt.GATT_FAILURE
-        } else if (preparedWrite) {
-            // We publish write-without-response only; queued long writes are
-            // out of contract and must be refused rather than half-handled.
-            BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED
-        } else if (offset != 0) {
-            BluetoothGatt.GATT_INVALID_OFFSET
-        } else {
-            val link = peripheralLinks[id]
-            if (value == null || value.isEmpty() || link == null) {
+        val link = peripheralLinks[id]
+        // Paired admission can check the whole roster. Keep JNI and frame
+        // ordering on the radio worker rather than running that work on Binder.
+        handler.post {
+            if (gattServer !== server) return@post
+            val status = if (characteristic.uuid != CHARACTERISTIC_UUID) {
                 BluetoothGatt.GATT_FAILURE
-            } else synchronized(link) {
-                val firstWrite = !link.admitted
-                if (!admitFirstWrite(link, value)) {
-                    BluetoothGatt.GATT_INSUFFICIENT_AUTHORIZATION
-                } else {
-                    val preface = firstWrite && link.admissionBeacon != null
-                    if (!preface) {
-                        if (link.announced) {
-                            emitData(id, value.copyOf())
-                        } else {
-                            synchronized(link.pendingInbound) {
-                                while (link.pendingInbound.size >= MAX_PENDING_INBOUND) {
-                                    link.pendingInbound.removeFirst()
+            } else if (preparedWrite) {
+                // We publish write-without-response only; queued long writes are
+                // out of contract and must be refused rather than half-handled.
+                BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED
+            } else if (offset != 0) {
+                BluetoothGatt.GATT_INVALID_OFFSET
+            } else {
+                if (value == null || value.isEmpty() || link == null || peripheralLinks[id] !== link) {
+                    BluetoothGatt.GATT_FAILURE
+                } else synchronized(link) {
+                    val firstWrite = !link.admitted
+                    if (!admitFirstWrite(link, value)) {
+                        BluetoothGatt.GATT_INSUFFICIENT_AUTHORIZATION
+                    } else {
+                        val preface = firstWrite && link.admissionBeacon != null
+                        if (!preface) {
+                            if (link.announced) {
+                                emitData(id, value.copyOf())
+                            } else {
+                                synchronized(link.pendingInbound) {
+                                    while (link.pendingInbound.size >= MAX_PENDING_INBOUND) {
+                                        link.pendingInbound.removeFirst()
+                                    }
+                                    link.pendingInbound.addLast(value.copyOf())
                                 }
-                                link.pendingInbound.addLast(value.copyOf())
-                            }
-                            if (value.size > link.largestInbound) link.largestInbound = value.size
-                            val waited = SystemClock.elapsedRealtime() - link.connectedAt
-                            if (!link.subscribed && link.adoptionScheduled.compareAndSet(false, true)) {
-                                handler.postDelayed(
-                                    { adoptStaleSubscription(link) },
-                                    (SUBSCRIBE_GRACE_MS - waited).coerceAtLeast(0L),
-                                )
+                                if (value.size > link.largestInbound) link.largestInbound = value.size
+                                val waited = SystemClock.elapsedRealtime() - link.connectedAt
+                                if (!link.subscribed && link.adoptionScheduled.compareAndSet(false, true)) {
+                                    handler.postDelayed(
+                                        { adoptStaleSubscription(link) },
+                                        (SUBSCRIBE_GRACE_MS - waited).coerceAtLeast(0L),
+                                    )
+                                }
                             }
                         }
+                        if (link.subscribed) announcePeripheral(link, "subscribed and admitted")
+                        BluetoothGatt.GATT_SUCCESS
                     }
-                    if (link.subscribed) announcePeripheral(link, "subscribed and admitted")
-                    BluetoothGatt.GATT_SUCCESS
                 }
             }
-        }
-        if (responseNeeded) {
-            guard("sendResponse", false) {
-                gattServer?.sendResponse(device, requestId, status, offset, null) ?: false
+            if (responseNeeded) {
+                guard("sendResponse", false) {
+                    server.sendResponse(device, requestId, status, offset, null)
+                }
             }
         }
     }

@@ -11,12 +11,8 @@ fn permit_inbound(
     recent: &parking_lot::Mutex<RecentPairingAdverts>,
     incoming: &InboundLink,
 ) -> bool {
-    if incoming
-        .beacon
-        .as_ref()
-        .is_some_and(|beacon| state.paired_contact_for_beacon(beacon).is_some())
-    {
-        return true;
+    if let Some(preface) = &incoming.beacon {
+        return state.paired_contact_for_preface(preface).is_some();
     }
     let seen = recent.lock().get(&incoming.address).copied();
     seen.is_some_and(|(beacon, seen_at)| {
@@ -63,7 +59,7 @@ impl BleRuntime {
                 );
                 self.degraded(
                     "Other devices can no longer connect to this one over Bluetooth. \
-                     Restarting the app should restore it."
+                     Turn Mesh off and back on to restore it."
                         .to_string(),
                 );
             }

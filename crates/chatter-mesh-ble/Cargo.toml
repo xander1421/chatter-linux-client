@@ -24,6 +24,7 @@ chatter-mesh-link = { path = "../chatter-mesh-link" }
 bluer = { version = "0.17", features = ["bluetoothd"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "process"] }
 futures = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

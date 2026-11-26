@@ -313,6 +313,7 @@ struct EventQueue {
 struct Roles {
     adapter: Option<BleAdapter>,
     peripheral: Option<PeripheralRole>,
+    alias: Option<adapter::MeshAlias>,
     scan: Option<Scan>,
     power: Option<JoinHandle<()>>,
 }
@@ -587,14 +588,33 @@ impl MeshLink for BlueZLink {
             // stops discovery constantly.
             central::configure_discovery(ble.adapter(), service).await?;
 
-            let peripheral = PeripheralRole::start(
-                ble.adapter(),
+            let adapter = ble.adapter();
+            let mut alias = match adapter::MeshAlias::install(&adapter).await {
+                Ok(alias) => Some(alias),
+                Err(error) => {
+                    tracing::warn!(%error, "could not set a neutral Bluetooth adapter alias");
+                    None
+                }
+            };
+            let peripheral = match PeripheralRole::start(
+                &adapter,
                 service,
                 characteristic,
                 self.inner.clone(),
                 self.beacons.subscribe(),
             )
-            .await?;
+            .await
+            {
+                Ok(peripheral) => peripheral,
+                Err(error) => {
+                    if let Some(alias) = &mut alias
+                        && let Err(restore_error) = alias.restore().await
+                    {
+                        tracing::warn!(%restore_error, "could not restore the Bluetooth adapter alias");
+                    }
+                    return Err(error);
+                }
+            };
 
             self.inner
                 .emit(LinkEvent::AdapterPowerChanged { powered: true });
@@ -618,6 +638,7 @@ impl MeshLink for BlueZLink {
             }
             roles.adapter = Some(ble);
             roles.peripheral = Some(peripheral);
+            roles.alias = alias;
             roles.power = Some(power);
             Ok(())
         })
@@ -627,25 +648,30 @@ impl MeshLink for BlueZLink {
         Box::pin(async move {
             {
                 let mut roles = self.roles.lock().await;
-                // Dropping these stops discovery, unregisters the advertisement
-                // and the GATT application, and aborts their tasks.
-                roles.scan = None;
-                roles.peripheral = None;
-                if let Some(power) = roles.power.take() {
-                    power.abort();
-                }
-                roles.adapter = None;
-            }
-            {
-                let mut handle = self
+                let _ = self
                     .inner
                     .adapter
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                *handle = None;
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take();
+                // Dropping these stops discovery, unregisters the advertisement
+                // and the GATT application, and aborts their tasks.
+                roles.scan = None;
+                if let Some(peripheral) = roles.peripheral.take() {
+                    peripheral.stop().await;
+                }
+                if let Some(power) = roles.power.take() {
+                    power.abort();
+                }
+                self.inner.drop_all();
+                if let Some(mut alias) = roles.alias.take()
+                    && let Err(error) = alias.restore().await
+                {
+                    tracing::warn!(%error, "could not restore the Bluetooth adapter alias");
+                }
+                roles.adapter = None;
             }
 
-            self.inner.drop_all();
             // Ends `next_event` once the queue has drained.
             let _ = self.inner.shutdown_tx.send(true);
             Ok(())

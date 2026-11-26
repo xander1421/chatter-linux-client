@@ -110,7 +110,7 @@ object MeshBleBridge {
     private const val PAIRING_BEACON_SIZE = 13
     private const val INBOUND_ADMISSION_MS = 5_000L
     private val ADMISSION_BEACON_PREFIX = "CHPB".toByteArray(Charsets.US_ASCII)
-    private const val BEACON_SLOT_MS = 1_000L
+    private const val BEACON_SLOT_MS = 4_000L
 
     // --- Tuning ------------------------------------------------------------------
 
@@ -430,7 +430,12 @@ object MeshBleBridge {
     @Suppress("unused")
     fun setPairingBeacons(payload: ByteArray): Boolean = synchronized(lock) {
         if (payload.isEmpty() || payload.size % PAIRING_BEACON_SIZE != 0) return@synchronized false
-        if (!pairingBeacons.contentEquals(payload)) pairingBeacons = payload
+        if (!pairingBeacons.contentEquals(payload)) {
+            pairingBeacons = payload
+            beaconSlot = -1
+            handler.removeCallbacks(beaconCycle)
+            if (!beaconUpdatePending) handler.post(beaconCycle)
+        }
         true
     }
 
@@ -601,7 +606,7 @@ object MeshBleBridge {
     private fun emitDiscovered(address: String, rssi: Int, beacon: ByteArray) =
         emit("onDiscovered") { nativeOnDiscovered(address, rssi, beacon) }
 
-    /** Preserve the first sighting and peer-id changes; refresh RSSI once a second. */
+    /** Preserve the first sighting and beacon changes; refresh RSSI once a second. */
     private fun emitScanResult(scan: ScanResult) {
         val beacon = scan.scanRecord?.getServiceData(SERVICE_PARCEL_UUID) ?: return
         if (beacon.size != PAIRING_BEACON_SIZE) return
@@ -684,6 +689,7 @@ object MeshBleBridge {
             .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
             .build()
         val data = AdvertiseData.Builder().addServiceUuid(SERVICE_PARCEL_UUID).build()
+        val startingSlots = pairingBeacons
         val callback = object : AdvertisingSetCallback() {
             override fun onAdvertisingSetStarted(
                 advertisingSet: AdvertisingSet?, txPower: Int, status: Int,
@@ -695,7 +701,8 @@ object MeshBleBridge {
                     return@synchronized
                 }
                 MeshBleBridge.advertisingSet = advertisingSet
-                handler.postDelayed(beaconCycle, BEACON_SLOT_MS)
+                beaconSlot = if (pairingBeacons === startingSlots) 0 else -1
+                scheduleNextBeacon()
             }
 
             override fun onScanResponseDataSet(advertisingSet: AdvertisingSet?, status: Int): Unit =
@@ -705,7 +712,7 @@ object MeshBleBridge {
                     if (status != ADVERTISE_SUCCESS) {
                         Log.w(TAG, "pairing beacon update failed: code=$status")
                     }
-                    handler.postDelayed(beaconCycle, BEACON_SLOT_MS)
+                    scheduleNextBeacon()
                 }
 
             override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?): Unit =
@@ -729,6 +736,11 @@ object MeshBleBridge {
         return AdvertiseData.Builder()
             .addServiceData(SERVICE_PARCEL_UUID, pairingBeacons.copyOfRange(offset, offset + PAIRING_BEACON_SIZE))
             .build()
+    }
+
+    private fun scheduleNextBeacon() {
+        handler.removeCallbacks(beaconCycle)
+        handler.postDelayed(beaconCycle, if (beaconSlot < 0) 0L else BEACON_SLOT_MS)
     }
 
     private fun cycleBeaconLocked() {
@@ -963,7 +975,13 @@ object MeshBleBridge {
             it.size == prefixSize + PAIRING_BEACON_SIZE &&
                 ADMISSION_BEACON_PREFIX.indices.all { index -> it[index] == ADMISSION_BEACON_PREFIX[index] }
         }?.copyOfRange(prefixSize, value.size)
-        if (!nativeCheckInbound(link.device.address, beacon)) {
+        val allowed = try {
+            nativeCheckInbound(link.device.address, beacon)
+        } catch (error: UnsatisfiedLinkError) {
+            Log.e(TAG, "native inbound admission is unavailable", error)
+            false
+        }
+        if (!allowed) {
             rejectPeripheral(link)
             return false
         }
@@ -975,7 +993,7 @@ object MeshBleBridge {
     private fun rejectPeripheral(link: PeripheralLink) {
         if (link.rejected) return
         link.rejected = true
-        // Let the binder callback send its ATT error before closing the link.
+        // Send the ATT error before closing the link on the next worker turn.
         handler.post {
             if (peripheralLinks.remove(link.id, link)) closePeripheral(link)
         }

@@ -61,11 +61,9 @@ use tokio::{
 use crate::error;
 use crate::link::Shared;
 
-/// Build the advertisement for the mesh service.
-///
-/// Separated out and unit-tested because the thing most worth checking about it
-/// is what it does *not* contain.
-const BEACON_SLOT: Duration = Duration::from_secs(1);
+const BEACON_SLOT: Duration = Duration::from_secs(4);
+const ADVERTISEMENT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+const ADVERTISEMENT_RETRY_WINDOW: Duration = Duration::from_secs(5);
 const INBOUND_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn mesh_advertisement(service: Uuid, beacon: Option<PairingBeacon>) -> Advertisement {
@@ -183,6 +181,13 @@ impl PeripheralRole {
             _application: application,
         })
     }
+
+    pub(crate) async fn stop(mut self) {
+        self.pump.abort();
+        self.advertisement.abort();
+        let _ = (&mut self.pump).await;
+        let _ = (&mut self.advertisement).await;
+    }
 }
 
 async fn cycle_beacons(
@@ -196,49 +201,57 @@ async fn cycle_beacons(
     let mut slot = 0;
     loop {
         tokio::select! {
+            biased;
             result = beacons.changed() => {
                 if result.is_err() {
                     return;
                 }
+                slot = 0;
             }
-            _ = time::sleep(BEACON_SLOT) => {}
+            _ = time::sleep(BEACON_SLOT) => { slot += 1; }
         }
         let next = {
             let slots = beacons.borrow_and_update();
-            slot = (slot + 1) % slots.len().max(1);
+            slot %= slots.len().max(1);
             slots.get(slot).copied()
         };
         if next == current {
             continue;
         }
         drop(advertisement);
-        // bluer unregisters asynchronously. Wait for capacity before registering
-        // the next slot so a one-instance controller can finish unregistering.
-        let free = matches!(
-            time::timeout(Duration::from_millis(250), async {
-                loop {
-                    match adapter.supported_advertising_instances().await {
-                        Ok(0) => time::sleep(Duration::from_millis(25)).await,
-                        Ok(_) => return true,
-                        Err(_) => return false,
-                    }
-                }
-            })
-            .await,
-            Ok(true)
-        );
-        if !free {
-            shared.emit(LinkEvent::PeripheralRoleEnded);
-            return;
-        }
-        advertisement = match adapter.advertise(mesh_advertisement(service, next)).await {
+        advertisement = match register_next_slot(&adapter, service, next).await {
             Ok(handle) => handle,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(%error, "could not replace the Bluetooth pairing beacon");
                 shared.emit(LinkEvent::PeripheralRoleEnded);
                 return;
             }
         };
         current = next;
+    }
+}
+
+async fn register_next_slot(
+    adapter: &Adapter,
+    service: Uuid,
+    beacon: Option<PairingBeacon>,
+) -> Result<AdvertisementHandle, LinkError> {
+    // Unregistration is asynchronous, and another application can claim a
+    // slot between observing capacity and registering the advertisement.
+    let retry_until = time::Instant::now() + ADVERTISEMENT_RETRY_WINDOW;
+    loop {
+        let failure = match adapter.supported_advertising_instances().await {
+            Ok(0) => LinkError::PeripheralSetup("no BlueZ advertising instance available".into()),
+            Ok(_) => match adapter.advertise(mesh_advertisement(service, beacon)).await {
+                Ok(handle) => return Ok(handle),
+                Err(error) => error::classify_peripheral(&error),
+            },
+            Err(error) => error::classify_peripheral(&error),
+        };
+        if time::Instant::now() >= retry_until {
+            return Err(failure);
+        }
+        time::sleep(ADVERTISEMENT_RETRY_INTERVAL).await;
     }
 }
 

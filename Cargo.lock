@@ -2135,6 +2135,7 @@ dependencies = [
  "futures",
  "futures-util",
  "tokio",
+ "tracing",
  "uuid 1.28.0",
 ]
 
