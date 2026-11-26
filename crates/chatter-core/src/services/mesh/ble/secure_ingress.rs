@@ -1,10 +1,8 @@
 use super::*;
 use chatter_mesh::tlv::courier_envelope::courier_receipt_id;
-
-pub(super) const COURIER_RECEIPT_MAGIC: &[u8; 8] = b"CHTRCRP1";
-
 use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
 
+pub(super) const COURIER_RECEIPT_MAGIC: &[u8; 8] = b"CHTRCRP1";
 const SIGNING_BINDING_MAGIC: &[u8; 8] = b"CHTRNSB1";
 pub(super) const SIGNING_BINDING_REQUEST: &[u8; 8] = b"CHTRNSR1";
 pub(super) const SIGNING_PIN_INTENT_MS: u64 = 300_000;
@@ -92,16 +90,20 @@ impl BleRuntime {
                 && self.state.with(|state| state.links.mark_noise_authenticated(link, claimed));
             if direct {
                 self.prune_duplicate_links(claimed, now_millis()).await;
-            }
-            if direct && self.state.with(|state| {
-                state.peers.info(claimed).is_some_and(|peer| {
-                    peer.noise_public_key.as_deref() == Some(recipient_key.as_slice())
-                })
-            }) {
-                self.hand_over_courier_mail(
-                    claimed, &recipient_key, now_secs(),
-                    AnnounceIngress::verified_direct_on_authenticated_link(),
-                ).await;
+                let announced_key_matches = self.state.with(|state| {
+                    state.peers.info(claimed).is_some_and(|peer| {
+                        peer.noise_public_key.as_deref() == Some(recipient_key.as_slice())
+                    })
+                });
+                if announced_key_matches {
+                    self.hand_over_courier_mail(
+                        claimed,
+                        &recipient_key,
+                        now_secs(),
+                        AnnounceIngress::verified_direct_on_authenticated_link(),
+                    )
+                    .await;
+                }
             }
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.

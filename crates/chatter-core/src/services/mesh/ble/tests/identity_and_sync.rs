@@ -467,7 +467,7 @@ async fn sync_requests_require_the_claimed_peers_own_link() {
     runtime.drain_writes().await;
     assert_eq!(radio.write_count(), before);
 
-    runtime.on_packet(&link, packet).await;
+    runtime.on_packet(&link, packet.clone()).await;
     runtime.drain_writes().await;
 
     let replies: Vec<_> = radio

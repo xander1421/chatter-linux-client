@@ -630,10 +630,19 @@ impl BleRuntime {
         let Ok((header, _)) = chatter_mesh::fragment::FragmentHeader::parse(packet) else {
             return;
         };
-        let received = self
-            .state
-            .with(|state| state.fragments.receive(packet, link.clone(), now_s));
-        let Ok(received) = received else { return };
+        let received = self.state.with(|state| {
+            if header.original_type == MessageType::RequestSync.as_u8()
+                && state
+                    .links
+                    .peer_for(link)
+                    .or_else(|| state.links.discovery_peer_for(link))
+                    != Some(claimed)
+            {
+                return None;
+            }
+            state.fragments.receive(packet, link.clone(), now_s).ok()
+        });
+        let Some(received) = received else { return };
         if let Some(bytes) = received.reassembled {
             let Ok(mut inner) = codec::decode(&bytes) else { return };
             if inner.msg_type != header.original_type
