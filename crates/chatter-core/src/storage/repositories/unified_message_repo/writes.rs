@@ -464,7 +464,10 @@ impl UnifiedMessageRepository {
             {
                 tx.execute(
                     "INSERT OR IGNORE INTO channel_delivery_outbox
-                     (owner_id,message_id,conversation_id,sent_at) VALUES (?1,?2,?3,?4)",
+                     (owner_id,message_id,conversation_id,sent_at)
+                     SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (
+                         SELECT 1 FROM channels WHERE id=?3 AND channel_type=1
+                     )",
                     params![owner.to_string(),message.id.to_string(),message.conversation_id.to_string(),message.sent_at as i64],
                 )?;
             }

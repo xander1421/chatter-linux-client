@@ -136,10 +136,25 @@
     }
 
     fn two_members_at(server_url: &str) -> TwoMembers {
+        two_members_with_ids_at(server_url, ChannelId::new(), UserId::new(), UserId::new())
+    }
+
+    fn two_members_with_ids_at(
+        server_url: &str, channel_id: ChannelId, alice_id: UserId, bob_id: UserId,
+    ) -> TwoMembers {
+        two_members_of_type_at(server_url, channel_id, alice_id, bob_id, crate::domain::ChannelType::Private)
+    }
+
+    fn two_public_members() -> TwoMembers {
+        two_members_of_type_at("https://localhost:1", ChannelId::new(), UserId::new(), UserId::new(), crate::domain::ChannelType::Public)
+    }
+
+    fn two_members_of_type_at(
+        server_url: &str, channel_id: ChannelId, alice_id: UserId, bob_id: UserId,
+        channel_type: crate::domain::ChannelType,
+    ) -> TwoMembers {
         use crate::client::ChatterClient;
-        use crate::domain::channel::{
-            Channel, ChannelType, MemberRole, Membership, NotificationPreference,
-        };
+        use crate::domain::channel::{Channel, MemberRole, Membership, NotificationPreference};
 
         let client = |dir: &tempfile::TempDir, user: UserId| {
             // Keyless, with the passphrase in a file beside the database, so
@@ -165,16 +180,14 @@
             c.auth_state().set_logged_in(user, 1, "fixture".into());
             c
         };
-        let (alice_id, bob_id) = (UserId::new(), UserId::new());
         let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (alice, bob) = (client(&da, alice_id), client(&db, bob_id));
-        let channel_id = ChannelId::new();
         for c in [&alice, &bob] {
             let repo = &c.messages().channel_repo;
             repo.insert(&Channel::new(
                 channel_id,
                 "g".into(),
-                ChannelType::Private,
+                channel_type,
                 alice_id,
             ))
             .unwrap();
@@ -252,6 +265,11 @@
             policy: Policy::defaults(false),
             invites: Default::default(),
             disappearing_seconds: 0,
+            channel_type: match c.messages().channel_repo.routing_type(&channel_id).unwrap() {
+                Some(crate::domain::ChannelType::Public) => pb::ChannelType::ChannelPublic,
+                Some(crate::domain::ChannelType::Private) => pb::ChannelType::ChannelPrivate,
+                _ => pb::ChannelType::Unspecified,
+            },
         };
         let hash = state.hash();
         let change = pb::ChannelChange {
@@ -280,7 +298,7 @@
     /// answered (its delivery fails here only because there is no server).
     #[tokio::test]
     async fn sender_key_request_is_answered_for_members_only() {
-        let t = two_members();
+        let t = two_public_members();
         let alice = t.alice.messages();
         let outsider = UserId::new();
 

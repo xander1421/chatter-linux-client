@@ -260,8 +260,8 @@ impl MessageGateway {
             let Some(sid) = sender_id else {
                 return Ok(SealedSenderResult::DroppedChannelContent);
             };
-            profile_key_changed =
-                self.store_skdm_profile_key(&sid, data_message.profile_key.as_deref());
+            profile_key_changed = self.store_skdm_profile_key(&sid, data_message.profile_key.as_deref())
+                && self.channel_repo.is_routed_public(&cid);
             // A server channel (sender-key or not) is filed as Channel;
             // anon groups never arrive on this path (they use the mailbox).
             let conversation_type =
@@ -495,6 +495,13 @@ impl MessageGateway {
             let channel: ChannelId = id.parse().map_err(|_| {
                 ServiceError::Validation("invalid channel receipt transcript scope".into())
             })?;
+            if self.channel_repo.routing_type(&channel)?
+                != Some(crate::domain::channel::ChannelType::Public)
+            {
+                return Err(ServiceError::Validation(
+                    "receipt transcripts require a public channel".into(),
+                ));
+            }
             let targets = sync
                 .receipt_targets
                 .iter()

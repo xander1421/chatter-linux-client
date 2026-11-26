@@ -42,7 +42,6 @@ impl MessageService {
         proto_msg: &chatter_proto::chat_v1::Message,
         ciphertext: &[u8],
     ) {
-
         // Our own sender-key ciphertext from this very device is undecryptable
         // by design, not lost.
         let us = (
@@ -55,6 +54,11 @@ impl MessageService {
         if us == (Some(sender_id), Some(device_id)) {
             return;
         }
+        if !self.is_public_channel(&channel_id) {
+            self.record_channel_delivery_issue(channel_id, sender_id, proto_msg);
+            return;
+        }
+
         // The clock the sender put on the envelope. The server's
         // Message.timestamp is receive time and does not match the sender's
         // sent_at, so a DecryptionErrorMessage named with it is dropped.

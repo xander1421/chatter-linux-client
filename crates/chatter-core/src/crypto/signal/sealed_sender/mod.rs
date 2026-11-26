@@ -30,6 +30,7 @@ pub struct ReceivedSealedSender {
     pub sender_e164: Option<String>,
     pub device_id: libsignal_protocol::DeviceId,
     pub message: Vec<u8>,
+    pub(crate) group_id: Option<Vec<u8>>,
     pub(crate) prekey_identity: Option<libsignal_protocol::IdentityKey>,
 }
 
@@ -67,6 +68,21 @@ pub struct SealedSenderManager;
 /// Mirrors the server's per-device sealed-body cap. It applies to the entire
 /// serialized envelope, including the actual certificate, PQXDH and SPQR data.
 pub(crate) const MAX_SEALED_BODY_BYTES: usize = 8192;
+
+#[derive(Clone, Copy)]
+pub(crate) enum SealedBatchShape {
+    Standard,
+    PrivateChannelKey { echo_registration: Option<u32> },
+}
+
+impl SealedBatchShape {
+    fn padded_usmc_size(self) -> Option<usize> {
+        match self {
+            Self::Standard => None,
+            Self::PrivateChannelKey { .. } => Some(4096),
+        }
+    }
+}
 
 /// Exact cap comparison; equality is permitted by the server.
 pub(crate) fn validate_sealed_body_size(

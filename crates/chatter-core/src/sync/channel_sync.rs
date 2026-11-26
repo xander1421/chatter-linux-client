@@ -114,8 +114,9 @@ impl ChannelSync {
                     Ok(channel) => {
                         let is_new = self.channel_repo.get(&channel.id).ok().flatten().is_none();
 
-                        self.channel_repo
-                            .upsert(&channel)
+                        let channel = self
+                            .channel_repo
+                            .save_remote(channel)
                             .map_err(|e| SyncError::Storage(e.to_string()))?;
 
                         if is_new {
@@ -154,7 +155,7 @@ impl ChannelSync {
 
         // Sync memberships for each channel so local member queries reflect
         // server state (join/leave/role changes that happened while offline).
-        for channel in &all_channels {
+        for channel in &mut all_channels {
             match self.sync_channel_members(channel, last_sync).await {
                 Ok((added, removed)) => {
                     result.members_synced += added;
@@ -170,6 +171,10 @@ impl ChannelSync {
                     );
                 }
             }
+            // Membership catch-up may have pinned the type during this cycle.
+            self.channel_repo
+                .apply_stored_type(channel)
+                .map_err(|e| SyncError::Storage(e.to_string()))?;
         }
 
         // Only advance the sync timestamp when every per-channel step

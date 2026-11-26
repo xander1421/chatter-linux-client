@@ -450,7 +450,11 @@ async fn decrypt_durable_inner(
         &mut prekeys,
         &signed,
         &mut kyber,
-        ReceiveStore::allow_archived_whisper_receive,
+        |store, message_type, _| {
+            if message_type == CiphertextMessageType::Whisper {
+                store.allow_archived_whisper_receive();
+            }
+        },
     )
     .await
     .map_err(ServiceError::Crypto)?;
@@ -535,6 +539,7 @@ async fn decrypt_durable_inner(
         None
     };
     let mut changes = identities.changes();
+    changes.group_scope = result.group_id;
     changes.prekey_identity = result.prekey_identity.map(|identity|
         (result.sender_uuid.clone(), identity.serialize().to_vec()));
     let committed =
@@ -1259,7 +1264,11 @@ mod tests {
             &mut prekeys,
             &signed,
             &mut kyber,
-            ReceiveStore::allow_archived_whisper_receive,
+            |store, message_type, _| {
+            if message_type == CiphertextMessageType::Whisper {
+                store.allow_archived_whisper_receive();
+            }
+        },
         )
         .await
         .unwrap();

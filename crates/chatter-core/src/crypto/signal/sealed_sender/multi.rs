@@ -74,7 +74,11 @@ fn protocol(e: impl std::fmt::Display) -> CryptoError {
 
 /// A session record with our own device, carrying our registration id, built
 /// from our current signed and Kyber prekeys.
-async fn self_session(store: &SignalStore, local: &ProtocolAddress) -> Result<SessionRecord, CryptoError> {
+async fn self_session(
+    store: &SignalStore,
+    local: &ProtocolAddress,
+    echo_registration: Option<u32>,
+) -> Result<SessionRecord, CryptoError> {
     let identity = store.get_identity_key_pair().await.map_err(protocol)?;
     let registration_id = store.get_local_registration_id().await.map_err(protocol)?;
     let keys = store.key_store();
@@ -83,7 +87,7 @@ async fn self_session(store: &SignalStore, local: &ProtocolAddress) -> Result<Se
     let signed = store.get_signed_pre_key(signed_id.into()).await.map_err(protocol)?;
     let kyber = store.get_kyber_pre_key(kyber_id.into()).await.map_err(protocol)?;
     let bundle = libsignal_protocol::PreKeyBundle::new(
-        registration_id,
+        echo_registration.unwrap_or(registration_id),
         local.device_id(),
         None,
         signed.id().map_err(protocol)?,
@@ -117,6 +121,27 @@ async fn self_session(store: &SignalStore, local: &ProtocolAddress) -> Result<Se
 }
 
 impl SealedSenderManager {
+    /// Run the same PQXDH admission as a remote repair in a throwaway store.
+    /// The posting device must retain its real identity and device keys.
+    pub(crate) async fn validate_private_echo_bundle(
+        store: &SignalStore,
+        local: &ProtocolAddress,
+        bundle: libsignal_protocol::PreKeyBundle,
+    ) -> Result<u32, CryptoError> {
+        let ours = store.get_identity_key_pair().await.map_err(protocol)?;
+        if bundle.identity_key().map_err(protocol)? != ours.identity_key() {
+            return Err(CryptoError::InvalidKeyFormat);
+        }
+        let registration = bundle.registration_id().map_err(protocol)?;
+        let local_registration = store.get_local_registration_id().await.map_err(protocol)?;
+        let mut scratch = InMemSignalProtocolStore::new(ours, local_registration).map_err(protocol)?;
+        crate::crypto::SessionManager::establish_session(
+            local, local, &mut scratch.session_store, &mut scratch.identity_store,
+            &bundle, &mut OsRng.unwrap_err(),
+        ).await?;
+        Ok(registration)
+    }
+
     /// Encrypt `usmc` to every destination (grouped by user, as libsignal
     /// expects), our own address included. A destination we hold no session
     /// with is `CryptoError::SessionNotFound`-style: establish one and retry.
@@ -125,6 +150,7 @@ impl SealedSenderManager {
         destinations: &[ProtocolAddress],
         local: &ProtocolAddress,
         store: &SignalStore,
+        echo_registration: Option<u32>,
     ) -> Result<Vec<u8>, CryptoError> {
         let mut sorted: Vec<&ProtocolAddress> = destinations.iter().collect();
         sorted.sort_by(|a, b| (a.name(), u32::from(a.device_id())).cmp(&(b.name(), u32::from(b.device_id()))));
@@ -132,7 +158,7 @@ impl SealedSenderManager {
         let mut sessions = Vec::with_capacity(sorted.len());
         for d in &sorted {
             let record = if *d == local {
-                self_session(store, local).await?
+                self_session(store, local, echo_registration).await?
             } else {
                 store
                     .load_session(d)
@@ -251,6 +277,7 @@ mod tests {
             &[bob.address.clone(), alice.address.clone()],
             &alice.address,
             &alice.store,
+            None,
         )
         .await
         .unwrap();
@@ -285,7 +312,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            SealedSenderManager::encrypt_multi_recipient(&usmc, &[carol.address.clone()], &alice.address, &alice.store)
+            SealedSenderManager::encrypt_multi_recipient(&usmc, &[carol.address.clone()], &alice.address, &alice.store, None)
                 .await
                 .is_err()
         );

@@ -49,6 +49,8 @@ impl std::error::Error for StorageCallbackError {}
 pub struct SignalStore {
     key_store: Arc<KeyStore>,
     kt_route: Option<KtRoute>,
+    outbound_kt_due_at: i64,
+    inbound_kt_due_at: i64,
     authenticated_whisper_receive: bool,
     /// Mesh ratchets have a device-local address space per signed-in account.
     /// Identity keys remain keyed by the ordinary account ID.
@@ -63,6 +65,8 @@ impl SignalStore {
         Self {
             key_store,
             kt_route: Some(KtRoute::Normal),
+            outbound_kt_due_at: 0,
+            inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
             mesh_owner: None,
             #[cfg(feature = "mesh")]
@@ -82,6 +86,8 @@ impl SignalStore {
         Self {
             key_store,
             kt_route: Some(KtRoute::Normal),
+            outbound_kt_due_at: 0,
+            inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
             mesh_owner: Some(owner),
             mesh_binding: Some((binding_store, peer)),
@@ -137,7 +143,16 @@ impl SignalStore {
 
     pub(crate) fn set_kt_route(&mut self, route: KtRoute) {
         self.kt_route = Some(route);
+        self.inbound_kt_due_at = 0;
         self.authenticated_whisper_receive = false;
+    }
+
+    pub(crate) fn defer_outbound_kt_until(&mut self, due_at: i64) {
+        self.outbound_kt_due_at = due_at;
+    }
+
+    pub(crate) fn defer_received_key_until(&mut self, due_at: i64) {
+        self.inbound_kt_due_at = due_at;
     }
 
     pub(crate) fn defer_inbound_kt_route(&mut self) {
@@ -197,16 +212,16 @@ impl SignalStore {
         match state {
             PeerVerification::Rejected => Err(untrusted_send(peer, device, None)),
             PeerVerification::UnverifiedInbound => {
-                self.key_store.enqueue_kt(peer, key, self.kt_route.ok_or_else(|| {
+                self.key_store.enqueue_kt_at(peer, key, self.kt_route.ok_or_else(|| {
                     CryptoError::Protocol("outbound verification route absent".into())
-                })?)?;
+                })?, self.outbound_kt_due_at)?;
                 Err(CryptoError::KeyVerificationPending { peer_id: peer.to_owned() })
             }
             permitted => {
                 if permitted == PeerVerification::Legacy {
-                    self.key_store.enqueue_kt(peer, key, self.kt_route.ok_or_else(|| {
+                    self.key_store.enqueue_kt_at(peer, key, self.kt_route.ok_or_else(|| {
                     CryptoError::Protocol("outbound verification route absent".into())
-                })?)?;
+                })?, self.outbound_kt_due_at)?;
                 }
                 if stored.is_some_and(|old| old != key) {
                     return Err(untrusted_send(peer, device, None));
@@ -412,8 +427,8 @@ impl IdentityKeyStore for SignalStore {
         let route = self.kt_route.unwrap_or(KtRoute::AnonymousTor);
         match self.key_store.get_identity(peer).map_err(storage_to_signal_error)? {
             Some(pinned) if pinned.as_slice() != observed.as_ref() => self.key_store
-                .enqueue_archived_kt(peer, &pinned, &observed, route).map_err(storage_to_signal_error),
-            Some(_) => self.key_store.enqueue_inbound_kt(peer, &observed, route)
+                .enqueue_archived_kt(peer, &pinned, &observed, route, self.inbound_kt_due_at).map_err(storage_to_signal_error),
+            Some(_) => self.key_store.enqueue_inbound_kt(peer, &observed, route, self.inbound_kt_due_at)
                 .map_err(storage_to_signal_error),
             None => Ok(()),
         }

@@ -456,7 +456,7 @@ async fn test_server_rejects_wrong_credentials() {
     // Request tokens and create a real mailbox
     let _ = ctx
         .token_manager
-        .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
+        .request_tokens(&ctx.pool, 3)
         .await;
 
     let token = assert_ok(ctx.token_manager.claim_prefetched_token());

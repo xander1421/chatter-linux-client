@@ -132,6 +132,18 @@ impl SignalService {
             "No usable session exists, fetching prekey bundle"
         );
 
+        let bundle = Self::fetch_device_bundle(source, recipient_id, device_id).await?;
+        self.actor
+            .establish_session(address, bundle)
+            .await
+            .inspect_err(|e| self.note_identity_change(e))
+    }
+
+    pub(super) async fn fetch_device_bundle(
+        source: &mut PreKeySource<'_>,
+        recipient_id: &str,
+        device_id: u32,
+    ) -> Result<libsignal_protocol::PreKeyBundle, ServiceError> {
         let bundle_response = source.fetch(recipient_id, &device_id.to_string()).await?;
 
         let result = bundle_response
@@ -145,11 +157,7 @@ impl SignalService {
         if proto_bundle.device_id != device_id {
             return Err(ServiceError::Validation("Bundle device does not match request".into()));
         }
-        let bundle = Self::convert_prekey_bundle(proto_bundle)?;
-        self.actor
-            .establish_session(address, bundle)
-            .await
-            .inspect_err(|e| self.note_identity_change(e))
+        Self::convert_prekey_bundle(proto_bundle)
     }
     /// Convert Protobuf PreKeyBundle to libsignal PreKeyBundle.
     pub(crate) fn convert_prekey_bundle(

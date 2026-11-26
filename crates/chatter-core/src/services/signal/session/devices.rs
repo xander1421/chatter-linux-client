@@ -57,14 +57,23 @@ impl SignalService {
 
     /// Reuse admitted sessions for a private-channel send. The anonymous
     /// submit reports missing or stale devices for reconciliation.
+    pub(crate) fn require_group_device_ready(&self, recipient_id: &str) -> Result<(), ServiceError> {
+        if let Some(key) = self.get_peer_identity(recipient_id)? {
+            self.require_private_post_key(recipient_id, &key)?;
+        }
+        self.require_bundle_lookup_ready(recipient_id)
+    }
+
+    pub(crate) fn has_discovered_private_echo(&self) -> Result<bool, ServiceError> {
+        let (key, _) = self.private_echo_key()?;
+        Ok(self.settings_repo.get::<Option<u32>>(&key)?.flatten().is_some())
+    }
+
     pub(crate) async fn require_group_device_sessions(
         &self,
         source: &mut PreKeySource<'_>,
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
-        if let Some(key) = self.get_peer_identity(recipient_id)? {
-            self.require_sendable_key(recipient_id, &key).map_err(ServiceError::Crypto)?;
-        }
         self.ensure_device_sessions(source, recipient_id, false, true)
             .await.map(|(devices, _)| devices)
     }
@@ -125,13 +134,11 @@ impl SignalService {
             .filter(|d| Some(*d) != this_device)
             .collect();
         let known_policy = self.unrestricted_access(recipient_id);
-        if !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
+        if !strict_discovery && !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
             return Ok((with_session, known_policy.unwrap_or(false)));
         }
 
-        if strict_discovery && this_device.is_some() {
-            return Ok((with_session, known_policy.unwrap_or(false)));
-        }
+        let refresh_echo = strict_discovery && this_device.is_some();
 
         match self.require_bundle_lookup_ready(recipient_id) {
             Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }))
@@ -160,6 +167,9 @@ impl SignalService {
         };
 
         let Some(result) = response.result else {
+            if strict_discovery {
+                return Err(crate::error::NetworkError::Unavailable.into());
+            }
             // No bundle at all: nothing to fetch a session from. The send
             // still asks the server, which names any device we are missing.
             return Ok((with_session, false));
@@ -175,7 +185,7 @@ impl SignalService {
                     .any(|b| b.unrestricted_unidentified_access == Some(true));
                 self.record_unrestricted_access(recipient_id, unrestricted);
 
-                let bundles = without_device(device_list.bundles, this_device);
+                let bundles = without_device(device_list.bundles, this_device.filter(|_| !refresh_echo));
                 if bundles.is_empty() {
                     return Ok((Vec::new(), unrestricted));
                 }
@@ -197,6 +207,11 @@ impl SignalService {
                     };
                     let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
+                    if refresh_echo && this_device == Some(device_id) {
+                        self.restore_private_echo(address, Self::convert_prekey_bundle(proto_bundle)?).await?;
+                        established_device_ids.push(device_id);
+                        continue;
+                    }
                     // Check if a usable session already exists
                     if self.actor.has_session(address.clone()).await? {
                         established_device_ids.push(device_id);
@@ -210,7 +225,12 @@ impl SignalService {
                     // too: `OutgoingMessage.doSendMessage` -> `registerError`).
                     match Self::convert_prekey_bundle(proto_bundle) {
                         Ok(bundle) => {
-                            match self.actor.establish_session(address, bundle).await {
+                            let result = if strict_discovery {
+                                self.establish_private_post_device(address, bundle).await
+                            } else {
+                                self.actor.establish_session(address, bundle).await
+                            };
+                            match result {
                                 Ok(_) => established_device_ids.push(device_id),
                                 Err(e) => {
                                     tracing::warn!(
@@ -268,6 +288,10 @@ impl SignalService {
                 let unrestricted = single_bundle.unrestricted_unidentified_access == Some(true);
                 self.record_unrestricted_access(recipient_id, unrestricted);
                 if this_device == Some(device_id) {
+                    if refresh_echo {
+                        self.restore_private_echo(self.get_our_address()?, Self::convert_prekey_bundle(single_bundle)?).await?;
+                        return Ok((vec![device_id], unrestricted));
+                    }
                     return Ok((Vec::new(), unrestricted));
                 }
                 let id = DeviceId::try_from(device_id)
@@ -275,8 +299,12 @@ impl SignalService {
                 let address = ProtocolAddress::new(recipient_id.to_owned(), id);
                 if !self.actor.has_session(address.clone()).await? {
                     let bundle = Self::convert_prekey_bundle(single_bundle)?;
-                    self.actor.establish_session(address, bundle).await
-                        .inspect_err(|error| self.note_identity_change(error))?;
+                    if strict_discovery {
+                        self.establish_private_post_device(address, bundle).await?;
+                    } else {
+                        self.actor.establish_session(address, bundle).await
+                            .inspect_err(|error| self.note_identity_change(error))?;
+                    }
                 }
                 Ok((vec![device_id], unrestricted))
             }
@@ -336,6 +364,108 @@ impl SignalService {
         for &device_id in missing.iter().chain(stale) {
             self.ensure_session_with_source(source, recipient_id, device_id)
                 .await?;
+        }
+        Ok(())
+    }
+
+    /// Keep the echo's registration and archive state for this linked
+    /// device, independently of a particular post or channel.
+    pub(crate) fn private_echo_registration(&self) -> Result<Option<u32>, ServiceError> {
+        let (key, registration) = self.private_echo_key()?;
+        Ok(self.settings_repo.get::<Option<u32>>(&key)?.unwrap_or(Some(registration)))
+    }
+
+    fn private_echo_key(&self) -> Result<(String, u32), ServiceError> {
+        let address = self.get_our_address()?;
+        let (registration, _) = self.key_store.get_local_identity()?.ok_or(CryptoError::NoIdentity)?;
+        Ok((format!("signal.private-post-echo:{address}:{registration}"), registration))
+    }
+
+    fn require_private_post_key(&self, peer: &str, key: &[u8]) -> Result<(), ServiceError> {
+        let route = self.actor.kt_route();
+        let mut store = crate::crypto::SignalStore::new(self.key_store.clone());
+        store.set_kt_route(route);
+        if route == crate::storage::peer_verification::KtRoute::AnonymousTor {
+            // In Shield, run a cold lookup's KT proof on its separate
+            // connection after a jittered delay.
+            let delay = crate::app::core_services::jittered_delay().as_secs() as i64;
+            store.defer_outbound_kt_until(chrono::Utc::now().timestamp() + delay);
+        }
+        Ok(store.require_sendable_key(peer, key)?)
+    }
+
+    async fn establish_private_post_device(
+        &self,
+        address: ProtocolAddress,
+        bundle: libsignal_protocol::PreKeyBundle,
+    ) -> Result<(), ServiceError> {
+        let peer = address.name();
+        let key = bundle.identity_key().map_err(|_| CryptoError::InvalidKeyFormat)?.serialize();
+        let pinned = if peer == self.get_our_address()?.name() {
+            let (_, local) = self.key_store.get_local_identity()?.ok_or(CryptoError::NoIdentity)?;
+            let local = libsignal_protocol::IdentityKeyPair::try_from(local.as_slice())
+                .map_err(|_| CryptoError::InvalidKeyFormat)?;
+            Some(local.identity_key().serialize().to_vec())
+        } else {
+            self.get_peer_identity(peer)?
+        };
+        // Match the echo: a bundle contradicting a pinned identity never
+        // starts KT or opens a key-change workflow from the repair path.
+        if pinned.as_deref().is_some_and(|pinned| pinned != key.as_ref()) {
+            return Err(CryptoError::InvalidKeyFormat.into());
+        }
+        self.require_private_post_key(peer, &key)?;
+        self.actor.establish_session(address, bundle).await
+    }
+
+    async fn restore_private_echo(
+        &self,
+        address: ProtocolAddress,
+        bundle: libsignal_protocol::PreKeyBundle,
+    ) -> Result<(), ServiceError> {
+        let (key, _) = self.private_echo_key()?;
+        let registration = self.actor.validate_private_echo_bundle(address, bundle).await?;
+        self.settings_repo.set(&key, &Some(registration))?;
+        Ok(())
+    }
+
+    /// Archive and refresh the posting device in the same steps as a peer.
+    /// Its registration is durable, and the real identity and keys stay local.
+    pub(crate) async fn reconcile_private_post_devices(
+        &self,
+        source: &mut PreKeySource<'_>,
+        recipient: &str,
+        devices: &chatter_proto::chat_v1::MismatchedDevices,
+    ) -> Result<(), ServiceError> {
+        let local = self.get_our_address()?;
+        let is_echo = |device| recipient == local.name() && device == u32::from(local.device_id());
+        // Each device has one disposition. In particular, repeated hints
+        // must not produce multiple echo lookups after a peer's session is ready.
+        let mut seen = std::collections::HashSet::new();
+        for &device in devices.extra_devices.iter().chain(&devices.stale_devices).chain(&devices.missing_devices) {
+            if DeviceId::try_from(device).is_err() || !seen.insert(device) {
+                return Err(crate::error::NetworkError::InvalidRequest("invalid private device mismatch".into()).into());
+            }
+        }
+        for &device in devices.extra_devices.iter().chain(&devices.stale_devices).chain(&devices.missing_devices) {
+            if is_echo(device) {
+                let (key, _) = self.private_echo_key()?;
+                self.settings_repo.set(&key, &Option::<u32>::None)?;
+            } else {
+                self.actor.archive_session_for_resend(recipient.to_owned(), device, None).await?;
+            }
+        }
+        for &device in devices.missing_devices.iter().chain(&devices.stale_devices) {
+            let bundle = Self::fetch_device_bundle(source, recipient, device).await?;
+            if is_echo(device) {
+                self.restore_private_echo(local.clone(), bundle).await?;
+            } else {
+                let address = ProtocolAddress::new(
+                    recipient.to_owned(), DeviceId::try_from(device)
+                        .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?,
+                );
+                self.establish_private_post_device(address, bundle).await?;
+            }
         }
         Ok(())
     }

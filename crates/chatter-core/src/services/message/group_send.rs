@@ -13,7 +13,7 @@
 //! cannot make its sender request endorsements on the account connection.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use chatter_proto::chat_v1;
@@ -132,13 +132,36 @@ fn active_members(verified: &VerifiedChannel) -> Vec<String> {
 }
 
 impl MessageService {
+    pub(super) async fn reconcile_private_post_devices(
+        &self,
+        member: &str,
+        devices: &chat_v1::MismatchedDevices,
+    ) -> Result<(), crate::error::ServiceError> {
+        self.signal_service.reconcile_private_post_devices(
+            &mut self.private_post_prekeys(), member, devices,
+        ).await
+    }
+
+    async fn private_post_devices(&self, member: &str, owner: &str) -> Result<Vec<(u32, Option<u32>)>, MessageError> {
+        let mut devices = self.signal_service.session_device_registrations(member).await
+            .map_err(|e| MessageError::from_signal_send(e, "group sessions"))?;
+        if member == owner {
+            let local = self.current_device_id_or_zero();
+            devices.retain(|(device, _)| *device != local);
+            if let Some(registration) = self.signal_service.private_echo_registration()
+                .map_err(|e| MessageError::from_signal_send(e, "private echo registration"))? {
+                devices.push((local, Some(registration)));
+            }
+        }
+        Ok(devices)
+    }
+
     /// Whether `channel_id` is a private channel, whose messages have no
     /// server copy: they reach members anonymously (this file), so there is
     /// nothing on the server to fetch, delete or pin.
     pub(crate) fn is_private_channel(&self, channel_id: &ChannelId) -> bool {
-        self.channel_repo.get(channel_id).ok().flatten().is_some_and(|c| {
-            c.channel_type == crate::domain::channel::ChannelType::Private
-        })
+        self.channel_repo.routing_type(channel_id).ok().flatten()
+            == Some(crate::domain::channel::ChannelType::Private)
     }
 
     async fn refresh_group_send_token(
@@ -222,7 +245,7 @@ impl MessageService {
 
     pub(super) fn private_post_prekeys(&self) -> PreKeySource<'_> {
         PreKeySource::Anonymous {
-            pool: &self.grpc_pool,
+            client: self.grpc_pool.private_post_auth_client(),
             tokens: &self.token_manager,
             claim: claim_private_post_credential,
         }
@@ -275,6 +298,32 @@ impl MessageService {
         )).await
     }
 
+    fn require_private_post_balance(&self, planned: usize, repairs_left: usize) -> Result<(), MessageError> {
+        if planned == 0 {
+            return Ok(());
+        }
+        let available = self.token_manager.available_token_count()
+            .map_err(|error| NetworkError::ServerError(error.to_string()))? as usize;
+        if available < planned + 2 * repairs_left + RESERVED_MAILBOX_CREDENTIALS {
+            return Err(NetworkError::AnonymousCredentialsUnavailable.into());
+        }
+        Ok(())
+    }
+
+    async fn private_post_holders(
+        &self,
+        channel_id: &ChannelId,
+        distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+    ) -> Result<Option<HashSet<(String, u32, u32)>>, MessageError> {
+        let current = self.create_sender_key_for_channel(channel_id).await?;
+        if !sender_key_precedes(distribution, &current) {
+            return Ok(None);
+        }
+        self.signal_service.sender_key_holders(channel_id)
+            .map(Some)
+            .map_err(|error| MessageError::from_signal_send(error, "sender key holders"))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn submit_verified_group(
         &self,
@@ -287,49 +336,68 @@ impl MessageService {
         contents: Vec<u8>,
         token: Vec<u8>,
     ) -> Result<chat_v1::Message, MessageError> {
-        let mut auth_client = self.auth_client();
-        let mut prekeys = self.private_post_prekeys();
-        // Reuse cached sessions. Cold members need initial discovery; the
-        // anonymous submit names any missing or stale devices for reconciliation.
-        let mut blocked = None;
+        // Do not send a subset of lookups. A cold roster scan covers
+        // every member, including accounts whose sessions are already warm.
+        let holders = self.private_post_holders(&channel_id, distribution).await?.unwrap_or_default();
+        let mut refresh_roster = false;
+        let mut fanout = 0;
         for member in &members {
-            match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
-                .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
-            {
-                Ok(devices) if devices.is_empty() && member != &me => {
-                    return Err(MessageError::Network(NetworkError::Unavailable));
-                }
-                Ok(_) => {}
-                Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
-                Err(error) => return Err(error),
+            let devices = self.private_post_devices(member, &me).await?;
+            refresh_roster |= devices.is_empty()
+                || (member == &me && devices.len() == 1 && devices[0].0 == self.current_device_id_or_zero()
+                    && !self.signal_service.has_discovered_private_echo()
+                        .map_err(|error| MessageError::from_signal_send(error, "private echo discovery"))?);
+            if devices.iter().any(|(device, registration)| {
+                !registration.is_some_and(|r| holders.contains(&(member.clone(), *device, r)))
+            }) {
+                fanout += 1;
             }
         }
-        if let Some(error) = blocked {
-            return Err(error);
+        let planned = if refresh_roster { 3 * members.len() } else { fanout };
+        self.require_private_post_balance(planned, MAX_REPAIRS_PER_POST)?;
+        for member in &members {
+            self.signal_service.require_group_device_ready(member)
+                .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))?;
         }
-        let current = self.create_sender_key_for_channel(&channel_id).await?;
-        let same_next = sender_key_precedes(distribution, &current);
-        let holders = if same_next {
-            self.signal_service.sender_key_holders(&channel_id)
-                .map_err(|e| MessageError::from_signal_send(e, "sender key holders"))?
-        } else {
-            Default::default()
-        };
-        let own_device = self.current_device_id_or_zero();
-        let mut message_client = self.message_client();
-        let mut distributed = std::collections::HashSet::new();
-        for round in 0..=MAX_RECONCILE_ROUNDS {
+
+        if refresh_roster {
+            let mut prekeys = self.private_post_prekeys();
+            let mut blocked = None;
             for member in &members {
-                let devices = self.signal_service.session_device_registrations(member).await
-                    .map_err(|e| MessageError::from_signal_send(e, "group sessions"))?;
-                let missing: Vec<_> = devices.into_iter().filter(|(device, registration)| {
-                    (member != &me || *device != own_device)
-                        && !distributed.contains(&(member.clone(), *device))
-                        && !registration.is_some_and(|r| holders.contains(&(member.clone(), *device, r)))
-                }).collect();
-                if missing.is_empty() {
-                    continue;
+                match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
+                    .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
+                {
+                    Ok(devices) if devices.is_empty() => return Err(NetworkError::Unavailable.into()),
+                    Ok(_) => {}
+                    Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
+                    Err(error) => return Err(error),
                 }
+            }
+            if let Some(error) = blocked {
+                return Err(error);
+            }
+        }
+        let mut auth_client = self.auth_client();
+        // Discovery can await the network while the local sender key advances.
+        let holders = self.private_post_holders(&channel_id, distribution).await?;
+        let same_next = holders.is_some();
+        let holders = holders.unwrap_or_default();
+        let mut message_client = self.message_client();
+        let mut distributed = HashSet::new();
+        for round in 0..=MAX_RECONCILE_ROUNDS {
+            let mut fanout = Vec::new();
+            for member in &members {
+                let devices = self.private_post_devices(member, &me).await?;
+                if devices.into_iter().any(|(device, registration)| {
+                    !distributed.contains(&(member.clone(), device))
+                        && !registration.is_some_and(|r| holders.contains(&(member.clone(), device, r)))
+                }) {
+                    fanout.push(member);
+                }
+            }
+            let repairs_left = PRIVATE_POST_BUDGET.with(|post| MAX_REPAIRS_PER_POST - post.repairs.get());
+            self.require_private_post_balance(fanout.len(), repairs_left)?;
+            for member in fanout {
                 let plaintext = self.skdm_plaintext(&channel_id, &verified, distribution, member);
                 let outcome = self.deposit_private_channel_key(
                     &mut auth_client, &mut message_client, member, &plaintext, &channel_id,
@@ -343,7 +411,9 @@ impl MessageService {
                 for (device, _) in outcome.deposits {
                     distributed.insert((member.clone(), device));
                 }
-                if missing.iter().any(|(device, _)| !distributed.contains(&(member.clone(), *device))) {
+                if self.private_post_devices(member, &me).await?.iter()
+                    .any(|(device, _)| !distributed.contains(&(member.clone(), *device)))
+                {
                     return Err(MessageError::Network(NetworkError::Unavailable));
                 }
             }
@@ -362,7 +432,7 @@ impl MessageService {
                 use prost::Message as _;
                 let original = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())
                     .map_err(invalid)?;
-                self.snapshot_private_receipt_targets(channel_id, original.timestamp, &destinations)?;
+                self.snapshot_private_resend_targets(channel_id, original.timestamp, &destinations)?;
                 return self.sent_group_message(request, resp.server_timestamp);
             }
             if resp.mismatched.is_empty() || round == MAX_RECONCILE_ROUNDS {
@@ -377,18 +447,8 @@ impl MessageService {
                     return Err(invalid("device mismatch for an account outside the verified channel"));
                 }
                 let d = account.devices.clone().unwrap_or_default();
-                if account.user_id == me
-                    && d.missing_devices.iter().chain(&d.extra_devices).chain(&d.stale_devices)
-                        .any(|device| *device == own_device)
-                {
-                    return Err(invalid("device mismatch for the sending device"));
-                }
                 distributed.retain(|(member, _)| member != &account.user_id);
-                self.signal_service
-                    .reconcile_devices_with_source(
-                        &mut prekeys, &account.user_id, &d.missing_devices,
-                        &d.extra_devices, &d.stale_devices,
-                    )
+                self.reconcile_private_post_devices(&account.user_id, &d)
                     .await
                     .map_err(|e| MessageError::from_signal_send(e, "device reconciliation"))?;
             }
@@ -435,9 +495,6 @@ pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
                     crate::state::send_session::SEND_SESSION.scope(session, async {
                         if let Err(error) = messages.refresh_private_endorsements(owner).await {
                             tracing::warn!(%error, "Private-channel endorsement refresh failed");
-                        }
-                        if let Err(error) = messages.flush_private_receipt_syncs(owner).await {
-                            tracing::warn!(%error, "Private-channel receipt sync failed");
                         }
                     }).await;
                 }

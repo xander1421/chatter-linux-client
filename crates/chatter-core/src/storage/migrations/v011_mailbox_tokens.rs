@@ -8,7 +8,6 @@ use super::Migration;
 ///
 /// Creates the mailbox-related tables:
 /// - `mailbox_server_keys`: Server blind signature public keys (for key rotation)
-/// - `mailbox_pending_blinds`: Pending blinding operations (awaiting server signature)
 /// - `mailbox_tokens`: Ready-to-use tokens with unblinded signatures
 /// - `mailbox_quota`: Daily quota tracking (single row)
 pub struct V011MailboxTokens;
@@ -19,7 +18,7 @@ impl Migration for V011MailboxTokens {
     }
 
     fn description(&self) -> &'static str {
-        "Mailbox token tables - server keys, pending blinds, tokens, quota"
+        "Mailbox token tables - server keys, tokens, quota"
     }
 
     fn up(&self) -> &'static str {
@@ -30,19 +29,6 @@ impl Migration for V011MailboxTokens {
             public_key_der BLOB NOT NULL,
             valid_until INTEGER NOT NULL,
             created_at TEXT NOT NULL
-        );
-
-        -- Pending blinding operations (awaiting server signature)
-        CREATE TABLE mailbox_pending_blinds (
-            id TEXT PRIMARY KEY,
-            ephemeral_public_key BLOB NOT NULL,
-            ephemeral_private_key BLOB NOT NULL,
-            blinded_message BLOB NOT NULL,
-            blinding_secret BLOB NOT NULL,
-            message_randomizer BLOB,
-            server_key_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (server_key_id) REFERENCES mailbox_server_keys(key_id)
         );
 
         -- Ready-to-use tokens
@@ -76,7 +62,6 @@ impl Migration for V011MailboxTokens {
             DROP TABLE IF EXISTS mailbox_quota;
             DROP INDEX IF EXISTS idx_mailbox_tokens_unused;
             DROP TABLE IF EXISTS mailbox_tokens;
-            DROP TABLE IF EXISTS mailbox_pending_blinds;
             DROP TABLE IF EXISTS mailbox_server_keys;
             "#,
         )

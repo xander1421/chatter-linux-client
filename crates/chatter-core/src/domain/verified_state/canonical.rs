@@ -22,7 +22,12 @@ fn put_bin(out: &mut Vec<u8>, b: &[u8]) {
 /// `canonical_state` (without the domain prefix).
 pub fn canonical_state(s: &MembershipState) -> Vec<u8> {
     let mut out = Vec::with_capacity(64 + s.members.len() * 80 + s.invites.len() * 64);
-    out.push(FORMAT_VERSION);
+    if s.channel_type as i32 == 0 {
+        out.push(FORMAT_VERSION);
+    } else {
+        out.push(FORMAT_VERSION + 1);
+        out.push(s.channel_type as u8);
+    }
     put_bin(&mut out, s.channel_id.as_bytes());
     out.extend_from_slice(&s.revision.to_be_bytes());
     let p = &s.policy;

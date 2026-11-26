@@ -20,7 +20,7 @@ async fn test_get_blind_signature_public_key() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
-    let response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let response = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
 
     // Should return an RSA-2048 public key
     assert!(
@@ -46,8 +46,8 @@ async fn test_blind_signature_key_is_consistent() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // Get key twice
-    let response1 = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let response2 = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let response1 = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
+    let response2 = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
 
     // Should return the same key (unless rotation happened)
     assert_eq!(
@@ -74,7 +74,7 @@ async fn test_get_mailbox_tokens() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // First get the public key
-    let key_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let key_response = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
 
     // Generate blinded keys (in real use, we'd properly blind them)
     // For this test, we'll use random bytes to verify API works
@@ -321,7 +321,7 @@ async fn test_blind_signature_key_requires_authentication() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
-    let result = mailbox_client.get_blind_signature_public_key().await;
+    let result = mailbox_client.get_blind_signature_public_key(Default::default()).await;
 
     // Server might allow this without auth (public key is not secret)
     // or require auth - both are valid implementations

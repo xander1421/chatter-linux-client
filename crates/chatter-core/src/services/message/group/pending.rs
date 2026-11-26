@@ -14,7 +14,7 @@ impl MessageService {
         sender_id: UserId,
         device_id: u32,
     ) -> bool {
-        sender_key_request_due(
+        self.is_public_channel(&channel_id) && sender_key_request_due(
             &mut self.sender_key_requests.lock(),
             (channel_id, sender_id, device_id),
             std::time::Instant::now(),
@@ -435,6 +435,11 @@ impl MessageService {
         use chatter_proto::content_v1::{self, SenderKeyRequest, content};
         use prost::Message;
 
+        // A private post may arrive before its distribution. Leave it for
+        // inbox redelivery; an author-directed control would name its sender.
+        if !self.is_public_channel(channel_id) {
+            return Ok(());
+        }
         let mut auth_client = self.auth_client();
 
         // Build the SenderKeyRequest proto

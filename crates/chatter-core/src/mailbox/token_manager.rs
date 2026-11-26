@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::error::MailboxError;
 use crate::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
-use crate::network::grpc::{AnonymousKtClient, MailboxClient};
+use crate::network::grpc::{AnonymousKtClient, GrpcClientPool, MailboxClient};
 use crate::storage::repositories::SettingsRepository;
 use crate::storage::Database;
 
@@ -64,7 +64,7 @@ fn credential_error(error: MailboxError) -> crate::error::NetworkError {
 /// (OPEN-ITEMS §120).
 fn grant_error(e: crate::error::NetworkError) -> MailboxError {
     match e {
-        crate::error::NetworkError::RateLimited => {
+        crate::error::NetworkError::MailboxQuotaExceeded => {
             tracing::debug!("TokenManager: server reports daily token quota exhausted");
             MailboxError::QuotaExhausted
         }
@@ -131,8 +131,8 @@ impl TokenManager {
     /// # Arguments
     ///
     /// * `client` - MailboxClient for server communication
-    /// * `kt` - anonymous KT client for the distinguished checkpoint
-    pub async fn refresh_server_key(
+    /// * `kt` - public KT client on the account transport
+    async fn refresh_server_key(
         &self,
         client: &mut MailboxClient,
         kt: &mut AnonymousKtClient,
@@ -302,8 +302,7 @@ impl TokenManager {
     ///
     /// # Arguments
     ///
-    /// * `client` - MailboxClient for server communication
-    /// * `kt` - anonymous KT client (see [`Self::refresh_server_key`])
+    /// * `pool` - account connection for issuance and manifest verification
     /// * `count` - Number of tokens to request
     ///
     /// # Returns
@@ -311,10 +310,11 @@ impl TokenManager {
     /// The number of tokens successfully acquired.
     pub async fn request_tokens(
         &self,
-        client: &mut MailboxClient,
-        kt: &mut AnonymousKtClient,
+        pool: &GrpcClientPool,
         count: u32,
     ) -> Result<u32, MailboxError> {
+        let mut client = pool.mailbox_client();
+        let mut kt = pool.account_kt_client();
         tracing::info!("TokenManager: request_tokens called, count={}", count);
 
         // No local quota gate: the server owns the daily budget (it clamps the
@@ -328,7 +328,7 @@ impl TokenManager {
 
         // Get/refresh server key
         tracing::info!("TokenManager: refreshing server key...");
-        let server_key = self.refresh_server_key(client, kt).await?;
+        let server_key = self.refresh_server_key(&mut client, &mut kt).await?;
         tracing::info!("TokenManager: got server key, generating keypairs...");
 
         // Generate ephemeral keypairs and blind them
@@ -660,11 +660,11 @@ mod tests {
     #[test]
     fn test_grant_error_maps_exhaustion() {
         assert!(matches!(
-            grant_error(crate::error::NetworkError::RateLimited),
+            grant_error(crate::error::NetworkError::MailboxQuotaExceeded),
             MailboxError::QuotaExhausted
         ));
         assert!(matches!(
-            grant_error(crate::error::NetworkError::Unavailable),
+            grant_error(crate::error::NetworkError::RateLimited),
             MailboxError::Network(_)
         ));
     }

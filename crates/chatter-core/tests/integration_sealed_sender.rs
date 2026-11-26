@@ -342,7 +342,7 @@ async fn test_get_blind_signature_public_key() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
-    let result = mailbox_client.get_blind_signature_public_key().await;
+    let result = mailbox_client.get_blind_signature_public_key(Default::default()).await;
 
     assert!(
         result.is_ok(),
@@ -373,7 +373,7 @@ async fn test_blind_signature_flow() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // Step 1: Get server's RSA public key
-    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
 
     // Parse the server public key using real blind_signature module
     let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
@@ -438,7 +438,7 @@ async fn test_get_mailbox_tokens_multiple() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // Get server key
-    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
     let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Generate 3 keypairs and blind them
@@ -482,7 +482,7 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // Step 1: Get server's RSA public key
-    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
     let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Step 2: Generate Ed25519 keypair
@@ -547,7 +547,7 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // Get server key
-    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
     let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Generate keypair
@@ -628,7 +628,7 @@ async fn test_send_to_ephemeral_mailbox() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // Create a mailbox first using real crypto
-    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
     let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     let mut secret_bytes = [0u8; 32];

@@ -68,6 +68,11 @@ pub fn genesis(user: &TestUser, public: bool) -> (String, pb::ChannelChange) {
     let g = act(Action::Genesis(pb::Genesis {
         policy: Some(Policy::defaults(public).to_proto()),
         disappearing_seconds: 0,
+        channel_type: if public {
+            pb::ChannelType::ChannelPublic as i32
+        } else {
+            pb::ChannelType::ChannelPrivate as i32
+        },
     }));
     let change = signed(user, &channel_id, None, vec![g]);
     (channel_id, change)

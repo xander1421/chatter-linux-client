@@ -26,7 +26,7 @@ mod receive;
 pub(crate) enum PreKeySource<'a> {
     Identified(&'a mut AuthClient),
     Anonymous {
-        pool: &'a crate::network::grpc::client_pool::GrpcClientPool,
+        client: crate::network::grpc::AnonymousAuthClient,
         tokens: &'a crate::mailbox::token_manager::TokenManager,
         claim: fn(&crate::mailbox::token_manager::TokenManager)
             -> Result<crate::mailbox::token_manager::MailboxToken, crate::error::NetworkError>,
@@ -41,12 +41,11 @@ impl PreKeySource<'_> {
     ) -> Result<chatter_proto::chat_v1::GetPreKeyBundleResponse, crate::error::NetworkError> {
         match self {
             Self::Identified(client) => client.get_pre_key_bundle(peer, device).await,
-            Self::Anonymous { pool, tokens, claim } => {
+            Self::Anonymous { client, tokens, claim } => {
                 // Minting immediately before discovery would link the authenticated
                 // mint to this request. Wait for the independent token refill.
                 let token = claim(tokens)?;
-                pool.anonymous_auth_client()
-                    .get_pre_key_bundle_anonymous(peer, device, &token.public_key, &token.signature)
+                client.get_pre_key_bundle_anonymous(peer, device, &token.public_key, &token.signature)
                     .await
             }
         }

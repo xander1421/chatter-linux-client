@@ -110,6 +110,16 @@ impl GrpcClientPool {
         super::super::AnonymousMessageClient::new(self.private_post_channel())
     }
 
+    pub(crate) fn private_post_auth_client(&self) -> super::super::AnonymousAuthClient {
+        super::super::AnonymousAuthClient::new(self.private_post_channel())
+    }
+
+    /// Public KT proofs for the account pin, including the mailbox signing
+    /// manifest, stay on the account transport.
+    pub(crate) fn account_kt_client(&self) -> super::super::AnonymousKtClient {
+        super::super::AnonymousKtClient::new(self.channel())
+    }
+
     /// Create an anonymous auth client (no auth headers) on the unidentified
     /// channel.
     pub fn anonymous_auth_client(&self) -> super::super::AnonymousAuthClient {

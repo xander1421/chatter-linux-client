@@ -1335,14 +1335,18 @@ impl KeyStore {
         for (address, identity) in &changes.identities {
             tx.execute("INSERT INTO remote_identities(address,identity_key,first_seen_at,updated_at) VALUES(?1,?2,?3,?3) ON CONFLICT(address) DO UPDATE SET identity_key=excluded.identity_key,updated_at=excluded.updated_at",params![address,identity,now])?;
         }
+        let kt_due_at = super::peer_verification::receive_key_due_at(changes.group_scope.as_deref(), |channel| {
+            super::repositories::ChannelRepository::routing_type_in(&tx, channel).ok().flatten()
+                == Some(crate::domain::ChannelType::Public)
+        });
         if let Some((address, identity)) = &changes.prekey_identity {
             if address != &key.local_account {
-                queued_kt |= Self::enqueue_inbound_kt_in(&tx, address, identity, KtRoute::AnonymousTor)?;
+                queued_kt |= Self::enqueue_inbound_kt_in(&tx, address, identity, KtRoute::AnonymousTor, kt_due_at)?;
             }
         }
         for (address, pinned, archived) in &changes.archived_identities {
             if address != &key.local_account {
-                queued_kt |= Self::enqueue_archived_kt_in(&tx, address, pinned, archived, KtRoute::AnonymousTor)?;
+                queued_kt |= Self::enqueue_archived_kt_in(&tx, address, pinned, archived, KtRoute::AnonymousTor, kt_due_at)?;
             }
         }
         for (id, record) in &changes.signed {

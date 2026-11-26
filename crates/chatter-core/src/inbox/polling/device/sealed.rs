@@ -365,20 +365,16 @@ pub(super) async fn process_sealed_sender_message(
             dem_serialized,
             channel_id,
         }) => {
-            tracing::warn!(
-                message_id = %msg.message_guid,
-                sender_id = %sender_id,
-                sender_device_id,
-                "[INBOX] 1:1 decrypt failed — dispatching DecryptionErrorMessage report to sender"
-            );
-            let _ = event_tx.send(InboxEvent::DmDecryptionErrorNeedsReport {
-                peer_id: sender_id,
-                peer_device_id: sender_device_id,
-                dem_serialized,
-            });
+            if channel_id.is_none_or(|id| channel_repo.is_routed_public(&id)) {
+                let _ = event_tx.send(InboxEvent::DmDecryptionErrorNeedsReport {
+                    peer_id: sender_id,
+                    peer_device_id: sender_device_id,
+                    dem_serialized,
+                });
+            }
             let _ = event_tx.send(InboxEvent::MessageFailed {
                 message_id: msg.message_guid.clone(),
-                error: "session desync — DecryptionErrorMessage reported to sender".to_string(),
+                error: "session desync".to_string(),
             });
 
             {

@@ -120,6 +120,7 @@ pub fn apply(
                 policy,
                 invites: BTreeMap::new(),
                 disappearing_seconds: g.disappearing_seconds,
+                channel_type: MembershipState::routing_type(g.channel_type)?,
             });
             continue;
         }

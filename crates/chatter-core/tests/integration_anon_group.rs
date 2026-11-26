@@ -32,7 +32,7 @@ async fn test_request_blind_signature_tokens() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
-    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
     // Request blind signature tokens
     // The server provides blinded tokens that can be used to register anonymous mailboxes
     // Note: get_mailbox_tokens requires blinded keys to be provided
@@ -218,7 +218,7 @@ async fn test_blind_token_full_flow() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
-    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key().await);
+    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key(Default::default()).await);
     // Step 1: Request blind tokens
     let blinded_keys: Vec<Vec<u8>> = (0..3)
         .map(|_| {

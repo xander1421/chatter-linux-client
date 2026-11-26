@@ -71,7 +71,15 @@ impl MailboxClient {
             .get_mailbox_tokens(request)
             .await
             .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+            .map_err(|status| {
+                // The mailbox handler's application refusal is distinct from
+                // a transport or gateway throttle, which uses the same code.
+                if status.code() == tonic::Code::ResourceExhausted && status.message() == "quota exceeded" {
+                    NetworkError::MailboxQuotaExceeded
+                } else {
+                    NetworkError::from_status(&status)
+                }
+            })
     }
 
     /// Get the server's blind signature public key.

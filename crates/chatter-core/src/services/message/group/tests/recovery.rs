@@ -10,7 +10,7 @@
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
         use prost::Message as _;
 
-        let t = two_members();
+        let t = two_public_members();
         let (alice, bob) = (&t.alice, &t.bob);
         let (alice_id, bob_id, channel_id) = (t.alice_id, t.bob_id, t.channel_id);
 
@@ -424,7 +424,7 @@
         use crate::domain::ids::MessageId;
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
 
-        let t = two_members();
+        let t = two_public_members();
         let (ge, _) = t
             .alice
             .signal()
@@ -531,7 +531,7 @@
         use crate::domain::ids::MessageId;
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
 
-        let t = two_members();
+        let t = two_public_members();
         // Bob's store is Alice's second device (7); Alice's client is device 1.
         let m = t.bob.messages();
         m.settings_repo

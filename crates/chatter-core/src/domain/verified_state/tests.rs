@@ -75,6 +75,7 @@ fn genesis(public: bool) -> Action {
     Action::Genesis(pb::Genesis {
         policy: Some(Policy::defaults(public).to_proto()),
         disappearing_seconds: 0,
+        channel_type: 0,
     })
 }
 
@@ -191,6 +192,7 @@ fn canonical_encoding_is_the_specified_layout() {
         policy: Policy::defaults(false),
         invites: Default::default(),
         disappearing_seconds: 3600,
+        channel_type: pb::ChannelType::Unspecified,
     };
     s.members.insert(
         "bbbbbbbb-0000-4000-8000-000000000000".into(),
@@ -1330,6 +1332,7 @@ fn vector_state(v: &serde_json::Value) -> pb::MembershipState {
             })
             .collect(),
         disappearing_seconds: v["disappearing_seconds"].as_u64().unwrap() as u32,
+        channel_type: 0,
     }
 }
 

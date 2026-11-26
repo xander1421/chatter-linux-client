@@ -115,7 +115,11 @@ impl ConversationHandle {
         timestamps: &[u64],
         read: bool,
     ) -> ConversationResult {
-        if timestamps.is_empty() || matches!(self.conversation, ActiveConversation::AnonGroup(_)) {
+        if timestamps.is_empty()
+            || matches!(self.conversation, ActiveConversation::AnonGroup(_))
+            || matches!(&self.conversation, ActiveConversation::Channel(channel)
+                if !self.client.messages().is_public_channel(channel))
+        {
             return Ok(());
         }
         if read
@@ -336,6 +340,8 @@ impl ConversationHandle {
     )> {
         if !self.client.chat_state().is_app_visible()
             || matches!(self.conversation, ActiveConversation::AnonGroup(_))
+            || matches!(&self.conversation, ActiveConversation::Channel(channel)
+                if !self.client.messages().is_public_channel(channel))
         {
             return None;
         }

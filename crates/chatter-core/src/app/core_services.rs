@@ -345,34 +345,45 @@ impl CoreServices {
             return Ok(0);
         }
         self.token_manager.request_tokens(
-            &mut self.grpc_pool.mailbox_client(),
-            &mut self.grpc_pool.anonymous_kt_client(),
+            &self.grpc_pool,
             count,
         ).await
     }
 
     /// Run credential issuance on its own clock. Every signed-in tick sends
-    /// one fixed batch regardless of the local balance or last grant, including
-    /// quota refusals. A separate jittered loop retries parked anonymous sends.
+    /// one fixed batch regardless of the local balance. After a quota refusal,
+    /// probe once an hour so a larger same-day grant can still take effect.
     pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
         let auth = self.auth_state.clone();
         let refill = async move {
+            const QUOTA_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
             initial_token_refill_sleep().await;
             let mut ticks = credential_refill_clock();
+            let mut quota_retry = None;
             loop {
-                ticks.tick().await;
+                let tick = ticks.tick().await;
                 let state = auth.get();
                 if state.current_user_id.is_none() || state.session_ended {
                     continue;
                 }
-                let mut client = grpc_pool.mailbox_client();
-                let mut kt = grpc_pool.anonymous_kt_client();
+                if quota_retry.is_some_and(|(revision, next)| {
+                    revision == state.session_revision && tick < next
+                }) {
+                    continue;
+                }
                 match token_manager.request_tokens(
-                    &mut client, &mut kt, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
+                    &grpc_pool, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
                 ).await {
-                    Ok(granted) => tracing::debug!(granted, "Scheduled credential batch received"),
+                    Ok(granted) => {
+                        quota_retry = None;
+                        tracing::debug!(granted, "Scheduled credential batch received");
+                    }
+                    Err(error @ crate::error::MailboxError::QuotaExhausted) => {
+                        quota_retry = Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
+                        trace_token_refill_failure(&error);
+                    }
                     Err(error) => trace_token_refill_failure(&error),
                 }
                 if let Err(error) = token_manager.prune_expired_unused_tokens() {
@@ -924,7 +935,7 @@ pub(crate) async fn initial_token_refill_sleep() {
 }
 
 fn credential_refill_clock() -> tokio::time::Interval {
-    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(2 * 60));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticks
 }
@@ -972,10 +983,10 @@ mod initial_token_refill_tests {
         use std::time::Duration;
         let mut ticks = super::credential_refill_clock();
         let first = ticks.tick().await;
-        tokio::time::advance(Duration::from_secs(25 * 60)).await;
-        assert_eq!(ticks.tick().await, first + Duration::from_secs(10 * 60));
+        tokio::time::advance(Duration::from_secs(5 * 60)).await;
+        assert_eq!(ticks.tick().await, first + Duration::from_secs(2 * 60));
         let mut next = std::pin::pin!(ticks.tick());
         assert!(futures::poll!(&mut next).is_pending());
-        assert_eq!(next.await, first + Duration::from_secs(30 * 60));
+        assert_eq!(next.await, first + Duration::from_secs(6 * 60));
     }
 }

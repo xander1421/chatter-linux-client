@@ -54,8 +54,10 @@ impl ChannelRepository {
 
     /// Insert a new channel.
     pub fn insert(&self, channel: &Channel) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        Self::pin_type_in(&tx, &channel.id, channel.channel_type)?;
+        tx.execute(
             "INSERT INTO channels (
                 id, channel_type, name, description, icon, owner_id,
                 persistence, max_members, default_ttl_seconds,
@@ -75,12 +77,13 @@ impl ChannelRepository {
                 channel.config.allow_reactions as i32,
                 channel.config.allow_threads as i32,
                 channel.config.allow_attachments as i32,
-                channel.config.require_encryption as i32,
+                Self::encryption_for_type(channel.channel_type, channel.config.require_encryption) as i32,
                 channel.created_at.to_rfc3339(),
                 channel.updated_at.to_rfc3339(),
                 channel.archived as i32,
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -128,6 +131,86 @@ impl ChannelRepository {
             .optional()?)
     }
 
+    /// A public route requires creator intent or a verified membership pin.
+    /// An older private row still requires encryption and verified membership.
+    pub(crate) fn routing_type(&self, id: &ChannelId) -> Result<Option<ChannelType>, StorageError> {
+        Self::routing_type_in(&*self.db.connection()?, id)
+    }
+
+    pub(crate) fn routing_type_in(
+        conn: &rusqlite::Connection, id: &ChannelId,
+    ) -> Result<Option<ChannelType>, StorageError> {
+        let value: Option<i32> = conn.query_row(
+            "SELECT COALESCE(
+                (SELECT channel_type FROM channel_type_pins WHERE channel_id=?1),
+                (SELECT channel_type FROM channels WHERE id=?1 AND channel_type IN (1,3))
+            )",
+            params![id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(value.map(channel_type_from_i32))
+    }
+
+    pub(crate) fn is_routed_public(&self, id: &ChannelId) -> bool {
+        self.routing_type(id).ok().flatten() == Some(ChannelType::Public)
+    }
+
+    pub(crate) fn pin_type_in(
+        conn: &rusqlite::Connection, id: &ChannelId, kind: ChannelType,
+    ) -> Result<(), StorageError> {
+        let id = id.to_string();
+        let kind = channel_type_to_i32(kind);
+        conn.execute(
+            "INSERT INTO channel_type_pins (channel_id, channel_type) VALUES (?1,?2)
+             ON CONFLICT(channel_id) DO NOTHING",
+            params![id, kind],
+        )?;
+        let matches: bool = conn.query_row(
+            "SELECT channel_type=?2 FROM channel_type_pins WHERE channel_id=?1",
+            params![id, kind], |row| row.get(0),
+        )?;
+        if !matches {
+            return Err(StorageError::InvalidData("channel type contradicts its pin".into()));
+        }
+        conn.execute(
+            "UPDATE channels SET channel_type=?2, require_encryption=(?2!=0) WHERE id=?1",
+            params![id, kind],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn pin_created_type(&self, id: &ChannelId, kind: ChannelType) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        Self::pin_type_in(&tx, id, kind)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn encryption_for_type(kind: ChannelType, configured: bool) -> bool {
+        match kind {
+            ChannelType::Public => false,
+            ChannelType::Private => true,
+            ChannelType::SavedMessages => configured,
+        }
+    }
+
+    /// Store refreshed metadata and return the effective channel.
+    pub(crate) fn save_remote(&self, mut channel: Channel) -> Result<Channel, StorageError> {
+        self.upsert(&channel)?;
+        self.apply_stored_type(&mut channel)?;
+        Ok(channel)
+    }
+
+    pub(crate) fn apply_stored_type(&self, channel: &mut Channel) -> Result<(), StorageError> {
+        if let Some(kind) = self.get_channel_type(&channel.id)? {
+            channel.channel_type = kind;
+            channel.config.require_encryption =
+                Self::encryption_for_type(kind, channel.config.require_encryption);
+        }
+        Ok(())
+    }
+
     /// Get a channel by ID.
     pub fn get(&self, id: &ChannelId) -> Result<Option<Channel>, StorageError> {
         let conn = self.db.connection()?;
@@ -156,13 +239,13 @@ impl ChannelRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE channels SET
-                channel_type = ?1, name = ?2, description = ?3, icon = ?4, owner_id = ?5,
-                persistence = ?6, max_members = ?7, default_ttl_seconds = ?8,
-                allow_reactions = ?9, allow_threads = ?10, allow_attachments = ?11, require_encryption = ?12,
-                updated_at = ?13, archived = ?14
-             WHERE id = ?15",
+                name = ?1, description = ?2, icon = ?3, owner_id = ?4,
+                persistence = ?5, max_members = ?6, default_ttl_seconds = ?7,
+                allow_reactions = ?8, allow_threads = ?9, allow_attachments = ?10,
+                require_encryption = CASE channel_type WHEN 0 THEN 0 WHEN 1 THEN 1 ELSE ?11 END,
+                updated_at = ?12, archived = ?13
+             WHERE id = ?14",
             params![
-                channel_type_to_i32(channel.channel_type),
                 channel.name,
                 channel.description,
                 channel.icon,
@@ -196,9 +279,12 @@ impl ChannelRepository {
                 persistence, max_members, default_ttl_seconds,
                 allow_reactions, allow_threads, allow_attachments, require_encryption,
                 created_at, updated_at, archived
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            ) SELECT ?1, kind, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                CASE kind WHEN 0 THEN 0 WHEN 1 THEN 1 ELSE ?13 END, ?14, ?15, ?16
+            FROM (SELECT COALESCE(
+                (SELECT channel_type FROM channel_type_pins WHERE channel_id=?1), ?2
+            ) AS kind) WHERE true
             ON CONFLICT(id) DO UPDATE SET
-                channel_type = excluded.channel_type,
                 name = excluded.name,
                 description = excluded.description,
                 icon = excluded.icon,
@@ -209,7 +295,8 @@ impl ChannelRepository {
                 allow_reactions = excluded.allow_reactions,
                 allow_threads = excluded.allow_threads,
                 allow_attachments = excluded.allow_attachments,
-                require_encryption = excluded.require_encryption,
+                require_encryption = CASE channels.channel_type
+                    WHEN 0 THEN 0 WHEN 1 THEN 1 ELSE excluded.require_encryption END,
                 updated_at = excluded.updated_at,
                 archived = excluded.archived",
             params![
@@ -901,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn channel_type_lookup_matches_full_mapping_and_observes_updates() {
+    fn channel_type_lookup_matches_full_mapping_and_pins_updates() {
         use crate::domain::message::ConversationType;
 
         let (repo, _dir) = create_test_repo();
@@ -911,29 +998,28 @@ mod tests {
             conversation_type_for_channel(&repo, &id),
             ConversationType::Channel
         );
-        let mut channel = make_channel(id);
-        repo.insert(&channel).unwrap();
-        for kind in [
-            ChannelType::Public,
-            ChannelType::Private,
-            ChannelType::SavedMessages,
-        ] {
-            for encrypted in [false, true] {
-                channel.channel_type = kind;
-                channel.config.require_encryption = encrypted;
-                repo.update(&channel).unwrap();
-                let full = repo.get(&id).unwrap().unwrap();
-                let narrow = repo.get_channel_type(&id).unwrap().unwrap();
-                let expected = match kind {
-                    ChannelType::SavedMessages => ConversationType::SavedMessages,
-                    _ => ConversationType::Channel,
-                };
-                assert_eq!(narrow, full.channel_type);
-                assert_eq!(full.conversation_type(), expected);
-                assert_eq!(narrow.conversation_type(), expected);
-                assert_eq!(conversation_type_for_channel(&repo, &id), expected);
+        for kind in [ChannelType::Public, ChannelType::Private, ChannelType::SavedMessages] {
+            let mut channel = make_channel(ChannelId::new());
+            channel.channel_type = kind;
+            repo.insert(&channel).unwrap();
+            channel.channel_type = if kind == ChannelType::Public {
+                ChannelType::Private
+            } else {
+                ChannelType::Public
+            };
+            channel.config.require_encryption = false;
+            repo.update(&channel).unwrap();
+            let returned = repo.save_remote(channel.clone()).unwrap();
+            assert_eq!(returned.channel_type, kind);
+            assert_eq!(repo.routing_type(&channel.id).unwrap(), Some(kind));
+            assert_eq!(repo.get_channel_type(&channel.id).unwrap(), Some(kind));
+            assert_eq!(repo.get(&channel.id).unwrap().unwrap().channel_type, kind);
+            assert_eq!(conversation_type_for_channel(&repo, &channel.id), kind.conversation_type());
+            if kind == ChannelType::Private {
+                assert!(returned.config.require_encryption);
             }
         }
+        repo.insert(&make_channel(id)).unwrap();
         // This includes the obsolete/unknown integer 2: retain the full-row
         // decoder's Public fallback rather than inventing an AnonGroup kind.
         for stored in [2, -1, 99] {

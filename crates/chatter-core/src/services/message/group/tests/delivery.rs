@@ -619,7 +619,7 @@
     async fn parked_message_evicted_by_the_cap_requests_a_resend() {
         use crate::domain::ids::MessageId;
 
-        let t = two_members();
+        let t = two_public_members();
         let m = t.bob.messages();
         let (ge, _) = t
             .alice

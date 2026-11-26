@@ -240,7 +240,7 @@ async fn sealed_sender_decrypt_labels_unratcheted_plaintext() {
         &mut s3,
         &s6,
         &mut s4,
-        |_| {},
+        |_, _, _| {},
     )
     .await
     .expect("envelope opens — the cert chain is valid");
@@ -341,7 +341,7 @@ async fn an_inner_failure_carries_the_sealed_group_id() {
         &mut s3,
         &s6,
         &mut s4,
-        |_| {},
+        |_, _, _| {},
     )
     .await
     .expect_err("no session: the inner message cannot open");
@@ -439,7 +439,7 @@ async fn sealed_sender_cert_is_validated_at_envelope_time_not_now() {
                 &mut s3,
                 &s6,
                 &mut s4,
-                |_| {},
+                |_, _, _| {},
             )
             .await
         }

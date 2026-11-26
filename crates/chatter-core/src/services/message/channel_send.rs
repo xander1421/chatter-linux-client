@@ -23,6 +23,10 @@ const LEASE_SECONDS: i64 = 60;
 const MAX_PENDING: i64 = 64;
 /// Phases that still hold delivery or deletion work.
 const LIVE: &str = "('queued','preparing','submitted','accepted','deleting')";
+const RETRY_DEADLINES_MET: &str =
+    "COALESCE(json_extract(value,'$.credential_retry_at'),0)<=?2
+     AND COALESCE(json_extract(value,'$.private_key_retry_at'),0)<=?2
+     AND (?3 OR json_extract(value,'$.private_key_retry_at') IS NULL)";
 /// The retained (`unresolved`) shape of a journal whose bubble the user
 /// deleted: the plaintext entry and lease fields go, while the exact request,
 /// response, canonical id, intent and sending device stay (the device
@@ -276,15 +280,17 @@ fn record_channel_attempt_failure(
     generation: &str,
     retryable: bool,
     credential_retry_at: Option<i64>,
+    private_key_retry_at: Option<i64>,
 ) -> Result<usize, StorageError> {
     let conn = db.connection()?;
     Ok(conn.execute(
         "UPDATE settings SET value=json_set(value,'$.phase',CASE WHEN ?3 THEN 'queued' ELSE 'terminal' END,
          '$.attempts',MIN(json_extract(value,'$.attempts')+1,6),
          '$.credential_retry_at',?5,
-         '$.next_at',COALESCE(?5,?4+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6)))))
+         '$.private_key_retry_at',?6,
+         '$.next_at',COALESCE(?5,?6,?4+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6)))))
          WHERE key=?1 AND json_extract(value,'$.generation')=?2",
-        params![key, generation, retryable, now(), credential_retry_at],
+        params![key, generation, retryable, now(), credential_retry_at, private_key_retry_at],
     )?)
 }
 
@@ -551,6 +557,9 @@ impl MessageService {
         }
         let owner = self.current_user_id()?;
         let row = &entry.row;
+        if self.channel_send_requires_encryption(&row.conversation_id)? != prepared.distribution.is_some() {
+            return Err(MessageError::InvalidContent("prepared post contradicts the pinned channel type".into()));
+        }
         let private = prepared.distribution.is_some();
         if !private {
             let members = tokio::time::timeout(
@@ -836,9 +845,11 @@ impl MessageService {
                 if let Some(stored) = self.message_repo.get(&sent.id)? {
                     sent.delivery_status = stored.delivery_status;
                 }
-                let mut auth = self.auth_client();
-                self.sync_channel_receipt_targets(row.conversation_id, sent.sent_at, &mut auth, private)
-                    .await;
+                if !private {
+                    let mut auth = self.auth_client();
+                    self.sync_channel_receipt_targets(row.conversation_id, sent.sent_at, &mut auth)
+                        .await;
+                }
                 Ok(sent)
             }
             Err(error) => {
@@ -862,8 +873,16 @@ impl MessageService {
                 let credential_retry_at = credential_wait.then(|| {
                     now() + crate::app::core_services::jittered_delay().as_secs() as i64
                 });
+                // Retry Shield posts on a jittered schedule measured from
+                // their failed attempt. Neither a KT verdict nor an unrelated
+                // wake is allowed to pull this due time forward.
+                let private_key_retry_at = (identity_wait.is_some()
+                    && self.is_private_channel(&row.conversation_id)
+                    && self.shield_mode.load(std::sync::atomic::Ordering::Acquire))
+                    .then(|| now() + crate::app::core_services::jittered_delay().as_secs() as i64);
                 let changed = record_channel_attempt_failure(
-                    &self.database, journal_key, generation, transient, credential_retry_at,
+                    &self.database, journal_key, generation, transient,
+                    credential_retry_at, private_key_retry_at,
                 )?;
                 if changed == 0 {
                     return self
@@ -1071,6 +1090,17 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
                 // they could still resolve an unknown canonical id.
                 tx.execute("UPDATE settings SET value=json_remove(value,'$.prepared.request','$.prepared.state_hash','$.prepared.distribution','$.response') WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.prepared.request') IS NOT NULL AND (json_extract(value,'$.server_id') IS NOT NULL OR json_extract(value,'$.prepared.at')<?2)",params![pattern,now()-REQUEST_WINDOW])?;
                 if reconnected || key_updated {
+                    if messages.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+                        // An already parked private post may predate the
+                        // independent retry schedule. Give it a deadline once.
+                        tx.execute("UPDATE settings SET value=json_set(value,'$.private_key_retry_at',?2+300+ABS(RANDOM()%601))
+                            WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'
+                            AND json_extract(value,'$.private_key_retry_at') IS NULL
+                            AND json_extract(value,'$.prepared.distribution') IS NOT NULL
+                            AND EXISTS(SELECT 1 FROM messages m WHERE m.id=json_extract(settings.value,'$.entry.row.id')
+                                       AND m.failure_reason IN (?3,?4))",
+                            params![pattern, now(), super::core::VERIFYING_KEY, super::core::IDENTITY_CHANGED])?;
+                    }
                     tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0)
                         WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'
                         AND (?2 OR EXISTS(SELECT 1 FROM messages m WHERE m.id=json_extract(settings.value,'$.entry.row.id')
@@ -1078,8 +1108,8 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
                         params![pattern, reconnected, super::core::VERIFYING_KEY, super::core::IDENTITY_CHANGED])?;
                 }
                 let rows: Vec<(String, Option<String>, String, Option<String>, Option<u32>)> = {
-                    let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase'),COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 AND COALESCE(json_extract(value,'$.credential_retry_at'),0)<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
-                    let mapped = stmt.query_map(params![pattern, now()], |r| {
+                    let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase'),COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 AND {RETRY_DEADLINES_MET} ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
+                    let mapped = stmt.query_map(params![pattern, now(), !key_updated], |r| {
                         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                     })?;
                     mapped.collect::<Result<_, _>>()?
@@ -1224,10 +1254,21 @@ mod tests {
         ] {
             let wait = peer_identity_wait_reason(&error);
             assert_eq!(wait, Some(reason));
-            assert_eq!(record_channel_attempt_failure(&db, &key, "lease", wait.is_some(), None).unwrap(), 1);
+            let due_at = now() + 300;
+            assert_eq!(record_channel_attempt_failure(&db, &key, "lease", wait.is_some(), None, Some(due_at)).unwrap(), 1);
             let retained: serde_json::Value = settings.get(&key).unwrap().unwrap();
             assert_eq!(retained["phase"], "queued");
             assert_eq!(retained["prepared"], prepared);
+            assert_eq!(retained["private_key_retry_at"], retained["next_at"]);
+            let conn = db.connection().unwrap();
+            conn.execute("UPDATE settings SET value=json_set(value,'$.next_at',0) WHERE key=?1", [&key]).unwrap();
+            let due = |at: i64, scheduled_tick: bool| conn.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1 AND json_extract(value,'$.next_at')<=?2 AND {RETRY_DEADLINES_MET})"),
+                params![key, at, scheduled_tick], |row| row.get::<_, bool>(0),
+            ).unwrap();
+            assert!(!due(due_at - 1, true));
+            assert!(!due(due_at, false), "a key verdict must not release the private post");
+            assert!(due(due_at, true));
         }
         assert_eq!(peer_identity_wait_reason(&MessageError::RecipientKeyUnverified { peer_id }), None);
     }

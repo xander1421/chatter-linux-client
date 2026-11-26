@@ -26,7 +26,7 @@ impl MessageGateway {
     /// fetch even when not (yet) a member of our state; a fork counts only
     /// from a verified member. A sender outside the verified distribution set
     /// is not stored (`Ok(None)`): the server alone cannot make anyone a
-    /// sender in our channels. `Ok(Some(profile_key_changed))` once stored.
+    /// sender in our channels. The returned flag permits an immediate profile refresh.
     pub(crate) async fn accept_skdm(
         &self,
         sender_id: &UserId,
@@ -54,10 +54,10 @@ impl MessageGateway {
         // name and avatar. Stored against the sealed-sender-authenticated
         // sender only — the key is theirs; a blocked sender never reaches
         // this point (checked by the caller).
-        Ok(Some(self.store_skdm_profile_key(
-            sender_id,
-            skdm.profile_key.as_deref(),
-        )))
+        let profile_changed = self.store_skdm_profile_key(sender_id, skdm.profile_key.as_deref());
+        // Receiving a private distribution cannot trigger a profile lookup or
+        // handshake directed at its sender.
+        Ok(Some(profile_changed && self.channel_repo.is_routed_public(channel_id)))
     }
 
     /// Process an incoming sender key (group) encrypted message.
@@ -185,39 +185,13 @@ impl MessageGateway {
                 );
                 Ok(DecryptResult::Plaintext(plaintext))
             }
-            Err(e) => {
-                // Check if this is a "no sender key" error
-                let error_str = e.to_string();
-                tracing::warn!(
-                    sender_id = %sender_id,
-                    channel_id = %channel_id,
-                    error = %error_str,
-                    "[MSG_RECV] Decryption failed, checking if sender key is missing"
-                );
-
-                if error_str.contains("no sender key")
-                    || error_str.contains("SenderKeyRecord")
-                    || error_str.contains("not found")
-                {
-                    tracing::warn!(
-                        sender_id = %sender_id,
-                        channel_id = %channel_id,
-                        "[MSG_RECV] MISSING SENDER KEY - need to request SKDM from sender"
-                    );
-                    Ok(DecryptResult::NeedsSenderKey {
-                        channel_id,
-                        sender_id: *sender_id,
-                    })
-                } else {
-                    // Other decryption error
-                    tracing::error!(
-                        sender_id = %sender_id,
-                        channel_id = %channel_id,
-                        error = %error_str,
-                        "[MSG_RECV] Decryption failed with non-recoverable error"
-                    );
-                    Err(e)
-                }
+            Err(ServiceError::Crypto(crate::error::CryptoError::MissingSenderKey)) => {
+                tracing::debug!(%sender_id, %channel_id, "Waiting for the sender-key distribution");
+                Ok(DecryptResult::NeedsSenderKey { channel_id, sender_id: *sender_id })
+            }
+            Err(error) => {
+                tracing::warn!(%sender_id, %channel_id, %error, "Group decryption failed");
+                Err(error)
             }
         }
     }

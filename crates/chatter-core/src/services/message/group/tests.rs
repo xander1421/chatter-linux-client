@@ -4,3 +4,8 @@ include!("tests/distribution.rs");
 include!("tests/recovery.rs");
 include!("tests/delivery.rs");
 include!("tests/membership.rs");
+
+
+#[cfg(feature = "dev-trust-root")]
+#[path = "tests/privacy_trace.rs"]
+mod privacy_trace;
