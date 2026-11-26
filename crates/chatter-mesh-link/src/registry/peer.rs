@@ -342,7 +342,11 @@ impl PeerRegistry {
             out.extend_from_slice(bytes);
         }
 
-        let mut out = Zeroizing::new(vec![PIN_BLOB_VERSION]);
+        // Reserve the entire blob up front so growing the vector never leaves
+        // a previous allocation containing pairing secrets.
+        let capacity = 1 + self.pins.len() * (5 * (1 + usize::from(u8::MAX)) + 8 + 1 + 32);
+        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
+        out.push(PIN_BLOB_VERSION);
         for (peer, pin) in &self.pins {
             field(&mut out, peer.as_str().as_bytes());
             field(&mut out, pin.contact.as_str().as_bytes());
