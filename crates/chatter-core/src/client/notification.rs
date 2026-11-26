@@ -455,7 +455,7 @@ mod session_tests {
             })
             .await
             .unwrap();
-            let _ = client.logout().await; // no server session; teardown still must complete
+            client.logout_with_retirement(std::future::ready(Ok(()))).await.unwrap();
             assert!(client.authed_notif_session.lock().is_none());
             assert!(!client
                 .authed_notif_started

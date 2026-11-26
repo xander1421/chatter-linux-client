@@ -1010,13 +1010,22 @@ impl ChatterClient {
 
     /// Retire the device on the server, then shut down the local session.
     pub async fn logout(&self) -> Result<(), ClientError> {
+        self.logout_with_retirement(self.auth().do_logout()).await
+    }
+
+    pub(super) async fn logout_with_retirement(
+        &self,
+        retire_device: impl std::future::Future<Output = Result<(), AuthError>>,
+    ) -> Result<(), ClientError> {
         let expected = self.auth_state().get().session_revision;
         let _lifecycle = self.auth_lifecycle_lock.lock().await;
         if self.auth_state().get().session_revision != expected {
             return Ok(());
         }
-        self.set_presence_for_shutdown(crate::domain::user::PresenceStatus::Offline).await;
-        self.auth().do_logout().await?;
+        let presence = self.suspend_presence(expected).await;
+        self.send_presence_updates(crate::domain::user::PresenceStatus::Offline).await;
+        retire_device.await?;
+        presence.commit();
         crate::system::messaging_background::set_signed_in(false);
         // Invalidate queued UI work immediately, then retire the old call owner
         // using its captured revision, before new credentials can be installed.

@@ -287,7 +287,7 @@ impl ClientBuilder {
             pending_update: Mutex::new(None),
             transport_epoch: tokio::sync::watch::channel(0).0,
             authed_notif_started: AtomicBool::new(false),
-            auth_lifecycle_lock: tokio::sync::Mutex::new(()),
+            auth_lifecycle_lock: Arc::new(tokio::sync::Mutex::new(())),
             authed_notif_session: Mutex::new(None),
             #[cfg(feature = "media")]
             call_notification_bridge: Mutex::new(None),
@@ -606,7 +606,7 @@ pub struct ChatterClient {
     /// can't start at boot like the consumer because there's no authenticated
     /// user / call service yet — see `start_authed_notification_streams`.
     authed_notif_started: AtomicBool,
-    auth_lifecycle_lock: tokio::sync::Mutex<()>,
+    auth_lifecycle_lock: Arc<tokio::sync::Mutex<()>>,
     authed_notif_session: Mutex<Option<u64>>,
     #[cfg(feature = "media")]
     call_notification_bridge: Mutex<

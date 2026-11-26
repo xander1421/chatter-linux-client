@@ -582,6 +582,7 @@ pub(super) async fn run_flow(
     device_info: String,
     device_name: String,
     tx: mpsc::UnboundedSender<LinkProgress>,
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
 ) {
     // 1. Start session + render QR.
     let session = match svc.start_as_new_device(&device_info, &device_name).await {
@@ -632,7 +633,8 @@ pub(super) async fn run_flow(
     *svc.active_uuid.lock() = None;
     let _ = tx.send(LinkProgress::Approved);
 
-    // 3. Complete linking.
+    // Serialize the server completion and local account change with sign-in.
+    let _lifecycle = lifecycle.lock().await;
     match svc.complete_linking(session, provision).await {
         Ok(c) => {
             let _ = tx.send(LinkProgress::Linked(c));

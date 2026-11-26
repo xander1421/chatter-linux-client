@@ -140,7 +140,7 @@ async fn logout_cancels_active_and_queued_work_drains_crypto_then_publishes_offl
         .test_pause(entered_tx, release_rx)
         .await;
     entered_rx.await.unwrap();
-    let mut logout = Box::pin(client.logout());
+    let mut logout = Box::pin(client.logout_with_retirement(std::future::ready(Ok(()))));
     assert!(futures::poll!(&mut logout).is_pending());
     active.await;
     queued.await;
@@ -151,9 +151,9 @@ async fn logout_cancels_active_and_queued_work_drains_crypto_then_publishes_offl
     );
     assert!(!events.lock().unwrap().contains(&"final_offline"));
     release_tx.send(()).unwrap();
-    // No connected auth transport in fixture: local teardown must still finish.
-    let _ = tokio::time::timeout(Duration::from_secs(2), &mut logout)
+    tokio::time::timeout(Duration::from_secs(2), &mut logout)
         .await
+        .unwrap()
         .unwrap();
     let events = events.lock().unwrap().clone();
     assert_eq!(events.last(), Some(&"final_offline"));

@@ -172,10 +172,11 @@ impl LinkDeviceService {
     /// status text on `WaitingForApproval` / `Approved`, and switch view on
     /// the terminal event. No session state, no error string formatting,
     /// no polling.
-    pub fn run_new_device_flow(
+    pub(crate) fn run_new_device_flow(
         self: &Arc<Self>,
         device_info: String,
         device_name: String,
+        lifecycle: Arc<tokio::sync::Mutex<()>>,
     ) -> mpsc::UnboundedReceiver<LinkProgress> {
         let (tx, rx) = mpsc::unbounded_channel();
         let svc = self.clone();
@@ -190,7 +191,7 @@ impl LinkDeviceService {
                 _ = cancel.closed() => {
                     tracing::info!("link device flow cancelled: receiver dropped");
                 }
-                _ = run_flow(svc, device_info, device_name, tx) => {}
+                _ = run_flow(svc, device_info, device_name, tx, lifecycle) => {}
             }
         });
         rx
