@@ -620,10 +620,9 @@ impl OwnerState {
     }
 }
 
-/// Record the exact public key that completed a local republish or device
-/// link. The next verified search consumes this permission. A repeat publish
-/// of a key we already monitor keeps its history and any warning.
-pub(crate) fn authorize_own_identity(
+/// Authorize the exact key authenticated by device-to-device provisioning.
+/// The next verified search accounts for its version in the log.
+pub(crate) fn authorize_linked_owner_identity(
     settings: &SettingsRepository,
     label: &str,
     key: &[u8],
@@ -635,7 +634,7 @@ pub(crate) fn authorize_own_identity(
     let current = SettingsRepository::get_with_connection::<String>(&tx, keys::CURRENT_USER_ID)?;
     if current.as_deref() != Some(label) {
         return Err(StorageError::InvalidData(
-            "transparency owner changed during publication".into(),
+            "transparency owner changed during device linking".into(),
         ));
     }
     let mut state = OwnerState::load(&tx, label.as_bytes())?;
@@ -671,6 +670,171 @@ pub(crate) fn authorize_own_identity(
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum OwnIdentityAtSignIn {
+    Current,
+    Republish,
+    UnexpectedKey,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum OwnIdentityCheck<'a> {
+    Local(&'a [u8]),
+    Restored(&'a [u8]),
+    BeforeReset,
+}
+
+/// Compare a password-authenticated device's local identity with the current
+/// log value. An explicit reset pins the account's existing key and version
+/// before this device stores the replacement key.
+pub(crate) async fn verify_own_identity_at_sign_in(
+    client: &mut AnonymousKtClient,
+    settings: &SettingsRepository,
+    label: &str,
+    check: OwnIdentityCheck<'_>,
+    deadline: Duration,
+) -> Result<OwnIdentityAtSignIn, KtError> {
+    let verifier = verifier()?;
+    with_deadline(deadline, async {
+        loop {
+            match search_own_at_sign_in(
+                client,
+                settings,
+                label.as_bytes(),
+                check,
+                verifier,
+                SystemTime::now(),
+            )
+            .await
+            {
+                Err(KtError::PinChanged) => tokio::task::yield_now().await,
+                result => return result,
+            }
+        }
+    })
+    .await
+}
+
+async fn search_own_at_sign_in(
+    client: &mut impl KtTransport,
+    settings: &SettingsRepository,
+    label: &[u8],
+    check: OwnIdentityCheck<'_>,
+    verifier: &KeyTransparency,
+    now: SystemTime,
+) -> Result<OwnIdentityAtSignIn, KtError> {
+    use OwnIdentityAtSignIn::{Current, Republish, UnexpectedKey};
+
+    let previous = {
+        let conn = settings.database().read_connection()?;
+        OwnerState::load(&conn, label)?
+    };
+    let mut state = previous.clone();
+    let pin = Pin::load_at(client, settings, PinScope::Account, verifier, now).await?;
+    let observations = pin.observations(label)?;
+    let (verified, version) = search_own(client, &pin, label, &observations).await?;
+    let published = OwnerBaseline {
+        key: hex::encode(&verified.value),
+        version,
+    };
+    state.observed_version = Some(version);
+
+    let action = match check {
+        OwnIdentityCheck::BeforeReset => {
+            // An explicit reset has to start from the last verified account
+            // key. On a fresh install this proof is the first baseline.
+            if state.mismatch || state.baseline.as_ref().is_some_and(|old| *old != published) {
+                state.mismatch = true;
+                UnexpectedKey
+            } else {
+                state.baseline = Some(published);
+                state.authorized = None;
+                Current
+            }
+        }
+        OwnIdentityCheck::Local(expected) | OwnIdentityCheck::Restored(expected)
+            if verified.value == expected =>
+        {
+            // A reset that committed before the client died is exactly one
+            // version after the predecessor pinned before the key was minted.
+            // Preserve any alarm and detect a write that changed back to our
+            // key as well as extra writes during a reset.
+            state.mismatch |= match state.authorized.take() {
+                Some(link) if link.key == published.key => {
+                    link.next_version.is_some_and(|next| next != version)
+                }
+                _ => match state.baseline.as_ref() {
+                    Some(old) if old.key == published.key => old.version != version,
+                    Some(old) => {
+                        matches!(check, OwnIdentityCheck::Restored(_))
+                            || old.version.checked_add(1) != Some(version)
+                    }
+                    // The backup authenticates the key independently of the
+                    // server. A fresh install has no previously pinned version.
+                    None => matches!(check, OwnIdentityCheck::Local(_)) && version != 0,
+                },
+            };
+            state.baseline = Some(published);
+            Current
+        }
+        OwnIdentityCheck::Local(_)
+            if !state.mismatch
+                && state.authorized.is_none()
+                && state.baseline.as_ref() == Some(&published) =>
+        {
+            Republish
+        }
+        _ => {
+            state.mismatch = true;
+            state.authorized = None;
+            UnexpectedKey
+        }
+    };
+    pin.save_search(observations, verified, |conn| {
+        save_owner_state(conn, label, &previous, &state)
+    })?;
+    Ok(action)
+}
+
+async fn search_own(
+    client: &mut impl KtTransport,
+    pin: &Pin<'_>,
+    label: &[u8],
+    observations: &Observations,
+) -> Result<(VerifiedSearchResult, u32), KtError> {
+    let response = pin
+        .search_label(client, label)
+        .await?
+        .ok_or(KtError::Invalid(
+            "own identity key is missing from transparency",
+        ))?;
+    let verified = pin.verify_response(label, response, observations, true)?;
+    let version = verified
+        .state_update
+        .monitoring_data
+        .as_ref()
+        .ok_or(KtError::Invalid(
+            "own identity search did not produce monitoring data",
+        ))?
+        .greatest_version();
+    Ok((verified, version))
+}
+
+fn save_owner_state(
+    conn: &rusqlite::Connection,
+    label: &[u8],
+    previous: &OwnerState,
+    state: &OwnerState,
+) -> Result<(), KtError> {
+    if OwnerState::load(conn, label)? != *previous {
+        return Err(KtError::PinChanged);
+    }
+    if state != previous {
+        state.store(conn, label)?;
+    }
+    Ok(())
+}
+
 async fn check_own(
     client: &mut impl KtTransport,
     settings: &SettingsRepository,
@@ -696,15 +860,6 @@ async fn check_own(
     }
     let pin = Pin::load_at(client, settings, PinScope::Account, verifier, now).await?;
     let observations = pin.observations(label)?;
-    let save_owner = |conn: &rusqlite::Connection, state: &OwnerState| -> Result<(), KtError> {
-        if OwnerState::load(conn, label)? != previous {
-            return Err(KtError::PinChanged);
-        }
-        if *state != previous {
-            state.store(conn, label)?;
-        }
-        Ok(())
-    };
     let baseline = state
         .baseline
         .as_ref()
@@ -718,26 +873,12 @@ async fn check_own(
         state.mismatch |= version != baseline.version;
         state.observed_version = Some(version);
         pin.save(head, observations, Some(data), |conn| {
-            save_owner(conn, &state)
+            save_owner_state(conn, label, &previous, &state)
         })?;
         return Ok(state.mismatch);
     }
 
-    let response = pin
-        .search_label(client, label)
-        .await?
-        .ok_or(KtError::Invalid(
-            "own identity key is missing from transparency",
-        ))?;
-    let verified = pin.verify_response(label, response, &observations, true)?;
-    let version = verified
-        .state_update
-        .monitoring_data
-        .as_ref()
-        .ok_or(KtError::Invalid(
-            "own identity search did not produce monitoring data",
-        ))?
-        .greatest_version();
+    let (verified, version) = search_own(client, &pin, label, &observations).await?;
 
     state.observed_version = Some(version);
     if verified.value != expected {
@@ -760,7 +901,9 @@ async fn check_own(
     } else {
         state.mismatch |= baseline.is_none_or(|baseline| baseline.version != version);
     }
-    pin.save_search(observations, verified, |conn| save_owner(conn, &state))?;
+    pin.save_search(observations, verified, |conn| {
+        save_owner_state(conn, label, &previous, &state)
+    })?;
     Ok(state.mismatch)
 }
 

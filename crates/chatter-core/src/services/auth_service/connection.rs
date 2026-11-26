@@ -2,13 +2,14 @@ use super::*;
 
 impl AuthService {
     /// Create a new AuthService with all dependencies.
-    pub fn new(
+    pub(crate) fn new(
         grpc_pool: Arc<GrpcClientPool>,
         identity_manager: Arc<IdentityKeyManager>,
         prekey_manager: Arc<PreKeyManager>,
         user_repo: Arc<UserRepository>,
         settings_repo: Arc<SettingsRepository>,
         auth_interceptor: AuthInterceptor,
+        #[cfg(feature = "mesh")] mesh: Arc<crate::services::mesh::SharedMesh>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -17,6 +18,8 @@ impl AuthService {
             user_repo,
             settings_repo,
             auth_interceptor,
+            #[cfg(feature = "mesh")]
+            mesh,
             recovery_login_grant: parking_lot::Mutex::new(None),
         }
     }
@@ -98,49 +101,11 @@ impl AuthService {
     ///
     /// Returns true if a session was successfully restored.
     pub fn restore_session(&self) -> bool {
-        // A saved device token cannot provide the fresh password proof needed
-        // to retry an interrupted identity republish.
-        match self.sign_in_publication_pending() {
-            Ok(false) => return self.restore_password_session(),
-            Ok(true) => tracing::info!("Sign-in required to finish publishing this device"),
-            Err(error) => tracing::warn!(%error, "Could not read pending device publication"),
+        let restored = self.restore_password_session();
+        if !restored {
+            self.auth_interceptor.clear();
         }
-        self.auth_interceptor.clear();
-        false
-    }
-
-    pub(crate) fn sign_in_publication_pending(&self) -> Result<bool, StorageError> {
-        Ok(self.key_republish_pending()? || self.login_bundle_pending()?)
-    }
-
-    pub(crate) fn login_bundle_pending(&self) -> Result<bool, StorageError> {
-        Ok(self
-            .settings_repo
-            .get_bool(keys::LOGIN_BUNDLE_PENDING)?
-            .unwrap_or(false))
-    }
-
-    pub(crate) fn finish_sign_in_publication(&self) -> Result<(), StorageError> {
-        let mut conn = self.settings_repo.database().connection()?;
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM settings WHERE key IN (?1, ?2)",
-            rusqlite::params![keys::LOGIN_BUNDLE_PENDING, keys::KEY_REPUBLISH_PENDING],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub(crate) fn key_republish_pending(&self) -> Result<bool, StorageError> {
-        Ok(self
-            .settings_repo
-            .get_bool(keys::KEY_REPUBLISH_PENDING)?
-            .unwrap_or(false))
-    }
-
-    pub(crate) fn begin_key_republish(&self) -> Result<(), StorageError> {
-        self.settings_repo
-            .set_bool(keys::KEY_REPUBLISH_PENDING, true)
+        restored
     }
 
     /// Restore a password-based (Basic auth) session.

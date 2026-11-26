@@ -154,36 +154,33 @@ mod transport_switch_tests {
         (client, dir)
     }
 
-    async fn interrupted_publication_waits_for_sign_in_on_restart(republish: bool) {
+    #[tokio::test]
+    async fn interrupted_device_bundle_publish_waits_for_sign_in_on_restart() {
+        use crate::services::auth_service::LoginResult;
         use crate::storage::repositories::settings_repo::keys;
 
         let (client, dir) = build_test_client();
         let settings = &client.signal().settings_repo;
+        let user_id = crate::domain::UserId::new();
         settings
-            .set_string(
-                keys::CURRENT_USER_ID,
-                &crate::domain::UserId::new().to_string(),
-            )
+            .set_string(keys::CURRENT_USER_ID, &user_id.to_string())
             .unwrap();
         settings.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
         settings.set_bytes(keys::PROFILE_KEY, &[5; 32]).unwrap();
-        settings.set_bytes(keys::DEVICE_AUTH_TOKEN, &[6; 32]).unwrap();
         settings.set_string(keys::SVR_SALT_USERNAME, "owner").unwrap();
 
-        // Leave the authenticated credentials and pending intent exactly as
-        // a crash between the republish RPC and the local acknowledgement would.
-        if republish {
-            client.auth().begin_key_republish().unwrap();
-        } else {
-            settings.set_bool(keys::LOGIN_BUNDLE_PENDING, true).unwrap();
-        }
+        client.auth().auth_interceptor.set_basic(
+            format!("{user_id}.1"),
+            crate::crypto::device_credentials::DeviceToken::generate().to_base64(),
+        );
         drop(client);
         let client = ChatterClient::builder()
             .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .unwrap();
-        assert!(client.auth().is_logged_in());
+        assert_eq!(client.current_user(), Some((user_id, 1)));
+        assert!(!client.auth().is_logged_in());
         assert!(!client.restore_session());
         assert!(!client.is_logged_in());
         assert!(client.services.grpc_pool.auth_clone().get_auth_info().is_none());
@@ -191,22 +188,25 @@ mod transport_switch_tests {
             client.start().await,
             Err(ClientError::Validation(_))
         ));
-        assert!(client.auth().sign_in_publication_pending().unwrap());
-
-        // Completion by the password-authenticated retry resumes normal restoration.
-        client.auth().finish_sign_in_publication().unwrap();
+        // The password retry reclaims device 1. A server-confirmed bundle
+        // permits the authentication token to be committed.
+        client.auth().auth_interceptor.set_basic(
+            format!("{user_id}.1"),
+            crate::crypto::device_credentials::DeviceToken::generate().to_base64(),
+        );
+        client
+            .auth()
+            .commit_login(&LoginResult {
+                user_id,
+                device_id: 1,
+                display_name: "Owner".into(),
+                keys_restored: false,
+                key_recovery: None,
+                recovery_codes: None,
+            })
+            .unwrap();
         assert!(client.restore_session());
         assert!(client.is_logged_in());
-    }
-
-    #[tokio::test]
-    async fn interrupted_identity_republish_waits_for_sign_in_on_restart() {
-        interrupted_publication_waits_for_sign_in_on_restart(true).await;
-    }
-
-    #[tokio::test]
-    async fn interrupted_device_bundle_publish_waits_for_sign_in_on_restart() {
-        interrupted_publication_waits_for_sign_in_on_restart(false).await;
     }
 
     /// Entering anon mode must fire the ntfy push shutdown and clear the slot

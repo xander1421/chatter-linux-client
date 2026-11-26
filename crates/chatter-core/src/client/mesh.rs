@@ -304,6 +304,7 @@ impl ChatterClient {
     /// Safe to call more than once; the service tracks whether it is running.
     #[cfg(feature = "mesh")]
     pub async fn start_mesh(&self) -> Result<(), crate::services::mesh::MeshError> {
+        let _lifecycle = self.services.mesh_service.lock_lifecycle().await;
         if !self.mesh_enabled() {
             return Ok(());
         }
@@ -318,6 +319,7 @@ impl ChatterClient {
     /// outbox, so anything already written is still there when it comes back.
     #[cfg(feature = "mesh")]
     pub async fn stop_mesh(&self) {
+        let _lifecycle = self.services.mesh_service.lock_lifecycle().await;
         self.mesh().shutdown().await;
     }
 
@@ -578,12 +580,13 @@ impl ChatterClient {
         enabled: bool,
     ) -> Result<(), crate::services::mesh::MeshError> {
         use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let _lifecycle = self.services.mesh_service.lock_lifecycle().await;
         SettingsRepository::new(self.services.database.clone())
             .set_bool(keys::MESH_ENABLED, enabled)?;
         if enabled {
-            self.start_mesh().await
+            self.mesh().start().await
         } else {
-            self.stop_mesh().await;
+            self.mesh().shutdown().await;
             Ok(())
         }
     }

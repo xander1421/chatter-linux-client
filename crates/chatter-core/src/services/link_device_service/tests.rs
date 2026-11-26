@@ -186,6 +186,8 @@ fn setup_service(username: &str, pin: Option<&str>) -> (Arc<LinkDeviceService>, 
         key_store,
         db,
         event_bus,
+        #[cfg(feature = "mesh")]
+        None,
     ));
     (svc, db_file)
 }

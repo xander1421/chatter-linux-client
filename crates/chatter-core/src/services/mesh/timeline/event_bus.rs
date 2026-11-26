@@ -12,18 +12,29 @@ pub struct MeshEvents {
     muted_channels: Arc<Mutex<std::collections::HashSet<String>>>,
     muted_peers: Arc<Mutex<std::collections::HashSet<String>>>,
     blocked_peers: Arc<Mutex<std::collections::HashSet<String>>>,
+    retired: Arc<parking_lot::RwLock<bool>>,
 }
 
 impl MeshEvents {
     pub fn open_private_channel(&self, id: &str, name: &str) {
-        self.timeline.open_private_channel(id, name);
+        let retired = self.retired.read();
+        if !*retired {
+            self.timeline.open_private_channel(id, name);
+        }
     }
     pub fn close_private_channel(&self, id: &str) {
-        self.timeline.close_private_channel(id);
+        let retired = self.retired.read();
+        if !*retired {
+            self.timeline.close_private_channel(id);
+        }
     }
     /// Return whether the DM was new. Signal and courier delivery receipts
     /// require a committed timeline row, including on duplicate deliveries.
     pub fn persist_received_dm(&self, message: &MeshMessage) -> Result<bool, StorageError> {
+        let retired = self.retired.read();
+        if *retired {
+            return Err(StorageError::InvalidData("mesh runtime retired".into()));
+        }
         if self.peer_blocked(&message.sender) {
             return Err(StorageError::InvalidData("blocked mesh DM sender".into()));
         }
@@ -31,18 +42,29 @@ impl MeshEvents {
     }
 
     pub fn publish_received_dm(&self, message: MeshMessage) {
-        let _ = self.events.send(MeshEvent::Message(Box::new(message)));
+        let retired = self.retired.read();
+        if !*retired {
+            let _ = self.events.send(MeshEvent::Message(Box::new(message)));
+        }
     }
     /// A fan-out buffering `capacity` events, storing through `timeline`.
     #[must_use]
     pub fn new(capacity: usize, timeline: Arc<MeshTimeline>) -> Self {
         let (events, _) = broadcast::channel(capacity);
+        Self::with_sender(events, timeline)
+    }
+
+    pub(in crate::services::mesh) fn with_sender(
+        events: broadcast::Sender<MeshEvent>,
+        timeline: Arc<MeshTimeline>,
+    ) -> Self {
         Self {
             events,
             timeline,
             muted_channels: Arc::new(Mutex::new(Default::default())),
             muted_peers: Arc::new(Mutex::new(Default::default())),
             blocked_peers: Arc::new(Mutex::new(Default::default())),
+            retired: Arc::new(parking_lot::RwLock::new(false)),
         }
     }
 
@@ -110,6 +132,10 @@ impl MeshEvents {
     /// goes out: the message did arrive, and dropping it from the live timeline
     /// as well would turn a storage problem into a lost message.
     pub fn send(&self, event: MeshEvent) {
+        let retired = self.retired.read();
+        if *retired {
+            return;
+        }
         if let MeshEvent::Message(message) = &event {
             if !message.is_local && self.peer_blocked(&message.sender) {
                 return;
@@ -163,6 +189,10 @@ impl MeshEvents {
         mime_type: Option<&str>,
         bytes: &[u8],
     ) -> Result<AttachmentId, MeshError> {
+        let retired = self.retired.read();
+        if *retired {
+            return Err(MeshError::IdentityWiped);
+        }
         self.timeline.store_file(file_name, mime_type, bytes)
     }
 
@@ -177,6 +207,10 @@ impl MeshEvents {
         mime_type: Option<&str>,
         plaintext: &std::path::Path,
     ) -> Result<AttachmentId, MeshError> {
+        let retired = self.retired.read();
+        if *retired {
+            return Err(MeshError::IdentityWiped);
+        }
         self.timeline
             .store_file_streamed(file_name, mime_type, plaintext)
     }
@@ -192,5 +226,9 @@ impl MeshEvents {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<MeshEvent> {
         self.events.subscribe()
+    }
+
+    pub(in crate::services::mesh) fn retire(&self) {
+        *self.retired.write() = true;
     }
 }

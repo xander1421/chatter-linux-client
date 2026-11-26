@@ -102,19 +102,6 @@ pub mod keys {
     /// Our identity public key (33 bytes - 0x05 + Curve25519, base64 encoded)
     /// Used for NDSS'21 private friend codes that embed cryptographic material.
     pub const IDENTITY_KEY_PUBLIC: &str = "crypto.identity_key_public";
-    /// The account-bound operation this device owes the server, stored in one
-    /// record and deleted once the server acknowledges the key-material republish.
-    ///
-    /// A recovery hands this device an identity key whose published prekeys
-    /// belong to a device that no longer exists. If the republish that fixes
-    /// that is interrupted — server down, connection dropped — the local keys
-    /// are already in place, so the next login would see a local identity, skip
-    /// the restore, and never retry. The account would sit there serving
-    /// prekeys nobody can complete a handshake with: the original bug, reached
-    /// by a different road. The record survives logout alongside the local
-    /// identity and is wiped with it.
-    pub const KEY_REPUBLISH_PENDING: &str = "crypto.key_republish_pending";
-    pub const LOGIN_BUNDLE_PENDING: &str = "crypto.login_bundle_pending";
     /// Who receives our profile key ("everyone" | "contacts" | "nobody"),
     /// see `services::profile_visibility`. Absent = everyone.
     pub const PROFILE_VISIBILITY: &str = "privacy.profile_visibility";

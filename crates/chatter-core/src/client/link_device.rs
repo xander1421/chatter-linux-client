@@ -46,6 +46,8 @@ impl ChatterClient {
                 key_store,
                 self.services.database.clone(),
                 self.services.event_bus.clone(),
+                #[cfg(feature = "mesh")]
+                Some(self.services.mesh_service.clone()),
             ))
         })
     }

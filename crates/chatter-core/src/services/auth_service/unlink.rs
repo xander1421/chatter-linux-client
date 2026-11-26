@@ -95,14 +95,32 @@ pub(crate) fn restore_staged_attachments(db: &Database) -> Result<(), StorageErr
 }
 
 pub(crate) fn wipe_unlinked_install(db: &Database) -> Result<(), StorageError> {
-    wipe_install(db, false)
+    wipe_install(db, false, |_| Ok(()))
 }
 
-pub(crate) fn wipe_switched_account(db: &Database) -> Result<(), StorageError> {
-    wipe_install(db, true)
+pub(crate) fn wipe_switched_account(
+    db: &Database,
+    finish: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), StorageError>,
+) -> Result<(), StorageError> {
+    for dir in ["mesh-transfers", "composer-staging"] {
+        remove_account_dir(&db.path().with_file_name(dir))?;
+    }
+    wipe_install(db, true, finish)
 }
 
-fn wipe_install(db: &Database, include_mesh: bool) -> Result<(), StorageError> {
+fn remove_account_dir(path: &std::path::Path) -> Result<(), StorageError> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(attachment_error(error)),
+    }
+}
+
+fn wipe_install(
+    db: &Database,
+    include_mesh: bool,
+    finish: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), StorageError>,
+) -> Result<(), StorageError> {
     let dir = db.path().with_file_name("attachments");
     let staged = db.path().with_file_name("attachments.account-wipe");
     if !staged.try_exists().map_err(attachment_error)? {
@@ -112,17 +130,9 @@ fn wipe_install(db: &Database, include_mesh: bool) -> Result<(), StorageError> {
             Err(error) => return Err(attachment_error(error)),
         }
     }
-    if include_mesh {
-        crate::storage::unlink::wipe_all_rows(db)?;
-    } else {
-        crate::storage::unlink::wipe_account_data(db)?;
-    }
+    crate::storage::unlink::wipe_rows(db, include_mesh, finish)?;
     for path in [staged, dir.clone()] {
-        match std::fs::remove_dir_all(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(attachment_error(error)),
-        }
+        remove_account_dir(&path)?;
     }
     crate::services::attachment::ensure_attachments_dir_at(&dir).map_err(attachment_error)?;
     tracing::info!("deleted the local data of the previous account");

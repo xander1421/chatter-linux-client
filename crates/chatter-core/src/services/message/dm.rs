@@ -276,19 +276,29 @@ impl MessageService {
             .flatten();
         // An account-only roster lets us skip discovery on single-device
         // accounts and settle strict sync only when every linked device lands.
+        let signal = self.signal_service.for_anonymous_route();
         let expected = match auth_client.list_devices().await {
             Ok(roster) => roster.devices.into_iter().filter_map(|device| {
                 (!device.is_current && Some(device.device_id) != this_device).then_some(device.device_id)
             }).collect::<std::collections::HashSet<_>>(),
             Err(error) => {
                 tracing::warn!(%error, "Own-device sync: roster unavailable");
-                return (0, false);
+                if strict {
+                    return (0, false);
+                }
+                // Best-effort sync can still reach devices with live sessions.
+                let Ok(devices) = signal.session_devices(&me).await else {
+                    return (0, false);
+                };
+                devices
+                    .into_iter()
+                    .filter(|&device| Some(device) != this_device)
+                    .collect()
             }
         };
         if expected.is_empty() {
             return (0, true);
         }
-        let signal = self.signal_service.for_anonymous_route();
         let mut discovery = self.anonymous_prekey_source(true);
         let mut devices = Vec::with_capacity(expected.len());
         for &device_id in &expected {

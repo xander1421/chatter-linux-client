@@ -386,7 +386,7 @@ impl LinkDeviceService {
                     .filter(|n| !n.is_empty())
             });
 
-        let local_commit = (|| -> Result<(), LinkDeviceError> {
+        let local_commit = async {
             let linked_identity = linked_identity?;
             if linked_identity.user_id.parse().ok() != Some(user_id)
                 || linked_identity.device_id != device_id
@@ -396,7 +396,16 @@ impl LinkDeviceService {
                 ));
             }
             if switching {
-                wipe_switched_account(&self.database)?;
+                self.grpc_pool.auth_clone().clear();
+                let wipe = || wipe_switched_account(&self.database, |_| Ok(()));
+                #[cfg(feature = "mesh")]
+                if let Some(mesh) = &self.mesh {
+                    mesh.wipe_for_account_switch(wipe).await?;
+                } else {
+                    wipe()?;
+                }
+                #[cfg(not(feature = "mesh"))]
+                wipe()?;
             } else if replacing_history {
                 wipe_unlinked_install(&self.database)?;
             } else {
@@ -431,8 +440,6 @@ impl LinkDeviceService {
             }
 
             cache_saved_messages_channel(&self.settings_repo, user_id)?;
-            self.settings_repo.delete(keys::KEY_REPUBLISH_PENDING)?;
-            self.settings_repo.delete(keys::LOGIN_BUNDLE_PENDING)?;
             self.settings_repo
                 .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
             self.settings_repo
@@ -451,13 +458,14 @@ impl LinkDeviceService {
             if let Some(ref name) = display_name {
                 self.settings_repo.set_string(keys::DISPLAY_NAME, name)?;
             }
-            crate::services::signal::kt_anchor::authorize_own_identity(
+            crate::services::signal::kt_anchor::authorize_linked_owner_identity(
                 &self.settings_repo,
                 &user_id.to_string(),
                 &identity_pub_full,
             )?;
-            Ok(())
-        })();
+            Ok::<(), LinkDeviceError>(())
+        }
+        .await;
 
         if let Err(original_error) = local_commit {
             // Logout of the newly authenticated device retires its server row,

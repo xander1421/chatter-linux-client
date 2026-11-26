@@ -130,7 +130,6 @@ impl ChatterClient {
     pub fn is_logged_in(&self) -> bool {
         !self.auth_state().get().session_ended
             && self.auth().is_logged_in()
-            && self.auth().sign_in_publication_pending().is_ok_and(|pending| !pending)
     }
 
     pub fn has_registered_before(&self) -> bool {

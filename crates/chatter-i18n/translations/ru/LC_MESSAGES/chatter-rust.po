@@ -3971,3 +3971,6 @@ msgstr "Не сейчас"
 #: crates/chatter-core/src/client/startup.rs
 msgid "Sign in again to finish publishing your encryption keys."
 msgstr "Войдите снова, чтобы завершить публикацию ключей шифрования."
+
+msgid "The server published an unexpected encryption key for your account."
+msgstr "Сервер опубликовал неожиданный ключ шифрования для вашей учётной записи."

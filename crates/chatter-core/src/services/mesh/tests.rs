@@ -36,6 +36,15 @@ fn service_with_radio_factory(
     radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
     connector: Option<Arc<dyn RelayConnector>>,
 ) -> MeshService {
+    let (events, _) = broadcast::channel(EVENT_CAPACITY);
+    service_with_events(radio_factory, connector, events)
+}
+
+fn service_with_events(
+    radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
+    connector: Option<Arc<dyn RelayConnector>>,
+    sender: broadcast::Sender<MeshEvent>,
+) -> MeshService {
     let identity = Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
     let config = Arc::new(MeshConfig::default());
     let state = Arc::new(MeshState::new());
@@ -49,7 +58,7 @@ fn service_with_radio_factory(
     );
     db.run_migrations().expect("mesh stores migrations");
     crate::test_tempdir::hold(dir);
-    let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
+    let events = MeshEvents::with_sender(sender, Arc::clone(&timeline));
     let (ble_bus, ble_rx) = CommandBus::new();
     let (nostr_bus, nostr_rx) = CommandBus::new();
     // Kept alive rather than dropped. Several tests exercise send paths on a
@@ -96,10 +105,51 @@ fn service_with_radio_factory(
         has_radio: radio_factory.is_some(),
         radio_factory,
         relay_connector: connector,
-        tasks: Mutex::new(Vec::new()),
+        tasks: tokio::sync::Mutex::new(Vec::new()),
         running: AtomicBool::new(false),
         identity_wiped: AtomicBool::new(false),
     }
+}
+
+#[tokio::test]
+async fn account_switch_stops_mesh_transports_and_replaces_the_runtime() {
+    let mesh = SharedMesh::new(|events| {
+        Ok(service_with_events(
+            Some(Arc::new(|| Arc::new(MockLink::new()))),
+            None,
+            events,
+        ))
+    })
+    .unwrap();
+    let old = mesh.get();
+    old.start().await.unwrap();
+    old.timeline.join_channel("old-channel");
+    old.timeline.observe_channel("nearby-channel");
+    assert_eq!(old.timeline.active_channels(), ["old-channel"]);
+    assert_eq!(old.timeline.nearby_channels(), ["nearby-channel"]);
+    old.nostr_state.with(|state| {
+        state.joined.insert("old-cell".into());
+    });
+    let old_peer = old.local_peer();
+    mesh.wipe_for_account_switch(|| {
+        assert!(!old.is_running());
+        assert!(old.router.send(RouterCommand::Wipe).is_err());
+        assert!(old.nostr_state.with(|state| state.joined.is_empty()));
+        assert!(old.timeline.active_channels().is_empty());
+        old.events
+            .send(MeshEvent::ChannelObserved("late-channel".into()));
+        assert!(old.timeline.nearby_channels().is_empty());
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let next = mesh.get();
+    assert_ne!(old_peer, next.local_peer());
+    assert!(matches!(old.start().await, Err(MeshError::IdentityWiped)));
+    next.start().await.unwrap();
+    assert!(next.is_running());
+    next.shutdown().await;
 }
 
 #[tokio::test]
@@ -197,7 +247,11 @@ async fn starting_twice_is_a_no_op_rather_than_a_second_stack() {
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
     service.start().await.expect("first start");
     service.start().await.expect("second start");
-    assert_eq!(service.tasks.lock().len(), 1, "one radio task, not two");
+    assert_eq!(
+        service.tasks.lock().await.len(),
+        1,
+        "one radio task, not two"
+    );
     service.shutdown().await;
 }
 

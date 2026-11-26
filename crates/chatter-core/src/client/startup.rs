@@ -310,7 +310,7 @@ impl ChatterClient {
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
-        if self.auth().sign_in_publication_pending().map_err(AuthError::Storage)? {
+        if self.current_user().is_some() && !self.auth().is_logged_in() {
             return Err(ClientError::Validation(
                 chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
             ));

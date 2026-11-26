@@ -219,13 +219,8 @@ impl SignalService {
     /// Publish THIS device's bundle and one-time pools under its own device id,
     /// leaving every other device of the account untouched.
     ///
-    /// Every login is issued a new device id by the server. A login that
-    /// already holds the identity locally (Log Out, then Log In again) skips
-    /// the SVR restore and so never reached `republish_identity_bundle`: the
-    /// new device id had no bundle, peers kept encrypting to the previous
-    /// (signed-out) device, and every incoming DM was silently lost. The
-    /// identity key is unchanged here, so the per-device upload's
-    /// same-identity check accepts it.
+    /// A password login can receive a new device id, even when it already
+    /// holds the account identity. That device still needs its own bundle.
     pub async fn publish_device_bundle(
         &self,
         auth_client: &mut AuthClient,
@@ -257,50 +252,37 @@ impl SignalService {
         Ok(())
     }
 
+    /// The classical pool has a foreign key to this device's published
+    /// bundle. A positive count confirms the bundle and its upload. A
+    /// zero count also covers an exhausted pool, which is safe to refill.
+    pub(crate) async fn ensure_device_bundle(
+        &self,
+        auth_client: &mut AuthClient,
+        device_id: u32,
+    ) -> Result<(), ServiceError> {
+        ensure_device_bundle_with(
+            auth_client,
+            device_id,
+            AuthClient::get_pre_key_stats,
+            async |client| self.publish_device_bundle(client).await,
+        )
+        .await
+    }
+
     /// Replace the account's ENTIRE server-side Signal key material with this
     /// device's, in one atomic RPC.
     ///
-    /// # Why this exists
-    ///
-    /// Two recovery situations leave the server holding key material nobody
-    /// can use, and neither had any way to fix itself:
-    ///
-    ///   - **PIN restore.** The identity key comes back from the SVR backup,
-    ///     but the private halves of every prekey the account ever published
-    ///     died with the old device. Peers keep fetching those prekeys and
-    ///     completing handshakes the new device cannot decrypt.
-    ///   - **Identity reset.** No backup existed, so a NEW identity key is the
-    ///     only way forward. `UploadPreKeyBundle` refuses a changed identity
-    ///     key outright (the cross-device consistency check), and neither
-    ///     `LoginRequest` nor `RefreshPreKeysRequest` carries one — so before
-    ///     this method there was literally no wire on which to publish it.
-    ///
-    /// # Why one call
-    ///
-    /// The identity key and the prekeys signed by it are published together or
-    /// not at all. Splitting them is precisely how accounts became permanently
-    /// unreachable: the replenisher rotated the signed prekey through
-    /// `RefreshPreKeys` while `identity_key` stayed at its old value, so the
-    /// server served a signed prekey whose signature could never verify
-    /// against the identity key it was served with. The server applies this in
-    /// a single transaction for the same reason.
-    ///
-    /// Not a routine rotation — it changes every contact's safety number.
-    /// Reached only from `ChatterClient::login`'s post-restore step and from
-    /// the explicit `accept_new_identity`.
+    /// Used for an authorized identity reset. Publishing the identity and
+    /// its signed prekeys in one transaction keeps every served bundle
+    /// verifiable. This operation also retires the account's other devices.
     pub async fn republish_identity_bundle(
         &self,
         auth_client: &mut AuthClient,
         proof: chatter_proto::chat_v1::PasswordProof,
     ) -> Result<RepublishOutcome, ServiceError> {
-        use crate::storage::repositories::settings_repo::keys;
-
-        let owner = self.settings_repo.get_string(keys::CURRENT_USER_ID)?
-            .ok_or_else(|| ServiceError::Validation("missing owner for identity republish".into()))?;
         self.rebind_device_sessions().await?;
         let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
             self.build_device_key_material().await?;
-        let published_key = bundle.identity_key.clone();
 
         let response = auth_client
             .republish_identity_key(
@@ -312,7 +294,6 @@ impl SignalService {
             .await
             .map_err(ServiceError::Network)?;
 
-        super::kt_anchor::authorize_own_identity(&self.settings_repo, &owner, &published_key)?;
         tracing::info!(
             identity_key_changed = response.identity_key_changed,
             devices_reset = response.devices_reset,
@@ -493,5 +474,75 @@ impl SignalService {
         );
 
         Ok(dropped)
+    }
+}
+
+async fn ensure_device_bundle_with<T>(
+    client: &mut T,
+    device_id: u32,
+    status: impl AsyncFn(
+        &mut T,
+        u32,
+    ) -> Result<
+        chatter_proto::chat_v1::GetPreKeyStatsResponse,
+        crate::error::NetworkError,
+    >,
+    publish: impl AsyncFnOnce(&mut T) -> Result<(), ServiceError>,
+) -> Result<(), ServiceError> {
+    let ready = |reply: chatter_proto::chat_v1::GetPreKeyStatsResponse| {
+        if reply.device_id != device_id || reply.available_count < 0 {
+            return Err(ServiceError::Validation(
+                "invalid device prekey status".into(),
+            ));
+        }
+        Ok(reply.available_count > 0)
+    };
+    if ready(status(client, device_id).await?)? {
+        return Ok(());
+    }
+    publish(client).await?;
+    if !ready(status(client, device_id).await?)? {
+        return Err(ServiceError::Validation(
+            "server did not confirm the device bundle".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod bundle_tests {
+    use super::*;
+    use crate::error::NetworkError;
+    use chatter_proto::chat_v1::GetPreKeyStatsResponse;
+
+    #[tokio::test]
+    async fn sign_in_uses_the_own_device_status_before_and_after_publication() {
+        for (counts, expected_calls, confirmed) in [
+            (vec![80], vec!["status"], true),
+            (vec![0, 80], vec!["status", "publish", "status"], true),
+            (vec![0, 0], vec!["status", "publish", "status"], false),
+        ] {
+            let mut server = (std::collections::VecDeque::from(counts), Vec::new());
+            let result = ensure_device_bundle_with(
+                &mut server,
+                7,
+                async |server, device_id| {
+                    assert_eq!(device_id, 7);
+                    server.1.push("status");
+                    Ok::<_, NetworkError>(GetPreKeyStatsResponse {
+                        device_id,
+                        available_count: server.0.pop_front().unwrap(),
+                        ..Default::default()
+                    })
+                },
+                async |server| {
+                    server.1.push("publish");
+                    Ok(())
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), confirmed);
+            assert_eq!(server.1, expected_calls);
+        }
     }
 }

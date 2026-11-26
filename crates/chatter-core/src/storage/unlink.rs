@@ -63,8 +63,6 @@ const DEVICE_CONFIGURATION_SETTINGS: &[&str] = &[
     keys::DEVICE_WAKE_TOPIC,
     keys::PIN_FINGERPRINT,
     keys::IDENTITY_KEY_PUBLIC,
-    keys::KEY_REPUBLISH_PENDING,
-    keys::LOGIN_BUNDLE_PENDING,
     keys::PROFILE_KEY_NEXT,
     keys::PROFILE_KEY_ROTATION_PENDING,
     keys::SENDER_CERTIFICATE,
@@ -114,16 +112,20 @@ pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(),
 /// until every table is empty; one that never empties fails the wipe rather
 /// than reporting a partial one as done.
 pub fn wipe_account_data(db: &Database) -> Result<(), StorageError> {
-    wipe_rows(db, false)
+    wipe_rows(db, false, |_| Ok(()))
 }
 
 /// Every row of every table except the migration ledger, mesh included: the
 /// row step of the duress wipe (`storage::local_wipe`).
 pub(crate) fn wipe_all_rows(db: &Database) -> Result<(), StorageError> {
-    wipe_rows(db, true)
+    wipe_rows(db, true, |_| Ok(()))
 }
 
-fn wipe_rows(db: &Database, include_mesh: bool) -> Result<(), StorageError> {
+pub(crate) fn wipe_rows(
+    db: &Database,
+    include_mesh: bool,
+    finish: impl FnOnce(&Transaction<'_>) -> Result<(), StorageError>,
+) -> Result<(), StorageError> {
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
     tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
@@ -157,6 +159,7 @@ fn wipe_rows(db: &Database, include_mesh: bool) -> Result<(), StorageError> {
         }
         tx.execute(settings_filter, [])?;
         if !any_rows(&tx, &tables)? {
+            finish(&tx)?;
             tx.commit()?;
             return Ok(());
         }

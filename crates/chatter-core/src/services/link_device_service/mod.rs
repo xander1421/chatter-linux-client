@@ -77,15 +77,18 @@ pub struct LinkDeviceService {
     /// UUID of an in-flight new-device session, owned here so the cancel
     /// button can reach it without the UI tracking session state.
     active_uuid: Mutex<Option<String>>,
+    #[cfg(feature = "mesh")]
+    mesh: Option<Arc<crate::services::mesh::SharedMesh>>,
 }
 
 impl LinkDeviceService {
-    pub fn new(
+    pub(crate) fn new(
         grpc_pool: Arc<GrpcClientPool>,
         settings_repo: Arc<SettingsRepository>,
         key_store: Arc<KeyStore>,
         database: Arc<Database>,
         event_bus: EventBus,
+        #[cfg(feature = "mesh")] mesh: Option<Arc<crate::services::mesh::SharedMesh>>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -94,6 +97,8 @@ impl LinkDeviceService {
             database,
             event_bus,
             active_uuid: Mutex::new(None),
+            #[cfg(feature = "mesh")]
+            mesh,
         }
     }
 

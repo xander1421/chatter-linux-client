@@ -15,7 +15,7 @@ impl AuthService {
         on_verifying: &(dyn Fn() + Send + Sync),
     ) -> Result<LoginResult, AuthError> {
         let identifier = login_identifier(username);
-        if self.is_logged_in() && !self.sign_in_publication_pending()? {
+        if self.is_logged_in() {
             return Err(AuthError::AlreadyLoggedIn);
         }
 
@@ -103,10 +103,31 @@ impl AuthService {
                 _ => AuthError::Network(e),
             })?;
 
-        self.finish_login(username, &auth_token, &svr_secret, response)
+        // Keep enough authenticated response data to retire a device if local
+        // setup fails before the device id can be saved for a retry.
+        let device = response.session.as_ref().map(|session| session.device_id);
+        let owner = response
+            .user_profile
+            .as_ref()
+            .and_then(|profile| profile.user_id.parse::<UserId>().ok());
+        let result = self
+            .finish_login(username, &auth_token, &svr_secret, response)
+            .await;
+        if let Err(error) = &result
+            && let (Some(owner), Some(device)) = (owner, device)
+            && self.current_user() != Some((owner, device))
+            && let Some(channel) = self.grpc_pool.try_channel()
+        {
+            let auth = AuthInterceptor::new();
+            auth.set_basic(format!("{owner}.{device}"), auth_token.to_base64());
+            if let Err(retire_error) = AuthClient::new(channel, auth).logout(device, None).await {
+                tracing::warn!(%error, %retire_error, "Could not retire a device after local sign-in failed");
+            }
+        }
+        result
     }
 
-    fn finish_login(
+    async fn finish_login(
         &self,
         username: &str,
         auth_token: &DeviceToken,
@@ -124,13 +145,34 @@ impl AuthService {
             .parse()
             .map_err(|_| AuthError::LoginFailed("invalid user_id format".to_string()))?;
         let device_id = session.device_id;
+        if device_id == 0 {
+            return Err(AuthError::LoginFailed("invalid device_id".to_string()));
+        }
         // Saved Messages is the only local account ownership record.
         let db = self.settings_repo.database();
+        let save_device = |tx: &rusqlite::Transaction<'_>| -> Result<(), StorageError> {
+            SettingsRepository::set_with_connection(
+                tx,
+                keys::CURRENT_USER_ID,
+                &user_id.to_string(),
+            )?;
+            SettingsRepository::set_with_connection(tx, keys::CURRENT_DEVICE_ID, &device_id)?;
+            SettingsRepository::set_with_connection(tx, keys::SVR_SALT_USERNAME, &username)?;
+            Ok(())
+        };
         if crate::storage::unlink::local_account_owner(db)? == Some(user_id) {
+            let mut conn = db.connection()?;
+            let tx = conn.transaction().map_err(StorageError::from)?;
+            save_device(&tx)?;
+            tx.commit().map_err(StorageError::from)?;
             super::unlink::restore_staged_attachments(db)?;
         } else {
             self.auth_interceptor.clear();
-            super::wipe_switched_account(db)?;
+            let wipe = || super::wipe_switched_account(db, save_device);
+            #[cfg(feature = "mesh")]
+            self.mesh.wipe_for_account_switch(wipe).await?;
+            #[cfg(not(feature = "mesh"))]
+            wipe()?;
             self.recovery_login_grant.lock().take();
         }
         self.settings_repo.delete(keys::UNLINKED_ACCOUNT_ID)?;
@@ -186,8 +228,6 @@ impl AuthService {
         self.settings_repo
             .set_string(keys::DISPLAY_NAME, &display_name)?;
         self.settings_repo
-            .set_string(keys::SVR_SALT_USERNAME, username)?;
-        self.settings_repo
             .set_string(keys::PUSH_TOPIC, &response.push_topic)?;
         self.settings_repo
             .set_string(keys::DEVICE_WAKE_TOPIC, &response.device_wake_topic)?;
@@ -224,25 +264,8 @@ impl AuthService {
         };
         self.user_repo.upsert_profile(&profile)?;
 
-        // Commit the local credentials together before opening authenticated
-        // RPCs. Always use the device id the server actually assigned.
-        {
-            let mut conn = self.settings_repo.database().connection()?;
-            let tx = conn.transaction().map_err(StorageError::from)?;
-            SettingsRepository::set_with_connection(
-                &tx,
-                keys::CURRENT_USER_ID,
-                &user_id.to_string(),
-            )?;
-            SettingsRepository::set_with_connection(&tx, keys::CURRENT_DEVICE_ID, &device_id)?;
-            SettingsRepository::set_with_connection(
-                &tx,
-                keys::DEVICE_AUTH_TOKEN,
-                &auth_token.to_base64(),
-            )?;
-            SettingsRepository::set_with_connection(&tx, keys::LOGIN_BUNDLE_PENDING, &true)?;
-            tx.commit().map_err(StorageError::from)?;
-        }
+        // The token stays in memory until the authenticated device has its
+        // bundle. A restart can reclaim the saved device with the password.
         self.auth_interceptor
             .set_basic(format!("{user_id}.{device_id}"), auth_token.to_base64());
 
@@ -250,7 +273,6 @@ impl AuthService {
             user_id,
             device_id,
             display_name,
-            needs_prekey_upload: true,
             keys_restored: false, // Set by caller after the SVR restore attempt
             // No local identity yet. The caller must resolve this before the
             // login can be called successful — see `ChatterClient::login`.
@@ -259,6 +281,19 @@ impl AuthService {
                 .then_some(KeyRecoveryNeed::NoPinProvided),
             recovery_codes: None, // Login never returns recovery codes
         })
+    }
+
+    pub(crate) fn commit_login(&self, result: &LoginResult) -> Result<(), AuthError> {
+        let auth = self
+            .auth_interceptor
+            .get_auth_info()
+            .ok_or(AuthError::NotLoggedIn)?;
+        if auth.user_id != result.user_id.to_string() || auth.device_id != result.device_id {
+            return Err(AuthError::NotLoggedIn);
+        }
+        self.settings_repo
+            .set_string(keys::DEVICE_AUTH_TOKEN, &auth.token)?;
+        Ok(())
     }
 }
 
@@ -301,6 +336,7 @@ mod tests {
         };
         let result = auth
             .finish_login("owner", &DeviceToken::generate(), &[4; 32], reply)
+            .await
             .unwrap();
         assert!(result.key_recovery.is_some());
         assert!(!auth.identity_manager.has_identity().unwrap());
@@ -310,6 +346,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let client = test_client(dir.path());
         let auth = client.auth();
+        #[cfg(feature = "mesh")]
+        let mesh_before = client.mesh();
         let settings = &auth.settings_repo;
         let db = settings.database();
         let messages = MessageRepository::new(db.clone());
@@ -337,7 +375,6 @@ mod tests {
             .unwrap();
         settings.set("kt.libsignal.head", &123u64).unwrap();
         settings.set("kt.libsignal.distinguished", &100u64).unwrap();
-        auth.begin_key_republish().unwrap();
         let (_, identity) = auth
             .identity_manager
             .generate_identity(&mut StdRng::seed_from_u64(19))
@@ -346,6 +383,13 @@ mod tests {
         settings
             .set_bytes(keys::IDENTITY_KEY_PUBLIC, &public_key)
             .unwrap();
+        let kt_owner_key = format!("kt.libsignal.owner.{}", hex::encode(old_owner.to_string()));
+        let kt_baseline = serde_json::json!({
+            "baseline": { "key": hex::encode(&public_key), "version": 0 },
+            "observed_version": 0,
+            "mismatch": false,
+        });
+        settings.set(&kt_owner_key, &kt_baseline).unwrap();
         let key_store = &client.signal().key_store;
         let peer_address = format!("{}:1", UserId::new());
         key_store.store_session(&peer_address, &[3]).unwrap();
@@ -367,6 +411,14 @@ mod tests {
         std::fs::create_dir_all(&files).unwrap();
         let attachment = files.join("saved.enc");
         std::fs::write(&attachment, b"test attachment").unwrap();
+        let mut switch_files = Vec::new();
+        for dirname in ["mesh-transfers", "composer-staging"] {
+            let dir = db.path().with_file_name(dirname);
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join("previous-account");
+            std::fs::write(&file, b"staged data").unwrap();
+            switch_files.push(file);
+        }
 
         // The client had not synced channels when it logged out. Sign-out
         // should still keep the real Saved Messages channel and its history.
@@ -426,12 +478,15 @@ mod tests {
                     ..Default::default()
                 },
             )
+            .await
             .unwrap();
 
         assert_eq!(result.user_id, new_owner);
         assert_eq!(result.device_id, 9);
-        assert!(result.needs_prekey_upload);
-        assert!(auth.login_bundle_pending().unwrap());
+        assert!(
+            !auth.is_logged_in(),
+            "bundle confirmation gates the saved token"
+        );
         assert_eq!(auth.current_user(), Some((new_owner, 9)));
         assert_eq!(
             crate::storage::unlink::local_account_owner(db).unwrap(),
@@ -442,7 +497,7 @@ mod tests {
                 .get_bytes(keys::DEVICE_AUTH_TOKEN)
                 .unwrap()
                 .as_deref(),
-            Some(token.as_bytes().as_slice())
+            None
         );
         let session = auth.auth_interceptor.get_auth_info().unwrap();
         assert_eq!(session.user_id, new_owner.to_string());
@@ -451,6 +506,21 @@ mod tests {
         assert!(!auth.restore_session());
         assert!(auth.auth_interceptor.get_auth_info().is_none());
         assert!(!staged.exists());
+        for file in switch_files {
+            assert_eq!(file.exists(), !switch_accounts);
+        }
+        #[cfg(feature = "mesh")]
+        {
+            assert_eq!(Arc::ptr_eq(&mesh_before, &client.mesh()), !switch_accounts);
+            if switch_accounts {
+                assert_ne!(mesh_before.local_peer(), client.mesh().local_peer());
+                assert!(matches!(
+                    mesh_before.start().await,
+                    Err(crate::services::mesh::MeshError::IdentityWiped)
+                        | Err(crate::services::mesh::MeshError::SealerUnavailable(_))
+                ));
+            }
+        }
 
         let mesh_offer_count: u32 = db
             .connection()
@@ -475,11 +545,16 @@ mod tests {
             assert!(settings.get::<u64>("kt.libsignal.head").unwrap().is_none());
             assert!(
                 settings
+                    .get::<serde_json::Value>(&kt_owner_key)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                settings
                     .get::<u64>("kt.libsignal.distinguished")
                     .unwrap()
                     .is_none()
             );
-            assert!(!auth.key_republish_pending().unwrap());
             assert!(key_store.load_session(&peer_address).unwrap().is_none());
             assert!(messages.get(&saved_message.id).unwrap().is_none());
             assert!(!attachment.exists());
@@ -495,7 +570,10 @@ mod tests {
                 Some(public_key.as_ref())
             );
             assert_eq!(settings.get::<u64>("kt.libsignal.head").unwrap(), Some(123));
-            assert!(auth.key_republish_pending().unwrap());
+            assert_eq!(
+                settings.get::<serde_json::Value>(&kt_owner_key).unwrap(),
+                Some(kt_baseline)
+            );
             assert!(key_store.load_session(&peer_address).unwrap().is_some());
             assert!(messages.get(&saved_message.id).unwrap().is_some());
             assert!(attachment.exists());

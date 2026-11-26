@@ -80,7 +80,7 @@ pub struct CoreServices {
     pub jarvis_service: Arc<JarvisService>,
     /// The bitchat mesh. Serverless: it shares no identity and makes no RPC.
     #[cfg(feature = "mesh")]
-    pub mesh_service: Arc<crate::services::mesh::MeshService>,
+    pub(crate) mesh_service: Arc<crate::services::mesh::SharedMesh>,
     #[cfg(feature = "jarvis")]
     pub jarvis_engine: SharedJarvisEngine,
     pub notification_service: Arc<NotificationService>,

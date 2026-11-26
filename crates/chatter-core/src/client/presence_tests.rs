@@ -104,7 +104,7 @@ async fn stalled_presence_releases_lifecycle_for_actual_accept_entry() {
 }
 
 #[tokio::test]
-async fn logout_cancels_active_and_queued_work_drains_crypto_then_publishes_offline() {
+async fn logout_cancels_active_and_queued_work_and_drains_crypto_before_retirement() {
     let (client, _dir, revision) = fixture();
     let events: Events = Default::default();
     let seen = events.clone();
@@ -117,8 +117,6 @@ async fn logout_cancels_active_and_queued_work_drains_crypto_then_publishes_offl
                     let _a = Dropped(events.clone(), "anonymous_dropped");
                     let _b = Dropped(events.clone(), "identified_dropped");
                     std::future::pending::<()>().await;
-                } else if presence == PresenceStatus::Offline {
-                    events.lock().unwrap().push("final_offline");
                 } else {
                     panic!("queued publication ran after retirement");
                 }
@@ -147,36 +145,33 @@ async fn logout_cancels_active_and_queued_work_drains_crypto_then_publishes_offl
     refresh.await;
     assert!(
         futures::poll!(&mut logout).is_pending(),
-        "submitted crypto must drain before Offline"
+        "submitted crypto must drain before retirement"
     );
-    assert!(!events.lock().unwrap().contains(&"final_offline"));
     release_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(2), &mut logout)
         .await
         .unwrap()
         .unwrap();
-    let events = events.lock().unwrap().clone();
-    assert_eq!(events.last(), Some(&"final_offline"));
-    assert!(
-        events
-            .iter()
-            .position(|e| *e == "anonymous_dropped")
-            .unwrap()
-            < events.len() - 1
-    );
-    assert!(
-        events
-            .iter()
-            .position(|e| *e == "identified_dropped")
-            .unwrap()
-            < events.len() - 1
-    );
+    let mut events = events.lock().unwrap().clone();
+    events.sort_unstable();
+    assert_eq!(events, ["anonymous_dropped", "identified_dropped"]);
     assert!(client.auth_state().get().current_user_id.is_none());
     assert_eq!(
         client.presence_controller.state.lock().await.manual,
         None,
         "queued old-session manual operation must not mutate policy"
     );
+}
+
+#[tokio::test]
+async fn failed_retirement_keeps_the_session_and_does_not_publish_offline() {
+    let (client, _dir, revision) = fixture();
+    hook(
+        &client,
+        Arc::new(|_, _| Box::pin(async { panic!("logout must await server acknowledgement") })),
+    );
+    assert!(client.logout().await.is_err());
+    assert!(client.auth_state().session_is_current(revision));
 }
 
 #[tokio::test]

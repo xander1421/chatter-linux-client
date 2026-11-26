@@ -121,8 +121,6 @@ pub struct LoginResult {
     pub device_id: u32,
     /// Display name of the user.
     pub display_name: String,
-    /// Whether initial prekey upload is still needed.
-    pub needs_prekey_upload: bool,
     /// Whether identity keys were restored from an SVR backup during login.
     pub keys_restored: bool,
     /// Set when this device could not establish a Signal identity key.
@@ -155,6 +153,8 @@ pub struct AuthService {
     user_repo: Arc<UserRepository>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) auth_interceptor: AuthInterceptor,
+    #[cfg(feature = "mesh")]
+    pub(super) mesh: Arc<crate::services::mesh::SharedMesh>,
     /// `(login identifier, grant)` from the last recovery, spent by the next
     /// login for that identifier (server OPEN-ITEMS §133). Memory only: it
     /// lives 10 minutes on the server.

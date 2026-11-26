@@ -4007,3 +4007,6 @@ msgstr "Nu acum"
 #: crates/chatter-core/src/client/startup.rs
 msgid "Sign in again to finish publishing your encryption keys."
 msgstr "Autentifică-te din nou pentru a finaliza publicarea cheilor tale de criptare."
+
+msgid "The server published an unexpected encryption key for your account."
+msgstr "Serverul a publicat o cheie de criptare neașteptată pentru contul tău."
