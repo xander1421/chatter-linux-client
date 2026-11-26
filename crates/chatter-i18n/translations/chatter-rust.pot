@@ -2954,15 +2954,19 @@ msgstr ""
 msgid "Could not back up messages. Check your connection and PIN, then retry."
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:254
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
 msgstr ""
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
+msgid "This backup was made by a newer version of Chatter. Update the app to restore it."
+msgstr ""
+
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:265
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 

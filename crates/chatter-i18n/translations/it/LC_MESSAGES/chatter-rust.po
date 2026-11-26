@@ -3437,15 +3437,23 @@ msgstr ""
 "Impossibile fare il backup dei messaggi. Controlla la connessione e il PIN, "
 "poi riprova."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:254
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "Ripristinate {} righe ({} già presenti o conservate in locale)"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
 msgstr "Questo backup è stato creato con una versione precedente e non può essere ripristinato."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
+msgid ""
+"This backup was made by a newer version of Chatter. Update the app to "
+"restore it."
+msgstr ""
+"Questo backup è stato creato da una versione più recente di Chatter. "
+"Aggiorna l'app per ripristinarlo."
+
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:265
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 "Impossibile ripristinare il backup. Controlla la frase segreta o il PIN, poi "

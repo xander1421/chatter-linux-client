@@ -1,5 +1,31 @@
 use super::*;
 
+#[test]
+fn backup_restore_error_preserves_version_ordering() {
+    use crate::error::StorageError;
+    use crate::services::message_backup_service::MessageBackupError;
+    use crate::storage::backup_data::PAYLOAD_VERSION;
+    use std::cmp::Ordering;
+
+    for (found, ordering) in [
+        (PAYLOAD_VERSION - 1, Ordering::Less),
+        (PAYLOAD_VERSION + 1, Ordering::Greater),
+    ] {
+        let error = ClientError::BackupRestore(MessageBackupError::Storage(
+            StorageError::UnsupportedBackupVersion {
+                found,
+                expected: PAYLOAD_VERSION,
+            },
+        ));
+        assert_eq!(error.backup_version_mismatch(), Some(ordering));
+    }
+
+    let error = ClientError::BackupRestore(MessageBackupError::Storage(
+        StorageError::InvalidData("missing info frame".into()),
+    ));
+    assert_eq!(error.backup_version_mismatch(), None);
+}
+
 #[cfg(test)]
 mod global_profile_refresh_tests {
     use crate::domain::anon_dm::AnonDmId;

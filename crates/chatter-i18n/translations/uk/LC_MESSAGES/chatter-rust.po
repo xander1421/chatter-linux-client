@@ -3458,15 +3458,23 @@ msgstr ""
 "Не вдалося створити резервну копію повідомлень. Перевірте з’єднання і PIN, "
 "потім повторіть."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:254
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "Відновлено рядків: {} (уже наявних або збережених локально: {})"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
 msgstr "Цю резервну копію створено в старішій версії, тому її неможливо відновити."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
+msgid ""
+"This backup was made by a newer version of Chatter. Update the app to "
+"restore it."
+msgstr ""
+"Цю копію створено новішою версією Chatter. Оновіть застосунок, щоб відновити "
+"її."
+
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:265
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 "Не вдалося відновити резервну копію. Перевірте парольну фразу або PIN, потім "
