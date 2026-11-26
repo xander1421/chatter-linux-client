@@ -186,6 +186,7 @@ async fn existing_unknown_recipient_claim_stays_uncertain_after_session_replacem
     state.set_logged_in(me, 1, "old".into());
     let session = SendSession::capture(state);
     let content = Content {
+        kt_head: None,
         content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
             content_v1::AnonGroupMessage {
                 group_id: f.group_id.to_vec(),

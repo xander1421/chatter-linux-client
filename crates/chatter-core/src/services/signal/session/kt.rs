@@ -97,18 +97,20 @@ async fn run_peer_verifier(
             }
         };
         let owner_key = &owner_key;
-        let reconcile = futures::stream::iter(heads).for_each_concurrent(4, |job| async move {
-            let current = || {
+        // At most one page of heads per tick, checked one at a time.
+        let reconcile = async move {
+            for job in heads {
+                let verdict = service.reconcile_peer_head(pool, &job).await;
                 let state = auth.get();
-                state.current_user_id == Some(owner)
-                    && !state.session_ended
-                    && state.session_revision == revision
-            };
-            let verdict = service.reconcile_peer_head(pool, &job).await;
-            if current() {
+                if state.current_user_id != Some(owner)
+                    || state.session_ended
+                    || state.session_revision != revision
+                {
+                    return;
+                }
                 settle_peer_head(service, events, job, verdict);
             }
-        });
+        };
         let verify = futures::stream::iter(jobs)
             .for_each_concurrent(4, |job| async move {
                 let current = || {
@@ -161,13 +163,23 @@ async fn run_peer_verifier(
         if route == KtRoute::Normal {
             // Stop polling in-flight direct RPCs, including a proof's follow-up
             // consistency request, when the caller changes privacy modes.
-            tokio::select! {
+            // Two selects, not one join: rustc cannot prove the joined future
+            // Send under tokio::spawn (rust-lang/rust#100013).
+            let changed = tokio::select! {
                 biased;
-                _ = transport_epoch.changed() => {}
-                _ = futures::future::join(verify, reconcile) => {}
+                _ = transport_epoch.changed() => true,
+                _ = verify => false,
+            };
+            if !changed {
+                tokio::select! {
+                    biased;
+                    _ = transport_epoch.changed() => {}
+                    _ = reconcile => {}
+                }
             }
         } else {
-            futures::future::join(verify, reconcile).await;
+            verify.await;
+            reconcile.await;
         }
     }
 }
@@ -220,7 +232,9 @@ fn settle_peer_head(
                 .delay_peer_kt_head(&job, chrono::Utc::now().timestamp())
             {
                 // An operator withholding the proof looks like an outage.
-                Ok(3) => events.emit_domain(DomainEvent::KeyTransparencyHistoryUnverified),
+                Ok(3) => {
+                    events.emit_domain(DomainEvent::KeyTransparencyHistoryUnverified);
+                }
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "Could not reschedule a contact head check"),
             }

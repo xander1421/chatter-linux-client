@@ -112,6 +112,7 @@ impl AnonGroupService {
         // Not before the joiner's admission, or the queue refuses the row.
         let sent_at = TimestampNanos::now().as_u64().max(admitted_at);
         Ok(Some(Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
                 content_v1::AnonGroupMessage {
                     group_id: group_id.to_vec(),
@@ -200,6 +201,7 @@ impl AnonGroupService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupMemberList(
                 member_list,
             )),

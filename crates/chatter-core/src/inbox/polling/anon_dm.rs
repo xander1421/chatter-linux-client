@@ -100,6 +100,7 @@ pub(crate) fn route_anon_dm_content(
         peer_id: sender_id,
         conversation_id: conversation_bytes.clone(),
         inner_content: Box::new(Content {
+            kt_head: None,
             content: Some(inner),
             timestamp: outer_timestamp,
             ephemeral_reply_to: outer_ephemeral_reply_to,

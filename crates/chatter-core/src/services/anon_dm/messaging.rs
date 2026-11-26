@@ -394,6 +394,7 @@ impl AnonDmService {
 
         // Send via mailbox
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonDmPresence(presence_msg)),
             ephemeral_reply_to: None,
             timestamp: TimestampNanos::now().as_u64(),
@@ -486,6 +487,7 @@ impl AnonDmService {
         };
 
         let content = Content {
+            kt_head: None,
             ephemeral_reply_to: None,
             timestamp: profile_update.timestamp,
             padding: Self::generate_padding(512), // Larger padding for profile updates
@@ -640,6 +642,7 @@ impl AnonDmService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
                 dm_message,
             ))),
@@ -868,6 +871,7 @@ impl AnonDmService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
                 dm_message,
             ))),

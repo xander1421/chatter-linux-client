@@ -136,6 +136,7 @@ fn encode_announcement(
     conversation_id: String,
 ) -> Result<Vec<u8>, MailboxError> {
     let content = Content {
+        kt_head: None,
         content: Some(content::Content::KeyExchange(KeyExchange {
             ephemeral_pk: announcement.encode(),
             conversation_id,

@@ -119,7 +119,7 @@ pub(crate) enum Verdict {
 /// Transport failures and unclassified proof errors stay errors so the caller
 /// retries; only positive evidence of two histories is `Split`.
 pub(crate) async fn reconcile(
-    client: &mut impl KtTransport,
+    client: &mut AnonymousKtClient,
     settings: &SettingsRepository,
     scope: PinScope,
     peer: &KtHeadGossip,

@@ -663,6 +663,7 @@ impl CoreServices {
                             // Announce the new mailbox to the peer's CURRENT mailbox so
                             // they switch to depositing into the rotated one.
                             let content = content_v1::Content {
+                                kt_head: None,
                                 content: Some(content_v1::content::Content::DmMailboxRotation(
                                     content_v1::DmMailboxRotation {
                                         new_mailbox_pk: notif.new_mailbox_public_key.to_vec(),

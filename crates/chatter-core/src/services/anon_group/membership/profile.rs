@@ -33,6 +33,7 @@ impl AnonGroupService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupProfileShare(
                 profile_share,
             )),
