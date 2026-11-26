@@ -63,6 +63,7 @@ tower = "0.5"
 # ============================================================================
 libsignal-protocol = { workspace = true }
 libsignal-core = { workspace = true }
+libsignal-account-keys = { workspace = true }
 # Group send endorsements (crypto/group_send.rs)
 zkgroup = { workspace = true }
 signal-media = { workspace = true }

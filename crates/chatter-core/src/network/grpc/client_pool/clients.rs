@@ -76,6 +76,18 @@ impl GrpcClientPool {
         super::super::SvrClient::new(self.channel(), self.auth_clone())
     }
 
+    /// Use the same account for deriving the backup ID and authorizing its RPC.
+    pub(crate) fn account_bound_svr_client(
+        &self,
+    ) -> Result<(libsignal_core::Aci, super::super::SvrClient), NetworkError> {
+        let (user_id, auth) = self
+            .auth
+            .bind_basic_account()
+            .ok_or(NetworkError::Unauthenticated)?;
+        let aci = libsignal_core::Aci::from_uuid_bytes(*user_id.as_bytes());
+        Ok((aci, super::super::SvrClient::new(self.channel(), auth)))
+    }
+
     /// Create an authenticated NotificationClient.
     pub fn notification_client(&self) -> super::super::NotificationClient {
         super::super::NotificationClient::new(self.channel(), self.auth_clone())

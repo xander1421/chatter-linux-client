@@ -61,12 +61,12 @@ impl SvrClient {
     /// Upload an encrypted backup to the server.
     ///
     /// Upserts the backup: creates if new, updates if exists. The server
-    /// validates that the version is monotonically increasing.
+    /// validates that the version advances by exactly one.
     ///
     /// # Arguments
     ///
     /// * `encrypted_backup` - AES-256-GCM ciphertext (nonce || ciphertext || tag)
-    /// * `backup_id_hash` - HMAC-SHA256(svr_secret, "BackupId") 32-byte identifier
+    /// * `backup_id_hash` - 32-byte digest of the account-bound key BackupId
     /// * `version` - Monotonic version counter to prevent replay attacks
     ///
     /// # Returns
@@ -98,7 +98,7 @@ impl SvrClient {
     ///
     /// # Arguments
     ///
-    /// * `backup_id_hash` - HMAC-SHA256(svr_secret, "BackupId") 32-byte identifier
+    /// * `backup_id_hash` - 32-byte digest of the account-bound key BackupId
     pub async fn fetch_backup(
         &mut self,
         backup_id_hash: Vec<u8>,
@@ -142,7 +142,7 @@ impl SvrClient {
     ///
     /// # Arguments
     ///
-    /// * `backup_id_hash` - HMAC-SHA256(svr_secret, "BackupId") 32-byte identifier
+    /// * `backup_id_hash` - 32-byte digest of the account-bound key BackupId
     pub async fn delete_backup(&mut self, backup_id_hash: Vec<u8>) -> Result<(), NetworkError> {
         let request = DeleteBackupRequest { backup_id_hash };
 
@@ -163,9 +163,9 @@ impl SvrClient {
     /// # Arguments
     ///
     /// * `encrypted_backup` - New AES-256-GCM ciphertext (nonce || ciphertext || tag)
-    /// * `new_backup_id_hash` - HMAC-SHA256(new_svr_secret, "BackupId")
-    /// * `old_backup_id_hash` - HMAC-SHA256(old_svr_secret, "BackupId")
-    /// * `version` - Monotonic version counter (must be > current)
+    /// * `new_backup_id_hash` - Key BackupId digest derived from the new PIN
+    /// * `old_backup_id_hash` - Key BackupId digest derived from the old PIN
+    /// * `version` - Monotonic version counter (must be exactly current + 1)
     /// * `new_registration_lock` - Registration lock derived from new PIN
     /// * `new_svr_public_key` - SVR public key derived from new PIN
     ///
@@ -204,7 +204,7 @@ impl SvrClient {
     ///
     /// # Arguments
     ///
-    /// * `backup_id_hash` - HMAC-SHA256(svr_secret, "MessageBackupId")
+    /// * `backup_id_hash` - 32-byte digest of the account-bound message BackupId
     /// * `size` - ciphertext size in bytes the caller will PUT
     pub async fn set_message_backup(
         &mut self,

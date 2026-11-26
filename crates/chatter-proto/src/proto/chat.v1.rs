@@ -5477,15 +5477,15 @@ impl NotificationPriority {
 // ================== Secure Value Recovery (SVR) ==================
 
 /// StoreBackupRequest upserts an encrypted SVR backup.
-/// The client encrypts the backup locally with a key derived from PIN + svr_secret.
-/// Neither PIN nor svr_secret appear in any request — only opaque ciphertext and HMAC identifiers.
+/// The client encrypts the backup locally with a key derived from its PIN.
+/// The server receives the ciphertext and lookup digest. The PIN and root stay on the client.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StoreBackupRequest {
     /// AES-256-GCM ciphertext: 12-byte nonce + encrypted payload + 16-byte tag
     /// Minimum 48 bytes = 12 (nonce) + 16 (tag) + 20 (minimum payload)
     #[prost(bytes="vec", tag="1")]
     pub encrypted_backup: ::prost::alloc::vec::Vec<u8>,
-    /// HMAC-SHA256(svr_secret, "BackupId") — allows server to index without knowing PIN
+    /// SHA-256 of the key BackupId derived from the PIN and account UUID.
     #[prost(bytes="vec", tag="2")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
     /// Monotonic version counter to prevent replay of old backups
@@ -5498,11 +5498,11 @@ pub struct StoreBackupResponse {
     #[prost(uint32, tag="1")]
     pub version: u32,
 }
-/// FetchBackupRequest retrieves an encrypted backup by its HMAC-derived identifier.
+/// FetchBackupRequest retrieves an encrypted backup by its lookup digest.
 /// Rate-limited server-side to prevent PIN brute-force attacks.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FetchBackupRequest {
-    /// HMAC-SHA256(svr_secret, "BackupId") — same identifier used in StoreBackup
+    /// The same key BackupId digest as in StoreBackup.
     #[prost(bytes="vec", tag="1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
 }
@@ -5541,7 +5541,7 @@ pub struct HasKeyBackupResponse {
 /// DeleteBackupRequest removes an encrypted backup.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteBackupRequest {
-    /// HMAC-SHA256(svr_secret, "BackupId") — identifies which backup to delete
+    /// The same key BackupId digest as in StoreBackup.
     #[prost(bytes="vec", tag="1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
 }
@@ -5560,13 +5560,13 @@ pub struct ChangePinBackupRequest {
     /// New encrypted backup (re-encrypted with new PIN-derived key)
     #[prost(bytes="vec", tag="1")]
     pub encrypted_backup: ::prost::alloc::vec::Vec<u8>,
-    /// New backup ID hash (HMAC of new SVR secret)
+    /// Key BackupId digest derived from the new PIN and account UUID.
     #[prost(bytes="vec", tag="2")]
     pub new_backup_id_hash: ::prost::alloc::vec::Vec<u8>,
     /// Old backup ID hash (to verify ownership of current backup)
     #[prost(bytes="vec", tag="3")]
     pub old_backup_id_hash: ::prost::alloc::vec::Vec<u8>,
-    /// New version (must be > current)
+    /// New version (must be exactly current + 1).
     #[prost(uint32, tag="4")]
     pub version: u32,
     /// New registration lock (derived from new PIN)
@@ -5586,15 +5586,15 @@ pub struct ChangePinBackupResponse {
 // The client builds an end-to-end encrypted message-history blob (frame stream,
 // AES-256-GCM; the file key is wrapped by a KEK HKDF'd from the SVR secret).
 // The server stores it as an opaque object in RustFS and holds no key material:
-// without the PIN-derived KEK the blob is noise, so the SVR strike counter does
-// NOT apply here — a thief gains nothing from fetching it. Keyed by
-// HMAC-SHA256(svr_secret, "MessageBackupId"), mirroring the SVR backup_id_hash.
+// the ciphertext requires the PIN-derived KEK to decrypt. The server applies
+// the shared PIN strike counter to operations that check the lookup digest.
+// The message and key BackupIds use independent derivation contexts.
 // One backup per user; Set replaces (rotation). Upload/download go direct to
 // object storage via presigned URLs (same model as attachments).
 
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetMessageBackupRequest {
-    /// HMAC-SHA256(svr_secret, "MessageBackupId")
+    /// SHA-256 of the message BackupId derived from the PIN and account UUID.
     #[prost(bytes="vec", tag="1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
     /// Ciphertext size in bytes the client will PUT (max 1 GiB)
@@ -5609,8 +5609,8 @@ pub struct SetMessageBackupResponse {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMessageBackupRequest {
-    /// HMAC-SHA256(svr_secret, "MessageBackupId") — derived from the PIN on a
-    /// fresh install; the server only compares it against the stored index.
+    /// SHA-256 of the message BackupId derived from the PIN and account UUID.
+    /// The server compares the submitted digest against the stored value.
     #[prost(bytes="vec", tag="1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
 }

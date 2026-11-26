@@ -3,8 +3,9 @@
 //! Covers round-trip, error cases, and backup ID derivation.
 
 use chatter_core::crypto::svr_backup::{
-    KeyBackupPayload, decrypt_backup, derive_backup_id, encrypt_backup,
+    KeyBackupPayload, decrypt_backup, derive_backup_id_hash, encrypt_backup,
 };
+use libsignal_core::Aci;
 
 /// Helper: create a deterministic test payload.
 fn test_payload() -> KeyBackupPayload {
@@ -190,21 +191,23 @@ fn v1_payload_is_rejected() {
 #[test]
 fn derive_backup_id_deterministic() {
     let svr_secret = test_svr_secret();
+    let aci = Aci::from_uuid_bytes([0x11; 16]);
 
-    let id1 = derive_backup_id(&svr_secret);
-    let id2 = derive_backup_id(&svr_secret);
+    let id1 = derive_backup_id_hash(&svr_secret, &aci);
+    let id2 = derive_backup_id_hash(&svr_secret, &aci);
 
     assert_eq!(id1, id2, "same input should produce same backup ID");
 }
 
 #[test]
 fn derive_backup_id_unique() {
+    let aci = Aci::from_uuid_bytes([0x11; 16]);
     let secret1 = test_svr_secret();
     let mut secret2 = [0u8; 32];
     secret2.fill(0xBB);
 
-    let id1 = derive_backup_id(&secret1);
-    let id2 = derive_backup_id(&secret2);
+    let id1 = derive_backup_id_hash(&secret1, &aci);
+    let id2 = derive_backup_id_hash(&secret2, &aci);
 
     assert_ne!(
         id1, id2,
