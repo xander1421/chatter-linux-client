@@ -52,7 +52,7 @@ impl MessageService {
     async fn prewarm_dm_session_initiator(&self, peer_id: &UserId) -> Result<(), MessageError> {
         let grpc_pool = &self.grpc_pool;
         let mut auth_client = self.auth_client();
-        let devices = self.bootstrap_devices(&mut auth_client, peer_id).await?;
+        let devices = self.bootstrap_devices(peer_id).await?;
         crate::services::gateway::submission::mark_submission_started()?;
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
         let mut anon_mailbox_client = self.bootstrap_mailbox_client(grpc_pool)?;

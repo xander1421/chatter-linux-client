@@ -26,6 +26,7 @@ pub(crate) const NO_TOR_ROUTE: &str = "No Tor route";
 pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
 pub(crate) const VERIFYING_KEY: &str = "Verifying key";
+pub(crate) const IDENTITY_CHANGED: &str = "Identity changed";
 pub(crate) const SHIELD_VERIFYING_KEY: &str = "Verifying key over Tor";
 
 pub(crate) async fn wait_for_key_verification(
@@ -76,7 +77,7 @@ impl MessageError {
             Self::DmError(reason) if reason.as_str() == DELIVERY_UNCONFIRMED => {
                 Some(DELIVERY_UNCONFIRMED)
             }
-            Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
+            Self::RecipientIdentityChanged { .. } => Some(IDENTITY_CHANGED),
             Self::RecipientKeyVerifying { .. } => None,
             Self::RecipientKeyUnverified { .. } => Some("Key not verified"),
             Self::MembershipNotVerified { .. } => Some("Membership not verified"),

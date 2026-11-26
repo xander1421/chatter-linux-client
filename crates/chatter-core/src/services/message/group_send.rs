@@ -158,12 +158,16 @@ impl MessageService {
         };
         check_distribution(distribution, &contents)?;
         let members = active_members(&verified);
+        if !members.contains(&me) {
+            return Err(MessageError::NotAuthor);
+        }
         let mut auth_client = self.auth_client();
+        let mut prekeys = self.anonymous_prekey_source();
         // Reuse cached sessions. Cold members need initial discovery; the
         // anonymous submit names any missing or stale devices for reconciliation.
         let mut blocked = None;
         for member in &members {
-            match self.signal_service.require_group_device_sessions(&mut auth_client, member).await
+            match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
                 .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
             {
                 Ok(devices) if devices.is_empty() && member != &me => {
@@ -248,10 +252,22 @@ impl MessageService {
                 return Err(invalid("members' devices still mismatched after reconciling"));
             }
             for account in &resp.mismatched {
-                distributed.retain(|(member, _)| member != &account.user_id);
+                if !members.contains(&account.user_id) {
+                    return Err(invalid("device mismatch for an account outside the verified channel"));
+                }
                 let d = account.devices.clone().unwrap_or_default();
+                if account.user_id == me
+                    && d.missing_devices.iter().chain(&d.extra_devices).chain(&d.stale_devices)
+                        .any(|device| *device == own_device)
+                {
+                    return Err(invalid("device mismatch for the sending device"));
+                }
+                distributed.retain(|(member, _)| member != &account.user_id);
                 self.signal_service
-                    .reconcile_devices(&mut auth_client, &account.user_id, &d.missing_devices, &d.extra_devices, &d.stale_devices)
+                    .reconcile_devices_with_source(
+                        &mut prekeys, &account.user_id, &d.missing_devices,
+                        &d.extra_devices, &d.stale_devices,
+                    )
                     .await
                     .map_err(|e| MessageError::from_signal_send(e, "device reconciliation"))?;
             }

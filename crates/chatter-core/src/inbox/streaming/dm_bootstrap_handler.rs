@@ -642,7 +642,7 @@ async fn handle_bootstrap_request_async(
     let peer_id_str = peer_id.to_string();
 
     let sealed_ciphertext = signal_service
-        .encrypt_message(
+        .encrypt_message_with_existing_session(
             &mut auth_client,
             &peer_id_str,
             peer_device_id,

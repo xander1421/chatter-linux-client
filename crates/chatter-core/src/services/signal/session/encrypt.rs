@@ -45,6 +45,30 @@ impl SignalService {
         self.ensure_session(auth_client, recipient_id, device_id)
             .await?;
 
+        self.seal_to_session(auth_client, recipient_id, device_id, plaintext).await
+    }
+
+    /// Encrypt after anonymous discovery or after receiving a bootstrap.
+    pub(crate) async fn encrypt_message_with_existing_session(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        device_id: u32,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, ServiceError> {
+        let lock = self.get_encrypt_lock(&format!("{recipient_id}:{device_id}")).await;
+        let _guard = lock.lock().await;
+        self.refuse_pending_identity_change(recipient_id)?;
+        self.seal_to_session(auth_client, recipient_id, device_id, plaintext).await
+    }
+
+    async fn seal_to_session(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        device_id: u32,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, ServiceError> {
         let device_id_struct = DeviceId::try_from(device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
@@ -273,6 +297,21 @@ impl SignalService {
             )
             .await?;
         Ok((ciphertexts, unrestricted))
+    }
+
+    pub(crate) async fn encrypt_group_distribution(
+        &self,
+        auth_client: &mut AuthClient,
+        source: &mut PreKeySource<'_>,
+        recipient_id: &str,
+        plaintext: &[u8],
+        group_id: Option<&[u8]>,
+    ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
+        let devices = self.require_group_device_sessions(source, recipient_id).await?;
+        let ciphertexts = self.encrypt_prepared_devices_bounded(
+            auth_client, recipient_id, &devices, plaintext, group_id, false,
+        ).await?;
+        Ok((ciphertexts, self.unrestricted_access(recipient_id).unwrap_or(false)))
     }
 
     /// Original-recipient retry uses precisely these devices. Never replace

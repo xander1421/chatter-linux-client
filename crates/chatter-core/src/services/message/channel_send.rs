@@ -522,18 +522,18 @@ impl MessageService {
         }
         let owner = self.current_user_id()?;
         let row = &entry.row;
-        let members = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.channel_client()
-                .get_all_channel_members(&row.conversation_id.to_string()),
-        )
-        .await
-        .unwrap_or(Err(NetworkError::Timeout))?;
-        if !members
-            .iter()
-            .any(|member| member.user_id == owner.to_string())
-        {
-            return Err(MessageError::NotAuthor);
+        let private = self.is_private_channel(&row.conversation_id);
+        if !private {
+            let members = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.channel_client()
+                    .get_all_channel_members(&row.conversation_id.to_string()),
+            )
+            .await
+            .unwrap_or(Err(NetworkError::Timeout))?;
+            if !members.iter().any(|member| member.user_id == owner.to_string()) {
+                return Err(MessageError::NotAuthor);
+            }
         }
         if let Some(hash) = prepared.state_hash.as_ref() {
             self.sync_channel_state_if_behind(&row.conversation_id);
@@ -569,7 +569,7 @@ impl MessageService {
         let proto = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             // Only a private channel goes out anonymously; an encrypted
             // public channel also carries a state hash but posts to the server.
-            if self.is_private_channel(&row.conversation_id) {
+            if private {
                 let distribution = prepared.distribution.as_deref().ok_or_else(||
                     MessageError::InvalidContent("Private post is missing its original sender key".into()))?;
                 let distribution = chatter_proto::content_v1::SenderKeyDistribution::decode(distribution)
@@ -1036,8 +1036,8 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
                     tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0)
                         WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'
                         AND (?2 OR EXISTS(SELECT 1 FROM messages m WHERE m.id=json_extract(settings.value,'$.entry.row.id')
-                        AND m.failure_reason=?3))",
-                        params![pattern, reconnected, super::core::VERIFYING_KEY])?;
+                        AND m.failure_reason IN (?3,?4)))",
+                        params![pattern, reconnected, super::core::VERIFYING_KEY, super::core::IDENTITY_CHANGED])?;
                 }
                 let rows: Vec<(String, Option<String>, String, Option<String>, Option<u32>)> = {
                     let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase'),COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;

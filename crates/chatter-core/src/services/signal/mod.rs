@@ -14,7 +14,7 @@ mod identity;
 pub mod kt_anchor;
 mod sender_key;
 mod session;
-pub(crate) use session::kt::spawn_peer_verifier;
+pub(crate) use session::{PreKeySource, kt::spawn_peer_verifier};
 
 use crate::domain::ids::ChannelId;
 use libsignal_protocol::PublicKey;

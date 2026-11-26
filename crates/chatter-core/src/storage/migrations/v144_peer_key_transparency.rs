@@ -17,7 +17,7 @@ impl Migration for V144PeerKeyTransparency {
             account TEXT NOT NULL,
             identity_key BLOB NOT NULL,
             state TEXT NOT NULL CHECK (state IN (
-                'legacy', 'legacy-unlisted', 'unverified-inbound', 'verified', 'rejected'
+                'legacy', 'unverified-inbound', 'verified', 'rejected'
             )),
             PRIMARY KEY (account, identity_key)
         );

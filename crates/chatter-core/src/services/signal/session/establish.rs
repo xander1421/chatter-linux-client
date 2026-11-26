@@ -79,6 +79,17 @@ impl SignalService {
         recipient_id: &str,
         device_id: u32,
     ) -> Result<(), ServiceError> {
+        self.ensure_session_with_source(
+            &mut PreKeySource::Identified(auth_client), recipient_id, device_id,
+        ).await
+    }
+
+    pub(super) async fn ensure_session_with_source(
+        &self,
+        source: &mut PreKeySource<'_>,
+        recipient_id: &str,
+        device_id: u32,
+    ) -> Result<(), ServiceError> {
         let device_id_struct = DeviceId::try_from(device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
@@ -121,9 +132,7 @@ impl SignalService {
             "No usable session exists, fetching prekey bundle"
         );
 
-        let bundle_response = auth_client
-            .get_pre_key_bundle(recipient_id, &device_id.to_string())
-            .await?;
+        let bundle_response = source.fetch(recipient_id, &device_id.to_string()).await?;
 
         let result = bundle_response
             .result
@@ -133,6 +142,9 @@ impl SignalService {
             _ => return Err(ServiceError::Validation("Unexpected response type".into())),
         };
 
+        if proto_bundle.device_id != device_id {
+            return Err(ServiceError::Validation("Bundle device does not match request".into()));
+        }
         let bundle = Self::convert_prekey_bundle(proto_bundle)?;
         self.actor
             .establish_session(address, bundle)

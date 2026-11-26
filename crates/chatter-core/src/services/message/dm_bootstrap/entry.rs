@@ -15,7 +15,7 @@ impl MessageService {
         if our_user_id.as_uuid() > peer_id.as_uuid() {
             return self.send_bootstrap_request(&mut auth_client, peer_id, &our_user_id, &self.grpc_pool).await;
         }
-        let devices = self.bootstrap_devices(&mut auth_client, peer_id).await?;
+        let devices = self.bootstrap_devices(peer_id).await?;
         let mut mailbox_client = self.bootstrap_mailbox_client(&self.grpc_pool)?;
         let bootstrap = DmBootstrap::new(self.database.clone())
             .initiate_dm(*peer_id, &mut mailbox_client).await
@@ -75,7 +75,7 @@ impl MessageService {
             // device is cached. In Shield this is strictly local, never an
             // identified device fetch, regardless of the token pool state.
             if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-                self.bootstrap_devices(auth_client, peer_id).await?;
+                self.bootstrap_devices(peer_id).await?;
             }
             return Err(MessageError::ShieldNotReady);
         }
@@ -121,7 +121,7 @@ impl MessageService {
         };
 
         // Before a mailbox is made or a token spent: is any device reachable?
-        let devices = self.bootstrap_devices(auth_client, peer_id).await?;
+        let devices = self.bootstrap_devices(peer_id).await?;
 
         // No Tor route in Shield is refused here, before the send starts:
         // nothing was submitted, so the row fails rather than goes unconfirmed.
@@ -281,7 +281,7 @@ impl MessageService {
             "BOOTSTRAP[1/4] Higher UUID sending REQUEST to lower UUID peer"
         );
 
-        let devices = self.bootstrap_devices(auth_client, peer_id).await?;
+        let devices = self.bootstrap_devices(peer_id).await?;
         self.send_bootstrap_payload(
             auth_client,
             peer_id,

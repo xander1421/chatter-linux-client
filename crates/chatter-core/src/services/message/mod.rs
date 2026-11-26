@@ -200,6 +200,15 @@ pub enum MessageError {
     },
 }
 
+impl MessageService {
+    fn anonymous_prekey_source(&self) -> super::signal::PreKeySource<'_> {
+        super::signal::PreKeySource::Anonymous {
+            pool: &self.grpc_pool,
+            tokens: &self.token_manager,
+        }
+    }
+}
+
 impl MessageError {
     /// Classify a send-side [`ServiceError`] from the Signal layer.
     ///
