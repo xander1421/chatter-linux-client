@@ -536,12 +536,7 @@ impl BleRuntime {
             return false;
         }
         self.published_beacons.clear();
-        let config = Arc::clone(&self.config);
-        let state = Arc::clone(&self.state);
-        let scans = Arc::clone(&self.matched_scans);
-        self.radio.set_inbound_admission(Arc::new(move |inbound| {
-            admission::inbound_admission(&config, &state, &scans, inbound, Instant::now()).is_some()
-        }));
+        self.install_inbound_admission();
         if !self.refresh_pairing_beacons() {
             return false;
         }
@@ -949,8 +944,9 @@ async fn transmit_forwarded(
     if let Some(allowed) = group_links {
         links.retain(|candidate| allowed.contains(&candidate.id));
     }
-    let kind = broadcasts::packet_kind(packet);
-    links.retain(|link| broadcasts::allows_traffic_on_link(config, state, &link.id, kind));
+    if !config.public_chat_enabled() {
+        links.retain(|link| state.is_paired_link(&link.id));
+    }
     let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
         // Split horizon: never send a packet back down the link it arrived on —
         // nor down any other link to the same peer, which is what `siblings` adds.

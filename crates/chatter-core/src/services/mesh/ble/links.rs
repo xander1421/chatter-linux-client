@@ -1,6 +1,15 @@
 use super::*;
 
 impl BleRuntime {
+    pub(super) fn install_inbound_admission(&self) {
+        let config = Arc::clone(&self.config);
+        let state = Arc::clone(&self.state);
+        let scans = Arc::clone(&self.matched_scans);
+        self.radio.set_inbound_admission(Arc::new(move |inbound| {
+            admission::inbound_admission(&config, &state, &scans, inbound, Instant::now()).is_some()
+        }));
+    }
+
     // ------------------------------------------------------------- link events
 
     pub(super) async fn on_link_event(&mut self, event: LinkEvent) {
@@ -427,12 +436,7 @@ impl BleRuntime {
     pub(super) async fn on_packet(&mut self, link: &LinkId, packet: BitchatPacket) {
         let pairing_only = !self.config.public_chat_enabled() && !self.state.is_paired_link(link);
         if !self.allows_public_packet(&packet)
-            || !broadcasts::allows_traffic_on_link(
-                &self.config,
-                &self.state,
-                link,
-                broadcasts::packet_kind(&packet),
-            )
+            || !self.allows_link_frame(link, broadcasts::packet_kind(&packet))
         {
             return;
         }
@@ -518,13 +522,7 @@ impl BleRuntime {
                 .cloned()
         });
         if pairing_only {
-            if !self
-                .link_admission
-                .get(link)
-                .is_some_and(|record| record.permits_proof(&self.config, Instant::now()))
-                || packet.is_rsr
-                || bound.as_ref().is_some_and(|peer| *peer != claimed)
-            {
+            if packet.is_rsr || bound.as_ref().is_some_and(|peer| *peer != claimed) {
                 return;
             }
             let kind = broadcasts::packet_kind(&packet);

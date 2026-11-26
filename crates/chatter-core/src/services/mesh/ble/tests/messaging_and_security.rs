@@ -67,32 +67,29 @@ async fn nothing_is_written_when_no_link_is_writable() {
 
 #[tokio::test]
 async fn an_unpaired_default_link_carries_pairing_frames_only() {
-    let (runtime, _, state, _) = runtime_with_config(MeshConfig::default());
+    let (mut runtime, _, _, _) = runtime_with_config(MeshConfig::default());
     let link = LinkId::new("/mock/pairing");
+    let now = Instant::now();
+    runtime.config.set_pairing(true, now);
+    runtime
+        .link_admission
+        .insert(link.clone(), admission::LinkAdmission::new(None, now));
     for kind in [
         MessageType::Announce,
         MessageType::NoiseHandshake,
         MessageType::NoiseEncrypted,
     ] {
-        assert!(broadcasts::allows_traffic_on_link(
-            &runtime.config,
-            &state,
-            &link,
-            Some(kind)
-        ));
+        assert!(runtime.allows_link_frame(&link, Some(kind)));
     }
     for kind in [
         MessageType::RequestSync,
         MessageType::GroupMessage,
         MessageType::PrekeyBundle,
     ] {
-        assert!(!broadcasts::allows_traffic_on_link(
-            &runtime.config,
-            &state,
-            &link,
-            Some(kind)
-        ));
+        assert!(!runtime.allows_link_frame(&link, Some(kind)));
     }
+    runtime.config.set_pairing(false, now);
+    assert!(!runtime.allows_link_frame(&link, Some(MessageType::Announce)));
 }
 
 #[tokio::test]
@@ -267,6 +264,7 @@ async fn a_connected_link_is_treated_as_writable_immediately() {
 #[tokio::test]
 async fn default_mesh_does_not_dial_or_admit_a_stranger() {
     let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    runtime.install_inbound_admission();
     let beacon = [0; 13];
     runtime.on_discovered("stranger", -45, beacon).await;
     runtime.dial("stranger").await;
@@ -298,14 +296,26 @@ async fn default_mesh_does_not_dial_or_admit_a_stranger() {
         .await;
     assert!(!state.with(|inner| inner.links.contains(&link)));
     assert_eq!(radio.write_count(), 0);
+    let first_write = chatter_mesh_link::admission_preface(&beacon);
+    assert!(!radio.admits_first_write("stranger", &first_write));
+    runtime.config.set_pairing(true, Instant::now());
+    assert!(radio.admits_first_write("stranger", &first_write));
+    runtime.config.set_pairing(false, Instant::now());
+    runtime.config.set_public_chat(true);
+    assert!(radio.admits_first_write("stranger", &first_write));
+    runtime.config.set_public_chat(false);
+    assert!(!radio.admits_first_write("stranger", &first_write));
 }
 
 #[tokio::test]
 async fn first_write_or_a_recent_matched_scan_admits_a_paired_link_for_proof() {
-    let (mut runtime, _, state, _) = runtime_with_config(MeshConfig::default());
+    let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    runtime.install_inbound_admission();
     let (contact, beacon) = paired_remote(&runtime, &state);
     let now = Instant::now();
     runtime.matched_scans.lock().remember("seen", beacon, now);
+    assert!(radio.admits_first_write("seen", &[]));
+    assert!(radio.admits_first_write("unseen", &chatter_mesh_link::admission_preface(&beacon)));
     for incoming in [
         InboundLink {
             address: "seen".into(),
@@ -344,6 +354,22 @@ async fn first_write_or_a_recent_matched_scan_admits_a_paired_link_for_proof() {
     let deadline = runtime.link_admission[&link].proof_deadline;
     runtime.close_lapsed_admissions(deadline).await;
     assert!(!state.with(|inner| inner.links.contains(&link)));
+}
+
+#[tokio::test]
+async fn paired_dial_presents_our_beacon_for_the_recognized_contact() {
+    let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    let (peer, beacon) = paired_remote(&runtime, &state);
+    let local_beacon = state
+        .pairing_beacon_for_contact(&runtime.identity.peer_id(), &peer)
+        .unwrap();
+    runtime.on_discovered("paired", -45, beacon).await;
+    runtime.settle_dial().await;
+    assert_eq!(radio.connect_attempts(), ["paired"]);
+    assert_eq!(
+        radio.connect_prefaces(),
+        [chatter_mesh_link::admission_preface(&local_beacon)]
+    );
 }
 
 #[tokio::test]

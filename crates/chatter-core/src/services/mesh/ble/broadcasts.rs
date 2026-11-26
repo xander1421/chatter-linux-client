@@ -55,21 +55,23 @@ fn allows_public_packet(config: &MeshConfig, packet: &BitchatPacket) -> bool {
     config.public_chat_enabled() || !public_chat_type(packet_kind(packet))
 }
 
-pub(super) fn allows_traffic_on_link(
-    config: &MeshConfig,
-    state: &MeshState,
-    link: &LinkId,
-    kind: Option<MessageType>,
-) -> bool {
-    config.public_chat_enabled()
-        || matches!(
-            kind,
-            Some(MessageType::Announce | MessageType::NoiseHandshake | MessageType::NoiseEncrypted)
-        )
-        || state.is_paired_link(link)
-}
-
 impl BleRuntime {
+    pub(super) fn allows_link_frame(&self, link: &LinkId, kind: Option<MessageType>) -> bool {
+        self.config.public_chat_enabled()
+            || self.state.is_paired_link(link)
+            || (matches!(
+                kind,
+                Some(
+                    MessageType::Announce
+                        | MessageType::NoiseHandshake
+                        | MessageType::NoiseEncrypted
+                )
+            ) && self
+                .link_admission
+                .get(link)
+                .is_some_and(|record| record.permits_proof(&self.config, Instant::now())))
+    }
+
     pub(super) fn allows_public_packet(&self, packet: &BitchatPacket) -> bool {
         allows_public_packet(&self.config, packet)
     }

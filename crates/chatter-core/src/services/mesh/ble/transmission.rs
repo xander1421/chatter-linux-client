@@ -255,9 +255,7 @@ impl BleRuntime {
         let (plan, frames) = {
             let mut links = self.state.link_candidates();
             let kind = broadcasts::packet_kind(packet);
-            links.retain(|link| {
-                broadcasts::allows_traffic_on_link(&self.config, &self.state, &link.id, kind)
-            });
+            links.retain(|link| self.allows_link_frame(&link.id, kind));
             if let (Some(link), Some(peer)) = (chosen_link, directed_peer) {
                 links.retain(|candidate| &candidate.id == link);
                 let Some(candidate) = links.first_mut() else {

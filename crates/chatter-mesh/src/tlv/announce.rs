@@ -239,6 +239,7 @@ mod tests {
         let mut packet = sample();
         packet.direct_neighbors = None;
         packet.bridge_geohash = None;
+        packet.capabilities = Some(PeerCapabilities::from_bits(PeerCapabilities::PREKEYS));
         packet.pairing_beacon = Some([7; 13]);
         let encoded = packet.encode().unwrap();
         assert_eq!(AnnouncementPacket::decode(&encoded).unwrap(), packet);

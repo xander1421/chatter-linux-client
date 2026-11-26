@@ -507,6 +507,8 @@ mod tests {
     async fn paired_contacts_reconnect_and_open_courier_mail_after_a_week_offline() {
         let (mut a, a_radio, a_state) = super::super::tests::runtime();
         let (mut b, _, b_state) = super::super::tests::runtime();
+        a.config.set_public_chat(false);
+        b.config.set_public_chat(false);
         let store_a = temp_identity_store();
         let store_b = temp_identity_store();
         let start = 1_800_000_000;
@@ -565,6 +567,18 @@ mod tests {
         let link_b = LinkId::new("paired-b");
         bind_link(&a_state, &link_a, &wire_b);
         bind_link(&b_state, &link_b, &wire_a);
+        for (runtime, state, link, contact) in [
+            (&mut a, &a_state, &link_a, &contact_b),
+            (&mut b, &b_state, &link_b, &contact_a),
+        ] {
+            runtime.link_admission.insert(
+                link.clone(),
+                admission::LinkAdmission::new(Some(contact.clone()), Instant::now()),
+            );
+            state.with(|state| state.awaiting_pairing_proof.insert(link.clone()));
+            assert!(!state.is_paired_link(link));
+            assert!(!state.can_write_to(contact));
+        }
         let transcript = a_state
             .with(|state| state.sessions.handshake_hash(&wire_b))
             .unwrap();
@@ -591,6 +605,8 @@ mod tests {
             ))
         );
         assert_eq!(b_state.route(&contact_a), wire_a);
+        assert!(a_state.is_paired_link(&link_a));
+        assert!(b_state.is_paired_link(&link_b));
         assert_eq!(directory.noise_key(&contact_b), Some(prior_address));
 
         let now = now_secs();

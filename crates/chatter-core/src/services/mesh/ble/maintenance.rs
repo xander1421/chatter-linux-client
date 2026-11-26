@@ -481,13 +481,8 @@ impl BleRuntime {
         for (link, write) in next {
             let kind = broadcasts::frame_kind(&write.bytes);
             if !self.allows_queued_frame(&write.bytes)
+                || !self.allows_link_frame(&link, kind)
                 || (kind == Some(MessageType::GroupMessage) && !self.group_traffic_allowed(&link))
-                || !broadcasts::allows_traffic_on_link(
-                    &self.config,
-                    &self.state,
-                    &link,
-                    kind,
-                )
             {
                 continue;
             }
