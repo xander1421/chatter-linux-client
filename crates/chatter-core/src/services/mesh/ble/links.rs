@@ -377,8 +377,9 @@ impl BleRuntime {
             None
         };
         if packet.message_type() == Some(MessageType::GroupMessage) || private_fragment.is_some() {
-            if packet.message_type() == Some(MessageType::GroupMessage)
-                && packet.payload.len() > 4096
+            if !self.group_traffic_allowed(link)
+                || (packet.message_type() == Some(MessageType::GroupMessage)
+                    && packet.payload.len() > 4096)
             {
                 return;
             }
@@ -630,6 +631,7 @@ impl BleRuntime {
         let Ok((header, chunk)) = chatter_mesh::fragment::FragmentHeader::parse(packet) else {
             return;
         };
+        let private_group = header.original_type == MessageType::GroupMessage.as_u8();
         if header.index == 0 && chunk.get(1) != Some(&header.original_type) {
             return;
         }
@@ -659,13 +661,29 @@ impl BleRuntime {
                 && inner.sender_id == packet.sender_id
                 && inner.message_type() != Some(MessageType::Fragment)
             {
-                if matches!(
+                if private_group || matches!(
                     inner.message_type(),
                     Some(MessageType::NoiseHandshake | MessageType::NoiseEncrypted)
                 ) {
                     inner.ttl = inner.ttl.min(received.ttl);
                 }
-                self.handle_typed(link, &inner, claimed).await
+                if private_group {
+                    // A legacy group envelope exposes its ID and epoch in
+                    // fragment data. Forward only after checking the complete
+                    // envelope, and deduplicate the packet across fragment IDs.
+                    let key = MessageDeduplicator::dedup_key(&inner);
+                    if self.state.with(|state| state.dedup.is_duplicate(&key, now_s)) {
+                        return;
+                    }
+                    if self.handle_typed(link, &inner, claimed).await {
+                        self.state.with(|state| state.dedup.mark_processed(&key, now_s));
+                        self.relay(link, &inner, local).await;
+                        return;
+                    }
+                    false
+                } else {
+                    self.handle_typed(link, &inner, claimed).await
+                }
             } else {
                 false
             };
@@ -673,6 +691,9 @@ impl BleRuntime {
                 self.state.with(|state| state.fragments.reject_completion(packet, header));
                 return;
             }
+        }
+        if private_group {
+            return;
         }
         for (ingress, fragment) in received.forwards {
             if fragment.is_broadcast() {

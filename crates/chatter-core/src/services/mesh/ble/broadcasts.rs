@@ -141,7 +141,12 @@ impl BleRuntime {
         self.transmit(&packet, Some(peer), None).await;
     }
 
-    pub(super) async fn broadcast_private_channel(&mut self, id: &str, bytes: Vec<u8>) {
+    pub(super) async fn broadcast_private_channel(
+        &mut self,
+        id: &str,
+        bytes: Vec<u8>,
+        timestamp_ms: u64,
+    ) {
         let Ok(Some(state)) = self.private_channels.load(id) else {
             return;
         };
@@ -149,13 +154,14 @@ impl BleRuntime {
             return;
         }
         let local_group = self.private_group_identity.peer_id();
-        let Some(opened) = state.decrypt(&bytes) else {
+        let Some(opened) = state.decrypt(&bytes, timestamp_ms) else {
             return;
         };
         let message_id = opened.id;
         let content = opened.content;
         let sender = opened.sender;
-        let packet = self.build_packet(MessageType::GroupMessage, None, bytes, 7);
+        let mut packet = self.build_packet(MessageType::GroupMessage, None, bytes, 7);
+        packet.timestamp = timestamp_ms;
         self.state
             .with(|s| s.self_broadcasts.record(&message_id, &packet, now_millis()));
         self.originate_broadcast(&packet).await;
@@ -168,7 +174,7 @@ impl BleRuntime {
                 .unwrap_or_else(|| sender.as_str().to_owned())
         };
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
-            message: outbound_message(&conversation, &message_id, &sender, &content, now_millis()),
+            message: outbound_message(&conversation, &message_id, &sender, &content, timestamp_ms),
             conversation,
             is_local: sender == local_group,
             sender,

@@ -227,22 +227,24 @@ impl BleRuntime {
         if !packet.is_broadcast() || packet.payload.is_empty() || packet.payload.len() > 4096 {
             return false;
         }
-        let Some(group_id) = PrivateChannel::envelope_group_id(&packet.payload) else {
-            return true;
-        };
+        if !PrivateChannel::has_group_envelope(&packet.payload) {
+            return false;
+        }
         // A relayed group packet can arrive as fragments. The outer fragments
         // are retained by ingress, but the reassembled packet only reaches this
         // handler. Keep it so an epoch key arriving later can open it.
         self.gossip.on_public_packet_seen(packet, now_secs());
-        let id = uuid::Uuid::from_bytes(group_id).to_string();
-        let Ok(Some(mut state)) = self.private_channels.load(&id) else {
+        let Ok(Some(mut state)) = self
+            .private_channels
+            .find_group(&packet.payload, packet.timestamp)
+        else {
             // Nonmembers still relay sealed group packets.
             return true;
         };
         if self.is_own_echo(packet) {
             return true;
         }
-        let Some(opened) = state.decrypt(&packet.payload) else {
+        let Some(opened) = state.decrypt(&packet.payload, packet.timestamp) else {
             return true;
         };
         let author = opened.sender.clone();
@@ -503,9 +505,7 @@ impl BleRuntime {
         // already in our GCS filter, so a later round will never request it again.
         // Replay the bounded retained window now that this epoch can decrypt it.
         for packet in self.gossip.group_message_packets(now_secs()) {
-            if PrivateChannel::envelope_group_id(&packet.payload) == update.group_id()
-                && PrivateChannel::envelope_epoch(&packet.payload) == Some(update.epoch)
-            {
+            if update.matches_group_envelope(&packet.payload, packet.timestamp) {
                 self.on_private_channel_message(&packet, claimed);
             }
         }

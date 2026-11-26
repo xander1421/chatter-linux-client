@@ -464,6 +464,16 @@ impl BleRuntime {
         });
 
         for (link, write) in next {
+            let kind = write.bytes.get(1).copied().and_then(MessageType::from_u8);
+            let group = match kind {
+                Some(MessageType::GroupMessage) => true,
+                Some(MessageType::Fragment) => codec::decode(&write.bytes)
+                    .is_ok_and(|packet| super::transmission::is_private_group_packet(&packet)),
+                _ => false,
+            };
+            if group && !self.group_traffic_allowed(&link) {
+                continue;
+            }
             match self.radio.send(&link, &write.bytes).await {
                 Ok(()) => {
                     self.frames_written

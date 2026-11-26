@@ -433,7 +433,9 @@ impl MeshService {
             acknowledged: vec![],
         })?;
         let encoded = notice.encode()?;
-        let (_, broadcast) = state.encrypt(&identity, &encoded, &self.config.nickname())?;
+        let timestamp_ms = now_millis();
+        let (_, broadcast) =
+            state.encrypt(&identity, &encoded, &self.config.nickname(), timestamp_ms)?;
         let notice = serde_json::to_vec(&notice)
             .map_err(|_| MeshError::Binding("invalid leave notice".into()))?;
         let mut control = b"CHTRPCL2".to_vec();
@@ -443,6 +445,7 @@ impl MeshService {
                 peers,
                 notice: control,
                 broadcast,
+                timestamp_ms,
             })
             .map_err(|_| MeshError::NotRunning)?;
         self.private_channels.remove(id)?;
@@ -568,11 +571,14 @@ impl MeshService {
                 "Waiting for key update from creator".into(),
             ));
         }
-        let (message_id, bytes) = state.encrypt(&identity, text, &self.config.nickname())?;
+        let timestamp_ms = now_millis();
+        let (message_id, bytes) =
+            state.encrypt(&identity, text, &self.config.nickname(), timestamp_ms)?;
         self.ble
             .send(BleCommand::PrivateChannelMessage {
                 channel_id: id.into(),
                 bytes,
+                timestamp_ms,
             })
             .map_err(|_| MeshError::NotRunning)?;
         // The encrypted packet is broadcast over the radio, with no

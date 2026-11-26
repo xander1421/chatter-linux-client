@@ -1,12 +1,62 @@
+use super::message::{GroupEnvelope, GroupRoutingKey};
 use super::*;
+use parking_lot::Mutex;
+use std::collections::BTreeMap;
 
 pub struct PrivateChannelStore {
     db: Arc<Database>,
+    // Keep only routing keys here. An unmatched packet need not read or
+    // verify the database's group states, much less try AEAD for each group.
+    routes: Mutex<Option<BTreeMap<String, GroupRoutingKey>>>,
 }
 impl PrivateChannelStore {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self {
+            db,
+            routes: Mutex::new(None),
+        }
     }
+
+    pub fn find_group(
+        &self,
+        bytes: &[u8],
+        timestamp_ms: u64,
+    ) -> Result<Option<PrivateChannel>, MeshError> {
+        let Some(envelope) = GroupEnvelope::parse(bytes) else {
+            return Ok(None);
+        };
+        let id = {
+            let mut routes = self.routes.lock();
+            if routes.is_none() {
+                *routes = Some(
+                    self.list()?
+                        .into_iter()
+                        .filter_map(|channel| Some((channel.id.clone(), channel.routing_key()?)))
+                        .collect(),
+                );
+            }
+            let mut matches = routes
+                .as_ref()
+                .expect("initialized routes")
+                .iter()
+                .filter(|(_, key)| envelope.matches(key, timestamp_ms));
+            let id = matches.next().map(|(id, _)| id.clone());
+            if matches.next().is_some() {
+                return Ok(None);
+            }
+            id
+        };
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        // A writer can have installed a new epoch after the route lookup.
+        Ok(self.load(&id)?.filter(|channel| {
+            channel
+                .routing_key()
+                .is_some_and(|key| envelope.matches(&key, timestamp_ms))
+        }))
+    }
+
     /// Redemption and nonce consumption share one SQL transaction.
     pub fn redeem(
         &self,
@@ -15,6 +65,7 @@ impl PrivateChannelStore {
         member: Member,
     ) -> Result<Option<PrivateChannel>, MeshError> {
         use rusqlite::OptionalExtension;
+        let mut routes = self.routes.lock();
         let mut conn = self.db.connection()?;
         let tx = conn.transaction().map_err(db_error)?;
         let bytes: Option<Vec<u8>> = tx
@@ -56,6 +107,11 @@ impl PrivateChannelStore {
         )
         .map_err(db_error)?;
         tx.commit().map_err(db_error)?;
+        if let Some(routes) = routes.as_mut()
+            && let Some(key) = state.routing_key()
+        {
+            routes.insert(state.id.clone(), key);
+        }
         Ok(Some(state))
     }
     pub fn save(&self, state: &PrivateChannel) -> Result<(), MeshError> {
@@ -66,6 +122,7 @@ impl PrivateChannelStore {
         let bytes = Zeroizing::new(
             serde_json::to_vec(state).map_err(|_| failure("invalid channel state"))?,
         );
+        let mut routes = self.routes.lock();
         let mut conn = self.db.connection()?;
         let tx = conn.transaction().map_err(db_error)?;
         let previous: Option<Vec<u8>> = tx
@@ -93,6 +150,11 @@ impl PrivateChannelStore {
         )
         .map_err(db_error)?;
         tx.commit().map_err(db_error)?;
+        if let Some(routes) = routes.as_mut()
+            && let Some(key) = state.routing_key()
+        {
+            routes.insert(state.id.clone(), key);
+        }
         Ok(())
     }
     pub fn load(&self, id: &str) -> Result<Option<PrivateChannel>, MeshError> {
@@ -141,6 +203,7 @@ impl PrivateChannelStore {
         Ok(out)
     }
     pub fn remove(&self, id: &str) -> Result<(), MeshError> {
+        let mut routes = self.routes.lock();
         self.db
             .connection()?
             .execute(
@@ -148,6 +211,9 @@ impl PrivateChannelStore {
                 params![id],
             )
             .map_err(db_error)?;
+        if let Some(routes) = routes.as_mut() {
+            routes.remove(id);
+        }
         Ok(())
     }
     pub fn save_pending(&self, invite: &Invite) -> Result<(), MeshError> {
@@ -254,14 +320,54 @@ impl PrivateChannelStore {
         Ok(())
     }
     pub fn wipe(&self) -> Result<(), MeshError> {
+        let mut routes = self.routes.lock();
         self.db
             .connection()?
             .execute("DELETE FROM mesh_private_channels", [])
             .map_err(db_error)?;
+        *routes = None;
         self.db
             .connection()?
             .execute("DELETE FROM mesh_private_joins", [])
             .map_err(db_error)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_routing_cache_tracks_committed_keys_and_channel_removal() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&directory.path().join("groups.db"), "test").unwrap());
+        db.run_migrations().unwrap();
+        let store = PrivateChannelStore::new(db);
+        let identity = MeshIdentity::generate(&mut crate::crypto::os_rng());
+        let mut channel = PrivateChannel::create("private", &identity, "sender").unwrap();
+        let timestamp = 1_800_000_000_000;
+        let (_, before) = channel
+            .encrypt(&identity, "before", "sender", timestamp)
+            .unwrap();
+        assert!(store.find_group(&before, timestamp).unwrap().is_none());
+        store.save(&channel).unwrap();
+        assert_eq!(
+            store.find_group(&before, timestamp).unwrap().unwrap().id,
+            channel.id
+        );
+
+        channel.rotate(&identity, None, None).unwrap();
+        store.save(&channel).unwrap();
+        let (_, after) = channel
+            .encrypt(&identity, "after", "sender", timestamp)
+            .unwrap();
+        assert!(store.find_group(&before, timestamp).unwrap().is_none());
+        assert_eq!(
+            store.find_group(&after, timestamp).unwrap().unwrap().epoch,
+            channel.epoch
+        );
+        store.remove(&channel.id).unwrap();
+        assert!(store.find_group(&after, timestamp).unwrap().is_none());
     }
 }

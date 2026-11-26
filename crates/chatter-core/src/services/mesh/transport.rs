@@ -142,11 +142,13 @@ pub enum BleCommand {
     PrivateChannelMessage {
         channel_id: String,
         bytes: Vec<u8>,
+        timestamp_ms: u64,
     },
     PrivateLeave {
         peers: Vec<PeerId>,
         notice: Vec<u8>,
         broadcast: Vec<u8>,
+        timestamp_ms: u64,
     },
     /// Broadcast a file into the mesh room.
     ///

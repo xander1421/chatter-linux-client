@@ -122,6 +122,18 @@ impl BleRuntime {
         })
     }
 
+    pub(super) fn pairing_verified_on_link(&self, link: &LinkId, peer: &PeerId) -> bool {
+        self.pairing_verified(peer)
+            && self
+                .state
+                .with(|state| state.links.is_noise_authenticated(link, peer))
+    }
+
+    pub(super) fn group_traffic_allowed(&self, link: &LinkId) -> bool {
+        let peer = self.state.with(|state| state.links.peer_for(link).cloned());
+        peer.is_some_and(|peer| self.pairing_verified_on_link(link, &peer))
+    }
+
     pub(super) async fn send_pairing_proof(&mut self, peer: &PeerId) {
         let contact = self
             .pairing_candidates
@@ -641,6 +653,141 @@ mod tests {
         let ack = wrap_private_control(&b, &wire_a, &ack);
         a.on_encrypted(&link_a, &ack, &wire_b).await;
         assert!(!a.couriers.carries_for(&prior_address, now));
+
+        // A buddy can receive the opaque packet before the new epoch key. Its
+        // original timestamp still routes the packet once the key arrives.
+        let mut group =
+            PrivateChannel::create("retained history", &a.private_group_identity, "a").unwrap();
+        let enrolled = super::super::super::private_channel::Member {
+            peer: b.private_group_identity.peer_id().to_string(),
+            fingerprint: b.private_group_identity.fingerprint(),
+            signing_key: b.private_group_identity.signing_public().to_vec(),
+            nickname: "b".into(),
+        };
+        group
+            .rotate(&a.private_group_identity, Some(enrolled), None)
+            .unwrap();
+        b.private_channels.save(&group).unwrap();
+        group.rotate(&a.private_group_identity, None, None).unwrap();
+        let timestamp_ms = now_millis().saturating_sub(120_000);
+        let (id, payload) = group
+            .encrypt(
+                &a.private_group_identity,
+                "before the epoch update",
+                "a",
+                timestamp_ms,
+            )
+            .unwrap();
+        let mut packet = a.build_packet(MessageType::GroupMessage, None, payload, 7);
+        packet.timestamp = timestamp_ms;
+        assert!(b.on_private_channel_message(&packet, &wire_a));
+        assert!(
+            b.private_channels
+                .load(&group.id)
+                .unwrap()
+                .unwrap()
+                .replay
+                .is_empty()
+        );
+        b.on_private_epoch(
+            &wire_a,
+            PrivateChannel::decode_update(&group.update_bytes().unwrap()).unwrap(),
+            false,
+        )
+        .await;
+        assert_eq!(
+            b.private_channels.load(&group.id).unwrap().unwrap().replay,
+            vec![id]
+        );
+    }
+
+    #[tokio::test]
+    async fn private_group_frames_stay_on_proven_links() {
+        let (mut runtime, radio, state) = super::super::tests::runtime();
+        let paired = MeshIdentity::generate(&mut crate::crypto::os_rng());
+        let stranger = MeshIdentity::generate(&mut crate::crypto::os_rng());
+        let paired_link = LinkId::new("paired-group-link");
+        let stranger_link = LinkId::new("unpaired-group-link");
+        for (identity, link) in [(&paired, &paired_link), (&stranger, &stranger_link)] {
+            super::super::rotation::tests::establish(&runtime, identity);
+            bind_link(&state, link, &identity.peer_id());
+        }
+        let peer = paired.peer_id();
+        pair(&runtime, &paired, 3, true);
+        let transcript = state
+            .with(|state| state.sessions.handshake_hash(&peer))
+            .unwrap();
+        let key = state.pairing_key(&peer).unwrap();
+        let remote = PairingKey::new(*key.root(), false);
+        let proof = sign_route(&paired, &remote, &transcript);
+        assert!(runtime.on_pairing_control(&peer, &proof).await);
+        runtime.drain_writes().await;
+        state.with(|state| {
+            state.max_write.insert(paired_link.clone(), 128);
+        });
+
+        let group_signer = &runtime.private_group_identity;
+        let group = PrivateChannel::create("private", group_signer, "local").unwrap();
+        let timestamp_ms = now_millis();
+        let (_, payload) = group
+            .encrypt(group_signer, &"private".repeat(60), "local", timestamp_ms)
+            .unwrap();
+        let mut packet = runtime.build_packet(MessageType::GroupMessage, None, payload, 7);
+        packet.timestamp = timestamp_ms;
+        assert!(
+            !runtime
+                .transmit_on_link(&packet, &stranger.peer_id(), &stranger_link)
+                .await
+        );
+        assert!(runtime.transmit(&packet, None, None).await);
+        runtime.drain_writes().await;
+        let group_writes: Vec<_> = radio
+            .writes()
+            .into_iter()
+            .filter(|(_, bytes)| {
+                codec::decode(bytes).is_ok_and(|packet| {
+                    super::super::transmission::is_private_group_packet(&packet)
+                })
+            })
+            .collect();
+        assert!(group_writes.len() > 1, "expected a fragmented group packet");
+        assert!(group_writes.iter().all(|(link, _)| *link == paired_link));
+
+        // Once the other link is also paired, it can relay the new format but
+        // must never see even the first fragment of a legacy clear envelope.
+        let relay = stranger.peer_id();
+        pair(&runtime, &stranger, 4, true);
+        let transcript = state
+            .with(|state| state.sessions.handshake_hash(&relay))
+            .unwrap();
+        let remote = PairingKey::new(*state.pairing_key(&relay).unwrap().root(), false);
+        assert!(
+            runtime
+                .on_pairing_control(&relay, &sign_route(&stranger, &remote, &transcript))
+                .await
+        );
+        runtime.drain_writes().await;
+        let before = radio.writes().len();
+        packet.sender_id = peer.to_routing_bytes().unwrap();
+        let mut legacy = packet.clone();
+        legacy.payload.splice(19..19, [2, 0, 4, 0, 0, 0, 1]);
+        for fragment in fragment::plan_fragments(&legacy, 100, [7; 8]).unwrap() {
+            runtime.on_packet(&paired_link, fragment).await;
+            runtime.drain_writes().await;
+        }
+        assert_eq!(radio.writes().len(), before);
+
+        for fragment in fragment::plan_fragments(&packet, 100, [8; 8]).unwrap() {
+            runtime.on_packet(&paired_link, fragment).await;
+        }
+        runtime.drain_writes().await;
+        let writes = radio.writes();
+        assert!(writes.len() > before);
+        assert!(
+            writes[before..]
+                .iter()
+                .all(|(link, _)| *link == stranger_link)
+        );
     }
 
     #[tokio::test]
@@ -700,11 +847,12 @@ mod tests {
         channel
             .rotate(&creator_group, None, Some(&member_group.peer_id()))
             .unwrap();
+        let timestamp_ms = now_millis();
         let new_message = channel
-            .encrypt(&creator_group, "after revocation", "creator")
+            .encrypt(&creator_group, "after revocation", "creator", timestamp_ms)
             .unwrap()
             .1;
-        assert!(old_channel.decrypt(&new_message).is_none());
+        assert!(old_channel.decrypt(&new_message, timestamp_ms).is_none());
         let revoked = channel.removed_update_bytes(&creator_group).unwrap();
         member
             .on_private_epoch(

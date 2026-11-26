@@ -1,5 +1,14 @@
 use super::*;
 
+pub(super) fn is_private_group_packet(packet: &BitchatPacket) -> bool {
+    match packet.message_type() {
+        Some(MessageType::GroupMessage) => true,
+        Some(MessageType::Fragment) => fragment::FragmentHeader::parse(packet)
+            .is_ok_and(|(header, _)| header.original_type == MessageType::GroupMessage.as_u8()),
+        _ => false,
+    }
+}
+
 impl BleRuntime {
     pub(super) async fn announce(&mut self) {
         let now_ms = now_millis();
@@ -214,6 +223,9 @@ impl BleRuntime {
                     return false;
                 };
                 candidate.peer = Some(peer.clone());
+            }
+            if is_private_group_packet(packet) {
+                links.retain(|candidate| self.group_traffic_allowed(&candidate.id));
             }
             let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
                 .with_ingress_link(ingress_link)

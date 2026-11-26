@@ -66,23 +66,24 @@ impl BleRuntime {
             if kind == Some(MessageType::GroupMessage) {
                 // The store carries opaque ciphertext from any group. Only a
                 // current member of this exact epoch may receive a sync copy.
-                let Some(group_id) = PrivateChannel::envelope_group_id(&send.packet.payload) else {
+                if !self.group_traffic_allowed(link) {
+                    continue;
+                }
+                let Some(member) = self.state.group_peer_for_wire(claimed) else {
                     continue;
                 };
-                let Some(epoch) = PrivateChannel::envelope_epoch(&send.packet.payload) else {
-                    continue;
-                };
-                let id = uuid::Uuid::from_bytes(group_id).to_string();
-                let Ok(Some(channel)) = self.private_channels.load(&id) else {
+                let Ok(Some(channel)) = self
+                    .private_channels
+                    .find_group(&send.packet.payload, send.packet.timestamp)
+                else {
                     continue;
                 };
                 if channel.stale
-                    || channel.epoch != epoch
-                    || channel.member_key(claimed).is_none()
+                    || channel.member_key(&member).is_none()
                     || channel
                         .departed
                         .iter()
-                        .any(|member| member.peer == claimed.as_str())
+                        .any(|notice| notice.peer == member.as_str())
                 {
                     continue;
                 }
@@ -175,20 +176,27 @@ impl BleRuntime {
                     self.send_private_epoch_ack(&peer, &state).await;
                 }
             }
-            BleCommand::PrivateChannelMessage { channel_id, bytes } => {
-                self.broadcast_private_channel(&channel_id, bytes).await
+            BleCommand::PrivateChannelMessage {
+                channel_id,
+                bytes,
+                timestamp_ms,
+            } => {
+                self.broadcast_private_channel(&channel_id, bytes, timestamp_ms)
+                    .await
             }
             BleCommand::PrivateLeave {
                 peers,
                 notice,
                 broadcast,
+                timestamp_ms,
             } => {
                 for peer in peers {
                     if let Some(wire) = self.state.wire_for_group_peer(&peer) {
                         self.send_group_control(&wire, &notice).await;
                     }
                 }
-                let packet = self.build_packet(MessageType::GroupMessage, None, broadcast, 7);
+                let mut packet = self.build_packet(MessageType::GroupMessage, None, broadcast, 7);
+                packet.timestamp = timestamp_ms;
                 self.originate_broadcast(&packet).await;
             }
             BleCommand::FileTransfer { message_id, file } => {
