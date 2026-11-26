@@ -198,6 +198,13 @@ impl SettingsRepository {
     /// Returns `None` if the key doesn't exist.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, StorageError> {
         let conn = self.db.read_connection()?;
+        Self::get_with_connection(&conn, key)
+    }
+
+    pub(crate) fn get_with_connection<T: DeserializeOwned>(
+        conn: &rusqlite::Connection,
+        key: &str,
+    ) -> Result<Option<T>, StorageError> {
         // Cached per pooled connection: this one statement is read very often
         // (every get/get_string/get_bool routes here — e.g. the current user id
         // is read a few times per message row while a conversation loads), so

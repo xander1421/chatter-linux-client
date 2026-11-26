@@ -174,13 +174,16 @@ impl TokenManager {
         let settings = SettingsRepository::new(self.db.clone());
         let previous = cached.as_ref();
         let (response, server_key) = ServerPublicKey::fetch_manifest(
-            |consistency| async move {
-                let response = client.get_blind_signature_public_key(consistency).await
-                    .map_err(|error| MailboxError::Network(error.to_string()))?;
-                if let Some(previous) = previous {
-                    manifest_skipped_rotation(previous, &response)?;
+            |consistency| {
+                let mut client = client.clone();
+                async move {
+                    let response = client.get_blind_signature_public_key(consistency).await
+                        .map_err(|error| MailboxError::Network(error.to_string()))?;
+                    if let Some(previous) = previous {
+                        manifest_skipped_rotation(previous, &response)?;
+                    }
+                    Ok(response)
                 }
-                Ok(response)
             },
             &settings,
             kt,

@@ -243,6 +243,7 @@ export component MainWindow inherits Window {
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
+    in-out property <bool> own-identity-mismatch: false;
     // ========== Connection status ==========
     // "connected", "connecting", "reconnecting", "disconnected", "failed".
     // Pushed from `bin_ui::features::connection`, which reads chatter-core's
@@ -499,6 +500,9 @@ export component MainWindow inherits Window {
     private property <string> observed-active-tab: SidebarPane.active-tab;
     changed observed-active-tab => { CallView.calls-more-menu-visible = false; CallView.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); root.refresh-screen-protection(); }
     changed current-view => {
+        if root.current-view == "login" {
+            root.own-identity-mismatch = false;
+        }
         root.refresh-screen-protection();
         CallView.calls-more-menu-visible = false;
         CallView.call-history-selecting = false;
@@ -861,6 +865,7 @@ export component MainWindow inherits Window {
                 inserted-emoji : root.inserted-emoji;
                 is-mobile-platform : root.is-mobile-platform;
                 is-small-screen : root.is-small-screen;
+                own-identity-mismatch: root.own-identity-mismatch;
                 keyboard-open : root.keyboard-open;
                 macos-titlebar-height : root.native-chat-row ? root.macos-titlebar-height : 0px;
                 macos-traffic-lights-width : root.native-chat-row ? root.macos-traffic-lights-width : 0px;

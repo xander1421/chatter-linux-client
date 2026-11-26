@@ -30,6 +30,14 @@ pub(crate) fn active_peer(client: &ChatterClient) -> Option<UserId> {
     }
 }
 
+/// Restore the durable account warning when a session opens or detects a change.
+pub fn refresh_own(w: &MainWindow, client: &ChatterClient) {
+    match client.own_identity_change_detected() {
+        Ok(detected) => w.set_own_identity_mismatch(detected),
+        Err(error) => tracing::warn!(%error, "Could not load own identity-change warning"),
+    }
+}
+
 /// Show or hide the prompt for `peer`, reading the pending change from core.
 ///
 /// Called on every DM open (so a change parked while the app was closed

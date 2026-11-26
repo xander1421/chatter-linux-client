@@ -302,6 +302,10 @@ pub enum DomainEvent {
     /// A background verifier rejected the transparency log's history proof.
     KeyTransparencyHistoryUnverified,
 
+    /// A verified transparency proof exposed an unexpected write to our
+    /// account's identity key. The local Signal identity is unchanged.
+    OwnIdentityChanged { user_id: UserId },
+
     /// A peer who shares a channel with the local user added, revoked or
     /// re-registered a device. Handled by
     /// `MessageService::handle_peer_device_change`.
@@ -770,6 +774,7 @@ impl DomainEvent {
             DomainEvent::DmSessionHealed { .. } => None,
             DomainEvent::PeerIdentityChanged { .. } | DomainEvent::PeerKeyVerificationUpdated { .. } => None,
             DomainEvent::KeyTransparencyHistoryUnverified => None,
+            DomainEvent::OwnIdentityChanged { .. } => None,
             DomainEvent::PeerDevicesChanged { .. } => None,
         }
     }

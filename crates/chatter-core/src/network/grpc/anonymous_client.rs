@@ -12,7 +12,8 @@ use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use chatter_proto::chat_v1::{
-    GetPreKeyBundleRequest, GetPreKeyBundleResponse, KtSearchRequest, KtSearchResponse, SealedDelivery,
+    GetPreKeyBundleRequest, GetPreKeyBundleResponse, KtMonitorRequest, KtMonitorResponse,
+    KtSearchRequest, KtSearchResponse, SealedDelivery,
     SealedDeviceMessage, SendGroupMessageRequest, SendGroupMessageResponse,
     SendSealedMessageRequest, SendSealedMessageResponse,
     auth_service_client::AuthServiceClient,
@@ -297,5 +298,16 @@ impl AnonymousKtClient {
             Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
             Err(status) => Err(NetworkError::from_status(&status)),
         }
+    }
+
+    pub async fn monitor(
+        &mut self,
+        request: KtMonitorRequest,
+    ) -> Result<KtMonitorResponse, NetworkError> {
+        self.inner
+            .monitor(request)
+            .await
+            .map(|response| response.into_inner())
+            .map_err(|status| NetworkError::from_status(&status))
     }
 }

@@ -13,6 +13,7 @@ import { AppCallDock } from "calls/app_call_dock.slint";
 import { AppEdgeSwipe } from "chat/app_edge_swipe.slint";
 import { MeshGlobal } from "mesh/mesh_global.slint";
 import { MainStatusNotices } from "main_status_notices.slint";
+import { IdentityChangeBar } from "chat/identity_change_bar.slint";
 import { AppThreadPanel } from "app_thread_panel.slint";
 import { AppSidebarHost } from "app_sidebar_host.slint";
 import { Materials } from "theme/materials.slint";
@@ -49,6 +50,7 @@ export component MainChatShell inherits Rectangle {
     in property <string> inserted-emoji;
     in property <bool> is-mobile-platform;
     in property <bool> is-small-screen;
+    in property <bool> own-identity-mismatch;
     in property <bool> keyboard-open;
     in property <length> macos-titlebar-height;
     in property <length> macos-traffic-lights-width;
@@ -106,6 +108,16 @@ export component MainChatShell inherits Rectangle {
         }
     }
 
+    identity-warning := IdentityChangeBar {
+        visible: root.own-identity-mismatch && !CallView.active-call-fullscreen;
+        y: root.top-inset + root.update-notice-height;
+        width: parent.width;
+        height: self.visible ? self.preferred-height : 0px;
+        allow-accept: false;
+        title: @tr("Your account’s identity key changed in the transparency log");
+        detail: @tr("An unexpected key was published for your account. Check your safety number with your contacts.");
+    }
+
     // Leaving or ending our call drops the channel's "Call in progress"
     // banner at once: it was polled during the call and showed the call we
     // just hung up until the next 20 s poll. Not re-fetched here: the server
@@ -119,7 +131,7 @@ export component MainChatShell inherits Rectangle {
     }
 
         Rectangle {
-            y: root.top-inset + root.update-notice-height;
+            y: root.top-inset + root.update-notice-height + identity-warning.height;
             width: 100%;
             height: max(0px, parent.height - self.y);
             clip: true;
@@ -582,7 +594,7 @@ export component MainChatShell inherits Rectangle {
 
         MainStatusNotices {
             z: 1;
-            y: root.top-inset + root.update-notice-height;
+            y: root.top-inset + root.update-notice-height + identity-warning.height;
             width: parent.width;
             height: max(0px, parent.height - self.y);
             is-signed-in: AuthFlow.is-signed-in;

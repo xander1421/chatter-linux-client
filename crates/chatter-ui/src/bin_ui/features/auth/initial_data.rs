@@ -196,6 +196,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let saved = SavedPreview::read(ui_ctx);
     let cached_client = ui_ctx.clone();
     crate::run_history_ui!(window_weak, session_owner, |w| {
+        crate::bin_ui::features::chat::identity_change::refresh_own(&w, &cached_client);
         saved.apply(&w, &cached_client);
         if !cached_rows.is_empty() {
             crate::bin_ui::features::sidebar::apply_chat_list(&w, &cached_client, cached_rows);

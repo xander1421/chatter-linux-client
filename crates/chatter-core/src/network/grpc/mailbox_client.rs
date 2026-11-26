@@ -31,6 +31,7 @@ use chatter_proto::mailbox_v1::{
 /// let mut mailbox = MailboxClient::new(pool.channel(), pool.auth_clone());
 /// let tokens = mailbox.get_mailbox_tokens(5, vec![], "manifest-key-id".into()).await?;
 /// ```
+#[derive(Clone)]
 pub struct MailboxClient {
     inner: EphemeralMailboxServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }

@@ -979,15 +979,14 @@ impl IdentityKeyVerifier for SignalKtVerifier {
         let mut auth = self.grpc_pool.auth_client();
         match self
             .signal_service
-            .verify_identity_key_transparency(&mut auth, user_id, identity_key)
+            .verified_identity_key_from_kt(&mut auth, user_id)
             .await
         {
-            Ok(()) => Ok(true),
-            Err(ServiceError::Network(e)) => Err(VerifyError::KtUnavailable(e.to_string())),
-            Err(e) => {
-                tracing::warn!(user_id, error = %e, "Channel change author key is not the KT key");
+            Ok(key) => Ok(key == *identity_key),
+            Err(ServiceError::Crypto(crate::error::CryptoError::NotInTransparencyLog { .. })) => {
                 Ok(false)
             }
+            Err(e) => Err(VerifyError::KtUnavailable(e.to_string())),
         }
     }
 }

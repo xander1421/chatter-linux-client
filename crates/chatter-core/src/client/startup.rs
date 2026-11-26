@@ -494,6 +494,7 @@ impl ChatterClient {
 
         // ── PreKey replenishment (runs initial check immediately) ────
         let h_prekey = self.services.spawn_prekey_replenishment();
+        let h_own_identity = self.spawn_own_identity_monitor();
 
         // ── DM mailbox key rolling (L4 anonymity rotation) ───────────
         let h_key_rolling = self.services.spawn_key_rolling();
@@ -611,6 +612,7 @@ impl ChatterClient {
             h_dm_bootstrap,
             h_sync,
             h_prekey,
+            h_own_identity,
             h_key_rolling,
             h_token_refill,
             h_shield_retry,

@@ -93,36 +93,51 @@ impl ServerPublicKey {
         manifest: &GetBlindSignaturePublicKeyResponse,
         now: u64,
     ) -> Result<Self, MailboxError> {
-        let key = Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)?;
-        let (proof, digest) = manifest_proof(manifest)?;
-        kt_anchor::verify_cached(manifest_label(&manifest.key_id).as_bytes(), proof, &digest)
-            .map_err(manifest_kt_error)?;
+        let key = Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)
+            .inspect_err(|_| {
+                tracing::warn!(target: "token_manifest::signature_schedule_or_key", "manifest verification failed");
+            })?;
+        manifest_proof(manifest)
+            .and_then(|(proof, digest)| {
+                kt_anchor::verify_cached(manifest_label(&manifest.key_id).as_bytes(), proof, &digest)
+                    .map_err(manifest_kt_error)
+            })
+            .inspect_err(|_| {
+                tracing::warn!(target: "token_manifest::kt_proof", "manifest verification failed");
+            })?;
         Ok(key)
     }
 
-    /// Fetch and verify under the same pin lock as identity searches. Both
-    /// checkpoint and manifest requests stay on the caller's selected route.
+    /// Verify against the shared pin, retrying on the caller's route if another
+    /// request advances the pin during the fetch.
     pub(crate) async fn fetch_manifest<M, MFut>(
-        fetch: M,
+        mut fetch: M,
         settings: &SettingsRepository,
         kt: &mut AnonymousKtClient,
     ) -> Result<(GetBlindSignaturePublicKeyResponse, Self), MailboxError>
     where
-        M: FnOnce(KtConsistency) -> MFut,
+        M: FnMut(KtConsistency) -> MFut,
         MFut: Future<Output = Result<GetBlindSignaturePublicKeyResponse, MailboxError>>,
     {
         tokio::time::timeout(kt_anchor::PIN_RPC_DEADLINE, async {
-            let pin = kt_anchor::Pin::load(kt, settings).await.map_err(manifest_kt_error)?;
-            let manifest = fetch(pin.consistency()).await?;
-            let key = Self::verify_manifest_at(
-                &manifest,
-                &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES,
-                manifest_now()?,
-            )?;
-            let (proof, digest) = manifest_proof(&manifest)?;
-            pin.verify(manifest_label(&manifest.key_id).as_bytes(), proof, Some(&digest))
-                .map_err(manifest_kt_error)?;
-            Ok((manifest, key))
+            loop {
+                let pin = match kt_anchor::Pin::load(kt, settings).await {
+                    Err(kt_anchor::KtError::PinChanged) => continue,
+                    result => result.map_err(manifest_kt_error)?,
+                };
+                let manifest = fetch(pin.consistency()).await?;
+                let key = Self::verify_manifest_at(
+                    &manifest,
+                    &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES,
+                    manifest_now()?,
+                )?;
+                let (proof, digest) = manifest_proof(&manifest)?;
+                match pin.verify(manifest_label(&manifest.key_id).as_bytes(), proof, &digest) {
+                    Err(kt_anchor::KtError::PinChanged) => continue,
+                    result => result.map_err(manifest_kt_error)?,
+                }
+                return Ok((manifest, key));
+            }
         })
         .await
         .unwrap_or_else(|_| Err(MailboxError::Network(NetworkError::Timeout.to_string())))

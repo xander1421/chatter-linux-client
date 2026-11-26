@@ -237,9 +237,12 @@ impl SignalService {
             kt_anchor::PIN_RPC_DEADLINE,
         )
         .await?
-        .ok_or_else(|| CryptoError::NotInTransparencyLog {
-            peer_id: recipient_id.to_owned(),
-        }.into())
+        .ok_or_else(|| {
+            CryptoError::NotInTransparencyLog {
+                peer_id: recipient_id.to_owned(),
+            }
+            .into()
+        })
     }
 
     async fn lookup_identity(

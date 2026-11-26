@@ -45,6 +45,7 @@ export component IdentityChangeBar inherits Rectangle {
     // colour is not allowed to be the thing that tells the user this may not be
     // who it says it is.
     in property <bool> attributed: false;
+    in property <bool> allow-accept: true;
 
     callback accept-clicked();
 
@@ -107,7 +108,7 @@ export component IdentityChangeBar inherits Rectangle {
             }
         }
 
-        VerticalLayout {
+        if root.allow-accept: VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
             Rectangle {
