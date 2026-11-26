@@ -151,6 +151,8 @@ impl KeyStore {
         conn.execute("DELETE FROM remote_identities", [])?;
         conn.execute("DELETE FROM peer_kt_jobs", [])?;
         conn.execute("DELETE FROM peer_kt_archived_receives", [])?;
+        conn.execute("DELETE FROM peer_kt_heads", [])?;
+        conn.execute("DELETE FROM peer_kt_split_views", [])?;
         conn.execute("DELETE FROM peer_key_transparency", [])?;
         conn.execute("DELETE FROM local_identity", [])?;
 

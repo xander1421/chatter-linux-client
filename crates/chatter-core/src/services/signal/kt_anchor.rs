@@ -888,5 +888,7 @@ fn decode_setting(encoded: &str) -> Result<Vec<u8>, KtError> {
     hex::decode(encoded).map_err(|_| KtError::Invalid("invalid stored transparency state"))
 }
 
+pub(crate) mod gossip;
+
 #[cfg(test)]
 mod vectors;

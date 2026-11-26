@@ -138,6 +138,7 @@ mod v145_private_channel_receipts;
 mod v146_signed_channel_type;
 mod v147_private_channel_attachments;
 mod v148_gif_credentials;
+mod v149_peer_kt_heads;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -503,4 +504,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v146_signed_channel_type::V146SignedChannelType)
         .register(v147_private_channel_attachments::V147PrivateChannelAttachments)
         .register(v148_gif_credentials::V148GifCredentials)
+        .register(v149_peer_kt_heads::V149PeerKtHeads)
 }

@@ -129,6 +129,23 @@ pub struct SignalActorHandle {
 }
 
 
+use crate::services::signal::kt_anchor::gossip;
+
+/// Queue the transparency head a peer sent, after its ratchet decrypt
+/// authenticated the message. The KT worker for `route` checks it.
+fn record_kt_head(store: &SignalStore, sender: &str, route: KtRoute, plaintext: &[u8]) {
+    use prost::Message;
+    let Some(head) = gossip::received(plaintext) else {
+        return;
+    };
+    if let Err(error) = store
+        .key_store()
+        .record_peer_kt_head(sender, route, &head.encode_to_vec())
+    {
+        tracing::warn!(%error, "Could not queue a contact's transparency head");
+    }
+}
+
 /// Device inbox envelopes can contain either a regular post or an anonymous
 /// bootstrap. Their wire type is private until after the ratchet decrypt.
 fn receive_kt_route(route: KtRoute, plaintext: &[u8]) -> KtRoute {

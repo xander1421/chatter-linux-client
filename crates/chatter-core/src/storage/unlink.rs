@@ -34,6 +34,8 @@ const DEVICE_CONFIGURATION_TABLES: &[&str] = &[
     "dm_outbox",
     "peer_kt_jobs",
     "peer_kt_archived_receives",
+    "peer_kt_heads",
+    "peer_kt_split_views",
     "dm_bootstrap_replies",
     "peer_key_transparency",
     "pending_dm_messages",

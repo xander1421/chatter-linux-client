@@ -190,11 +190,29 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<Option<IdentityChangePrompt>, ClientError> {
+        if let Some(attributed) = self.pending_identity_change(peer_user_id)? {
+            return Ok(Some(IdentityChangePrompt::new(
+                attributed,
+                &self.display_name(peer_user_id),
+            )));
+        }
         Ok(self
-            .pending_identity_change(peer_user_id)?
-            .map(|attributed| {
-                IdentityChangePrompt::new(attributed, &self.display_name(peer_user_id))
-            }))
+            .peer_transparency_split(peer_user_id)?
+            .then(IdentityChangePrompt::split_view))
+    }
+
+    /// Whether a head this peer shared proved that the server showed the two
+    /// devices different transparency logs. Sends to the peer stay blocked
+    /// until the user accepts.
+    pub fn peer_transparency_split(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<bool, ClientError> {
+        self.services
+            .signal_service
+            .key_store
+            .peer_kt_split(&peer_user_id.to_string())
+            .map_err(|e| ClientError::Validation(e.to_string()))
     }
 
     /// Accept the peer's new identity key, unwedging the conversation in both
@@ -213,16 +231,32 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<u32, ClientError> {
-        let (new_identity_key, _source) = self
+        let pending = self
             .services
             .signal_service
             .pending_identity_change(&peer_user_id.to_string())
-            .map_err(|e| ClientError::Validation(e.to_string()))?
-            .ok_or_else(|| {
-                ClientError::Validation(
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        // The prompt shows a key change before a split view, so each accept
+        // answers the prompt the user is looking at.
+        let Some((new_identity_key, _source)) = pending else {
+            let cleared = self
+                .services
+                .signal_service
+                .key_store
+                .clear_peer_kt_split(&peer_user_id.to_string())
+                .map_err(|e| ClientError::Validation(e.to_string()))?;
+            if !cleared {
+                return Err(ClientError::Validation(
                     chatter_i18n::tr("no identity change is pending for this peer").into(),
-                )
-            })?;
+                ));
+            }
+            tracing::warn!(peer = %peer_user_id, "ACCEPTED a conversation after a key transparency split view");
+            self.event_bus()
+                .emit_domain(crate::events::DomainEvent::PeerKeyVerificationUpdated {
+                    peer_user_id: *peer_user_id,
+                });
+            return Ok(0);
+        };
 
         let dropped = self
             .services

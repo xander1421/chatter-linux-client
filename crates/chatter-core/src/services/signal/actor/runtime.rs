@@ -158,6 +158,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptSealed { plaintext, sender_cert, recipient_address, permit, response } => {
+                            let plaintext = gossip::attach(&settings_repo, route, plaintext);
                             let res = if let Some(permit) = permit {
                                 SealedSenderManager::encrypt_for_submission(
                                     &plaintext, &sender_cert, &recipient_address, &store, &permit,
@@ -178,6 +179,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, shape, permit, response } => {
+                            let plaintext = gossip::attach(&settings_repo, route, plaintext);
                             let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), shape, &store, &permit).await;
                             let _ = response.send(res);
                         }
@@ -218,6 +220,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptIdentified { plaintext, recipient_address, response } => {
+                            let plaintext = gossip::attach(&settings_repo, route, plaintext);
                             let local_address = match local_protocol_address(&settings_repo) {
                                 Ok(a) => a,
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
@@ -275,6 +278,7 @@ impl SignalActorHandle {
                                             tracing::warn!(%error, "Could not schedule verification of a received key");
                                         }
                                     }
+                                    record_kt_head(&store, address.name(), receive_kt_route(route, &result.message), &result.message);
                                     Ok((address, result.message, msg_type))
                                 },
                                 // Preserve the STRUCTURED CryptoError (notably
@@ -288,6 +292,9 @@ impl SignalActorHandle {
 
                         SignalCommand::DecryptReactionDurable {ciphertext,trust_root,key,response} => {
                             let res=crate::crypto::signal::store::receive::decrypt_durable(store.clone(),&ciphertext,&trust_root,key).await;
+                            if let Ok(received) = &res {
+                                record_kt_head(&store, received.address.name(), KtRoute::AnonymousTor, &received.content);
+                            }
                             let _=response.send(res);
                         }
 
@@ -322,6 +329,9 @@ impl SignalActorHandle {
                             } else {
                                 Err(ServiceError::Crypto(CryptoError::Protocol("Unknown ciphertext format".into())))
                             };
+                            if let Ok(plaintext) = &res {
+                                record_kt_head(&store, sender_address.name(), route, plaintext);
+                            }
                             let _ = response.send(res);
                         }
 

@@ -509,6 +509,18 @@ impl IdentityChangePrompt {
             ),
         }
     }
+
+    /// A contact's shared transparency head and this device's pin cannot be
+    /// one log: the server showed the two devices different key directories.
+    fn split_view() -> Self {
+        Self {
+            attributed: false,
+            title: chatter_i18n::tr("The server showed you and this contact different key directories"),
+            detail: chatter_i18n::tr(
+                "Either of you may be talking to someone intercepting this conversation. Sending is blocked until you accept — compare safety numbers with them over a call or in person first.",
+            ),
+        }
+    }
 }
 
 /// Actions available in the open conversation header.
