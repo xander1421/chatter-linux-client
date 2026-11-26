@@ -157,14 +157,6 @@ impl TokenManager {
         }
     }
 
-    fn discontinuity_key(&self) -> &'static str {
-        match self.purpose {
-            CredentialPurpose::Mailbox => "mailbox.manifest_discontinuity",
-            CredentialPurpose::Attachment => "attachment.manifest_discontinuity",
-            CredentialPurpose::Gif => "gif.manifest_discontinuity",
-        }
-    }
-
     fn verify_purpose(
         &self,
         manifest: &GetBlindSignaturePublicKeyResponse,
@@ -284,15 +276,11 @@ impl TokenManager {
             ],
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        if let Some(reason) = discontinuity {
-            tx.execute(
-                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![self.discontinuity_key(), reason, now],
-            )
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        }
         tx.commit()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        // The pinned KT log already authenticated this manifest, so a gap in
+        // the locally observed schedule (offline across a rotation, lost cache)
+        // is not something the user can act on: log it, store nothing.
         if let Some(reason) = discontinuity {
             tracing::warn!(target: "token_manifest::continuity", reason, "manifest recovered through pinned KT log");
         }

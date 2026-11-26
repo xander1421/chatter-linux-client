@@ -409,7 +409,12 @@ pub async fn check_latest(
         } else {
             None
         };
-        rekor::check_consistency(stored.as_ref(), &checkpoint, proofs.as_ref())?;
+        rekor::check_consistency(
+            stored.as_ref(),
+            &checkpoint,
+            proofs.as_ref(),
+            crate::config::REKOR_ORIGINS,
+        )?;
         store_checkpoint(data_dir, &checkpoint).await?;
         tracing::info!(version = %manifest.version_name, size = manifest.size, rekor_uuid = %bundle.uuid, "update available (Rekor-logged)");
         Ok(Some(manifest))
@@ -1067,11 +1072,25 @@ mod tests {
         let (first, _) = publish(122);
         let (second, proofs) = publish(123);
         assert!(rekor::needs_consistency_proof(Some(&first), &second));
-        rekor::check_consistency(Some(&first), &second, Some(&proofs)).unwrap();
+        rekor::check_consistency(
+            Some(&first),
+            &second,
+            Some(&proofs),
+            crate::config::DEV_REKOR_ORIGINS,
+        )
+        .unwrap();
         // A client that pinned some other history at that size refuses.
         let mut forked = first.clone();
         forked.root[0] ^= 1;
-        assert!(rekor::check_consistency(Some(&forked), &second, Some(&proofs)).is_err());
+        assert!(
+            rekor::check_consistency(
+                Some(&forked),
+                &second,
+                Some(&proofs),
+                crate::config::DEV_REKOR_ORIGINS,
+            )
+            .is_err()
+        );
     }
 
     #[cfg(target_os = "linux")]

@@ -624,9 +624,10 @@ async fn ensure_session_refuses_a_stale_session_when_an_identity_change_is_parke
 /// throwaway recipient bundle.
 ///
 /// The recipient's prekeys deliberately do NOT have to match the store that
-/// will decrypt this: libsignal checks the sender's identity FIRST in
-/// `process_prekey` (session.rs:57-63), before any prekey lookup, so a message
-/// carrying an untrusted identity key never reaches them.
+/// will decrypt this: for a base key with no existing session, libsignal
+/// v0.108.5 checks the sender's identity FIRST in `build_prekey_session`
+/// (session.rs:94-101), before any prekey lookup, so a message carrying an
+/// untrusted identity key never reaches them.
 async fn prekey_message_from(sender_identity: IdentityKeyPair, seed: u64) -> Vec<u8> {
     let mut rng = StdRng::seed_from_u64(seed);
     let recipient =
