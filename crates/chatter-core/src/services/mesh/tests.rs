@@ -158,6 +158,7 @@ async fn the_disabled_mesh_has_no_identity_until_it_is_enabled() {
 #[test]
 fn sending_the_same_file_twice_allocates_different_stream_ids() {
     let service = service(Some(MockLink::shared()), None);
+    service.set_public_chat(true);
     let mut commands = service.ble.rebind();
     let file = tempfile::NamedTempFile::new().unwrap();
     file.as_file()
