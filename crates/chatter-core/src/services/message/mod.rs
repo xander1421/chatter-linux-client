@@ -486,7 +486,6 @@ impl SolicitedResends {
             settings,
         };
         this.reload();
-        this.persist(&mut this.set.lock());
         this
     }
 
@@ -501,6 +500,7 @@ impl SolicitedResends {
             .flatten()
             .unwrap_or_default();
         *set = stored.into_iter().collect();
+        self.persist(&mut set);
     }
 
     /// Record a request for `(channel, sender, sent_at ms)`.
@@ -556,6 +556,35 @@ impl SolicitedResends {
 #[cfg(test)]
 mod solicited_resends_tests {
     use super::*;
+
+    #[test]
+    fn solicited_resends_reload_only_admissible_entries_from_the_current_store() {
+        use crate::storage::repositories::settings_repo::keys;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("s.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let settings = Arc::new(SettingsRepository::new(db));
+        let resends = SolicitedResends::load(settings.clone());
+        let now_ms = crate::util::time::TimestampNanos::now().as_u64() / 1_000_000;
+        let previous = (ChannelId::new(), UserId::new(), now_ms);
+        resends.insert(previous);
+
+        let current = (ChannelId::new(), UserId::new(), now_ms);
+        let expired = (
+            ChannelId::new(),
+            UserId::new(),
+            now_ms - SOLICITED_RESEND_TTL_MS - 1,
+        );
+        settings
+            .set(keys::SOLICITED_RESENDS, &[current, expired])
+            .unwrap();
+        resends.reload();
+
+        assert!(!resends.contains(&previous));
+        assert!(resends.contains(&current));
+        assert!(!resends.contains(&expired));
+    }
 
     #[test]
     fn solicited_resends_survive_a_restart_and_expire_after_24h() {
