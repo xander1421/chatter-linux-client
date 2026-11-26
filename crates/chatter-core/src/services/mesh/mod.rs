@@ -233,6 +233,7 @@ pub struct MeshService {
     private_channels: Arc<PrivateChannelStore>,
     signal_lock: Arc<Mutex<()>>,
     identity: identity::ActiveMeshIdentity,
+    private_group_identity: identity::ActiveMeshIdentity,
     /// Retained so a panic wipe can destroy the keypair, not merely the mail.
     identity_store: Arc<MeshIdentityStore>,
     config: Arc<MeshConfig>,

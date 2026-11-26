@@ -222,61 +222,65 @@ impl BleRuntime {
                 peer: self.state.contact(claimed),
             });
             self.flush_pending_dms(claimed).await;
-            if let Ok(leaves) = self.private_channels.pending_leaves_for(claimed) {
-                for leave in leaves {
-                    if let Ok(bytes) = serde_json::to_vec(&leave.notice) {
-                        let mut control = b"CHTRPCL2".to_vec();
-                        control.extend(bytes);
-                        self.send_private_control(claimed, &control).await;
-                    }
-                }
-            }
-            if let Ok(states) = self.private_channels.list() {
-                for state in states {
-                    if state.creator == self.identity.peer_id().as_str()
-                        && state
-                            .removed_members
-                            .iter()
-                            .any(|peer| peer == claimed.as_str())
-                        && let Ok(bytes) = state.removed_update_bytes(&self.identity)
-                    {
-                        self.send_group_state(claimed, &bytes, false).await;
-                    }
-                    if state.creator == self.identity.peer_id().as_str()
-                        && state.member_key(claimed).is_some()
-                    {
-                        for notice in &state.departed {
-                            if notice.peer == claimed.as_str() {
-                                continue;
-                            }
-                            if let Ok(bytes) = serde_json::to_vec(notice) {
-                                let mut control = b"CHTRPCL2".to_vec();
-                                control.extend(bytes);
-                                self.send_private_control(claimed, &control).await;
-                            }
-                        }
-                        if let Some(hint) = state.epoch_proof().encode() {
-                            self.send_private_control(claimed, &hint).await;
-                        }
-                        if !state.stale
-                            && !state
-                                .unanswered_direct_invites
-                                .get(claimed.as_str())
-                                .is_some_and(|at| {
-                                    now_secs().saturating_sub(*at)
-                                        >= super::super::DIRECT_INVITE_LIFETIME_SECS
-                                })
-                            && let Ok(bytes) = state.update_bytes()
-                        {
-                            let invite = state
-                                .unanswered_direct_invites
-                                .contains_key(claimed.as_str());
-                            self.send_group_state(claimed, &bytes, invite).await;
-                        }
-                    }
-                }
-            }
             self.emit_peers();
+        }
+    }
+
+    pub(super) async fn sync_private_groups(&mut self, claimed: &PeerId) {
+        let Some(group) = self.state.group_peer_for_wire(claimed) else {
+            return;
+        };
+        if let Ok(leaves) = self.private_channels.pending_leaves_for(&group) {
+            for leave in leaves {
+                if let Ok(bytes) = serde_json::to_vec(&leave.notice) {
+                    let mut control = b"CHTRPCL2".to_vec();
+                    control.extend(bytes);
+                    self.send_private_control(claimed, &control).await;
+                }
+            }
+        }
+        if let Ok(states) = self.private_channels.list() {
+            for state in states {
+                if state.creator == self.private_group_identity.peer_id().as_str()
+                    && state
+                        .removed_members
+                        .iter()
+                        .any(|peer| peer == group.as_str())
+                    && let Ok(bytes) = state.removed_update_bytes(&self.private_group_identity)
+                {
+                    self.send_group_state(&group, &bytes, false).await;
+                }
+                if state.creator == self.private_group_identity.peer_id().as_str()
+                    && state.member_key(&group).is_some()
+                {
+                    for notice in &state.departed {
+                        if notice.peer == group.as_str() {
+                            continue;
+                        }
+                        if let Ok(bytes) = serde_json::to_vec(notice) {
+                            let mut control = b"CHTRPCL2".to_vec();
+                            control.extend(bytes);
+                            self.send_private_control(claimed, &control).await;
+                        }
+                    }
+                    if let Some(hint) = state.epoch_proof().encode() {
+                        self.send_private_control(claimed, &hint).await;
+                    }
+                    if !state.stale
+                        && !state
+                            .unanswered_direct_invites
+                            .get(group.as_str())
+                            .is_some_and(|at| {
+                                now_secs().saturating_sub(*at)
+                                    >= super::super::DIRECT_INVITE_LIFETIME_SECS
+                            })
+                        && let Ok(bytes) = state.update_bytes()
+                    {
+                        let invite = state.unanswered_direct_invites.contains_key(group.as_str());
+                        self.send_group_state(&group, &bytes, invite).await;
+                    }
+                }
+            }
         }
     }
 
@@ -339,6 +343,7 @@ impl BleRuntime {
 
         if let Some(receipt) = plaintext.strip_prefix(PAIRING_RECEIPT_MAGIC) {
             self.on_pairing_receipt(claimed, receipt);
+            self.send_pairing_proof(claimed).await;
             return;
         }
         if self.on_pairing_control(claimed, &plaintext).await {
@@ -516,17 +521,6 @@ impl BleRuntime {
                 self.gossip.retain_signing_key(claimed, key);
                 self.signing_pin_intent.remove(claimed);
                 self.emit_peers();
-                let pending: Vec<_> = self
-                    .pending_private_joins
-                    .keys()
-                    .filter(|(peer, _)| peer == claimed)
-                    .cloned()
-                    .collect();
-                for key in pending {
-                    if let Some(invite) = self.pending_private_joins.remove(&key) {
-                        self.on_private_join_request(claimed, invite).await;
-                    }
-                }
             }
             return;
         }
@@ -613,7 +607,11 @@ impl BleRuntime {
             if let Ok(notice) = serde_json::from_slice::<LeaveNotice>(bytes) {
                 let id = notice.id.clone();
                 let epoch = notice.epoch;
-                if self.on_private_leave(claimed, notice) {
+                if self
+                    .state
+                    .group_peer_for_wire(claimed)
+                    .is_some_and(|group| self.on_private_leave(&group, notice))
+                {
                     let mut ack = b"CHTRPLA1".to_vec();
                     if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
                         ack.extend_from_slice(uuid.as_bytes());
@@ -627,9 +625,11 @@ impl BleRuntime {
         if plaintext.len() == 28 && plaintext.starts_with(b"CHTRPLA1") {
             if let Ok(id) = uuid::Uuid::from_slice(&plaintext[8..24]) {
                 let epoch = u32::from_be_bytes(plaintext[24..28].try_into().expect("leave epoch"));
-                let _ = self
-                    .private_channels
-                    .clear_pending_leave(&id.to_string(), epoch, claimed);
+                if let Some(group) = self.state.group_peer_for_wire(claimed) {
+                    let _ =
+                        self.private_channels
+                            .clear_pending_leave(&id.to_string(), epoch, &group);
+                }
             }
             return;
         }

@@ -87,6 +87,7 @@ impl MeshService {
         self.identity_wiped
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.identity.write().take();
+        self.private_group_identity.write().take();
         self.config.set_nickname("anon".to_owned());
         self.events.clear_moderation();
         let mut first_error: Option<MeshError> = None;

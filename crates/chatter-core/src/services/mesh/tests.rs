@@ -21,7 +21,7 @@ impl Sealer for NoopSealer {
 /// `MeshIdentityStore` needs a real `Database`, and construction tests are
 /// about the wiring rather than about SQLCipher, so this assembles the same
 /// parts `MeshService::new` does from an identity handed in directly.
-fn service(
+pub(super) fn service(
     radio: Option<Arc<dyn MeshLink>>,
     connector: Option<Arc<dyn RelayConnector>>,
 ) -> MeshService {
@@ -84,6 +84,9 @@ fn service_with_radio_factory(
         // nothing to report.
         sealer_unavailable: None,
         identity,
+        private_group_identity: Arc::new(parking_lot::RwLock::new(Some(
+            identity_store.private_group_identity().unwrap(),
+        ))),
         identity_store,
         config,
         state,
@@ -704,6 +707,25 @@ async fn direct_group_invite_uses_only_the_noise_pinned_roster_key() {
         &owner.signing_public(),
         now_millis(),
     )));
+    assert!(
+        service
+            .invite_private_channel_direct(&channel_id, &peer)
+            .is_err()
+    );
+    service.state.with(|state| {
+        assert!(state.peers.pair_noise_identity(
+            &peer,
+            &owner.static_public(),
+            &owner.signing_public(),
+            now_millis(),
+            chatter_mesh_link::registry::PairingKey::new([42; 32], true)
+        ));
+        assert!(
+            state
+                .peers
+                .bind_private_group_keys(&peer, (owner.static_public(), owner.signing_public()))
+        );
+    });
     service
         .invite_private_channel_direct(&channel_id, &peer)
         .unwrap();

@@ -97,6 +97,10 @@ impl BleRuntime {
     }
 
     pub(super) async fn send_group_state(&mut self, peer: &PeerId, bytes: &[u8], invite: bool) {
+        let Some(wire) = self.state.wire_for_group_peer(peer) else {
+            return;
+        };
+        let peer = &wire;
         let kind = if invite {
             NoisePayloadType::GroupInvite
         } else {
@@ -138,19 +142,19 @@ impl BleRuntime {
         if state.stale {
             return;
         }
-        let packet_sender = self.identity.peer_id();
+        let local_group = self.private_group_identity.peer_id();
         let Some(opened) = state.decrypt(&bytes) else {
             return;
         };
         let message_id = opened.id;
         let content = opened.content;
-        let sender = packet_sender.clone();
+        let sender = opened.sender;
         let packet = self.build_packet(MessageType::GroupMessage, None, bytes, 7);
         self.state
             .with(|s| s.self_broadcasts.record(&message_id, &packet, now_millis()));
         self.originate_broadcast(&packet).await;
         let conversation = MeshConversation::PrivateChannel(id.to_owned());
-        let nickname = if sender == packet_sender {
+        let nickname = if sender == local_group {
             self.config.nickname()
         } else {
             self.state
@@ -160,7 +164,7 @@ impl BleRuntime {
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message: outbound_message(&conversation, &message_id, &sender, &content, now_millis()),
             conversation,
-            is_local: sender == packet_sender,
+            is_local: sender == local_group,
             sender,
             nickname,
             sender_verified: true,

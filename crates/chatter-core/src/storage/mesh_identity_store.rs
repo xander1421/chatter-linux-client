@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use crate::crypto::os_rng;
-use chatter_mesh::ids::PeerId;
 use chatter_mesh_noise::MeshIdentity;
 use rusqlite::{Connection, OptionalExtension, params};
 use zeroize::Zeroizing;
@@ -19,7 +18,6 @@ pub(crate) const ROTATION_SECS: u64 = 24 * 60 * 60;
 pub(crate) struct MeshEpoch {
     pub identity: Arc<MeshIdentity>,
     pub started_at: u64,
-    pub previous_peer: Option<PeerId>,
 }
 
 /// Keeps independent Noise and signing keys in SQLCipher, separate from Signal.
@@ -30,6 +28,30 @@ pub struct MeshIdentityStore {
 impl MeshIdentityStore {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
+    }
+
+    /// Private group signing material never goes into a radio identity or
+    /// advertisement. It is disclosed only inside a proven pairing.
+    pub(crate) fn private_group_identity(&self) -> Result<Arc<MeshIdentity>, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let stored = tx.query_row(
+            "SELECT static_secret, signing_secret FROM mesh_private_group_identity WHERE id = 1",
+            [],
+            |row| Ok((Zeroizing::new(row.get::<_, Vec<u8>>(0)?), Zeroizing::new(row.get::<_, Vec<u8>>(1)?))),
+        ).optional()?;
+        let identity = if let Some((noise, signing)) = stored {
+            Self::decode(&noise, &signing)?
+        } else {
+            let identity = MeshIdentity::generate(&mut os_rng());
+            tx.execute(
+                "INSERT INTO mesh_private_group_identity (id, static_secret, signing_secret) VALUES (1, ?1, ?2)",
+                params![&identity.static_secret()[..], &identity.signing_secret()[..]],
+            )?;
+            identity
+        };
+        tx.commit()?;
+        Ok(Arc::new(identity))
     }
 
     #[cfg(test)]
@@ -45,23 +67,22 @@ impl MeshIdentityStore {
         conn.pragma_update(None, "secure_delete", true)?;
         let tx = conn.transaction()?;
         let stamp = i64::try_from(now).unwrap_or(i64::MAX);
-        let (identity, started_at, previous_peer) = match Self::read(&tx)? {
+        let (identity, started_at) = match Self::read(&tx)? {
             Some((identity, started_at))
                 if !enable && now.saturating_sub(started_at) < ROTATION_SECS =>
             {
-                (identity, started_at, None)
+                (identity, started_at)
             }
-            Some((previous, _)) => {
+            Some(_) => {
                 tx.execute("DELETE FROM mesh_identity_epochs", [])?;
-                (Self::insert(&tx, stamp)?, now, Some(previous.peer_id()))
+                (Self::insert(&tx, stamp)?, now)
             }
-            None => (Self::insert(&tx, stamp)?, now, None),
+            None => (Self::insert(&tx, stamp)?, now),
         };
         tx.commit()?;
         Ok(MeshEpoch {
             identity: Arc::new(identity),
             started_at,
-            previous_peer,
         })
     }
 
@@ -69,7 +90,10 @@ impl MeshIdentityStore {
     pub fn wipe(&self) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.pragma_update(None, "secure_delete", true)?;
-        conn.execute("DELETE FROM mesh_identity_epochs", [])?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM mesh_identity_epochs", [])?;
+        tx.execute("DELETE FROM mesh_private_group_identity", [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -170,6 +194,27 @@ mod tests {
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn private_group_identity_survives_radio_rotation_and_is_wiped_separately() {
+        let db = setup_db();
+        let store = MeshIdentityStore::new(db.clone());
+        let group = store.private_group_identity().unwrap();
+        let first = store.advance(1_000, true).unwrap().identity;
+        let second = store.advance(2_000, true).unwrap().identity;
+        assert_ne!(first.peer_id(), second.peer_id());
+        assert_ne!(group.peer_id(), first.peer_id());
+        let reloaded = MeshIdentityStore::new(db);
+        assert_eq!(
+            reloaded.private_group_identity().unwrap().peer_id(),
+            group.peer_id()
+        );
+        reloaded.wipe().unwrap();
+        assert_ne!(
+            reloaded.private_group_identity().unwrap().peer_id(),
+            group.peer_id()
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ thiserror = { workspace = true }
 # links for the same message or duplicate suppression stops working — so the hash
 # is part of the wire behaviour, not an implementation detail.
 sha2 = { workspace = true }
+subtle = "2.5"
 zeroize = { workspace = true }
 
 # No tokio, and no futures. The MeshLink trait uses boxed futures from core, so a

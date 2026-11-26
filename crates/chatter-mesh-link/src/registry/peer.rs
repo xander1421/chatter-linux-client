@@ -64,11 +64,20 @@ pub struct AnnounceUpdate {
 }
 
 /// A secret established by the explicit QR pairing and scoped to its two peers.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct PairingKey {
     root: [u8; 32],
     issuer: bool,
 }
+
+impl PartialEq for PairingKey {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        bool::from(self.root.ct_eq(&other.root)) && self.issuer == other.issuer
+    }
+}
+
+impl Eq for PairingKey {}
 
 impl PairingKey {
     pub fn new(root: [u8; 32], issuer: bool) -> Self {
@@ -109,6 +118,8 @@ pub struct PinnedIdentity {
     /// Local contact handle, retained when the radio routing ID changes.
     pub contact: PeerId,
     pub pairing: Option<PairingKey>,
+    /// Stable group-only keys learned through the authenticated pairing.
+    pub private_group_keys: Option<([u8; 32], [u8; 32])>,
     pub noise_public_key: Vec<u8>,
     pub signing_public_key: Vec<u8>,
     /// The nickname at first sight. Display only, for naming the peer in a
@@ -127,7 +138,7 @@ pub struct PinnedIdentity {
 pub const MAX_PINNED_IDENTITIES: usize = 4096;
 
 /// First byte of the persisted pin set.
-pub(super) const PIN_BLOB_VERSION: u8 = 4;
+pub(super) const PIN_BLOB_VERSION: u8 = 5;
 const MAX_UNPROVEN_PEERS: usize = 512;
 
 /// The persisted pin set could not be read. Carries nothing: the only thing a
@@ -325,9 +336,36 @@ impl PeerRegistry {
         if let Some(next_pin) = self.pins.get_mut(&next) {
             next_pin.contact = contact.clone();
             next_pin.pairing = old_pin.pairing;
+            next_pin.private_group_keys = old_pin.private_group_keys;
         }
         self.routes.insert(contact, next);
         self.peers.remove(prior);
+        true
+    }
+
+    /// Pin keys proven alongside the authorized route. A group identity may
+    /// belong to only one durable contact.
+    pub fn bind_private_group_keys(&mut self, peer: &PeerId, keys: ([u8; 32], [u8; 32])) -> bool {
+        let group = PeerId::from_noise_key(&keys.0);
+        if self.pins.iter().any(|(other, pin)| {
+            other != peer
+                && pin
+                    .private_group_keys
+                    .is_some_and(|(noise, _)| PeerId::from_noise_key(&noise) == group)
+        }) {
+            return false;
+        }
+        let Some(pin) = self.pins.get_mut(peer) else {
+            return false;
+        };
+        if pin.pairing.is_none()
+            || pin
+                .private_group_keys
+                .is_some_and(|previous| previous != keys)
+        {
+            return false;
+        }
+        pin.private_group_keys = Some(keys);
         true
     }
 
@@ -344,7 +382,7 @@ impl PeerRegistry {
 
         // Reserve the entire blob up front so growing the vector never leaves
         // a previous allocation containing pairing secrets.
-        let capacity = 1 + self.pins.len() * (5 * (1 + usize::from(u8::MAX)) + 8 + 1 + 32);
+        let capacity = 1 + self.pins.len() * (5 * (1 + usize::from(u8::MAX)) + 8 + 1 + 32 + 1 + 64);
         let mut out = Zeroizing::new(Vec::with_capacity(capacity));
         out.push(PIN_BLOB_VERSION);
         for (peer, pin) in &self.pins {
@@ -359,6 +397,14 @@ impl PeerRegistry {
                 out.extend_from_slice(pairing.root());
             } else {
                 out.push(0);
+            }
+            match pin.private_group_keys {
+                Some((noise, signing)) => {
+                    out.push(1);
+                    out.extend_from_slice(&noise);
+                    out.extend_from_slice(&signing);
+                }
+                None => out.push(0),
             }
         }
         out
@@ -405,6 +451,18 @@ impl PeerRegistry {
                 }
                 _ => return Err(MalformedPins),
             };
+            let (&has_group, tail) = rest.split_first().ok_or(MalformedPins)?;
+            rest = tail;
+            let private_group_keys = match has_group {
+                0 => None,
+                1 if pairing.is_some() => {
+                    let (noise, tail) = rest.split_first_chunk::<32>().ok_or(MalformedPins)?;
+                    let (signing, tail) = tail.split_first_chunk::<32>().ok_or(MalformedPins)?;
+                    rest = tail;
+                    Some((*noise, *signing))
+                }
+                _ => return Err(MalformedPins),
+            };
             // A pin filed under an ID its own key does not derive to could
             // never have been recorded by `on_announce`, so the blob is not
             // one we wrote.
@@ -420,6 +478,7 @@ impl PeerRegistry {
                 PinnedIdentity {
                     contact,
                     pairing,
+                    private_group_keys,
                     noise_public_key,
                     signing_public_key,
                     nickname,
@@ -519,6 +578,7 @@ impl PeerRegistry {
             .or_insert_with(|| PinnedIdentity {
                 contact: peer.clone(),
                 pairing: None,
+                private_group_keys: None,
                 noise_public_key: noise.to_vec(),
                 signing_public_key: signing.to_vec(),
                 nickname,

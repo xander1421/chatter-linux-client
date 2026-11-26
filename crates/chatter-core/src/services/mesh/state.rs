@@ -283,31 +283,56 @@ impl MeshState {
         self.with(|state| state.sessions.has_session(state.peers.route(peer)))
     }
 
-    /// A private-channel roster entry must come from the Noise-bound pin.
+    /// Bind a group roster member to its durable paired contact. A live
+    /// exchange must still present the current radio key that Noise proved.
     pub(super) fn pinned_member(
         &self,
         peer: &PeerId,
         require_live_session: bool,
     ) -> Option<super::private_channel::Member> {
         self.with(|state| {
-            let pin = state.peers.pinned(peer)?;
-            let static_key: [u8; 32] = pin.noise_public_key.as_slice().try_into().ok()?;
-            match state.sessions.remote_static(peer) {
-                Some(live) if live == static_key => {}
+            let wire = state.peers.route(peer);
+            let pin = state.peers.pinned(wire)?;
+            let (group_static, group_signing) = pin.private_group_keys?;
+            match state.sessions.remote_static(wire) {
+                Some(live) if pin.noise_public_key.as_slice() == live => {}
                 None if !require_live_session => {}
                 _ => return None,
             }
             Some(super::private_channel::Member {
-                peer: peer.to_string(),
-                fingerprint: chatter_mesh_noise::fingerprint_of(&static_key),
-                signing_key: pin.signing_public_key.clone(),
+                peer: PeerId::from_noise_key(&group_static).to_string(),
+                fingerprint: chatter_mesh_noise::fingerprint_of(&group_static),
+                signing_key: group_signing.to_vec(),
                 nickname: state
                     .peers
-                    .info(peer)
+                    .info(wire)
                     .filter(|record| record.verified_nickname)
                     .map_or_else(|| pin.nickname.clone(), |record| record.nickname.clone()),
             })
         })
+    }
+
+    pub(super) fn private_group_keys(&self, peer: &PeerId) -> Option<([u8; 32], [u8; 32])> {
+        self.with(|state| {
+            state
+                .peers
+                .pinned(state.peers.route(peer))?
+                .private_group_keys
+        })
+    }
+
+    pub(super) fn wire_for_group_peer(&self, group: &PeerId) -> Option<PeerId> {
+        self.with(|state| {
+            state.peers.pinned_identities().find_map(|(wire, pin)| {
+                let (key, _) = pin.private_group_keys?;
+                (PeerId::from_noise_key(&key) == *group).then(|| wire.clone())
+            })
+        })
+    }
+
+    pub(super) fn group_peer_for_wire(&self, peer: &PeerId) -> Option<PeerId> {
+        let (key, _) = self.private_group_keys(peer)?;
+        Some(PeerId::from_noise_key(&key))
     }
 
     /// Everything the courier selector needs about every peer we know.

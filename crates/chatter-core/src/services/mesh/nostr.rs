@@ -172,6 +172,7 @@ impl NostrRuntime {
     async fn on_command(&mut self, command: NostrCommand) {
         match command {
             NostrCommand::Stop => {}
+            NostrCommand::RotateIdentity(identity) => self.rotate_identity(&identity).await,
             NostrCommand::Join(cell) => self.join(&cell).await,
             NostrCommand::Leave(cell) => self.leave(&cell).await,
             NostrCommand::GeohashMessage {
@@ -241,8 +242,20 @@ impl NostrRuntime {
             self.degraded(format!("could not join {cell}: {error}"));
         }
 
-        // Gift wraps are addressed to the cell's derived pubkey, so the DM
-        // subscription is per cell too.
+        self.watch_cell_dms(cell).await;
+        self.events.send(MeshEvent::GeohashJoined(cell.to_string()));
+    }
+
+    async fn rotate_identity(&mut self, identity: &chatter_mesh_noise::MeshIdentity) {
+        self.identities = NostrIdentities::from_mesh(identity);
+        let cells = self.state.with(|state| state.joined.clone());
+        for cell in cells {
+            self.pool.unsubscribe(&dm_subscription(&cell)).await;
+            self.watch_cell_dms(&cell).await;
+        }
+    }
+
+    async fn watch_cell_dms(&mut self, cell: &str) {
         let pubkey = self
             .identities
             .for_geohash(cell)
@@ -263,8 +276,6 @@ impl NostrRuntime {
             }
             Err(error) => self.degraded(format!("no identity for {cell}: {error}")),
         }
-
-        self.events.send(MeshEvent::GeohashJoined(cell.to_string()));
     }
 
     async fn leave(&mut self, cell: &str) {
@@ -781,6 +792,59 @@ fn decode_dm(content: &str) -> Option<(String, String, NoisePayloadType)> {
 mod tests {
     use super::*;
     use chatter_mesh_noise::MeshIdentity;
+
+    #[tokio::test]
+    async fn broadcast_rotation_replaces_the_live_cell_dm_subscription() {
+        let service = super::super::tests::service(None, None);
+        let connector = Arc::new(super::super::mock::LoopbackConnector::new());
+        let (pool, _events) = RelayPool::new(connector.clone());
+        let old = MeshIdentity::generate(&mut os_rng());
+        let new = MeshIdentity::generate(&mut os_rng());
+        let mut runtime = NostrRuntime::new(
+            pool,
+            service.nostr_state.clone(),
+            service.state.clone(),
+            NostrIdentities::from_mesh(&old),
+            service.config.clone(),
+            service.events.clone(),
+            service.router.clone(),
+        );
+        runtime.relays = vec!["wss://relay.example".into()];
+        runtime.pool.ensure_relays(&runtime.relays).await;
+        let cell = "u4pruy";
+        runtime.join(cell).await;
+        let old_key = runtime
+            .cell_identity(cell)
+            .unwrap()
+            .public_key_hex()
+            .to_owned();
+        runtime
+            .on_command(NostrCommand::RotateIdentity(Arc::new(new)))
+            .await;
+        let new_key = runtime
+            .cell_identity(cell)
+            .unwrap()
+            .public_key_hex()
+            .to_owned();
+        assert_ne!(old_key, new_key);
+        assert!(runtime.state.with(|state| state.joined.contains(cell)));
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let frames = connector.sent.lock();
+                if frames
+                    .iter()
+                    .any(|frame| frame.contains(&new_key) && frame.contains("dm:u4pruy"))
+                {
+                    break;
+                }
+                drop(frames);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        runtime.pool.shutdown().await;
+    }
 
     #[test]
     fn subscription_ids_separate_the_three_streams() {

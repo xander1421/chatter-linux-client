@@ -167,12 +167,14 @@ pub struct BleRuntime {
     /// resetting the relay count to zero every time a link changes.
     nostr_state: Arc<NostrState>,
     identity: Arc<MeshIdentity>,
+    private_group_identity: Arc<MeshIdentity>,
     rotation: Option<RadioRotation>,
     pairing_candidates: std::collections::BTreeMap<PeerId, (PeerId, u64)>,
     pairing_proofs_sent: std::collections::BTreeMap<PeerId, [u8; 32]>,
     pairing_proofs_received: std::collections::BTreeMap<PeerId, [u8; 32]>,
     courier_claims: std::collections::BTreeMap<PeerId, std::collections::BTreeSet<[u8; 32]>>,
     beacon_cursor: usize,
+    published_beacons: Vec<chatter_mesh::tlv::pairing::PairingBeacon>,
     config: Arc<MeshConfig>,
     events: MeshEvents,
     router: Arc<RouterHandle>,
@@ -206,7 +208,6 @@ pub struct BleRuntime {
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     prekey_ingress: std::collections::HashMap<LinkId, (u64, u32)>,
-    pending_private_joins: std::collections::HashMap<(PeerId, String), Invite>,
     last_channel_presence_ms: u64,
     last_private_rekey_ms: u64,
     /// Connect attempts run off the loop and report back here. Awaiting one
@@ -274,6 +275,7 @@ impl BleRuntime {
             radio,
             state,
             nostr_state,
+            private_group_identity: identity.clone(),
             identity,
             rotation: None,
             pairing_candidates: std::collections::BTreeMap::new(),
@@ -281,6 +283,7 @@ impl BleRuntime {
             pairing_proofs_received: std::collections::BTreeMap::new(),
             courier_claims: std::collections::BTreeMap::new(),
             beacon_cursor: 0,
+            published_beacons: Vec::new(),
             config,
             events,
             router,
@@ -306,10 +309,14 @@ impl BleRuntime {
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
             prekey_ingress: std::collections::HashMap::new(),
-            pending_private_joins: std::collections::HashMap::new(),
             last_channel_presence_ms: 0,
             last_private_rekey_ms: 0,
         }
+    }
+
+    pub(super) fn with_private_group_identity(mut self, identity: Arc<MeshIdentity>) -> Self {
+        self.private_group_identity = identity;
+        self
     }
 
     fn restore_pins(&self) -> Result<(), String> {
@@ -324,6 +331,7 @@ impl BleRuntime {
                 .with(|state| {
                     state.peers.restore_pins(&bytes)?;
                     state.pairing_couriers.restore(&state.peers);
+                    state.pairing_beacon_slots.invalidate_contacts();
                     Ok::<_, chatter_mesh_link::registry::MalformedPins>(())
                 })
                 .map_err(|_| "malformed peer pins".to_string())?;
@@ -524,6 +532,7 @@ impl BleRuntime {
         if let Some(peer) = self.broadcast_peer_id().to_routing_bytes() {
             self.radio.set_local_peer(peer);
         }
+        self.refresh_pairing_beacons();
         if let Err(error) = self.radio.start().await {
             self.degraded(format!("the radio would not start: {error}"));
             return false;
@@ -673,6 +682,19 @@ impl BleRuntime {
         });
         self.emit_status();
         stopped.is_ok()
+    }
+
+    fn refresh_pairing_beacons(&mut self) {
+        let beacons = self.state.pairing_beacons(&self.broadcast_peer_id());
+        if self.published_beacons == beacons {
+            return;
+        }
+        if let Err(error) = self.radio.set_pairing_beacons(&beacons) {
+            self.degraded(format!(
+                "the radio could not install pairing beacons: {error}"
+            ));
+        }
+        self.published_beacons = beacons;
     }
 }
 

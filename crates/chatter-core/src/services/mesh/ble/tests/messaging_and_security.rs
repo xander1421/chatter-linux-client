@@ -722,109 +722,60 @@ async fn prekey_ingress_budget_applies_before_signature_verification() {
 }
 
 #[tokio::test]
-async fn qr_join_requires_a_live_noise_session_and_the_pinned_signing_key() {
+async fn qr_join_requires_the_live_paired_group_identity() {
     let (mut runtime, _radio, state) = runtime();
-    let local = runtime.identity.peer_id();
     let joiner = MeshIdentity::generate(&mut os_rng());
+    let joiner_group = MeshIdentity::generate(&mut os_rng());
     let peer = joiner.peer_id();
-    let other = MeshIdentity::generate(&mut os_rng());
-    let announcement = AnnouncementPacket::new(
-        "unproven".into(),
-        joiner.static_public().to_vec(),
-        other.signing_public().to_vec(),
-        None,
-        None,
-        None,
-    );
-    let mut remote = super::super::session::SessionManager::new();
-    let m1 = remote.initiate(&local, &joiner).unwrap();
-    state.with(|inner| {
-        inner
-            .peers
-            .upsert_verified_announce(&peer, &announcement, true, now_millis());
-        let m2 = inner
-            .sessions
-            .on_handshake(&peer, &local, &runtime.identity, &m1)
-            .unwrap()
-            .reply
-            .unwrap();
-        let m3 = remote
-            .on_handshake(&local, &peer, &joiner, &m2)
-            .unwrap()
-            .reply
-            .unwrap();
-        inner
-            .sessions
-            .on_handshake(&peer, &local, &runtime.identity, &m3)
-            .unwrap();
-    });
+    let group_peer = joiner_group.peer_id();
+    super::rotation::tests::establish(&runtime, &joiner);
+    let group = runtime.private_group_identity.clone();
+    let mut channel = PrivateChannel::create("private", &group, "creator").unwrap();
+    let token = channel
+        .invite(&group, &group_peer, group.static_public(), now_secs())
+        .unwrap();
+    let invite = Invite::from_text(&token, now_secs()).unwrap();
+    runtime.private_channels.save(&channel).unwrap();
 
-    let mut channel_ids = Vec::new();
-    for name in ["private", "second channel"] {
-        let mut channel = PrivateChannel::create(name, &runtime.identity, "creator").unwrap();
-        let qr = channel
-            .invite(
-                &runtime.identity,
-                &peer,
-                runtime.identity.static_public(),
-                now_secs(),
-            )
-            .unwrap();
-        let invite = Invite::from_text(&qr, now_secs()).unwrap();
-        runtime.private_channels.save(&channel).unwrap();
-        runtime.on_private_join_request(&peer, invite).await;
-        assert!(
-            runtime
-                .private_channels
-                .load(&channel.id)
-                .unwrap()
-                .unwrap()
-                .member_key(&peer)
-                .is_none()
-        );
-        channel_ids.push(channel.id);
-    }
-    assert_eq!(runtime.pending_private_joins.len(), 2);
-    let transcript = remote.handshake_hash(&local).unwrap();
-    let key = joiner.signing_public();
-    let proof = chatter_mesh_noise::sign::sign_bytes(
-        &joiner,
-        &[
-            b"CHTRNSB1".as_slice(),
+    state.with(|state| {
+        assert!(state.peers.pin_noise_identity(
+            &peer,
             &joiner.static_public(),
-            &transcript,
-            &key,
-        ]
-        .concat(),
+            &joiner.signing_public(),
+            now_millis()
+        ))
+    });
+    runtime.on_private_join_request(&peer, invite.clone()).await;
+    assert!(
+        runtime
+            .private_channels
+            .load(&channel.id)
+            .unwrap()
+            .unwrap()
+            .member_key(&group_peer)
+            .is_none()
     );
-    let binding = [b"CHTRNSB1".as_slice(), &key, &proof].concat();
-    let packet = BitchatPacket::new(
-        MessageType::NoiseEncrypted,
-        peer.to_routing_bytes().unwrap(),
-        local.to_routing_bytes(),
-        now_millis(),
-        remote.encrypt(&local, &binding).unwrap(),
-        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+
+    state.with(|state| {
+        assert!(state.peers.pair_noise_identity(
+            &peer,
+            &joiner.static_public(),
+            &joiner.signing_public(),
+            now_millis(),
+            chatter_mesh_link::registry::PairingKey::new([42; 32], true)
+        ));
+        assert!(state.peers.bind_private_group_keys(
+            &peer,
+            (joiner_group.static_public(), joiner_group.signing_public())
+        ));
+    });
+    runtime.on_private_join_request(&peer, invite).await;
+    let roster = runtime.private_channels.load(&channel.id).unwrap().unwrap();
+    assert_eq!(
+        roster.member_key(&group_peer),
+        Some(joiner_group.signing_public())
     );
-    runtime
-        .on_encrypted(&LinkId::new("/mock/joiner"), &packet, &peer)
-        .await;
-    assert!(state.with(|inner| {
-        inner.peers.info(&peer).is_some_and(|record| {
-            !record.verified_nickname && record.signing_public_key.as_deref() == Some(key.as_slice())
-        })
-    }));
-    assert!(runtime.pending_private_joins.is_empty());
-    for id in channel_ids {
-        let roster = runtime.private_channels.load(&id).unwrap().unwrap();
-        let member = roster
-            .members
-            .iter()
-            .find(|member| member.peer == peer.as_str())
-            .unwrap();
-        assert_eq!(member.signing_key, joiner.signing_public());
-        assert_ne!(member.nickname, "unproven");
-    }
+    assert!(roster.member_key(&peer).is_none());
 }
 
 #[tokio::test]

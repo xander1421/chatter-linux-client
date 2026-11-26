@@ -184,7 +184,9 @@ impl BleRuntime {
                 broadcast,
             } => {
                 for peer in peers {
-                    self.send_private_control(&peer, &notice).await;
+                    if let Some(wire) = self.state.wire_for_group_peer(&peer) {
+                        self.send_private_control(&wire, &notice).await;
+                    }
                 }
                 let packet = self.build_packet(MessageType::GroupMessage, None, broadcast, 7);
                 self.originate_broadcast(&packet).await;

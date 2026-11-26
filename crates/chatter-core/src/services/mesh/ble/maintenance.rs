@@ -6,6 +6,7 @@ impl BleRuntime {
     pub(super) async fn on_tick(&mut self) {
         let now_ms = now_millis();
         let now_s = now_secs();
+        self.refresh_pairing_beacons();
         let expired = self.state.with(|state| {
             state.declined_group_invites.retain(|_, (_, at)| {
                 now_s.saturating_sub(*at) < super::super::DIRECT_INVITE_LIFETIME_SECS
@@ -33,7 +34,7 @@ impl BleRuntime {
             self.last_private_rekey_ms = now_ms;
             if let Ok(channels) = self.private_channels.list() {
                 for mut channel in channels {
-                    if channel.creator == self.identity.peer_id().as_str()
+                    if channel.creator == self.private_group_identity.peer_id().as_str()
                         && !channel.departed.is_empty()
                     {
                         let leaving: Vec<_> = channel
@@ -45,7 +46,10 @@ impl BleRuntime {
                             if peer.as_str() == channel.creator {
                                 continue;
                             }
-                            if channel.rotate(&self.identity, None, Some(&peer)).is_err() {
+                            if channel
+                                .rotate(&self.private_group_identity, None, Some(&peer))
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -54,7 +58,7 @@ impl BleRuntime {
                         }
                         self.events.send(MeshEvent::PrivateChannelChanged);
                     }
-                    if channel.creator == self.identity.peer_id().as_str() {
+                    if channel.creator == self.private_group_identity.peer_id().as_str() {
                         let newly_expired: Vec<_> = channel
                             .unanswered_direct_invites
                             .iter()
@@ -77,7 +81,7 @@ impl BleRuntime {
                         }
                     }
                     if !channel.stale
-                        && channel.creator == self.identity.peer_id().as_str()
+                        && channel.creator == self.private_group_identity.peer_id().as_str()
                         && !channel.awaiting_rekey.is_empty()
                         && let Ok(bytes) = channel.update_bytes()
                     {

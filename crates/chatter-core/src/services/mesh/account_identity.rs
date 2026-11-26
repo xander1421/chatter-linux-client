@@ -60,6 +60,7 @@ pub(super) fn store_paired_pin(
             .pairing_couriers
             .insert(candidate.contact(peer).clone(), &pairing);
         state.peers = candidate;
+        state.pairing_beacon_slots.invalidate_contacts();
         return true;
     }
     false

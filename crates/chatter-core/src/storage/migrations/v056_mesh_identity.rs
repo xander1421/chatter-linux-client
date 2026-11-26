@@ -21,10 +21,17 @@ impl Migration for V056MeshIdentity {
             signing_secret BLOB NOT NULL CHECK (length(signing_secret) = 32),
             started_at INTEGER NOT NULL
         );
+        CREATE TABLE mesh_private_group_identity (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            static_secret BLOB NOT NULL CHECK (length(static_secret) = 32),
+            signing_secret BLOB NOT NULL CHECK (length(signing_secret) = 32)
+        );
         "#
     }
 
     fn down(&self) -> Option<&'static str> {
-        Some("DROP TABLE IF EXISTS mesh_identity_epochs;")
+        Some(
+            "DROP TABLE IF EXISTS mesh_private_group_identity; DROP TABLE IF EXISTS mesh_identity_epochs;",
+        )
     }
 }

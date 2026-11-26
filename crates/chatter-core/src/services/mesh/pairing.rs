@@ -6,17 +6,30 @@ use std::sync::Arc;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::tlv::announce::AnnouncementPacket;
 use chatter_mesh::tlv::courier_envelope::{CourierEnvelope, candidate_tags};
-use chatter_mesh::tlv::pairing::{PAIRING_BEACON_NONCE_LEN, PAIRING_BEACON_SLOTS, PairingBeacon};
+use chatter_mesh::tlv::pairing::{PAIRING_BEACON_SLOTS, PairingBeacon};
 use chatter_mesh_link::registry::{PairingKey, PeerRegistry};
 use chatter_mesh_noise::MeshIdentity;
 use hmac::{Hmac, Mac};
 use rand::{Rng, seq::SliceRandom};
 use sha2::Sha256;
-use subtle::ConstantTimeEq;
 
-use super::state::MeshState;
+use super::state::{MeshState, now_secs};
 
-type Nonce = [u8; PAIRING_BEACON_NONCE_LEN];
+/// Eight contacts per 40-second window give a full 4,096-entry roster
+/// at least four passes per day. Only the five seconds at a window edge
+/// accommodate the adjacent bucket.
+pub(super) const BEACON_WINDOW_SECS: u64 = 40;
+const BEACON_SKEW_SECS: u64 = 5;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BeaconKind {
+    Advert,
+    Preface,
+}
+
+fn beacon_window(now: u64) -> u64 {
+    now / BEACON_WINDOW_SECS
+}
 
 fn mac(key: &[u8; 32], domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut mac =
@@ -36,98 +49,133 @@ pub(super) fn establish_key(
     scanner_nonce: &[u8; 16],
     issuer: bool,
 ) -> PairingKey {
-    PairingKey::new(
-        mac(
-            qr_token,
-            b"chatter.mesh.pairing.v1\0",
-            &[transcript, issuer_nonce, scanner_nonce],
-        ),
-        issuer,
-    )
+    let root = zeroize::Zeroizing::new(mac(
+        qr_token,
+        b"chatter.mesh.pairing.v1\0",
+        &[transcript, issuer_nonce, scanner_nonce],
+    ));
+    PairingKey::new(*root, issuer)
 }
 
-fn epoch_nonce(peer: &PeerId) -> Option<Nonce> {
-    peer.to_routing_bytes()?[..PAIRING_BEACON_NONCE_LEN]
-        .try_into()
-        .ok()
-}
-
-fn beacon(key: &PairingKey, nonce: &Nonce, direction: u8) -> PairingBeacon {
-    let tag = mac(
-        key.root(),
-        b"chatter.mesh.beacon.v1\0",
-        &[nonce, &[direction]],
-    );
+fn beacon(key: &PairingKey, window: u64, direction: u8, kind: BeaconKind) -> PairingBeacon {
+    let domain = match kind {
+        BeaconKind::Advert => b"chatter.mesh.advert.v2\0".as_slice(),
+        BeaconKind::Preface => b"chatter.mesh.preface.v2\0".as_slice(),
+    };
+    let tag = mac(key.root(), domain, &[&window.to_be_bytes(), &[direction]]);
     let mut bytes = [0; 13];
-    bytes[..PAIRING_BEACON_NONCE_LEN].copy_from_slice(nonce);
-    bytes[PAIRING_BEACON_NONCE_LEN..].copy_from_slice(&tag[..8]);
+    bytes.copy_from_slice(&tag[..13]);
     bytes
 }
 
 #[derive(Default)]
 pub(super) struct PairingBeaconSlots {
-    local: Option<PeerId>,
+    epoch: Option<(PeerId, u64)>,
+    published: Option<(PeerId, u64)>,
     next_contact: Option<usize>,
     slots: [PairingBeacon; PAIRING_BEACON_SLOTS],
+    incoming: BTreeMap<u64, BeaconIndex>,
 }
 
+type BeaconIndex = BTreeMap<(BeaconKind, PairingBeacon), Option<PeerId>>;
+
 impl PairingBeaconSlots {
-    fn for_epoch(&mut self, local: &PeerId, peers: &PeerRegistry) -> Vec<PairingBeacon> {
-        // Reusing the slots for the whole epoch keeps a roster change from
-        // revealing how many decoys were replaced.
-        if self.local.as_ref() == Some(local) {
+    fn active(&self, local: &PeerId, window: u64) -> bool {
+        local.to_routing_bytes().is_some()
+            && self
+                .epoch
+                .as_ref()
+                .is_none_or(|(peer, start)| peer != local || window > *start)
+    }
+
+    fn for_window(&mut self, local: &PeerId, peers: &PeerRegistry, now: u64) -> Vec<PairingBeacon> {
+        let window = beacon_window(now);
+        // Keep the cover slots constant within a window, including when the
+        // roster changes or several callers request the same schedule.
+        if self
+            .published
+            .as_ref()
+            .is_some_and(|(peer, at)| peer == local && *at == window)
+        {
             return self.slots.to_vec();
         }
-
         let mut rng = rand::rng();
-        let nonce = epoch_nonce(local);
         for slot in &mut self.slots {
-            let (prefix, tag) = slot.split_at_mut(PAIRING_BEACON_NONCE_LEN);
-            prefix.copy_from_slice(&nonce.unwrap_or_default());
-            rng.fill(tag);
+            rng.fill(slot);
         }
-
-        if let Some(nonce) = nonce {
+        if self.active(local, window) {
             let mut pairings: Vec<_> = peers
                 .pinned_identities()
                 .filter_map(|(_, pin)| Some((&pin.contact, pin.pairing.as_ref()?)))
                 .collect();
             pairings.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-            if !pairings.is_empty() {
-                let count = pairings.len();
+            let count = pairings.len();
+            if count != 0 {
                 let start = self
                     .next_contact
                     .map_or_else(|| rng.random_range(0..count), |cursor| cursor % count);
                 let used = count.min(PAIRING_BEACON_SLOTS);
                 for (slot, index) in self.slots.iter_mut().zip(start..start + used) {
                     let (_, key) = pairings[index % count];
-                    *slot = beacon(key, &nonce, key.local_direction());
+                    *slot = beacon(key, window, key.local_direction(), BeaconKind::Advert);
                 }
                 self.next_contact = Some((start + used) % count);
             }
         }
         self.slots.shuffle(&mut rng);
-        self.local = Some(local.clone());
+        self.published = Some((local.clone(), window));
         self.slots.to_vec()
     }
-}
 
-fn match_beacon<'a>(
-    advertised: &PairingBeacon,
-    pairings: impl Iterator<Item = (&'a PeerId, &'a PairingKey)>,
-) -> Option<PeerId> {
-    let nonce = advertised[..PAIRING_BEACON_NONCE_LEN].try_into().ok()?;
-    let mut matched = None;
-    for (contact, pairing) in pairings {
-        let expected = beacon(pairing, &nonce, pairing.local_direction() ^ 1);
-        if bool::from(expected.ct_eq(advertised)) {
-            if matched.is_some() {
-                return None;
-            }
-            matched = Some(contact.clone());
-        }
+    pub(super) fn invalidate_contacts(&mut self) {
+        self.incoming.clear();
     }
-    matched
+
+    fn recognize(
+        &mut self,
+        peers: &PeerRegistry,
+        token: &PairingBeacon,
+        kind: BeaconKind,
+        now: u64,
+    ) -> Option<PeerId> {
+        let window = beacon_window(now);
+        let offset = now % BEACON_WINDOW_SECS;
+        let adjacent = if offset < BEACON_SKEW_SECS {
+            window.checked_sub(1)
+        } else if BEACON_WINDOW_SECS - offset <= BEACON_SKEW_SECS {
+            Some(window + 1)
+        } else {
+            None
+        };
+        self.incoming
+            .retain(|&at, _| at == window || Some(at) == adjacent);
+        let mut matched = None;
+        for at in std::iter::once(window).chain(adjacent) {
+            let index = self.incoming.entry(at).or_insert_with(|| {
+                let mut index = BeaconIndex::new();
+                for (_, pin) in peers.pinned_identities() {
+                    if let Some(key) = &pin.pairing {
+                        for kind in [BeaconKind::Advert, BeaconKind::Preface] {
+                            let tag = beacon(key, at, key.local_direction() ^ 1, kind);
+                            index
+                                .entry((kind, tag))
+                                .and_modify(|match_| *match_ = None)
+                                .or_insert_with(|| Some(pin.contact.clone()));
+                        }
+                    }
+                }
+                index
+            });
+            if let Some(match_) = index.get(&(kind, *token)) {
+                let contact = match_.as_ref()?;
+                if matched.as_ref().is_some_and(|prior| prior != contact) {
+                    return None;
+                }
+                matched = Some(contact.clone());
+            }
+        }
+        matched
+    }
 }
 
 /// A proof for a particular Noise peer and transcript. Its direction prevents
@@ -154,18 +202,17 @@ pub(super) struct PairingCourier {
 }
 
 fn courier_identity(key: &PairingKey, direction: u8) -> MeshIdentity {
-    MeshIdentity::from_keys(
-        mac(
-            key.root(),
-            b"chatter.mesh.courier.noise.v1\0",
-            &[&[direction]],
-        ),
-        mac(
-            key.root(),
-            b"chatter.mesh.courier.sign.v1\0",
-            &[&[direction]],
-        ),
-    )
+    let noise = zeroize::Zeroizing::new(mac(
+        key.root(),
+        b"chatter.mesh.courier.noise.v1\0",
+        &[&[direction]],
+    ));
+    let signing = zeroize::Zeroizing::new(mac(
+        key.root(),
+        b"chatter.mesh.courier.sign.v1\0",
+        &[&[direction]],
+    ));
+    MeshIdentity::from_keys(*noise, *signing)
 }
 
 impl PairingCourier {
@@ -207,38 +254,81 @@ impl PairingCouriers {
 }
 
 impl MeshState {
-    /// Eight randomly ordered, decoy-padded slots, held until the next epoch.
-    pub(crate) fn pairing_beacons(&self, local: &PeerId) -> Vec<PairingBeacon> {
-        self.with(|state| state.pairing_beacon_slots.for_epoch(local, &state.peers))
+    /// Keep the first partial clock window covered with decoys after enabling
+    /// or replacing our local identity, including after a process restart.
+    pub(super) fn begin_beacon_epoch(&self, local: &PeerId, started_at: u64) {
+        self.with(|state| {
+            state.pairing_beacon_slots.epoch = Some((local.clone(), beacon_window(started_at)));
+            state.pairing_beacon_slots.published = None;
+        });
     }
 
-    /// The beacon for a particular contact's first write, including contacts
-    /// outside of the current epoch's broadcast slots.
+    /// Eight decoy-padded slots. Each window advances to the next contacts.
+    pub(crate) fn pairing_beacons(&self, local: &PeerId) -> Vec<PairingBeacon> {
+        self.pairing_beacons_at(local, now_secs())
+    }
+
+    pub(super) fn pairing_beacons_at(&self, local: &PeerId, now: u64) -> Vec<PairingBeacon> {
+        self.with(|state| {
+            state
+                .pairing_beacon_slots
+                .for_window(local, &state.peers, now)
+        })
+    }
+
+    /// A first-write token uses a distinct domain, so a captured first write
+    /// cannot be mistaken for an advertised slot or identify which slot is real.
     pub(crate) fn pairing_beacon_for_contact(
         &self,
         local: &PeerId,
         contact: &PeerId,
     ) -> Option<PairingBeacon> {
-        let nonce = epoch_nonce(local)?;
+        self.pairing_beacon_for_contact_at(local, contact, now_secs())
+    }
+
+    pub(super) fn pairing_beacon_for_contact_at(
+        &self,
+        local: &PeerId,
+        contact: &PeerId,
+        now: u64,
+    ) -> Option<PairingBeacon> {
+        let window = beacon_window(now);
         self.with(|state| {
+            if !state.pairing_beacon_slots.active(local, window) {
+                return None;
+            }
             let key = state
                 .peers
                 .pinned(state.peers.route(contact))?
                 .pairing
                 .as_ref()?;
-            Some(beacon(key, &nonce, key.local_direction()))
+            Some(beacon(
+                key,
+                window,
+                key.local_direction(),
+                BeaconKind::Preface,
+            ))
         })
     }
 
-    /// A bounded recognition pass over current pairings. Epoch history is
-    /// never consulted: the caller presents the fresh epoch nonce.
     pub(crate) fn paired_contact_for_beacon(&self, advertised: &PairingBeacon) -> Option<PeerId> {
+        self.recognize_beacon(advertised, BeaconKind::Advert, now_secs())
+    }
+
+    pub(crate) fn paired_contact_for_preface(&self, preface: &PairingBeacon) -> Option<PeerId> {
+        self.recognize_beacon(preface, BeaconKind::Preface, now_secs())
+    }
+
+    fn recognize_beacon(
+        &self,
+        token: &PairingBeacon,
+        kind: BeaconKind,
+        now: u64,
+    ) -> Option<PeerId> {
         self.with(|state| {
-            let pairings = state
-                .peers
-                .pinned_identities()
-                .filter_map(|(_, pin)| Some((&pin.contact, pin.pairing.as_ref()?)));
-            match_beacon(advertised, pairings)
+            state
+                .pairing_beacon_slots
+                .recognize(&state.peers, token, kind, now)
         })
     }
 
@@ -246,12 +336,7 @@ impl MeshState {
         &self,
         announce: &AnnouncementPacket,
     ) -> Option<PeerId> {
-        let advertised = announce.pairing_beacon.as_ref()?;
-        let peer = PeerId::from_noise_key(&announce.noise_public_key);
-        if advertised[..PAIRING_BEACON_NONCE_LEN] != epoch_nonce(&peer)? {
-            return None;
-        }
-        self.paired_contact_for_beacon(advertised)
+        self.paired_contact_for_beacon(announce.pairing_beacon.as_ref()?)
     }
 
     pub(super) fn pairing_key(&self, peer: &PeerId) -> Option<PairingKey> {
@@ -330,73 +415,134 @@ impl MeshState {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use super::*;
     use chatter_mesh_link::registry::MAX_PINNED_IDENTITIES;
+    use std::collections::BTreeSet;
+
+    fn add_pairing(state: &MeshState, index: u16, issuer: bool) -> (PeerId, PairingKey) {
+        let mut noise = [0; 32];
+        noise[..2].copy_from_slice(&index.to_be_bytes());
+        let peer = PeerId::from_noise_key(&noise);
+        let key = PairingKey::new(noise, issuer);
+        state.with(|state| {
+            assert!(
+                state
+                    .peers
+                    .pair_noise_identity(&peer, &noise, &noise, 0, key.clone())
+            )
+        });
+        (peer, key)
+    }
 
     #[test]
-    fn eight_slots_stay_constant_and_contacts_take_turns_across_epochs() {
+    fn eight_slots_stay_constant_and_cover_a_full_roster_in_less_than_six_hours() {
         let state = MeshState::new();
-        let first = PeerId::from_noise_key(&[101; 32]);
-        let decoys = state.pairing_beacons(&first);
-        assert_eq!(decoys.len(), PAIRING_BEACON_SLOTS);
+        let local = PeerId::from_noise_key(&[101; 32]);
+        let decoys = state.pairing_beacons_at(&local, 0);
         assert_eq!(
             decoys.iter().collect::<BTreeSet<_>>().len(),
             PAIRING_BEACON_SLOTS
         );
-        let contacts: Vec<_> = (1..=PAIRING_BEACON_SLOTS as u8 + 3)
-            .map(|index| {
-                let noise = [index; 32];
-                let peer = PeerId::from_noise_key(&noise);
-                state.with(|state| {
-                    assert!(state.peers.pair_noise_identity(
-                        &peer,
-                        &noise,
-                        &noise,
-                        0,
-                        PairingKey::new([index; 32], true),
-                    ));
-                });
-                peer
-            })
+        let contacts: Vec<_> = (1..=MAX_PINNED_IDENTITIES as u16)
+            .map(|index| add_pairing(&state, index, true))
             .collect();
-        assert_eq!(state.pairing_beacons(&first), decoys);
+        assert_eq!(state.pairing_beacons_at(&local, 1), decoys);
         let mut advertised = BTreeSet::new();
-        for epoch in [102, 103] {
-            let local = PeerId::from_noise_key(&[epoch; 32]);
-            let slots = state.pairing_beacons(&local);
+        let windows = MAX_PINNED_IDENTITIES.div_ceil(PAIRING_BEACON_SLOTS) as u64;
+        assert!(windows * BEACON_WINDOW_SECS < 6 * 60 * 60);
+        for window in 1..=windows {
+            let slots = state.pairing_beacons_at(&local, window * BEACON_WINDOW_SECS);
             assert_eq!(slots.len(), PAIRING_BEACON_SLOTS);
-            let visible: Vec<_> = contacts
-                .iter()
-                .filter(|contact| {
-                    let beacon = state.pairing_beacon_for_contact(&local, contact).unwrap();
-                    slots.contains(&beacon)
-                })
-                .collect();
-            assert_eq!(visible.len(), PAIRING_BEACON_SLOTS);
-            advertised.extend(visible);
+            // Use the sorted roster's start and step to check coverage without
+            // reproducing a 4,096-key receiver scan for every window.
+            let slot_ids = state.with(|inner| {
+                let mut roster: Vec<_> = contacts.iter().collect();
+                roster.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                let next = inner.pairing_beacon_slots.next_contact.unwrap();
+                let start = (next + contacts.len() - PAIRING_BEACON_SLOTS) % contacts.len();
+                (start..start + PAIRING_BEACON_SLOTS)
+                    .map(|index| {
+                        let (id, key) = roster[index % contacts.len()];
+                        assert!(slots.contains(&beacon(
+                            key,
+                            window,
+                            key.local_direction(),
+                            BeaconKind::Advert
+                        )));
+                        id.clone()
+                    })
+                    .collect::<Vec<_>>()
+            });
+            advertised.extend(slot_ids);
         }
         assert_eq!(advertised.len(), contacts.len());
     }
 
     #[test]
-    fn recognition_checks_each_pair_at_most_once_with_a_fresh_epoch_nonce() {
-        let roster: Vec<_> = (0..MAX_PINNED_IDENTITIES)
-            .map(|index| {
-                let mut root = [0; 32];
-                root[..8].copy_from_slice(&(index as u64).to_be_bytes());
-                (PeerId::from_noise_key(&root), PairingKey::new(root, false))
-            })
-            .collect();
-        let (contact, key) = &roster[MAX_PINNED_IDENTITIES / 2];
-        let advertised = beacon(key, &[0x9f; PAIRING_BEACON_NONCE_LEN], 1);
-        let mut attempts = 0;
-        let pairings = roster.iter().map(|(id, root)| {
-            attempts += 1;
-            (id, root)
-        });
-        assert_eq!(match_beacon(&advertised, pairings), Some(contact.clone()));
-        assert_eq!(attempts, MAX_PINNED_IDENTITIES);
+    fn clock_window_accepts_small_skew_and_rejects_old_beacons() {
+        let state = MeshState::new();
+        let (contact, key) = add_pairing(&state, 1, false);
+        let window = 10;
+        let start = window * BEACON_WINDOW_SECS;
+        let next = start + BEACON_WINDOW_SECS;
+        let tag = beacon(&key, window, 1, BeaconKind::Advert);
+        let recognize = |now| state.recognize_beacon(&tag, BeaconKind::Advert, now);
+        assert_eq!(recognize(start - 1), Some(contact.clone()));
+        assert_eq!(recognize(start + 1), Some(contact.clone()));
+        assert_eq!(recognize(next + BEACON_SKEW_SECS - 1), Some(contact));
+        assert_eq!(recognize(next + BEACON_SKEW_SECS), None);
+        assert_eq!(recognize(next + 86_400), None);
+        assert_ne!(tag, beacon(&key, window + 1, 1, BeaconKind::Advert));
+        assert_eq!(
+            state.recognize_beacon(&tag, BeaconKind::Preface, start),
+            None
+        );
+    }
+
+    #[test]
+    fn received_beacon_index_is_reused_under_unmatched_traffic() {
+        let state = MeshState::new();
+        let (contact, key) = add_pairing(&state, 1, false);
+        let now = 418;
+        let tag = beacon(&key, beacon_window(now), 1, BeaconKind::Advert);
+        assert_eq!(
+            state.recognize_beacon(&tag, BeaconKind::Advert, now),
+            Some(contact)
+        );
+        let (_, new_pair) = add_pairing(&state, 2, false);
+        let new_tag = beacon(&new_pair, beacon_window(now), 1, BeaconKind::Advert);
+        assert!(
+            state
+                .recognize_beacon(&new_tag, BeaconKind::Advert, now)
+                .is_none()
+        );
+        state.with(|state| state.pairing_beacon_slots.invalidate_contacts());
+        assert!(
+            state
+                .recognize_beacon(&new_tag, BeaconKind::Advert, now)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn newly_enabled_epoch_covers_the_rest_of_its_first_window() {
+        let state = MeshState::new();
+        let (contact, key) = add_pairing(&state, 1, false);
+        let local = PeerId::from_noise_key(&[101; 32]);
+        state.begin_beacon_epoch(&local, 415);
+        let current = state.pairing_beacons_at(&local, 416);
+        let next = state.pairing_beacons_at(&local, 440);
+        assert!(!current.contains(&beacon(&key, 10, 0, BeaconKind::Advert)));
+        assert!(next.contains(&beacon(&key, 11, 0, BeaconKind::Advert)));
+        assert!(
+            state
+                .pairing_beacon_for_contact_at(&local, &contact, 416)
+                .is_none()
+        );
+        assert!(
+            state
+                .pairing_beacon_for_contact_at(&local, &contact, 440)
+                .is_some()
+        );
     }
 }

@@ -187,6 +187,7 @@ pub enum BleCommand {
 /// Work for the relay loop.
 #[derive(Debug)]
 pub enum NostrCommand {
+    RotateIdentity(Arc<MeshIdentity>),
     /// Gift-wrap and publish a private message.
     Dm {
         peer: PeerId,

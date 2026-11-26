@@ -248,7 +248,9 @@ impl BleRuntime {
         let author = opened.sender.clone();
         state.awaiting_rekey.retain(|peer| peer != author.as_str());
         state.unanswered_direct_invites.remove(author.as_str());
-        state.unanswered_expired.retain(|peer| peer != author.as_str());
+        state
+            .unanswered_expired
+            .retain(|peer| peer != author.as_str());
         if !state.record_message(&opened.id) || self.private_channels.save(&state).is_err() {
             return true;
         }
@@ -259,7 +261,11 @@ impl BleRuntime {
             self.on_private_leave(&author, notice);
             return true;
         }
-        if self.events.peer_blocked(&author) {
+        let contact = self
+            .state
+            .wire_for_group_peer(&author)
+            .map_or_else(|| author.clone(), |wire| self.state.contact(&wire));
+        if self.events.peer_blocked(&contact) {
             return true;
         }
         let now_ms = now_millis();
@@ -292,49 +298,24 @@ impl BleRuntime {
             conversation,
             sender: author.clone(),
             nickname: opened.nickname,
-            is_local: author == self.identity.peer_id(),
+            is_local: author == self.private_group_identity.peer_id(),
             sender_verified: true,
         })));
         true
     }
 
     pub(super) async fn on_private_join_request(&mut self, claimed: &PeerId, invite: Invite) {
-        if invite.creator != self.identity.peer_id().as_str() || invite.target != claimed.as_str() {
-            return;
-        }
-        let pending_key = (claimed.clone(), invite.channel_id.clone());
         let Some(member) = self.state.pinned_member(claimed, true) else {
-            // A QR already issued by this device authorizes requesting the
-            // binding when upgrading with an outstanding invitation.
-            let now = now_secs();
-            if invite.expires_at >= now
-                && self
-                    .private_channels
-                    .load(&invite.channel_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|channel| {
-                        channel
-                            .pending_invites
-                            .iter()
-                            .any(|issued| issued.signature == invite.signature)
-                    })
-            {
-                self.pending_private_joins
-                    .retain(|_, pending| pending.expires_at >= now);
-                if self.pending_private_joins.len() < 512
-                    || self.pending_private_joins.contains_key(&pending_key)
-                {
-                    self.pending_private_joins.insert(pending_key, invite);
-                    self.request_signing_pin(claimed).await;
-                }
-            }
             return;
         };
-        self.pending_private_joins.remove(&pending_key);
-        let Ok(Some(state)) = self
-            .private_channels
-            .redeem(&invite, &self.identity, member)
+        if invite.creator != self.private_group_identity.peer_id().as_str()
+            || invite.target != member.peer
+        {
+            return;
+        }
+        let Ok(Some(state)) =
+            self.private_channels
+                .redeem(&invite, &self.private_group_identity, member)
         else {
             return;
         };
@@ -342,11 +323,11 @@ impl BleRuntime {
             return;
         };
         for member in &state.members {
-            if member.peer != self.identity.peer_id().as_str() {
+            if member.peer != self.private_group_identity.peer_id().as_str() {
                 self.send_group_state(
                     &PeerId::from_str(&member.peer),
                     &bytes,
-                    member.peer == claimed.as_str(),
+                    member.peer == invite.target,
                 )
                 .await;
             }
@@ -365,11 +346,15 @@ impl BleRuntime {
         if self.events.peer_blocked(claimed) {
             return;
         }
-        let Some(static_key) = self.state.with(|s| s.sessions.remote_static(claimed)) else {
+        let Some(creator) = self.state.pinned_member(claimed, true) else {
             return;
         };
-        if claimed.as_str() != update.creator
-            || chatter_mesh_noise::fingerprint_of(&static_key) != update.members[0].fingerprint
+        let Some((static_key, signing_key)) = self.state.private_group_keys(claimed) else {
+            return;
+        };
+        if creator.peer != update.creator
+            || creator.fingerprint != update.members[0].fingerprint
+            || update.creator_key.as_slice() != signing_key
             || !update.verify()
         {
             return;
@@ -408,7 +393,7 @@ impl BleRuntime {
                     invite.creator == update.creator
                         && invite.creator_key == update.creator_key
                         && invite.creator_static == update.creator_static
-                        && invite.target == self.identity.peer_id().as_str()
+                        && invite.target == self.private_group_identity.peer_id().as_str()
                 });
             if !accepted {
                 if self.state.with(|s| {
@@ -418,14 +403,14 @@ impl BleRuntime {
                 }) {
                     return;
                 }
-                if update.member_key(&self.identity.peer_id())
-                    != Some(self.identity.signing_public())
+                if update.member_key(&self.private_group_identity.peer_id())
+                    != Some(self.private_group_identity.signing_public())
                 {
                     return;
                 }
                 if !update.members.iter().any(|m| {
-                    m.peer == self.identity.peer_id().as_str()
-                        && m.fingerprint == self.identity.fingerprint()
+                    m.peer == self.private_group_identity.peer_id().as_str()
+                        && m.fingerprint == self.private_group_identity.fingerprint()
                 }) {
                     return;
                 }
@@ -440,11 +425,10 @@ impl BleRuntime {
                 let id = update.id.clone();
                 let name = update.name.clone();
                 let inserted = self.state.with(|s| {
-                    s.pending_group_invites
-                        .retain(|_, pending| {
-                            now.saturating_sub(pending.received_at)
-                                < super::super::DIRECT_INVITE_LIFETIME_SECS
-                        });
+                    s.pending_group_invites.retain(|_, pending| {
+                        now.saturating_sub(pending.received_at)
+                            < super::super::DIRECT_INVITE_LIFETIME_SECS
+                    });
                     let count = s
                         .pending_group_invites
                         .values()
@@ -489,7 +473,10 @@ impl BleRuntime {
                 return;
             }
         }
-        if update.member_key(&self.identity.peer_id()).is_none() {
+        if update
+            .member_key(&self.private_group_identity.peer_id())
+            .is_none()
+        {
             if existing.is_some() {
                 let _ = self.private_channels.remove(&update.id);
                 self.events.close_private_channel(&update.id);
@@ -528,7 +515,12 @@ impl BleRuntime {
         let Ok(Some(mut state)) = self.private_channels.load(proof.channel_id()) else {
             return;
         };
-        if claimed.as_str() != state.creator || !proof.verified_for(&state) {
+        if !self
+            .state
+            .group_peer_for_wire(claimed)
+            .is_some_and(|peer| peer.as_str() == state.creator)
+            || !proof.verified_for(&state)
+        {
             return;
         }
         let epoch = proof.epoch();
@@ -550,13 +542,18 @@ impl BleRuntime {
     }
 
     pub(super) fn on_private_decline(&mut self, claimed: &PeerId, notice: LeaveNotice) {
+        let Some(group_peer) = self.state.group_peer_for_wire(claimed) else {
+            return;
+        };
         let Ok(Some(mut state)) = self.private_channels.load(&notice.id) else {
             return;
         };
-        if state.creator != self.identity.peer_id().as_str()
-            || notice.peer != claimed.as_str()
+        if state.creator != self.private_group_identity.peer_id().as_str()
+            || notice.peer != group_peer.as_str()
             || !state.verify_leave(&notice)
-            || state.rotate(&self.identity, None, Some(claimed)).is_err()
+            || state
+                .rotate(&self.private_group_identity, None, Some(&group_peer))
+                .is_err()
             || self.private_channels.save(&state).is_err()
         {
             return;
@@ -618,7 +615,10 @@ impl BleRuntime {
         let Ok(Some(mut state)) = self.private_channels.load(&id.to_string()) else {
             return;
         };
-        if state.member_key(claimed).is_none()
+        let Some(claimed) = self.state.group_peer_for_wire(claimed) else {
+            return;
+        };
+        if state.member_key(&claimed).is_none()
             || !state
                 .awaiting_rekey
                 .iter()

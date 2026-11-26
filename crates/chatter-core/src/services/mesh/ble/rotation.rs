@@ -1,7 +1,25 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use super::*;
 use crate::storage::mesh_identity_store::{MeshIdentityStore, ROTATION_SECS};
+use rand::Rng;
+
+fn radio_gap() -> Duration {
+    Duration::from_secs(rand::rng().random_range(45..=120))
+}
+
+async fn wait_out_radio_gap(duration: Duration, stopped: impl Fn() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + duration;
+    while !stopped() {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        tokio::time::sleep_until(deadline.min(now + Duration::from_millis(250))).await;
+    }
+    false
+}
 
 pub(in crate::services::mesh) struct RadioRotation {
     pub store: Arc<MeshIdentityStore>,
@@ -10,6 +28,7 @@ pub(in crate::services::mesh) struct RadioRotation {
     pub wiped: Arc<AtomicBool>,
     pub running: Arc<AtomicBool>,
     pub started_at: u64,
+    pub nostr: Arc<super::super::CommandBus<super::super::NostrCommand>>,
 }
 
 impl BleRuntime {
@@ -60,7 +79,9 @@ impl BleRuntime {
             }
         };
 
-        if !self.stop_epoch().await || self.rotation_stopped() {
+        if !self.stop_epoch().await
+            || !wait_out_radio_gap(radio_gap(), || self.rotation_stopped()).await
+        {
             return false;
         }
 
@@ -78,6 +99,13 @@ impl BleRuntime {
         self.radio = radio;
         self.identity = next.identity;
         super::super::identity::activate_broadcast_epoch(&rotation.active, self.identity.clone());
+        self.state
+            .begin_beacon_epoch(&self.identity.peer_id(), next.started_at);
+        let _ = rotation
+            .nostr
+            .send(super::super::NostrCommand::RotateIdentity(
+                self.identity.clone(),
+            ));
         // A manifest or chunk under the next sender would link both epochs
         // through the transfer ID. Transfers may retry within their own epoch.
         self.files_out.clear();
@@ -86,6 +114,7 @@ impl BleRuntime {
         self.pairing_proofs_received.clear();
         self.courier_claims.clear();
         self.beacon_cursor = 0;
+        self.published_beacons.clear();
         rotation.started_at = next.started_at;
         let (dial_tx, dial_rx) = tokio::sync::mpsc::unbounded_channel();
         self.dial_tx = dial_tx;
@@ -107,6 +136,23 @@ pub(super) mod tests {
     use super::*;
     use crate::crypto::os_rng;
     use crate::services::mesh::session::SessionManager;
+
+    #[tokio::test(start_paused = true)]
+    async fn rotation_leaves_a_random_silent_gap_and_shutdown_interrupts_it() {
+        let samples: std::collections::BTreeSet<_> = (0..24).map(|_| radio_gap()).collect();
+        assert!(samples.len() > 1);
+        let delay = *samples.first().unwrap();
+        assert!(delay >= Duration::from_secs(45));
+        assert!(*samples.last().unwrap() <= Duration::from_secs(120));
+        let started = tokio::time::Instant::now();
+        assert!(wait_out_radio_gap(delay, || false).await);
+        assert_eq!(started.elapsed(), delay);
+        let started = tokio::time::Instant::now();
+        assert!(
+            !wait_out_radio_gap(delay, || started.elapsed() >= Duration::from_millis(250)).await
+        );
+        assert_eq!(started.elapsed(), Duration::from_millis(250));
+    }
 
     pub(in crate::services::mesh::ble) fn establish(
         runtime: &BleRuntime,

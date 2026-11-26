@@ -59,6 +59,7 @@ impl MeshService {
             private_channels: deps.private_channels,
             signal_lock: Arc::new(Mutex::new(())),
             identity: active_identity,
+            private_group_identity: Default::default(),
             config,
             state,
             nostr_state,
@@ -120,23 +121,21 @@ impl MeshService {
             return Ok(());
         }
         let channels = self.private_channels.list()?;
-        let epoch = {
+        let (epoch, group_identity) = {
             let _signal_guard = self.signal_lock.lock();
             if self.identity_wiped.load(Ordering::SeqCst) {
                 return Err(MeshError::IdentityWiped);
             }
             let epoch = self.identity_store.advance(now_secs(), true)?;
+            let group_identity = self.identity_store.private_group_identity()?;
+            *self.private_group_identity.write() = Some(group_identity.clone());
             identity::activate_broadcast_epoch(&self.identity, Arc::clone(&epoch.identity));
-            epoch
+            (epoch, group_identity)
         };
         let peer = epoch.identity.peer_id();
+        self.state.begin_beacon_epoch(&peer, epoch.started_at);
         for channel in channels {
-            if channel.member_key(&peer).is_some()
-                || epoch
-                    .previous_peer
-                    .as_ref()
-                    .is_some_and(|peer| channel.member_key(peer).is_some())
-            {
+            if channel.member_key(&group_identity.peer_id()).is_some() {
                 self.timeline
                     .open_private_channel(&channel.id, &channel.name);
             }
@@ -171,6 +170,7 @@ impl MeshService {
                 Arc::clone(&self.key_store),
                 Arc::clone(&self.signal_lock),
             )
+            .with_private_group_identity(group_identity)
             .with_rotation(ble::RadioRotation {
                 store: self.identity_store.clone(),
                 active: self.identity.clone(),
@@ -178,6 +178,7 @@ impl MeshService {
                 wiped: self.identity_wiped.clone(),
                 running: self.running.clone(),
                 started_at: epoch.started_at,
+                nostr: self.nostr.clone(),
             });
             tasks.push(tokio::spawn(runtime.run(ble_rx)));
         } else {
@@ -232,12 +233,20 @@ impl MeshService {
             let _ = task.await;
         }
         self.identity.write().take();
+        self.private_group_identity.write().take();
         // The router's channel is permanent. Keep its retained outbox actor
         // alive across a radio restart; RouterHandle::drop joins it at teardown.
     }
 
     pub(super) fn identity(&self) -> Result<Arc<MeshIdentity>, MeshError> {
         self.identity.read().clone().ok_or(MeshError::NotRunning)
+    }
+
+    pub(super) fn private_group_identity(&self) -> Result<Arc<MeshIdentity>, MeshError> {
+        self.private_group_identity
+            .read()
+            .clone()
+            .ok_or(MeshError::NotRunning)
     }
 
     // -------------------------------------------------------------- read paths

@@ -5,20 +5,40 @@ use subtle::ConstantTimeEq;
 
 use super::super::pairing::route_proof;
 
-const ROUTE_MAGIC: &[u8; 8] = b"CHTRPRT1";
+const ROUTE_MAGIC: &[u8; 8] = b"CHTRPRT2";
 const PULL_MAGIC: &[u8; 8] = b"CHTRPLQ1";
 const CANDIDATE_MS: u64 = 60_000;
 
 fn sign_route(
     identity: &MeshIdentity,
+    group: &MeshIdentity,
     key: &chatter_mesh_link::registry::PairingKey,
     transcript: &[u8; 32],
 ) -> Vec<u8> {
     let signing = identity.signing_public();
+    let group_static = group.static_public();
+    let group_signing = group.signing_public();
     let proof = route_proof(key, transcript, &identity.static_public(), &signing, true);
-    let signed = [ROUTE_MAGIC.as_slice(), transcript, &proof].concat();
+    let signed = [
+        ROUTE_MAGIC.as_slice(),
+        transcript,
+        &proof,
+        &group_static,
+        &group_signing,
+    ]
+    .concat();
     let signature = sign_bytes(identity, &signed);
-    [ROUTE_MAGIC.as_slice(), &signing, &proof, &signature].concat()
+    let group_signature = sign_bytes(group, &signed);
+    [
+        ROUTE_MAGIC.as_slice(),
+        &signing,
+        &proof,
+        &group_static,
+        &group_signing,
+        &signature,
+        &group_signature,
+    ]
+    .concat()
 }
 
 impl BleRuntime {
@@ -47,7 +67,12 @@ impl BleRuntime {
         if self.pairing_proofs_sent.get(peer) == Some(&transcript) {
             return;
         }
-        let frame = sign_route(&self.identity, &key, &transcript);
+        let frame = sign_route(
+            &self.identity,
+            &self.private_group_identity,
+            &key,
+            &transcript,
+        );
         if self.send_private_control(peer, &frame).await {
             self.pairing_proofs_sent.insert(peer.clone(), transcript);
         }
@@ -61,12 +86,15 @@ impl BleRuntime {
         let Some(content) = plaintext.strip_prefix(ROUTE_MAGIC) else {
             return false;
         };
-        let Ok(content) = <&[u8; 128]>::try_from(content) else {
+        let Ok(content) = <&[u8; 256]>::try_from(content) else {
             return true;
         };
         let signing: &[u8; 32] = content[..32].try_into().expect("route frame layout");
         let proof: &[u8; 32] = content[32..64].try_into().expect("route frame layout");
-        let signature: &[u8; 64] = content[64..].try_into().expect("route frame layout");
+        let group_static: &[u8; 32] = content[64..96].try_into().expect("route frame layout");
+        let group_signing: &[u8; 32] = content[96..128].try_into().expect("route frame layout");
+        let signature: &[u8; 64] = content[128..192].try_into().expect("route frame layout");
+        let group_signature: &[u8; 64] = content[192..].try_into().expect("route frame layout");
         let Some(transcript) = self.state.with(|state| state.sessions.handshake_hash(peer)) else {
             return true;
         };
@@ -79,12 +107,17 @@ impl BleRuntime {
         }
         let accepted = self.state.with(|state| {
             let noise = state.sessions.remote_static(peer)?;
+            let signed = [
+                ROUTE_MAGIC.as_slice(),
+                &transcript,
+                proof,
+                group_static,
+                group_signing,
+            ]
+            .concat();
             if PeerId::from_noise_key(&noise) != *peer
-                || !verify_bytes(
-                    signature,
-                    &[ROUTE_MAGIC.as_slice(), &transcript, proof].concat(),
-                    signing,
-                )
+                || !verify_bytes(signature, &signed, signing)
+                || !verify_bytes(group_signature, &signed, group_signing)
             {
                 return None;
             }
@@ -98,19 +131,31 @@ impl BleRuntime {
                 return None;
             }
             drop(matches);
-            if prior == *peer {
+            let moved = prior != *peer;
+            let group_keys = (*group_static, *group_signing);
+            if !moved {
                 let pin = state.peers.pinned(peer)?;
-                return (pin.noise_public_key.as_slice() == noise
-                    && pin.signing_public_key.as_slice() == signing)
-                    .then_some((contact, false));
+                if pin.noise_public_key.as_slice() != noise
+                    || pin.signing_public_key.as_slice() != signing
+                {
+                    return None;
+                }
+                if pin.private_group_keys == Some(group_keys) {
+                    return Some((contact, false));
+                }
             }
             let mut candidate = state.peers.clone();
-            if !candidate.bind_paired_route(&prior, &noise, signing, now_millis()) {
+            if (moved && !candidate.bind_paired_route(&prior, &noise, signing, now_millis()))
+                || !candidate.bind_private_group_keys(peer, group_keys)
+            {
                 return None;
             }
             let sealed = self.sealer.seal(&candidate.pins_to_bytes()).ok()?;
             self.storage.save(StorageKey::PeerPins, &sealed).ok()?;
             state.peers = candidate;
+            if !moved {
+                return Some((contact, false));
+            }
             state.sessions.forget_peer(&prior);
             state.chatter_hello.forget_live(&prior);
             state.dm_handshake_at_ms.remove(&prior);
@@ -129,6 +174,7 @@ impl BleRuntime {
             self.pairing_candidates.remove(peer);
             self.send_pairing_proof(peer).await;
             self.request_pairing_mail(peer).await;
+            self.sync_private_groups(peer).await;
             if moved {
                 let _ = self
                     .router
@@ -299,12 +345,10 @@ mod tests {
             None,
             None,
         );
-        announce.pairing_beacon = b_state.pairing_beacon_for_contact(&wire_b, &contact_a);
-        assert!(
-            b_state
-                .pairing_beacons(&wire_b)
-                .contains(&announce.pairing_beacon.unwrap())
-        );
+        announce.pairing_beacon = b_state
+            .pairing_beacons(&wire_b)
+            .into_iter()
+            .find(|slot| a_state.paired_contact_for_beacon(slot) == Some(contact_b.clone()));
         assert_eq!(
             a_state.paired_contact_for_announce(&announce),
             Some(contact_b.clone())
@@ -321,10 +365,16 @@ mod tests {
             .unwrap();
         let key_a = a_state.pairing_key(&contact_b).unwrap();
         let key_b = b_state.pairing_key(&contact_a).unwrap();
-        let frame_a =
-            wrap_private_control(&a, &wire_b, &sign_route(&a.identity, &key_a, &transcript));
-        let frame_b =
-            wrap_private_control(&b, &wire_a, &sign_route(&b.identity, &key_b, &transcript));
+        let frame_a = wrap_private_control(
+            &a,
+            &wire_b,
+            &sign_route(&a.identity, &a.private_group_identity, &key_a, &transcript),
+        );
+        let frame_b = wrap_private_control(
+            &b,
+            &wire_a,
+            &sign_route(&b.identity, &b.private_group_identity, &key_b, &transcript),
+        );
         a.on_encrypted(&link_a, &frame_b, &wire_b).await;
         b.on_encrypted(&link_b, &frame_a, &wire_a).await;
         assert_eq!(a_state.route(&contact_b), wire_b);
@@ -393,50 +443,116 @@ mod tests {
         assert!(!a.couriers.carries_for(&prior_address, now));
     }
 
+    #[tokio::test]
+    async fn a_creator_can_revoke_a_member_after_both_radio_identities_rotate() {
+        let (mut creator, _, creator_state) = super::super::tests::runtime();
+        let (mut member, _, member_state) = super::super::tests::runtime();
+        let old_creator_wire = creator.identity.peer_id();
+        let old_member_wire = member.identity.peer_id();
+        let creator_group = creator.private_group_identity.clone();
+        let member_group = member.private_group_identity.clone();
+        pair(&creator, &member.identity, 3, true);
+        pair(&member, &creator.identity, 3, false);
+        for (state, wire, group) in [
+            (&creator_state, &old_member_wire, &member_group),
+            (&member_state, &old_creator_wire, &creator_group),
+        ] {
+            state.with(|state| {
+                assert!(
+                    state.peers.bind_private_group_keys(
+                        wire,
+                        (group.static_public(), group.signing_public())
+                    )
+                )
+            });
+        }
+        let mut channel =
+            PrivateChannel::create("After rotation", &creator_group, "creator").unwrap();
+        channel
+            .rotate(
+                &creator_group,
+                creator_state.pinned_member(&old_member_wire, false),
+                None,
+            )
+            .unwrap();
+        member.private_channels.save(&channel).unwrap();
+        creator.private_channels.save(&channel).unwrap();
+        let old_channel = channel.clone();
+        creator.identity = Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
+        member.identity = Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
+        let creator_wire = creator.identity.peer_id();
+        let member_wire = member.identity.peer_id();
+        let member_session = super::super::rotation::tests::establish(&creator, &member.identity);
+        member_state.with(|state| state.sessions = member_session);
+        let transcript = creator_state
+            .with(|state| state.sessions.handshake_hash(&member_wire))
+            .unwrap();
+        let frame = sign_route(
+            &creator.identity,
+            &creator_group,
+            &creator_state.pairing_key(&old_member_wire).unwrap(),
+            &transcript,
+        );
+        assert!(member.on_pairing_control(&creator_wire, &frame).await);
+        assert_eq!(
+            member_state.wire_for_group_peer(&creator_group.peer_id()),
+            Some(creator_wire.clone())
+        );
+        channel
+            .rotate(&creator_group, None, Some(&member_group.peer_id()))
+            .unwrap();
+        let new_message = channel
+            .encrypt(&creator_group, "after revocation", "creator")
+            .unwrap()
+            .1;
+        assert!(old_channel.decrypt(&new_message).is_none());
+        let revoked = channel.removed_update_bytes(&creator_group).unwrap();
+        member
+            .on_private_epoch(
+                &creator_wire,
+                PrivateChannel::decode_update(&revoked).unwrap(),
+                false,
+            )
+            .await;
+        assert!(member.private_channels.load(&channel.id).unwrap().is_none());
+    }
+
     #[test]
-    fn a_stranger_cannot_match_either_epoch_or_reflect_a_beacon() {
+    fn a_stranger_cannot_match_a_slot_or_reflect_a_first_write() {
         let (a, _, a_state) = super::super::tests::runtime();
         let (b, _, b_state) = super::super::tests::runtime();
         let (stranger, _, stranger_state) = super::super::tests::runtime();
         pair(&a, &b.identity, 1, true);
         pair(&a, &stranger.identity, 9, false);
         pair(&b, &a.identity, 1, false);
-        // This stranger is paired with someone else and has a populated index.
         pair(&stranger, &a.identity, 9, true);
-        let first = b_state
+        let preface = b_state
             .pairing_beacon_for_contact(&b.identity.peer_id(), &a.identity.peer_id())
             .unwrap();
-        let next_identity = MeshIdentity::generate(&mut crate::crypto::os_rng());
-        let next = b_state
-            .pairing_beacon_for_contact(&next_identity.peer_id(), &a.identity.peer_id())
-            .unwrap();
-        assert_ne!(first, next);
-        assert_ne!(&first[5..], &next[5..]);
+        let slots = b_state.pairing_beacons(&b.identity.peer_id());
         assert_eq!(
-            a_state.paired_contact_for_beacon(&first),
+            a_state.paired_contact_for_preface(&preface),
             Some(b.identity.peer_id())
         );
-        assert_eq!(
-            a_state.paired_contact_for_beacon(&next),
-            Some(b.identity.peer_id())
+        assert!(b_state.paired_contact_for_preface(&preface).is_none());
+        assert!(
+            stranger_state
+                .paired_contact_for_preface(&preface)
+                .is_none()
         );
-        for local in [b.identity.peer_id(), next_identity.peer_id()] {
-            let slots = b_state.pairing_beacons(&local);
-            assert_eq!(
-                slots
-                    .iter()
-                    .filter(|slot| a_state.paired_contact_for_beacon(slot).is_some())
-                    .count(),
-                1
-            );
-            assert!(
-                slots
-                    .iter()
-                    .all(|slot| stranger_state.paired_contact_for_beacon(slot).is_none())
-            );
-        }
-        assert!(stranger_state.paired_contact_for_beacon(&first).is_none());
-        assert!(stranger_state.paired_contact_for_beacon(&next).is_none());
-        assert!(b_state.paired_contact_for_beacon(&first).is_none());
+        assert!(a_state.paired_contact_for_beacon(&preface).is_none());
+        assert!(!slots.contains(&preface));
+        assert_eq!(
+            slots
+                .iter()
+                .filter(|slot| a_state.paired_contact_for_beacon(slot).is_some())
+                .count(),
+            1
+        );
+        assert!(
+            slots
+                .iter()
+                .all(|slot| stranger_state.paired_contact_for_beacon(slot).is_none())
+        );
     }
 }
