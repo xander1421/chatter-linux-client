@@ -3986,3 +3986,7 @@ msgstr "Ce lien de nom d’utilisateur est invalide ou a expiré."
 
 msgid "Verifying key"
 msgstr "Vérification de la clé"
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr "Impossible de vérifier l’historique du journal de transparence des clés."

@@ -132,6 +132,10 @@ pub enum CryptoError {
         peer_id: String,
     },
 
+    /// An authenticated log head failed the history check against our pin.
+    #[error("key transparency log history could not be verified")]
+    KeyTransparencyHistoryUnverified,
+
     /// The server answered the peer's Key Transparency lookup with "no entry".
     ///
     /// Every identity key is logged in the same transaction that stores it

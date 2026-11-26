@@ -338,7 +338,7 @@ impl SignalService {
                 match result {
                     Ok(()) => ready.push(destination),
                     Err(error @ ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }
-                        | CryptoError::UntrustedIdentity { .. })) => {
+                        | CryptoError::UntrustedIdentity { new_identity_key: None, .. })) => {
                         if blocked.is_none() || matches!(error, ServiceError::Crypto(CryptoError::KeyVerificationPending { .. })) {
                             blocked = Some(error);
                         }
@@ -410,11 +410,12 @@ impl SignalService {
                     ciphertexts.insert(device_id, ciphertext);
                 }
                 Err(e @ ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }
-                    | CryptoError::UntrustedIdentity { .. })) => {
+                    | CryptoError::UntrustedIdentity { new_identity_key: None, .. })) => {
                     if blocked.is_none() || matches!(e, ServiceError::Crypto(CryptoError::KeyVerificationPending { .. })) {
                         blocked = Some(e);
                     }
                 }
+                Err(e @ ServiceError::Crypto(CryptoError::UntrustedIdentity { .. })) => return Err(e),
                 Err(e) => tracing::warn!(
                     recipient = %recipient_id,
                     device_id,

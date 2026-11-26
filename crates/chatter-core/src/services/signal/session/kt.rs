@@ -6,6 +6,7 @@ use crate::network::grpc::{AnonymousKtClient, client_pool::GrpcClientPool};
 use crate::state::AuthState;
 use crate::storage::peer_verification::{KtJob, KtRoute, KtUpdate, KtVerdict};
 use futures::StreamExt;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 const ANONYMOUS_DEADLINE: Duration = Duration::from_secs(95);
@@ -18,9 +19,26 @@ pub(crate) fn spawn_peer_verifier(
     transport_epoch: tokio::sync::watch::Receiver<u64>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let last_history_warning = Mutex::new(None);
         tokio::join!(
-            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::Normal, transport_epoch.clone()),
-            run_peer_verifier(&service, &pool, &events, &auth, KtRoute::AnonymousTor, transport_epoch),
+            run_peer_verifier(
+                &service,
+                &pool,
+                &events,
+                &auth,
+                KtRoute::Normal,
+                transport_epoch.clone(),
+                &last_history_warning,
+            ),
+            run_peer_verifier(
+                &service,
+                &pool,
+                &events,
+                &auth,
+                KtRoute::AnonymousTor,
+                transport_epoch,
+                &last_history_warning,
+            ),
         );
     })
 }
@@ -32,6 +50,7 @@ async fn run_peer_verifier(
     auth: &AuthState,
     route: KtRoute,
     mut transport_epoch: tokio::sync::watch::Receiver<u64>,
+    last_history_warning: &Mutex<Option<(crate::domain::UserId, u64)>>,
 ) {
     let mut recovered_session = None;
     let mut ticks = tokio::time::interval(Duration::from_secs(3));
@@ -98,6 +117,16 @@ async fn run_peer_verifier(
                         }
                     }
                     Err(error) => {
+                        if matches!(
+                            &error,
+                            ServiceError::Crypto(CryptoError::KeyTransparencyHistoryUnverified)
+                        ) {
+                            let mut warned = last_history_warning.lock();
+                            if *warned != Some((owner, revision)) {
+                                *warned = Some((owner, revision));
+                                events.emit_domain(DomainEvent::KeyTransparencyHistoryUnverified);
+                            }
+                        }
                         tracing::debug!(%error, ?route, "Peer key verification will retry");
                         if let Err(error) = service
                             .key_store
@@ -482,7 +511,14 @@ impl SignalService {
 
 fn anchor_error(error: KtError) -> ServiceError {
     error.trace_rejection();
-    ServiceError::Validation(format!("Key Transparency verification failed: {error}"))
+    match error {
+        KtError::ConsistencyEpochOrder
+        | KtError::ConsistencyRootMismatch
+        | KtError::ConsistencyLogNotAppendOnly => {
+            CryptoError::KeyTransparencyHistoryUnverified.into()
+        }
+        _ => ServiceError::Validation(format!("Key Transparency verification failed: {error}")),
+    }
 }
 
 #[cfg(test)]
@@ -787,6 +823,14 @@ mod kt_pin_tests {
             kt_anchor::pinned_head(&settings).unwrap().unwrap().root,
             [1u8; 32]
         );
+        drop(pin);
+        let initial_pin = kt_anchor::pinned_head(&settings).unwrap();
+        let pool = GrpcClientPool::new("http://127.0.0.1:1").unwrap();
+        let mut client = AnonymousKtClient::new(pool.channel());
+        assert!(matches!(
+            svc.hold_peer_head(initial_pin, &head(2), &mut client).await,
+            Err(ServiceError::Crypto(CryptoError::KeyTransparencyHistoryUnverified))
+        ));
     }
 
     /// Both KT gates hand their fetch result to `judge_kt_proof`. A server

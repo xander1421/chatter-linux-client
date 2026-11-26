@@ -3989,3 +3989,7 @@ msgstr "Acest link de nume de utilizator este nevalid sau a expirat."
 
 msgid "Verifying key"
 msgstr "Se verifică cheia"
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr "Istoricul jurnalului de transparență a cheilor nu a putut fi verificat."

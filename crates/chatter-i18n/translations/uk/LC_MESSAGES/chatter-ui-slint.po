@@ -6006,3 +6006,7 @@ msgstr "Перевірка ключа"
 
 msgid "Key not verified"
 msgstr "Ключ не підтверджено"
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr "Ідентичність змінилася"

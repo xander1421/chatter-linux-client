@@ -748,6 +748,15 @@ pub async fn handle_domain_event(
             });
         }
         DomainEvent::DmSessionHealed { .. } | DomainEvent::PeerKeyVerificationUpdated { .. } => {}
+        DomainEvent::KeyTransparencyHistoryUnverified => {
+            crate::run_ui!(window, |w| {
+                w.set_toast_message(
+                    chatter_i18n::tr("Could not verify the Key Transparency log history.").into(),
+                );
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            });
+        }
         DomainEvent::PeerDevicesChanged { .. } => {}
         // A peer's identity key changed while we were running. If their
         // conversation is the one on screen, raise the prompt now rather than

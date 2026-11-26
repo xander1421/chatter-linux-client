@@ -3958,3 +3958,7 @@ msgstr "Questo link al nome utente non è valido o è scaduto."
 
 msgid "Verifying key"
 msgstr "Verifica della chiave in corso"
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr "Non è stato possibile verificare la cronologia del registro di trasparenza delle chiavi."

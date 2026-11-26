@@ -3430,3 +3430,7 @@ msgstr ""
 
 msgid "Verifying key"
 msgstr ""
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr ""

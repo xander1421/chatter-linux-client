@@ -5996,3 +5996,7 @@ msgstr "Проверка ключа"
 
 msgid "Key not verified"
 msgstr "Ключ не проверен"
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr "Ключ идентификации изменился"

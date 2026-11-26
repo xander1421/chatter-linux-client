@@ -6004,3 +6004,7 @@ msgstr "Schlüssel wird überprüft"
 
 msgid "Key not verified"
 msgstr "Schlüssel nicht geprüft"
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr "Identität geändert"

@@ -93,7 +93,15 @@ impl AnonGroupError {
     }
 
     pub(super) fn identity_rejected(&self) -> bool {
-        matches!(self, Self::RecipientIdentity(crate::error::CryptoError::UntrustedIdentity { .. }))
+        matches!(self, Self::RecipientIdentity(crate::error::CryptoError::UntrustedIdentity {
+            new_identity_key: None, ..
+        }))
+    }
+
+    pub(super) fn awaiting_identity_acceptance(&self) -> bool {
+        matches!(self, Self::RecipientIdentity(crate::error::CryptoError::UntrustedIdentity {
+            new_identity_key: Some(_), ..
+        }))
     }
 
     /// Static metadata survives redaction without exposing error text or IDs.

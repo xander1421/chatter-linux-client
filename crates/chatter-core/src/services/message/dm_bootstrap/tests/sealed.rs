@@ -304,6 +304,7 @@ async fn public_sealed_envelope_refusal_releases_admission_without_advancing_dev
 #[cfg(feature = "dev-trust-root")]
 #[tokio::test]
 async fn sealed_batch_skips_a_blocked_device_and_commits_the_ready_device() {
+    use crate::error::{CryptoError, IdentityChangeSource, ServiceError};
     use crate::storage::peer_verification::KtRoute;
     let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
     let ready = UserId::new();
@@ -325,7 +326,7 @@ async fn sealed_batch_skips_a_blocked_device_and_commits_the_ready_device() {
     let ready_before = bytes(ready, 2);
     let cert = cache_fixture_sender_certificate(&client, me);
     let batch = ms.signal_service.actor.encrypt_sealed_bounded_batch(
-        chatter_proto::protovalidate::test_plaintext("one ready device"), cert,
+        chatter_proto::protovalidate::test_plaintext("one ready device"), cert.clone(),
         vec![address(ready, 2), address(blocked, 3)], None,
     ).await.unwrap();
     assert_eq!(batch.len(), 1);
@@ -335,6 +336,25 @@ async fn sealed_batch_skips_a_blocked_device_and_commits_the_ready_device() {
     let jobs = store.due_kt_jobs(KtRoute::AnonymousTor, i64::MAX).unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].key, key);
+
+    let candidate = super::IdentityKeyPair::generate(&mut rng);
+    store.record_pending_identity_change(
+        &blocked.to_string(),
+        &candidate.identity_key().serialize(),
+        IdentityChangeSource::ServerClaimed.as_db_str(),
+        3,
+    ).unwrap();
+    let ready_before = bytes(ready, 2);
+    let result = ms.signal_service.actor.encrypt_sealed_bounded_batch(
+        chatter_proto::protovalidate::test_plaintext("wait for the identity change"), cert,
+        vec![address(ready, 2), address(blocked, 3)], None,
+    ).await;
+    assert!(matches!(
+        result,
+        Err(ServiceError::Crypto(CryptoError::UntrustedIdentity { new_identity_key: Some(_), .. }))
+    ));
+    assert_eq!(bytes(ready, 2), ready_before);
+    assert_eq!(bytes(blocked, 3), blocked_before);
 }
 
 #[cfg(feature = "dev-trust-root")]

@@ -68,7 +68,7 @@ impl SealedSenderManager {
             .await {
                 Ok(ciphertext) => ciphertext,
                 Err(error @ (CryptoError::KeyVerificationPending { .. }
-                    | CryptoError::UntrustedIdentity { .. })) => {
+                    | CryptoError::UntrustedIdentity { new_identity_key: None, .. })) => {
                     if blocked.is_none() || matches!(error, CryptoError::KeyVerificationPending { .. }) {
                         blocked = Some(error);
                     }

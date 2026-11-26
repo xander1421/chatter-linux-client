@@ -227,6 +227,8 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                             pending.lock().await.remove(&(peer, device));
                                             return;
                                         }
+                                        // A retained announcement can carry mailbox keys tied to the old
+                                        // identity. The replacement key must authenticate a fresh bootstrap.
                                         Err(crate::services::message::MessageError::RecipientIdentityChanged { .. }
                                             | crate::services::message::MessageError::RecipientKeyUnverified { .. }) => Ok(()),
                                         Err(error) => Err(error.to_string()),

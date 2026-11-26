@@ -3975,3 +3975,7 @@ msgstr "Це посилання на ім’я користувача недій
 
 msgid "Verifying key"
 msgstr "Перевірка ключа"
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr "Не вдалося перевірити історію журналу прозорості ключів."

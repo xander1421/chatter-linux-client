@@ -5969,3 +5969,7 @@ msgstr ""
 
 msgid "Key not verified"
 msgstr ""
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr ""

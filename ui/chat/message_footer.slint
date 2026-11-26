@@ -206,8 +206,9 @@ export component MessageFooter inherits HorizontalLayout {
                 accessible-label: root.delivery-status == "upload-queued" ? @tr("Queued behind an earlier send; upload has not started") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
             }
 
-            if root.is-own && !root.mesh-delivery && (root.delivery-status == "verifying-key" || root.delivery-status == "key-not-verified"): Text {
-                text: root.delivery-status == "verifying-key" ? @tr("Verifying key") : @tr("Key not verified");
+            if root.is-own && !root.mesh-delivery && (root.delivery-status == "verifying-key" || root.delivery-status == "key-not-verified" || root.delivery-status == "identity-changed"): Text {
+                text: root.delivery-status == "verifying-key" ? @tr("Verifying key")
+                    : root.delivery-status == "key-not-verified" ? @tr("Key not verified") : @tr("Identity changed");
                 color: root.overlay-media ? #ffffff : Colors.text-muted;
                 font-size: Typography.xs;
                 font-italic: true;
@@ -290,7 +291,7 @@ export component MessageFooter inherits HorizontalLayout {
             }
 
             if root.is-own && !root.mesh-delivery && root.delivery-status != "upload-queued" && root.delivery-status != "sending" && root.delivery-status != "waiting-tor" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked"
-                && root.delivery-status != "verifying-key" && root.delivery-status != "key-not-verified": ticks := Rectangle {
+                && root.delivery-status != "verifying-key" && root.delivery-status != "key-not-verified" && root.delivery-status != "identity-changed": ticks := Rectangle {
                 // Only a receipt earns the second tick; an own row whose
                 // status is still empty (a Saved photo just sent) is "sent".
                 property <bool> double-tick: root.delivery-status == "delivered" || root.delivery-status == "read";

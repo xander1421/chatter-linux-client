@@ -6005,3 +6005,7 @@ msgstr "Se verifică cheia"
 
 msgid "Key not verified"
 msgstr "Cheie neverificată"
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr "Identitate schimbată"

@@ -74,7 +74,7 @@
 
     #[cfg(feature = "dev-trust-root")]
     #[tokio::test]
-    async fn private_submit_reuses_cached_sessions_and_queues_a_blocked_roster() {
+    async fn private_submit_reuses_cached_sessions_and_blocks_an_unverified_roster() {
         use chatter_proto::chat_v1 as pb;
         use crate::services::message::dm_bootstrap::tests::{
             cache_device, cache_fixture_sender_certificate,
@@ -120,10 +120,14 @@
 
         let t = two_members_at(&url);
         let alice = t.alice.messages();
+        alice.grpc_pool.auth().set_basic(format!("{}.1", t.alice_id), "fixture".into());
         let mut rng = StdRng::seed_from_u64(1844);
         let identity = libsignal_protocol::IdentityKeyPair::generate(&mut rng);
         let store = &alice.signal_service.key_store;
         store.set_local_identity(42, &identity.serialize()).unwrap();
+        // SSv2 includes Alice's sending device, which needs her own prekeys
+        // to construct its ephemeral self-session.
+        alice.signal_service.actor.rotate_signed_prekey().await.unwrap();
         cache_device(alice, &t.bob_id, 1, &mut rng).await;
         cache_fixture_sender_certificate(&t.alice, t.alice_id);
         let bob = t.bob_id.to_string();

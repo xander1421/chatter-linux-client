@@ -259,8 +259,12 @@ fn record_channel_attempt_failure(
     )?)
 }
 
-fn waits_for_peer_verification(error: &MessageError) -> bool {
-    matches!(error, MessageError::RecipientKeyVerifying { .. })
+fn peer_identity_wait_reason(error: &MessageError) -> Option<&'static str> {
+    match error {
+        MessageError::RecipientKeyVerifying { .. } => Some(super::core::VERIFYING_KEY),
+        MessageError::RecipientIdentityChanged { .. } => error.permanent_send_failure_reason(),
+        _ => None,
+    }
 }
 
 impl MessageService {
@@ -813,8 +817,9 @@ impl MessageService {
                 );
                 // A later preconnect miss does not undo an earlier ambiguous
                 // deposit. Keep replaying its exact request in that case.
-                let verifying = waits_for_peer_verification(&error);
-                let transient = verifying || crate::state::send_session::check_send_session().is_err()
+                let identity_wait = peer_identity_wait_reason(&error);
+                let transient = identity_wait.is_some()
+                    || crate::state::send_session::check_send_session().is_err()
                     || if request_not_sent {
                         !first_attempt
                     } else {
@@ -835,8 +840,7 @@ impl MessageService {
                     |r| r.get(0),
                 )?;
                 let (status, reason) = match phase.as_str() {
-                    "queued" if verifying => ("sending", Some(super::core::VERIFYING_KEY)),
-                    "queued" => ("sending", Some("Waiting for connection")),
+                    "queued" => ("sending", identity_wait.or(Some("Waiting for connection"))),
                     "submitted" => ("sending", Some("Delivery unconfirmed")),
                     _ => ("failed", error.permanent_send_failure_reason()),
                 };
@@ -1175,11 +1179,19 @@ mod tests {
         settings.set(&key, &serde_json::json!({
             "phase":"submitted", "generation":"lease", "prepared":prepared, "attempts":0,
         })).unwrap();
-        let error = MessageError::RecipientKeyVerifying { peer_id: UserId::new().to_string() };
-        assert_eq!(record_channel_attempt_failure(&db, &key, "lease", waits_for_peer_verification(&error)).unwrap(), 1);
-        let retained: serde_json::Value = settings.get(&key).unwrap().unwrap();
-        assert_eq!(retained["phase"], "queued");
-        assert_eq!(retained["prepared"], prepared);
+        let peer_id = UserId::new().to_string();
+        for (error, reason) in [
+            (MessageError::RecipientKeyVerifying { peer_id: peer_id.clone() }, "Verifying key"),
+            (MessageError::RecipientIdentityChanged { peer_id: peer_id.clone() }, "Identity changed"),
+        ] {
+            let wait = peer_identity_wait_reason(&error);
+            assert_eq!(wait, Some(reason));
+            assert_eq!(record_channel_attempt_failure(&db, &key, "lease", wait.is_some()).unwrap(), 1);
+            let retained: serde_json::Value = settings.get(&key).unwrap().unwrap();
+            assert_eq!(retained["phase"], "queued");
+            assert_eq!(retained["prepared"], prepared);
+        }
+        assert_eq!(peer_identity_wait_reason(&MessageError::RecipientKeyUnverified { peer_id }), None);
     }
 
     #[test]

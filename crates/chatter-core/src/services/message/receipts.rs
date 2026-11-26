@@ -27,6 +27,8 @@ pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>
         "verifying-key"
     } else if matches!(status, "failed" | "sending") && failure_reason == Some("Key not verified") {
         "key-not-verified"
+    } else if status == "sending" && failure_reason == Some("Identity changed") {
+        "identity-changed"
     } else if status == "failed" && failure_reason == Some(super::core::SHIELD_WAITING_FOR_TOKENS) {
         "parked"
     } else if status == "sending" && failure_reason == Some(super::core::DELIVERY_UNCONFIRMED) {
@@ -482,6 +484,7 @@ mod tests {
         let shown = |status, reason| display_delivery_status(status, reason);
         assert_eq!(shown("sending", Some(DELIVERY_UNCONFIRMED)), "unconfirmed");
         assert_eq!(shown("sending", Some("Waiting for connection")), "sending");
+        assert_eq!(shown("sending", Some("Identity changed")), "identity-changed");
         assert_eq!(shown("sending", None), "sending");
         assert_eq!(shown("failed", Some(DELIVERY_UNCONFIRMED)), "failed");
         assert_eq!(

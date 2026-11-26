@@ -674,7 +674,7 @@ impl AnonGroupService {
                     self.record_group_delivery(group_id, &content, recipient_user_id, "failed")?;
                     self.anon_group_repo.delete_pending_message(row_id)?;
                 }
-                Err(error) if error.verifying_key() => break,
+                Err(error) if error.verifying_key() || error.awaiting_identity_acceptance() => break,
                 Err(e) => {
                     // Stop draining on first failure so messages stay in order.
                     if self.token_manager.available_token_count().unwrap_or(0) == 0 {

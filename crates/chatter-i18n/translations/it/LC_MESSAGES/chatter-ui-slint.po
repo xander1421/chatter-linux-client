@@ -5977,3 +5977,7 @@ msgstr "Verifica della chiave in corso"
 
 msgid "Key not verified"
 msgstr "Chiave non verificata"
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr "Identità cambiata"
