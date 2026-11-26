@@ -12,8 +12,10 @@
 //! a custom config for tighter control:
 //!
 //! ```
+//! # #[cfg(feature = "testing")]
+//! # {
 //! use std::time::Duration;
-//! use chatter_core::network::ReconnectConfig;
+//! use chatter_core::testing::network::ReconnectConfig;
 //!
 //! let cfg = ReconnectConfig {
 //!     initial_delay: Duration::from_secs(5),
@@ -23,6 +25,7 @@
 //!     max_attempts: Some(10),
 //!     give_up_after: Some(Duration::from_secs(600)),
 //! };
+//! # }
 //! ```
 //!
 //! At default values the timing sequence is preserved byte-for-byte with the
@@ -50,11 +53,14 @@ const DEFAULT_JITTER_RATIO: f32 = 0.0;
 /// struct-update syntax:
 ///
 /// ```
-/// use chatter_core::network::ReconnectConfig;
+/// # #[cfg(feature = "testing")]
+/// # {
+/// use chatter_core::testing::network::ReconnectConfig;
 /// let cfg = ReconnectConfig {
 ///     max_attempts: Some(5),
 ///     ..ReconnectConfig::default()
 /// };
+/// # }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReconnectConfig {

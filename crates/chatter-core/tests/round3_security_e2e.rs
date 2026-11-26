@@ -38,7 +38,10 @@ use chatter_core::testing::storage::repositories::channel_repo::ChannelRepositor
 use chatter_core::testing::storage::{Database, KeyStore};
 
 use chrono::Utc;
-use libsignal_protocol::{DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress};
+use libsignal_protocol::{
+    DeviceId, Direction, IdentityKey, IdentityKeyPair, IdentityKeyStore, ProtocolAddress,
+    SignalProtocolError,
+};
 use rand::{SeedableRng, rngs::StdRng};
 use tempfile::NamedTempFile;
 
@@ -240,9 +243,22 @@ fn round3_finding_4_call_keys_are_random_per_draw() {
 // Ghost-device regression: identity keys pin per ACCOUNT, not per device
 // ============================================================================
 
-fn fresh_signal_store() -> (SignalStore, NamedTempFile) {
+fn fresh_signal_store() -> (SignalStore, Arc<Database>, NamedTempFile) {
     let (db, dbf) = fresh_db();
-    (SignalStore::new(Arc::new(KeyStore::new(db))), dbf)
+    (SignalStore::new(Arc::new(KeyStore::new(db.clone()))), db, dbf)
+}
+
+fn verify_fixture_key(db: &Database, peer: &str, identity: &IdentityKey) {
+    // Deliberately exercise the account pin after KT admission so the tests
+    // fail if the pin is accidentally scoped to a single device.
+    db.connection()
+        .unwrap()
+        .execute(
+            "INSERT INTO peer_key_transparency VALUES (?1, ?2, 'verified')
+             ON CONFLICT(account, identity_key) DO UPDATE SET state = 'verified'",
+            rusqlite::params![peer, identity.serialize().as_ref()],
+        )
+        .unwrap();
 }
 
 /// A server-injected "ghost" device presenting a DIVERGENT identity key must
@@ -264,7 +280,7 @@ fn fresh_signal_store() -> (SignalStore, NamedTempFile) {
 /// change with no compile error — hence this test.
 #[tokio::test]
 async fn ghost_device_with_divergent_identity_is_untrusted() {
-    let (mut store, _dbf) = fresh_signal_store();
+    let (mut store, db, _dbf) = fresh_signal_store();
 
     let mut rng = StdRng::seed_from_u64(0xC0FFEE);
     let account = IdentityKeyPair::generate(&mut rng);
@@ -278,6 +294,8 @@ async fn ghost_device_with_divergent_identity_is_untrusted() {
         .save_identity(&device1, account.identity_key())
         .await
         .expect("save primary identity");
+    verify_fixture_key(&db, device1.name(), account.identity_key());
+    verify_fixture_key(&db, device1.name(), ghost.identity_key());
 
     // A genuine linked device shares the primary's key -> trusted, even though
     // device 2 has never been seen before.
@@ -289,17 +307,16 @@ async fn ghost_device_with_divergent_identity_is_untrusted() {
         "a real linked device shares the primary's identity key and must be trusted"
     );
 
-    // The kill: same account, unseen device id, DIFFERENT key -> untrusted.
-    assert!(
-        !store
-            .is_trusted_identity(&device2, ghost.identity_key(), Direction::Sending)
-            .await
-            .expect("is_trusted_identity"),
-        "REGRESSION: a ghost device with a divergent identity key was TRUSTED. \
-         is_trusted_identity must key on address.name() (per-account), not \
-         address.to_string() (per-device). A malicious server can now inject a \
-         rogue device and receive fan-out copies of every message."
-    );
+    // A distinct key for an unseen device of the same account must be refused.
+    let error = store
+        .is_trusted_identity(&device2, ghost.identity_key(), Direction::Sending)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SignalProtocolError::ApplicationCallbackError("is_trusted_identity", cause)
+            if cause.to_string() == "Untrusted identity for alice-uuid:2"
+    ));
 }
 
 /// The pinning must not be so coarse that a *different account* is affected,
@@ -307,7 +324,7 @@ async fn ghost_device_with_divergent_identity_is_untrusted() {
 /// re-registration / MITM signal that safety-number verification surfaces).
 #[tokio::test]
 async fn divergent_identity_fails_on_pinned_device_and_accounts_are_isolated() {
-    let (mut store, _dbf) = fresh_signal_store();
+    let (mut store, db, _dbf) = fresh_signal_store();
 
     let mut rng = StdRng::seed_from_u64(0xBADC0DE);
     let alice = IdentityKeyPair::generate(&mut rng);
@@ -321,21 +338,25 @@ async fn divergent_identity_fails_on_pinned_device_and_accounts_are_isolated() {
         .await
         .expect("save alice identity");
 
-    // Alice's own device presenting Bob's key is a key change -> untrusted.
-    assert!(
-        !store
-            .is_trusted_identity(&alice_d1, bob.identity_key(), Direction::Sending)
-            .await
-            .expect("is_trusted_identity"),
-        "a divergent key on the pinned device must not be trusted"
-    );
+    verify_fixture_key(&db, alice_d1.name(), bob.identity_key());
 
-    // Pinning alice must not leak into bob's account: bob is unseen -> TOFU.
+    let error = store
+        .is_trusted_identity(&alice_d1, bob.identity_key(), Direction::Sending)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SignalProtocolError::ApplicationCallbackError("is_trusted_identity", cause)
+            if cause.to_string() == "Untrusted identity for alice-uuid:1"
+    ));
+
+    // The verified key is admissible under Bob's own independent account id.
+    verify_fixture_key(&db, bob_d1.name(), bob.identity_key());
     assert!(
         store
             .is_trusted_identity(&bob_d1, bob.identity_key(), Direction::Sending)
             .await
             .expect("is_trusted_identity"),
-        "pinning is per-account: an unrelated account must still TOFU"
+        "pinning is per-account: an unrelated verified account must still be trusted"
     );
 }
