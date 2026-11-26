@@ -5,8 +5,23 @@ impl BleRuntime {
         let config = Arc::clone(&self.config);
         let state = Arc::clone(&self.state);
         let scans = Arc::clone(&self.matched_scans);
+        let previews = Arc::clone(&self.pairing_previews);
         self.radio.set_inbound_admission(Arc::new(move |inbound| {
-            admission::inbound_admission(&config, &state, &scans, inbound, Instant::now()).is_some()
+            let now = Instant::now();
+            match admission::inbound_admission(&config, &state, &scans, inbound, now) {
+                Some(ConnectionAdmission::Pairing) => {
+                    let already_outbound = state.with(|inner| {
+                        inner.connecting.contains(&inbound.address)
+                            || inner
+                                .address_of
+                                .values()
+                                .any(|address| *address == inbound.address)
+                    });
+                    !already_outbound && previews.lock().reserve_inbound(&inbound.address, now)
+                }
+                Some(_) => true,
+                None => false,
+            }
         }));
     }
 
@@ -28,7 +43,7 @@ impl BleRuntime {
                 self.on_connected(link, role, max_write, inbound.as_ref())
                     .await
             }
-            LinkEvent::Disconnected { link } => self.on_disconnected(&link).await,
+            LinkEvent::Disconnected { link } => self.on_disconnected(&link, Instant::now()).await,
             LinkEvent::Data { link, bytes } => self.on_data(&link, bytes).await,
             LinkEvent::PeripheralRoleEnded => {
                 // Not fatal and not recoverable from here: outbound links still
@@ -42,13 +57,14 @@ impl BleRuntime {
                 );
                 self.degraded(
                     "Other devices can no longer connect to this one over Bluetooth. \
-                     Restarting the app should restore it."
+                     Turn Mesh off and back on to restore it."
                         .to_string(),
                 );
             }
             LinkEvent::AdapterPowerChanged { powered } => {
                 if !powered {
                     self.matched_scans.lock().clear();
+                    *self.pairing_previews.lock() = Default::default();
                     self.link_admission.clear();
                     self.pending_central = None;
                     self.central_admissions.clear();
@@ -129,7 +145,8 @@ impl BleRuntime {
         let permission = self.config.connection_admission(matched, now)?;
         match &permission {
             ConnectionAdmission::Paired(contact)
-                if self.state.paired_session(contact)
+                if self.failed_pairing_proofs.blocks(contact, now)
+                    || self.state.paired_session(contact)
                     || self.link_admission.values().any(|record| {
                         record.expected_contact.as_ref() == Some(contact)
                             && record.permits_proof(&self.config, now)
@@ -137,31 +154,44 @@ impl BleRuntime {
             {
                 None
             }
-            ConnectionAdmission::Pairing if self.pairing_link_limit_reached() => None,
+            ConnectionAdmission::Pairing
+                if self.has_pairing_preview(LinkRole::Central)
+                    || !self.pairing_previews.lock().allows_central(address, now) =>
+            {
+                None
+            }
             _ => Some(permission),
         }
     }
 
-    fn pairing_link_limit_reached(&self) -> bool {
-        self.link_admission
-            .iter()
-            .filter(|(link, record)| {
-                record.expected_contact.is_none() && !self.state.is_paired_link(link)
-            })
-            .take(admission::PAIRING_LINK_LIMIT)
-            .count()
-            >= admission::PAIRING_LINK_LIMIT
+    fn has_pairing_preview(&self, role: LinkRole) -> bool {
+        self.link_admission.iter().any(|(link, record)| {
+            record
+                .preview
+                .as_ref()
+                .is_some_and(|(held_role, _)| *held_role == role)
+                && !self.state.is_paired_link(link)
+        })
     }
 
     pub(super) async fn close_lapsed_admissions(&mut self, now: Instant) {
-        if self.config.public_chat_enabled() {
-            return;
+        for (link, record) in &mut self.link_admission {
+            if self.state.is_paired_link(link)
+                && let Some((role, address)) = record.preview.take()
+            {
+                self.pairing_previews
+                    .lock()
+                    .release(role, address, now, false);
+            }
         }
+        let public_chat = self.config.public_chat_enabled();
         let expired: Vec<_> = self
             .link_admission
             .iter()
             .filter(|(link, record)| {
-                !record.permits_proof(&self.config, now) && !self.state.is_paired_link(link)
+                (!public_chat || record.expected_contact.is_some())
+                    && !record.permits_proof(&self.config, now)
+                    && !self.state.is_paired_link(link)
             })
             .map(|(link, _)| link.clone())
             .collect();
@@ -169,7 +199,7 @@ impl BleRuntime {
             self.state
                 .with(|state| state.links.set_writable(&link, false));
             let _ = self.radio.disconnect(&link).await;
-            self.on_disconnected(&link).await;
+            self.on_disconnected(&link, now).await;
         }
     }
 
@@ -195,7 +225,7 @@ impl BleRuntime {
             }
             _ => None,
         };
-        self.pending_central = Some(permission);
+        self.pending_central = Some((address.to_owned(), permission));
         self.dial_in_flight = true;
         let now = now_millis();
         self.state.with(|state| {
@@ -237,6 +267,14 @@ impl BleRuntime {
                 });
             }
             Err(error) => {
+                if matches!(permission, Some((_, ConnectionAdmission::Pairing))) {
+                    self.pairing_previews.lock().release(
+                        LinkRole::Central,
+                        address.to_owned(),
+                        Instant::now(),
+                        true,
+                    );
+                }
                 let timed_out =
                     matches!(error, chatter_mesh_link::LinkError::ConnectTimedOut { .. });
                 self.state.with(|state| {
@@ -293,42 +331,70 @@ impl BleRuntime {
         inbound: Option<&InboundLink>,
     ) {
         let now = Instant::now();
-        let permission = match role {
+        let (permission, address) = match role {
             LinkRole::Central => {
                 let previous = self
                     .central_admissions
                     .remove(&link)
                     .or_else(|| self.pending_central.take());
-                let contact = match previous {
-                    Some(ConnectionAdmission::Paired(contact)) => Some(contact),
-                    _ => None,
+                let (contact, address) = match previous {
+                    Some((address, ConnectionAdmission::Paired(contact))) => {
+                        (Some(contact), Some(address))
+                    }
+                    Some((address, _)) => (None, Some(address)),
+                    None => (None, None),
                 };
-                self.config.connection_admission(contact, now)
+                (self.config.connection_admission(contact, now), address)
             }
-            LinkRole::Peripheral => inbound.and_then(|inbound| {
-                admission::inbound_admission(
-                    &self.config,
-                    &self.state,
-                    &self.matched_scans,
-                    inbound,
-                    now,
-                )
-            }),
+            LinkRole::Peripheral => (
+                inbound.and_then(|inbound| {
+                    admission::inbound_admission(
+                        &self.config,
+                        &self.state,
+                        &self.matched_scans,
+                        inbound,
+                        now,
+                    )
+                }),
+                inbound.map(|incoming| incoming.address.clone()),
+            ),
         };
-        let expected_contact = match permission {
-            Some(ConnectionAdmission::Paired(contact)) => Some(contact),
-            Some(ConnectionAdmission::PublicChat) => None,
-            Some(ConnectionAdmission::Pairing) if !self.pairing_link_limit_reached() => None,
+        let (expected_contact, preview) = match (permission, address) {
+            (Some(ConnectionAdmission::Paired(contact)), _) => (Some(contact), None),
+            (Some(ConnectionAdmission::PublicChat), _) => (None, None),
+            (Some(ConnectionAdmission::Pairing), Some(address))
+                if !self.has_pairing_preview(role) =>
+            {
+                let Some(deadline) = self.config.pairing_deadline(now) else {
+                    let _ = self.radio.disconnect(&link).await;
+                    return;
+                };
+                if role == LinkRole::Peripheral {
+                    let reserved = {
+                        let mut previews = self.pairing_previews.lock();
+                        let reserved = previews.reserve_inbound(&address, now);
+                        if reserved {
+                            previews.hold_inbound(&address, deadline);
+                        }
+                        reserved
+                    };
+                    if !reserved {
+                        let _ = self.radio.disconnect(&link).await;
+                        return;
+                    }
+                }
+                (None, Some((role, address)))
+            }
             _ => {
                 let _ = self.radio.disconnect(&link).await;
                 return;
             }
         };
         let needs_proof = expected_contact.is_some();
-        self.link_admission.insert(
-            link.clone(),
-            admission::LinkAdmission::new(expected_contact, now),
-        );
+        let mut record = admission::LinkAdmission::new(expected_contact, now);
+        record.role = Some(role);
+        record.preview = preview;
+        self.link_admission.insert(link.clone(), record);
         self.link_last_inbound_ms.insert(link.clone(), now_millis());
         self.state.with(|state| {
             state.links.link_up(link.clone(), role);
@@ -351,10 +417,25 @@ impl BleRuntime {
         self.flush_buffered_writes().await;
     }
 
-    async fn on_disconnected(&mut self, link: &LinkId) {
+    async fn on_disconnected(&mut self, link: &LinkId, instant: Instant) {
         let now = now_millis();
         self.link_last_inbound_ms.remove(link);
-        self.link_admission.remove(link);
+        if let Some(record) = self.link_admission.remove(link) {
+            if record.role == Some(LinkRole::Central)
+                && let Some(contact) = record.expected_contact
+                && self
+                    .state
+                    .with(|state| state.awaiting_pairing_proof.contains(link))
+            {
+                self.failed_pairing_proofs.record(contact, instant);
+            }
+            if let Some((role, address)) = record.preview {
+                let cool = !self.state.is_paired_link(link);
+                self.pairing_previews
+                    .lock()
+                    .release(role, address, instant, cool);
+            }
+        }
         self.central_admissions.remove(link);
         self.pairing_proofs_received
             .retain(|(proved_link, _), _| proved_link != link);

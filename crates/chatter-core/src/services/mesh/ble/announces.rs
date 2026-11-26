@@ -135,6 +135,15 @@ impl BleRuntime {
         }
 
         let direct = accepted.direct_hint;
+        if direct
+            && let Some(record) = self.link_admission.get_mut(link)
+            && record.preview.is_some()
+        {
+            let candidate = record.candidate.get_or_insert_with(|| claimed.clone());
+            if *candidate != *claimed || !record.permits_proof(&self.config, Instant::now()) {
+                return false;
+            }
+        }
         let mut paired_contact = direct
             .then(|| self.state.paired_contact_for_announce(announcement))
             .flatten();

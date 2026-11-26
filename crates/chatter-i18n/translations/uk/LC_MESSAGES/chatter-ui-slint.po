@@ -6074,5 +6074,5 @@ msgid "Mesh nickname"
 msgstr "Псевдонім Mesh"
 
 #: ui/mesh/mesh_setup_sheet.slint:204
-msgid "Anyone nearby can see your mesh nickname. Leave it blank to use a random name that changes with your mesh identity."
-msgstr "Ваш псевдонім Mesh бачать усі поблизу. Залиште поле порожнім, щоб використовувати випадкове ім’я, яке змінюється разом із вашим ідентифікатором Mesh."
+msgid "People nearby can see your mesh nickname. A custom nickname stays the same when your mesh identity changes."
+msgstr "Люди поблизу можуть бачити ваш псевдонім Mesh. Власний псевдонім не змінюється, коли змінюється ваш ідентифікатор Mesh."

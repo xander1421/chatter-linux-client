@@ -114,7 +114,7 @@ impl BleRuntime {
         match command {
             BleCommand::BindingProof { peer, bytes } => {
                 if bytes.starts_with(super::super::account_identity::PAIRING_RECEIPT_MAGIC) {
-                    self.install_pairing_beacons();
+                    self.refresh_pairing_beacons();
                 }
                 self.send_private_control(&peer, &bytes).await;
             }

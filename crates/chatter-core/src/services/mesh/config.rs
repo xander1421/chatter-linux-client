@@ -136,11 +136,25 @@ impl MeshConfig {
     }
 
     pub(super) fn pairing_active(&self, now: Instant) -> bool {
+        self.pairing_deadline(now).is_some()
+    }
+
+    pub(super) fn pairing_deadline(&self, now: Instant) -> Option<Instant> {
         self.pairing
             .lock()
             .unwrap()
             .as_ref()
-            .is_some_and(|window| now < window.deadline)
+            .filter(|window| now < window.deadline)
+            .map(|window| window.deadline)
+    }
+
+    pub(super) fn pairing_peer(&self, now: Instant) -> Option<PeerId> {
+        self.pairing
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|window| now < window.deadline)
+            .and_then(|window| window.peer.clone())
     }
 
     pub(super) fn set_pairing(&self, enabled: bool, now: Instant) {

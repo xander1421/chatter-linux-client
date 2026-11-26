@@ -209,7 +209,7 @@ async fn a_radio_that_will_not_restart_when_nobody_can_see_us_is_reported() {
 #[tokio::test]
 async fn an_address_for_a_pairing_already_proving_its_link_is_not_dialled() {
     let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
-    let (_, beacon) = paired_remote(&runtime, &state);
+    let (_, beacon, preface) = paired_remote(&runtime, &state);
     let link = LinkId::new("/mock/paired");
     runtime
         .on_link_event(LinkEvent::Connected {
@@ -218,7 +218,7 @@ async fn an_address_for_a_pairing_already_proving_its_link_is_not_dialled() {
             max_write: 244,
             inbound: Some(InboundLink {
                 address: "old-address".into(),
-                beacon: Some(beacon),
+                beacon: Some(preface),
             }),
         })
         .await;

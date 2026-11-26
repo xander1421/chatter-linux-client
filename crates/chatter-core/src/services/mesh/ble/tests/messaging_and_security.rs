@@ -311,11 +311,13 @@ async fn default_mesh_does_not_dial_or_admit_a_stranger() {
 async fn first_write_or_a_recent_matched_scan_admits_a_paired_link_for_proof() {
     let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
     runtime.install_inbound_admission();
-    let (contact, beacon) = paired_remote(&runtime, &state);
+    let (contact, beacon, preface) = paired_remote(&runtime, &state);
     let now = Instant::now();
     runtime.matched_scans.lock().remember("seen", beacon, now);
     assert!(radio.admits_first_write("seen", &[]));
-    assert!(radio.admits_first_write("unseen", &chatter_mesh_link::admission_preface(&beacon)));
+    assert!(!radio.admits_first_write("seen", &chatter_mesh_link::admission_preface(&beacon)));
+    assert!(!radio.admits_first_write("unseen", &chatter_mesh_link::admission_preface(&beacon)));
+    assert!(radio.admits_first_write("unseen", &chatter_mesh_link::admission_preface(&preface)));
     for incoming in [
         InboundLink {
             address: "seen".into(),
@@ -323,7 +325,7 @@ async fn first_write_or_a_recent_matched_scan_admits_a_paired_link_for_proof() {
         },
         InboundLink {
             address: "unseen".into(),
-            beacon: Some(beacon),
+            beacon: Some(preface),
         },
     ] {
         assert_eq!(
@@ -345,7 +347,7 @@ async fn first_write_or_a_recent_matched_scan_admits_a_paired_link_for_proof() {
             max_write: 244,
             inbound: Some(InboundLink {
                 address: "unseen".into(),
-                beacon: Some(beacon),
+                beacon: Some(preface),
             }),
         })
         .await;
@@ -359,7 +361,7 @@ async fn first_write_or_a_recent_matched_scan_admits_a_paired_link_for_proof() {
 #[tokio::test]
 async fn paired_dial_presents_our_beacon_for_the_recognized_contact() {
     let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
-    let (peer, beacon) = paired_remote(&runtime, &state);
+    let (peer, beacon, _) = paired_remote(&runtime, &state);
     let local_beacon = state
         .pairing_beacon_for_contact(&runtime.identity.peer_id(), &peer)
         .unwrap();
@@ -370,6 +372,59 @@ async fn paired_dial_presents_our_beacon_for_the_recognized_contact() {
         radio.connect_prefaces(),
         [chatter_mesh_link::admission_preface(&local_beacon)]
     );
+}
+
+#[tokio::test]
+async fn an_unproven_inbound_preview_cannot_take_the_outbound_pairing_slot() {
+    let (mut runtime, radio, _, _) = runtime_with_config(MeshConfig::default());
+    runtime.config.set_pairing(true, Instant::now());
+    runtime.install_inbound_admission();
+    assert!(radio.admits_first_write("occupant", b"announce"));
+    assert!(!radio.admits_first_write("second inbound", b"announce"));
+    runtime
+        .on_link_event(LinkEvent::Connected {
+            link: LinkId::new("/mock/inbound"),
+            role: LinkRole::Peripheral,
+            max_write: 244,
+            inbound: Some(InboundLink {
+                address: "occupant".into(),
+                beacon: None,
+            }),
+        })
+        .await;
+    runtime.dial("occupant").await;
+    assert!(!runtime.dial_in_flight);
+    runtime.dial("intended contact").await;
+    runtime.settle_dial().await;
+    assert_eq!(radio.connect_attempts(), ["intended contact"]);
+    runtime
+        .close_lapsed_admissions(Instant::now() + Duration::from_secs(9))
+        .await;
+    assert!(!radio.admits_first_write("occupant", b"announce"));
+    assert!(radio.admits_first_write("second inbound", b"announce"));
+}
+
+#[tokio::test]
+async fn failed_proof_suppresses_redial_at_a_different_private_address() {
+    let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    let (contact, beacon, _) = paired_remote(&runtime, &state);
+    runtime.on_discovered("first-address", -45, beacon).await;
+    runtime.settle_dial().await;
+    let link = LinkId::new("/mock/first-address");
+    runtime
+        .on_link_event(LinkEvent::Connected {
+            link: link.clone(),
+            role: LinkRole::Central,
+            max_write: 244,
+            inbound: None,
+        })
+        .await;
+    let deadline = runtime.link_admission[&link].proof_deadline;
+    runtime.close_lapsed_admissions(deadline).await;
+    assert!(runtime.failed_pairing_proofs.blocks(&contact, deadline));
+    runtime.on_discovered("changed-address", -45, beacon).await;
+    assert!(!runtime.dial_in_flight);
+    assert_eq!(radio.connect_attempts(), ["first-address"]);
 }
 
 #[tokio::test]

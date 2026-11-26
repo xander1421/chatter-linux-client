@@ -105,7 +105,10 @@ fn register_verified_peer(state: &MeshState, identity: &MeshIdentity, nickname: 
     peer
 }
 
-fn paired_remote(runtime: &BleRuntime, state: &MeshState) -> (PeerId, PairingBeacon) {
+fn paired_remote(
+    runtime: &BleRuntime,
+    state: &MeshState,
+) -> (PeerId, PairingBeacon, PairingBeacon) {
     use chatter_mesh_link::registry::PairingKey;
 
     let remote = MeshIdentity::generate(&mut os_rng());
@@ -130,10 +133,15 @@ fn paired_remote(runtime: &BleRuntime, state: &MeshState) -> (PeerId, PairingBea
             PairingKey::new([42; 32], true),
         ));
     });
-    let beacon = remote_state
+    let advert = remote_state
+        .pairing_beacons(&peer)
+        .into_iter()
+        .find(|slot| state.paired_contact_for_beacon(slot).as_ref() == Some(&peer))
+        .expect("one slot is addressed to the local contact");
+    let preface = remote_state
         .pairing_beacon_for_contact(&peer, &local)
         .unwrap();
-    (peer, beacon)
+    (peer, advert, preface)
 }
 
 #[tokio::test]

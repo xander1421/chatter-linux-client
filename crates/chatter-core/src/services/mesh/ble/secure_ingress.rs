@@ -87,7 +87,7 @@ impl BleRuntime {
             true
         });
         if paired {
-            self.install_pairing_beacons();
+            self.refresh_pairing_beacons();
             self.gossip.retain_signing_key(peer, key);
             self.emit_peers();
         }
@@ -370,7 +370,7 @@ impl BleRuntime {
 
         if let Some(receipt) = plaintext.strip_prefix(PAIRING_RECEIPT_MAGIC) {
             self.on_pairing_receipt(claimed, receipt);
-            self.send_pairing_proof(claimed).await;
+            self.send_pairing_proof(link, claimed).await;
             return;
         }
         if self.on_pairing_control(link, claimed, &plaintext).await {
@@ -384,7 +384,8 @@ impl BleRuntime {
         }
         if let Some(payload) = plaintext.strip_prefix(PAIRED_COURIER_MAGIC) {
             if self.state.is_paired_link_to(link, claimed) {
-                self.receive_courier(payload, packet.timestamp, claimed).await;
+                self.receive_courier(payload, packet.timestamp, claimed)
+                    .await;
             }
             return;
         }

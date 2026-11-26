@@ -6073,5 +6073,5 @@ msgid "Mesh nickname"
 msgstr "Pseudonim Mesh"
 
 #: ui/mesh/mesh_setup_sheet.slint:204
-msgid "Anyone nearby can see your mesh nickname. Leave it blank to use a random name that changes with your mesh identity."
-msgstr "Oricine din apropiere îți poate vedea pseudonimul Mesh. Lasă câmpul gol pentru a folosi un nume aleatoriu care se schimbă odată cu identitatea ta Mesh."
+msgid "People nearby can see your mesh nickname. A custom nickname stays the same when your mesh identity changes."
+msgstr "Persoanele din apropiere îți pot vedea pseudonimul Mesh. Un pseudonim personalizat rămâne același când ți se schimbă identitatea Mesh."
