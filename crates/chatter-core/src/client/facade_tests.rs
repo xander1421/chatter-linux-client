@@ -154,6 +154,47 @@ mod transport_switch_tests {
         (client, dir)
     }
 
+    #[tokio::test]
+    async fn interrupted_identity_republish_waits_for_sign_in_on_restart() {
+        use crate::storage::repositories::settings_repo::keys;
+
+        let (client, dir) = build_test_client();
+        let settings = &client.signal().settings_repo;
+        settings
+            .set_string(
+                keys::CURRENT_USER_ID,
+                &crate::domain::UserId::new().to_string(),
+            )
+            .unwrap();
+        settings.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        settings.set_bytes(keys::PROFILE_KEY, &[5; 32]).unwrap();
+        settings.set_bytes(keys::DEVICE_AUTH_TOKEN, &[6; 32]).unwrap();
+
+        // Leave the authenticated credentials and pending intent exactly as
+        // a crash between the republish RPC and the local acknowledgement would.
+        client.auth().set_key_republish_pending(true).unwrap();
+        drop(client);
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        assert!(client.auth().is_logged_in());
+        assert!(!client.restore_session());
+        assert!(!client.is_logged_in());
+        assert!(client.services.grpc_pool.auth_clone().get_auth_info().is_none());
+        assert!(matches!(
+            client.start().await,
+            Err(ClientError::Validation(_))
+        ));
+        assert!(client.auth().key_republish_pending().unwrap());
+
+        // Completion by the password-authenticated retry resumes normal restoration.
+        client.auth().set_key_republish_pending(false).unwrap();
+        assert!(client.restore_session());
+        assert!(client.is_logged_in());
+    }
+
     /// Entering anon mode must fire the ntfy push shutdown and clear the slot
     /// (product decision: push OFF while anon, poll-only). Idempotent: a second
     /// enter with no listener is a clean no-op.

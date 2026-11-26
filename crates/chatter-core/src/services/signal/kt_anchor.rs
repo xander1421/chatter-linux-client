@@ -566,29 +566,11 @@ struct OwnerAuthorization {
 
 impl OwnerState {
     fn load(conn: &rusqlite::Connection, label: &[u8]) -> Result<Self, StorageError> {
-        let label = hex::encode(label);
-        if let Some(state) =
-            SettingsRepository::get_with_connection(conn, &format!("kt.libsignal.owner.{label}"))?
-        {
-            return Ok(state);
-        }
-        // The earlier state accepted only version zero as an owner baseline.
-        let key = SettingsRepository::get_with_connection::<String>(
+        Ok(SettingsRepository::get_with_connection(
             conn,
-            &format!("kt.libsignal.own-key.{label}"),
-        )?;
-        let mismatch = SettingsRepository::get_with_connection(
-            conn,
-            &format!("kt.libsignal.own-mismatch.{label}"),
+            &format!("kt.libsignal.owner.{}", hex::encode(label)),
         )?
-        .unwrap_or(false);
-        let observed_version = (!mismatch && key.is_some()).then_some(0);
-        Ok(Self {
-            baseline: key.map(|key| OwnerBaseline { key, version: 0 }),
-            observed_version,
-            mismatch,
-            ..Self::default()
-        })
+        .unwrap_or_default())
     }
 
     fn store(&self, conn: &rusqlite::Connection, label: &[u8]) -> Result<(), StorageError> {
@@ -720,6 +702,9 @@ async fn check_own(
     state.observed_version = Some(version);
     if verified.value != expected {
         state.mismatch = true;
+        // The first verified result spends the local authorization. A later
+        // server write restoring the expected key cannot clear this alarm.
+        state.authorized = None;
     } else if let Some(pending) = state.authorized.take() {
         state.baseline = Some(OwnerBaseline {
             key: expected_hex,

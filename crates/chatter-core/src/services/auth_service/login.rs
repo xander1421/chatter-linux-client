@@ -19,10 +19,15 @@ impl AuthService {
         pin: Option<&str>,
         on_verifying: &(dyn Fn() + Send + Sync),
     ) -> Result<LoginResult, AuthError> {
-        // Check not already logged in
-        if self.is_logged_in() {
+        let republish_pending = self.key_republish_pending()?;
+        if self.is_logged_in() && !republish_pending {
             return Err(AuthError::AlreadyLoggedIn);
         }
+        let pending_owner = if republish_pending {
+            self.settings_repo.get_string(keys::CURRENT_USER_ID)?
+        } else {
+            None
+        };
 
         // PRIVACY: the server sees only the nickname-derived identifier, and
         // the password only through OPAQUE (`crypto::opaque`).
@@ -176,6 +181,15 @@ impl AuthService {
             .user_id
             .parse()
             .map_err(|_| AuthError::LoginFailed("invalid user_id format".to_string()))?;
+        if pending_owner.is_some_and(|owner| owner != user_id.to_string()) {
+            svr_secret.zeroize();
+            return Err(AuthError::LoginFailed(
+                chatter_i18n::tr(
+                    "Sign in to the same account to finish publishing your encryption keys.",
+                )
+                .into(),
+            ));
+        }
         let device_id = session.device_id;
 
         // Signing in on an install that already holds an account's local data.

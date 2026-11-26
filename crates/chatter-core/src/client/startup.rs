@@ -310,6 +310,11 @@ impl ChatterClient {
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
+        if self.auth().key_republish_pending().map_err(AuthError::Storage)? {
+            return Err(ClientError::Validation(
+                chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
+            ));
+        }
         struct StartupListeners<'a> {
             handles: Vec<tokio::task::JoinHandle<()>>,
             channel_delivery_shutdown: &'a AtomicBool,

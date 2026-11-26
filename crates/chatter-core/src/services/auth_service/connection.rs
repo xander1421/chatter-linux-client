@@ -98,7 +98,26 @@ impl AuthService {
     ///
     /// Returns true if a session was successfully restored.
     pub fn restore_session(&self) -> bool {
-        self.restore_password_session()
+        // A saved device token cannot provide the fresh password proof needed
+        // to retry an interrupted identity republish.
+        match self.key_republish_pending() {
+            Ok(false) => return self.restore_password_session(),
+            Ok(true) => tracing::info!("Sign-in required to finish the pending identity republish"),
+            Err(error) => tracing::warn!(%error, "Could not read pending identity republish"),
+        }
+        self.auth_interceptor.clear();
+        false
+    }
+
+    pub(crate) fn key_republish_pending(&self) -> Result<bool, StorageError> {
+        Ok(self
+            .settings_repo
+            .get_bool(keys::KEY_REPUBLISH_PENDING)?
+            .unwrap_or(false))
+    }
+
+    pub(crate) fn set_key_republish_pending(&self, pending: bool) -> Result<(), StorageError> {
+        self.settings_repo.set_bool(keys::KEY_REPUBLISH_PENDING, pending)
     }
 
     /// Restore a password-based (Basic auth) session.

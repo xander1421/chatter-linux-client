@@ -789,6 +789,69 @@ async fn provisioned_owner_key_can_bootstrap_at_an_existing_version() {
 }
 
 #[tokio::test]
+async fn restored_owner_value_cannot_clear_an_alarm_from_an_authorized_bootstrap() {
+    use crate::storage::repositories::settings_repo::keys;
+
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let owner = std::str::from_utf8(PEER).unwrap();
+    settings.set_string(keys::CURRENT_USER_ID, owner).unwrap();
+    let key = bytes(
+        vector(&vectors, "owner replacement")
+            .value
+            .as_deref()
+            .unwrap(),
+    );
+    super::authorize_own_identity(&settings, owner, &key).unwrap();
+    let (steady_request, steady_proof) = monitor_proof(&vectors, "owner replacement steady");
+    let mut client = Script {
+        searches: [
+            (
+                b"distinguished".as_slice(),
+                None,
+                None,
+                Some(search_proof(&vectors, "owner checkpoint")),
+            ),
+            (
+                PEER,
+                None,
+                Some(1),
+                Some(search_proof(&vectors, "owner identity")),
+            ),
+            (
+                PEER,
+                Some(2),
+                Some(1),
+                Some(search_proof(&vectors, "owner replacement")),
+            ),
+        ]
+        .into(),
+        monitors: [(steady_request, Ok(steady_proof))].into(),
+        ..Default::default()
+    };
+
+    assert!(
+        check_own(&mut client, &settings, PEER, &key, &verifier, now)
+            .await
+            .unwrap()
+    );
+    assert!(super::own_mismatch(&settings, PEER).unwrap());
+    // The next signed proof restores our expected key, but the one-use local
+    // authorization was spent when the first signed proof showed a different key.
+    assert!(
+        check_own(&mut client, &settings, PEER, &key, &verifier, now)
+            .await
+            .unwrap()
+    );
+    assert!(super::own_mismatch(&settings, PEER).unwrap());
+    assert!(
+        check_own(&mut client, &settings, PEER, &key, &verifier, now)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn concurrent_proofs_at_the_same_head_commit_distinct_labels_without_retrying() {
     let (verifier, vectors, now) = fixtures();
     let (_dir, settings) = database();

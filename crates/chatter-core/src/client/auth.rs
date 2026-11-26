@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::{ChatterClient, ClientError, RecoveryResult};
-use crate::services::auth_service::{prove_password, LoginResult, PendingRecoveryCodes};
+use crate::services::auth_service::{prove_password, AuthError, LoginResult, PendingRecoveryCodes};
 use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::storage::repositories::settings_repo::keys;
 
@@ -252,9 +252,13 @@ impl ChatterClient {
         // keys landed: without that, the next login sees a local identity,
         // skips the restore, and the account is left serving prekeys nobody
         // holds the private half of.
-        if result.keys_restored || self.key_republish_pending() {
-            // A failed proof exchange must also leave the republish pending.
-            self.set_key_republish_pending(true);
+        if result.keys_restored
+            || self.auth().key_republish_pending().map_err(AuthError::Storage)?
+        {
+            // Keep the intent durable through the proof exchange and RPC.
+            self.auth()
+                .set_key_republish_pending(true)
+                .map_err(AuthError::Storage)?;
             let mut auth_client = self
                 .auth()
                 .try_auth_client()
@@ -369,10 +373,12 @@ impl ChatterClient {
             .ok_or(ClientError::NotConnected)?;
         let proof = prove_password(&mut auth_client, password).await?;
         self.auth()
+            .set_key_republish_pending(true)
+            .map_err(AuthError::Storage)?;
+        self.auth()
             .generate_identity_for_recovery()
             .map_err(ClientError::Auth)?;
 
-        self.set_key_republish_pending(true);
         self.republish_identity_keys(&mut auth_client, proof).await?;
 
         tracing::warn!(
@@ -399,7 +405,9 @@ impl ChatterClient {
             .await
             .map_err(|e| ClientError::Validation(format!("failed to publish key material: {e}")))?;
 
-        self.set_key_republish_pending(false);
+        self.auth()
+            .set_key_republish_pending(false)
+            .map_err(AuthError::Storage)?;
 
         tracing::info!(
             identity_key_changed = outcome.identity_key_changed,
@@ -407,28 +415,6 @@ impl ChatterClient {
             "published this device's key material"
         );
         Ok(())
-    }
-
-    /// Whether a previous republish was interrupted after the local keys landed.
-    fn key_republish_pending(&self) -> bool {
-        self.signal()
-            .settings_repo
-            .get::<bool>(keys::KEY_REPUBLISH_PENDING)
-            .ok()
-            .flatten()
-            .unwrap_or(false)
-    }
-
-    fn set_key_republish_pending(&self, pending: bool) {
-        if let Err(e) = self
-            .signal()
-            .settings_repo
-            .set(keys::KEY_REPUBLISH_PENDING, &pending)
-        {
-            // Not fatal, but worth saying: losing this flag is how an
-            // interrupted republish becomes a permanent one.
-            tracing::warn!("failed to record pending key republish: {}", e);
-        }
     }
 
     /// Register a new account and start all background services.
@@ -966,6 +952,9 @@ impl ChatterClient {
             // Generate a registration ID for this new device (14-bit, 1-16383)
             let registration_id = (rand::random::<u32>() % 0x3FFF) + 1;
 
+            self.auth()
+                .set_key_republish_pending(true)
+                .map_err(|e| format!("failed to record pending identity republish: {e}"))?;
             self.signal()
                 .key_store
                 .set_local_identity(registration_id, &serialized)
