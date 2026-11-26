@@ -33,10 +33,8 @@ impl BleRuntime {
             self.config.bridge_geohash.clone(),
         );
         let beacons = self.state.pairing_beacons(&self.broadcast_peer_id());
-        if !beacons.is_empty() {
-            announcement.pairing_beacon = Some(beacons[self.beacon_cursor % beacons.len()]);
-            self.beacon_cursor = self.beacon_cursor.wrapping_add(1);
-        }
+        announcement.pairing_beacon = Some(beacons[self.beacon_cursor % beacons.len()]);
+        self.beacon_cursor = self.beacon_cursor.wrapping_add(1);
         let payload = match announcement.encode() {
             Ok(payload) => payload,
             Err(error) => {

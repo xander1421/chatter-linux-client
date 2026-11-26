@@ -299,7 +299,12 @@ mod tests {
             None,
             None,
         );
-        announce.pairing_beacon = b_state.pairing_beacons(&wire_b).first().copied();
+        announce.pairing_beacon = b_state.pairing_beacon_for_contact(&wire_b, &contact_a);
+        assert!(
+            b_state
+                .pairing_beacons(&wire_b)
+                .contains(&announce.pairing_beacon.unwrap())
+        );
         assert_eq!(
             a_state.paired_contact_for_announce(&announce),
             Some(contact_b.clone())
@@ -398,9 +403,13 @@ mod tests {
         pair(&b, &a.identity, 1, false);
         // This stranger is paired with someone else and has a populated index.
         pair(&stranger, &a.identity, 9, true);
-        let first = b_state.pairing_beacons(&b.identity.peer_id())[0];
+        let first = b_state
+            .pairing_beacon_for_contact(&b.identity.peer_id(), &a.identity.peer_id())
+            .unwrap();
         let next_identity = MeshIdentity::generate(&mut crate::crypto::os_rng());
-        let next = b_state.pairing_beacons(&next_identity.peer_id())[0];
+        let next = b_state
+            .pairing_beacon_for_contact(&next_identity.peer_id(), &a.identity.peer_id())
+            .unwrap();
         assert_ne!(first, next);
         assert_ne!(&first[5..], &next[5..]);
         assert_eq!(
@@ -411,6 +420,21 @@ mod tests {
             a_state.paired_contact_for_beacon(&next),
             Some(b.identity.peer_id())
         );
+        for local in [b.identity.peer_id(), next_identity.peer_id()] {
+            let slots = b_state.pairing_beacons(&local);
+            assert_eq!(
+                slots
+                    .iter()
+                    .filter(|slot| a_state.paired_contact_for_beacon(slot).is_some())
+                    .count(),
+                1
+            );
+            assert!(
+                slots
+                    .iter()
+                    .all(|slot| stranger_state.paired_contact_for_beacon(slot).is_none())
+            );
+        }
         assert!(stranger_state.paired_contact_for_beacon(&first).is_none());
         assert!(stranger_state.paired_contact_for_beacon(&next).is_none());
         assert!(b_state.paired_contact_for_beacon(&first).is_none());
