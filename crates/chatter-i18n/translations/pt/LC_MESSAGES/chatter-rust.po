@@ -605,7 +605,7 @@ msgid "Outgoing call"
 msgstr "Chamada realizada"
 
 #: crates/chatter-core/src/domain/message/entity.rs:387
-#: crates/chatter-core/src/services/call_notification_bridge.rs:199
+#: crates/chatter-core/src/domain/message/entity.rs:388
 msgid "Incoming video call"
 msgstr "Chamada de vídeo recebida"
 
@@ -1033,14 +1033,6 @@ msgstr ""
 "Houve tentativas de senha demais nesta conta, então a entrada por senha está "
 "pausada por enquanto. Entre com um código de recuperação ou vincule este "
 "dispositivo a partir de um que já esteja conectado."
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:207
-msgid "{} is calling in {}"
-msgstr "{} está chamando em {}"
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:209
-msgid "{} is calling"
-msgstr "{} está chamando"
 
 #: crates/chatter-core/src/services/channel/error.rs:74
 #: crates/chatter-core/src/services/link_device_service/types.rs:32
@@ -3877,7 +3869,7 @@ msgstr "Chamadas"
 
 #: crates/chatter-ui/src/platform/android/notifications.rs:313
 #: crates/chatter-core/src/domain/message/entity.rs:388
-#: crates/chatter-core/src/services/call_notification_bridge.rs:201
+#: crates/chatter-core/src/services/notification_service/mod.rs:412
 #: crates/chatter-core/src/services/notification_service/mod.rs:326
 msgid "Incoming call"
 msgstr "Chamada recebida"

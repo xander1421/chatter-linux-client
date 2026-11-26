@@ -449,7 +449,7 @@ fn a_panicking_sink_is_an_error_not_a_panic() {
         }
     }
     let service = NotificationService::new(Arc::new(Panics));
-    assert!(service.show_incoming_call("c", "t", "b").is_err());
+    assert!(service.show_incoming_call("c").is_err());
     assert!(service
         .show_message("t", "b", NotificationPriority::Normal)
         .is_ok());
@@ -615,7 +615,7 @@ async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
     #[derive(Debug, PartialEq, Eq)]
     enum Action {
         Message(String, String),
-        Call(String),
+        Call(String, String, String),
         CancelMessages,
     }
 
@@ -636,8 +636,10 @@ async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
                 .unwrap();
             Ok(())
         }
-        fn show_incoming_call(&self, id: &str, _: &str, _: &str) -> Result<(), SystemError> {
-            self.0.send(Action::Call(id.into())).unwrap();
+        fn show_incoming_call(&self, id: &str, title: &str, body: &str) -> Result<(), SystemError> {
+            self.0
+                .send(Action::Call(id.into(), title.into(), body.into()))
+                .unwrap();
             Ok(())
         }
         fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
@@ -678,12 +680,14 @@ async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
         receive_notification(&mut rx).await,
         Some(Action::Message("Alice".into(), "private text".into()))
     );
-    service
-        .show_incoming_call("ringing", "Alice", "Call")
-        .unwrap();
+    service.show_incoming_call("ringing").unwrap();
     assert_eq!(
         receive_notification(&mut rx).await,
-        Some(Action::Call("ringing".into()))
+        Some(Action::Call(
+            "ringing".into(),
+            "Chatter".into(),
+            "Incoming call".into()
+        ))
     );
 
     lock.set_visible_at(false, SystemTime::now() - Duration::from_secs(59));
@@ -696,12 +700,14 @@ async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
         receive_notification(&mut rx).await,
         Some(Action::Message("Chatter".into(), "New message".into()))
     );
-    service
-        .show_incoming_call("locked", "Alice", "Call")
-        .unwrap();
+    service.show_incoming_call("locked").unwrap();
     assert_eq!(
         receive_notification(&mut rx).await,
-        Some(Action::Call("locked".into()))
+        Some(Action::Call(
+            "locked".into(),
+            "Chatter".into(),
+            "Incoming call".into()
+        ))
     );
 
     lock.set_visible(true);
@@ -719,7 +725,7 @@ async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_lock_serializes_transition_with_notification_delivery() {
+async fn app_lock_clears_a_preview_posted_during_lock_without_blocking_transition() {
     use crate::services::app_lock::{AppLock, LockTimeout};
     use std::sync::mpsc;
     use tokio::sync::{mpsc as async_mpsc, oneshot};
@@ -795,28 +801,16 @@ async fn app_lock_serializes_transition_with_notification_delivery() {
         .unwrap()
         .unwrap();
 
-    let (started, wait_for_lock) = oneshot::channel();
-    let mut transition = tokio::task::spawn_blocking(move || {
-        started.send(()).unwrap();
+    let transition = tokio::task::spawn_blocking(move || {
         lock.lock_now();
+        assert!(lock.is_locked());
     });
-    tokio::time::timeout(Duration::from_secs(5), wait_for_lock)
-        .await
-        .unwrap()
-        .unwrap();
-    let waited_for_delivery = tokio::time::timeout(Duration::from_millis(100), &mut transition)
-        .await
-        .is_err();
+    let locked_while_posting = tokio::time::timeout(Duration::from_secs(2), transition).await;
     release.send(()).unwrap();
-    assert!(
-        waited_for_delivery,
-        "the app locked before the pending preview was posted"
-    );
-    tokio::time::timeout(Duration::from_secs(5), first_post)
-        .await
-        .unwrap()
+    locked_while_posting
+        .expect("platform notification delivery blocked App Lock")
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), transition)
+    tokio::time::timeout(Duration::from_secs(5), first_post)
         .await
         .unwrap()
         .unwrap();
@@ -825,11 +819,11 @@ async fn app_lock_serializes_transition_with_notification_delivery() {
         Some("private text")
     );
 
-    post(&service);
     assert_eq!(
         receive_notification(&mut received).await.as_deref(),
         Some("")
     );
+    post(&service);
     assert_eq!(
         receive_notification(&mut received).await.as_deref(),
         Some("New message")

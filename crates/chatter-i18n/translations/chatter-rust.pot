@@ -497,7 +497,7 @@ msgstr ""
 msgid "Outgoing call"
 msgstr ""
 
-#: crates/chatter-core/src/domain/message/entity.rs:387 crates/chatter-core/src/services/call_notification_bridge.rs:199
+#: crates/chatter-core/src/domain/message/entity.rs:388
 msgid "Incoming video call"
 msgstr ""
 
@@ -861,14 +861,6 @@ msgstr ""
 
 #: crates/chatter-core/src/services/auth_service/mod.rs:95
 msgid "Too many password attempts on this account, so password sign-in is paused for now. Sign in with a recovery code, or link this device from one that is already signed in."
-msgstr ""
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:207
-msgid "{} is calling in {}"
-msgstr ""
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:209
-msgid "{} is calling"
 msgstr ""
 
 #: crates/chatter-core/src/services/channel/error.rs:74 crates/chatter-core/src/services/link_device_service/types.rs:32 crates/chatter-core/src/services/session_service.rs:84 crates/chatter-core/src/services/user/mod.rs:214
@@ -3354,7 +3346,7 @@ msgstr ""
 msgid "Calls"
 msgstr ""
 
-#: crates/chatter-ui/src/platform/android/notifications.rs:313 crates/chatter-core/src/domain/message/entity.rs:388 crates/chatter-core/src/services/call_notification_bridge.rs:201 crates/chatter-core/src/services/notification_service/mod.rs:326
+#: crates/chatter-ui/src/platform/android/notifications.rs:313 crates/chatter-core/src/domain/message/entity.rs:389 crates/chatter-core/src/services/notification_service/mod.rs:412
 msgid "Incoming call"
 msgstr ""
 

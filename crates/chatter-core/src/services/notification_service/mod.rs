@@ -159,8 +159,14 @@ impl NotificationService {
                 let Some(service) = service.upgrade() else {
                     break;
                 };
-                let remaining = service.with_message_privacy(|_, _, remaining| remaining);
-                drop(service);
+                let Ok(remaining) = tokio::task::spawn_blocking(move || {
+                    let mut posts = service.message_posts();
+                    let (_, generation, remaining) = service.app_lock_state();
+                    service.cancel_locked_previews(&mut posts, generation, remaining)
+                })
+                .await else {
+                    break;
+                };
                 if let Some(remaining) = remaining {
                     tokio::select! {
                         _ = wait_for_lock_check(remaining) => {}
@@ -179,24 +185,33 @@ impl NotificationService {
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    fn with_app_lock_state<T>(&self, f: impl FnOnce((bool, u64, Option<Duration>)) -> T) -> T {
-        match self.app_lock.get() {
-            Some(lock) => lock.with_notification_lock_state(f),
-            None => f((false, 0, None)),
-        }
+    fn app_lock_state(&self) -> (bool, u64, Option<Duration>) {
+        self.app_lock
+            .get()
+            .map_or((false, 0, None), |lock| lock.notification_lock_state())
     }
 
     fn with_message_privacy<T>(
         &self,
-        f: impl FnOnce(&mut MessageNotifications, NotificationDetailLevel, Option<Duration>) -> T,
+        f: impl FnOnce(&mut MessageNotifications) -> T,
     ) -> T {
         let mut posts = self.message_posts();
-        // Keep the lock state stable through the sink call and preserve the
-        // same mutex order in both posting and the cancellation watcher.
-        self.with_app_lock_state(|(locked, generation, remaining)| {
-            let remaining = self.cancel_locked_previews(&mut posts, generation, remaining);
-            f(&mut posts, self.detail_for_lock_state(locked), remaining)
-        })
+        let (_, generation, _) = self.app_lock_state();
+        self.cancel_locked_previews(&mut posts, generation, None);
+        let result = f(&mut posts);
+
+        // A lock can engage while the sink is posting. Clear that post
+        // before releasing the posts mutex, even if the user already unlocked.
+        let (_, after_post, _) = self.app_lock_state();
+        if after_post != generation {
+            self.cancel_locked_previews(&mut posts, after_post, None);
+        }
+        result
+    }
+
+    fn message_detail(&self, cleared_generation: u64) -> NotificationDetailLevel {
+        let (locked, generation, _) = self.app_lock_state();
+        self.detail_for_lock_state(locked || generation != cleared_generation)
     }
 
     fn cancel_locked_previews(
@@ -258,7 +273,8 @@ impl NotificationService {
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        self.with_message_privacy(|notifications, level, _| {
+        self.with_message_privacy(|notifications| {
+            let level = self.message_detail(notifications.lock_generation);
             let (title, body) = Self::message_text(level, sender_name, message_preview, private);
             self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
             // Requests and reactions replace this conversation's OS notification.
@@ -308,7 +324,8 @@ impl NotificationService {
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        self.with_message_privacy(|notifications, level, _| {
+        self.with_message_privacy(|notifications| {
+            let level = self.message_detail(notifications.lock_generation);
             let (title, body) = Self::message_text(level, sender_name, message_preview, private);
             self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
             let entries = notifications.entries.entry(key).or_default();
@@ -327,7 +344,7 @@ impl NotificationService {
     /// Remove deleted or expired messages from whichever conversations posted
     /// them. A prior message remains visible when the newest one is removed.
     pub fn remove_message_notifications(&self, message_ids: &[crate::domain::ids::MessageId]) {
-        self.with_message_privacy(|notifications, level, _| {
+        self.with_message_privacy(|notifications| {
             for (key, entries) in &mut notifications.entries {
                 let was_latest = entries
                     .last()
@@ -338,6 +355,7 @@ impl NotificationService {
                     continue;
                 }
                 let result = if let Some(entry) = entries.last() {
+                    let level = self.message_detail(notifications.lock_generation);
                     let (title, body) = Self::message_text(
                         level,
                         entry.sender_name.as_deref(),
@@ -388,21 +406,11 @@ impl NotificationService {
     }
 
     /// Show an actionable incoming-call notification (Accept/Decline) for
-    /// `call_id`. On Android this is a full-screen ringing notification with
-    /// buttons; elsewhere it falls back to a plain urgent toast.
-    pub fn show_incoming_call(
-        &self,
-        call_id: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<(), SystemError> {
-        self.with_app_lock_state(|(locked, _, _)| match self.detail_for_lock_state(locked) {
-            NotificationDetailLevel::None => {
-                let body = chatter_i18n::tr("Incoming call");
-                self.deliver(|sink| sink.show_incoming_call(call_id, "Chatter", &body))
-            }
-            _ => self.deliver(|sink| sink.show_incoming_call(call_id, title, body)),
-        })
+    /// `call_id`. The notification can stay visible when App Lock engages.
+    /// Show the caller's identity in the in-app call screen.
+    pub fn show_incoming_call(&self, call_id: &str) -> Result<(), SystemError> {
+        let body = chatter_i18n::tr("Incoming call");
+        self.deliver(|sink| sink.show_incoming_call(call_id, "Chatter", &body))
     }
 
     /// Dismiss the incoming-call notification for `call_id` (accepted,

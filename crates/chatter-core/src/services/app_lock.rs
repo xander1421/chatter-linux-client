@@ -320,32 +320,28 @@ impl AppLock {
     }
 
     pub(crate) fn is_locked_at(&self, now: SystemTime) -> bool {
-        self.with_notification_lock_state_at(|| now, |(locked, _, _)| locked)
+        self.notification_lock_state_at(|| now).0
     }
 
-    pub(crate) fn with_notification_lock_state<T>(
-        &self,
-        f: impl FnOnce((bool, u64, Option<Duration>)) -> T,
-    ) -> T {
-        self.with_notification_lock_state_at(SystemTime::now, f)
+    pub(crate) fn notification_lock_state(&self) -> (bool, u64, Option<Duration>) {
+        self.notification_lock_state_at(SystemTime::now)
     }
 
     pub(crate) fn subscribe_to_changes(&self) -> watch::Receiver<()> {
         self.changes.subscribe()
     }
 
-    fn with_notification_lock_state_at<T>(
+    fn notification_lock_state_at(
         &self,
         now: impl FnOnce() -> SystemTime,
-        f: impl FnOnce((bool, u64, Option<Duration>)) -> T,
-    ) -> T {
+    ) -> (bool, u64, Option<Duration>) {
         let mut runtime = self.runtime.lock();
         let remaining = self.update_timeout(&mut runtime, now());
-        f((
+        (
             runtime.locked || runtime.wiping,
             runtime.lock_generation,
             remaining,
-        ))
+        )
     }
 
     fn engage(&self, runtime: &mut Runtime) {

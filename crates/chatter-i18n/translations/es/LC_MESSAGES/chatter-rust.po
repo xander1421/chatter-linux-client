@@ -613,7 +613,7 @@ msgid "Outgoing call"
 msgstr "Llamada saliente"
 
 #: crates/chatter-core/src/domain/message/entity.rs:387
-#: crates/chatter-core/src/services/call_notification_bridge.rs:199
+#: crates/chatter-core/src/domain/message/entity.rs:388
 msgid "Incoming video call"
 msgstr "Videollamada entrante"
 
@@ -1043,14 +1043,6 @@ msgstr ""
 "cuenta, así que el inicio de sesión con contraseña está en pausa por ahora. "
 "Inicia sesión con un código de recuperación o vincula este dispositivo desde "
 "uno que ya tenga la sesión iniciada."
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:207
-msgid "{} is calling in {}"
-msgstr "{} está llamando en {}"
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:209
-msgid "{} is calling"
-msgstr "{} está llamando"
 
 #: crates/chatter-core/src/services/channel/error.rs:74
 #: crates/chatter-core/src/services/link_device_service/types.rs:32
@@ -3890,7 +3882,7 @@ msgstr "Llamadas"
 
 #: crates/chatter-ui/src/platform/android/notifications.rs:313
 #: crates/chatter-core/src/domain/message/entity.rs:388
-#: crates/chatter-core/src/services/call_notification_bridge.rs:201
+#: crates/chatter-core/src/services/notification_service/mod.rs:412
 #: crates/chatter-core/src/services/notification_service/mod.rs:326
 msgid "Incoming call"
 msgstr "Llamada entrante"
