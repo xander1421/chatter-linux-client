@@ -410,7 +410,16 @@ pub fn derive_registration_lock(pin: &str, username: &str) -> Result<[u8; 32], C
 /// Same as [`derive_registration_lock`] but takes an already-derived SVR secret.
 /// See [`pin_fingerprint_from_secret`] for why callers should prefer this.
 pub fn registration_lock_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
-    SvrKey::new(*svr_secret).derive_registration_lock()
+    let mut key = SvrKey::new(*svr_secret);
+    let token = key.derive_registration_lock();
+
+    // SvrKey owns a copy of the root and does not implement Zeroize. Use a
+    // volatile overwrite so the compiler retains the store after the last use.
+    // SAFETY: `key` is a live, aligned local and its current type has no drop
+    // glue. Writing a valid SvrKey avoids relying on its private layout.
+    unsafe { std::ptr::write_volatile(&mut key, SvrKey::new([0; 32])) };
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    token
 }
 
 /// SVR Keypair for Secure Value Recovery.
