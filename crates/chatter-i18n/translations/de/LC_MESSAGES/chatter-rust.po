@@ -1164,6 +1164,12 @@ msgstr ""
 "Diese PIN hat die Schlüsselsicherung nicht entsperrt. Prüfe die PIN und "
 "versuch es erneut."
 
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again."
+msgid_plural "That PIN did not unlock your key backup. {n} attempts remaining. Check your current PIN before trying again."
+msgstr[0] "Diese PIN hat deine Schlüsselsicherung nicht entsperrt. Noch {n} Versuch. Prüfe deine aktuelle PIN, bevor du es erneut versuchst."
+msgstr[1] "Diese PIN hat deine Schlüsselsicherung nicht entsperrt. Noch {n} Versuche. Prüfe deine aktuelle PIN, bevor du es erneut versuchst."
+
 #: crates/chatter-core/src/services/key_recovery.rs:88
 msgid ""
 "No key backup was found for this account. Your previous conversations cannot "

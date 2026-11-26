@@ -1160,6 +1160,13 @@ msgstr ""
 "Acel PIN nu a deblocat copia de rezervă a cheilor. Verifică PIN-ul și "
 "încearcă din nou."
 
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again."
+msgid_plural "That PIN did not unlock your key backup. {n} attempts remaining. Check your current PIN before trying again."
+msgstr[0] "Acest PIN nu a deblocat copia de rezervă a cheilor. Mai ai {n} încercare. Verifică PIN-ul actual înainte să încerci din nou."
+msgstr[1] "Acest PIN nu a deblocat copia de rezervă a cheilor. Mai ai {n} încercări. Verifică PIN-ul actual înainte să încerci din nou."
+msgstr[2] "Acest PIN nu a deblocat copia de rezervă a cheilor. Mai ai {n} de încercări. Verifică PIN-ul actual înainte să încerci din nou."
+
 #: crates/chatter-core/src/services/key_recovery.rs:88
 msgid ""
 "No key backup was found for this account. Your previous conversations cannot "

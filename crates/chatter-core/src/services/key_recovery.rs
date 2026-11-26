@@ -39,7 +39,7 @@ pub enum KeyRecoveryNeed {
     NoPinProvided,
     /// The backup exists but did not decrypt. Overwhelmingly a wrong PIN: the
     /// PIN is the only input to the key that opens it.
-    WrongPin,
+    WrongPin { remaining_attempts: Option<u32> },
     /// The account has no SVR backup at all. The original identity key is
     /// genuinely unrecoverable, so a new one is the only way forward — but the
     /// user has to choose it, because their contacts will see the change.
@@ -70,7 +70,9 @@ impl KeyRecoveryNeed {
             // A PIN that was never entered, entered wrongly, or that the
             // server is currently refusing to check — all still lead back to
             // the real key.
-            Self::NoPinProvided | Self::WrongPin | Self::RateLimited | Self::Unavailable => true,
+            Self::NoPinProvided | Self::WrongPin { .. } | Self::RateLimited | Self::Unavailable => {
+                true
+            }
             // There is nothing left to recover from.
             Self::NoBackup | Self::BackupDestroyed | Self::StaleBackup => false,
         }
@@ -84,7 +86,17 @@ impl KeyRecoveryNeed {
             Self::NoPinProvided => chatter_i18n::tr(
                 "This device has no encryption keys. Enter your PIN to restore them from your backup.",
             ),
-            Self::WrongPin => chatter_i18n::tr(
+            Self::WrongPin {
+                remaining_attempts: Some(remaining),
+            } => chatter_i18n::trn(
+                "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again.",
+                "That PIN did not unlock your key backup. {n} attempts remaining. Check your current PIN before trying again.",
+                remaining.into(),
+                &[],
+            ),
+            Self::WrongPin {
+                remaining_attempts: None,
+            } => chatter_i18n::tr(
                 "That PIN did not unlock your key backup. Check the PIN and try again.",
             ),
             Self::NoBackup => chatter_i18n::tr(
@@ -117,7 +129,12 @@ pub fn classify_restore_failure(err: &SvrBackupError) -> KeyRecoveryNeed {
         SvrBackupError::BackupNotFound => KeyRecoveryNeed::NoBackup,
         // The server says the PIN-derived id does not match, or the backup was
         // found and did not decrypt: either way the PIN is wrong.
-        SvrBackupError::WrongPin | SvrBackupError::Crypto(_) => KeyRecoveryNeed::WrongPin,
+        SvrBackupError::WrongPin { remaining_attempts } => KeyRecoveryNeed::WrongPin {
+            remaining_attempts: *remaining_attempts,
+        },
+        SvrBackupError::Crypto(_) => KeyRecoveryNeed::WrongPin {
+            remaining_attempts: None,
+        },
         SvrBackupError::BackupDestroyed => KeyRecoveryNeed::BackupDestroyed,
         SvrBackupError::RateLimited => KeyRecoveryNeed::RateLimited,
         SvrBackupError::Network(_) | SvrBackupError::Storage(_) | SvrBackupError::Generic(_) => {
@@ -139,7 +156,12 @@ mod tests {
         let need = classify_restore_failure(&SvrBackupError::Crypto(CryptoError::Protocol(
             "decrypt failed".into(),
         )));
-        assert_eq!(need, KeyRecoveryNeed::WrongPin);
+        assert_eq!(
+            need,
+            KeyRecoveryNeed::WrongPin {
+                remaining_attempts: None
+            }
+        );
         assert!(
             need.is_retryable(),
             "a wrong PIN leaves the original key recoverable — minting over it destroys the account"
@@ -150,8 +172,16 @@ mod tests {
     fn a_server_wrong_pin_is_retryable_and_a_missing_backup_is_final() {
         // The server tells the two apart (NOT_FOUND vs PERMISSION_DENIED); a
         // typo must stay retryable, an account with no backup must not.
-        let need = classify_restore_failure(&SvrBackupError::WrongPin);
-        assert_eq!(need, KeyRecoveryNeed::WrongPin);
+        let need = classify_restore_failure(&SvrBackupError::WrongPin {
+            remaining_attempts: Some(2),
+        });
+        assert_eq!(
+            need,
+            KeyRecoveryNeed::WrongPin {
+                remaining_attempts: Some(2)
+            }
+        );
+        assert!(need.user_message().contains("2 attempts remaining"));
         assert!(need.is_retryable());
         let need = classify_restore_failure(&SvrBackupError::BackupNotFound);
         assert_eq!(need, KeyRecoveryNeed::NoBackup);
@@ -203,7 +233,9 @@ mod tests {
     fn every_need_says_something_actionable() {
         for need in [
             KeyRecoveryNeed::NoPinProvided,
-            KeyRecoveryNeed::WrongPin,
+            KeyRecoveryNeed::WrongPin {
+                remaining_attempts: None,
+            },
             KeyRecoveryNeed::NoBackup,
             KeyRecoveryNeed::BackupDestroyed,
             KeyRecoveryNeed::StaleBackup,

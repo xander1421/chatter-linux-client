@@ -102,8 +102,6 @@ pub mod keys {
     /// Our identity public key (33 bytes - 0x05 + Curve25519, base64 encoded)
     /// Used for NDSS'21 private friend codes that embed cryptographic material.
     pub const IDENTITY_KEY_PUBLIC: &str = "crypto.identity_key_public";
-    /// An observed stale backup, scoped to the verified account key and PIN.
-    pub const STALE_SVR_BACKUP: &str = "crypto.stale_svr_backup";
     /// Who receives our profile key ("everyone" | "contacts" | "nobody"),
     /// see `services::profile_visibility`. Absent = everyone.
     pub const PROFILE_VISIBILITY: &str = "privacy.profile_visibility";

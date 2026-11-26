@@ -1155,6 +1155,12 @@ msgstr ""
 "Ce PIN n'a pas déverrouillé la sauvegarde des clés. Vérifiez le PIN et "
 "réessayez."
 
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again."
+msgid_plural "That PIN did not unlock your key backup. {n} attempts remaining. Check your current PIN before trying again."
+msgstr[0] "Ce code PIN n’a pas déverrouillé ta sauvegarde de clés. Il reste {n} tentative. Vérifie ton code PIN actuel avant de réessayer."
+msgstr[1] "Ce code PIN n’a pas déverrouillé ta sauvegarde de clés. Il reste {n} tentatives. Vérifie ton code PIN actuel avant de réessayer."
+
 #: crates/chatter-core/src/services/key_recovery.rs:88
 msgid ""
 "No key backup was found for this account. Your previous conversations cannot "

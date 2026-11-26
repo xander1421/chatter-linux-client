@@ -698,6 +698,10 @@ async fn password_sign_in_reconciles_a_reset_interrupted_before_or_after_publish
     let (verifier, vectors, now) = fixtures();
     let (dir, settings) = database();
     let prior = search_proof(&vectors, "owner identity");
+    let old_key = libsignal_protocol::IdentityKey::decode(&bytes(
+        vector(&vectors, "owner identity").value.as_deref().unwrap(),
+    ))
+    .unwrap();
     let replacement = search_proof(&vectors, "owner replacement");
     let mut repeated = replacement.clone();
     repeated.tree_head.as_mut().unwrap().last.clear();
@@ -749,7 +753,7 @@ async fn password_sign_in_reconciles_a_reset_interrupted_before_or_after_publish
         )
         .await
         .unwrap(),
-        OwnIdentityAtSignIn::Republish
+        OwnIdentityAtSignIn::Republish(old_key)
     );
 
     // The server commits, but the process dies before adopting the new proof.

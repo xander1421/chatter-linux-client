@@ -59,10 +59,16 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Err(e) => e.user_message(),
                 };
                 let ok = outcome.is_ok();
+                let wrong_pin = matches!(
+                    outcome,
+                    Err(ClientError::IdentityRecoveryRequired(
+                        KeyRecoveryNeed::WrongPin { .. }
+                    ))
+                );
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.global::<crate::AuthFlow>().set_login_loading(false);
-                        if ok {
+                        if ok || wrong_pin {
                             w.global::<crate::AuthFlow>()
                                 .set_login_identity_reset_available(false);
                             w.global::<crate::AuthFlow>()
@@ -72,7 +78,7 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         w.global::<crate::AuthFlow>().set_login_error(message.into());
                     }
                 });
-                if ok {
+                if ok || wrong_pin {
                     if let Ok(mut g) = PENDING_RECOVERY.lock() {
                         *g = None;
                     }
@@ -291,6 +297,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     let reset_available = recovery.is_some_and(|need| !need.is_retryable());
                     let needs_new_pin = recovery == Some(KeyRecoveryNeed::StaleBackup);
+                    let wrong_pin = matches!(recovery, Some(KeyRecoveryNeed::WrongPin { .. }));
                     tracing::warn!("Login failed");
                     let error_msg = e.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
@@ -298,6 +305,9 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.global::<crate::AuthFlow>().set_login_loading(false);
                             w.global::<crate::AuthFlow>().set_login_error(error_msg.into());
+                            if wrong_pin {
+                                w.global::<crate::AuthFlow>().set_login_pin("".into());
+                            }
                             w.global::<crate::AuthFlow>().set_login_reset_needs_new_pin(needs_new_pin);
                             w.global::<crate::AuthFlow>().set_login_identity_reset_available(reset_available);
                         }

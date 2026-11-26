@@ -1148,6 +1148,13 @@ msgstr ""
 msgid "That PIN did not unlock your key backup. Check the PIN and try again."
 msgstr "Этот PIN не открыл копию ключей. Проверьте PIN и попробуйте снова."
 
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again."
+msgid_plural "That PIN did not unlock your key backup. {n} attempts remaining. Check your current PIN before trying again."
+msgstr[0] "Этот ПИН-код не разблокировал резервную копию ключей. Осталась {n} попытка. Проверьте действующий ПИН-код перед повторной попыткой."
+msgstr[1] "Этот ПИН-код не разблокировал резервную копию ключей. Осталось {n} попытки. Проверьте действующий ПИН-код перед повторной попыткой."
+msgstr[2] "Этот ПИН-код не разблокировал резервную копию ключей. Осталось {n} попыток. Проверьте действующий ПИН-код перед повторной попыткой."
+
 #: crates/chatter-core/src/services/key_recovery.rs:88
 msgid ""
 "No key backup was found for this account. Your previous conversations cannot "

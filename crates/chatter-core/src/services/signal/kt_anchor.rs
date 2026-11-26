@@ -673,7 +673,7 @@ pub(crate) fn authorize_linked_owner_identity(
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum OwnIdentityAtSignIn {
     Current,
-    Republish,
+    Republish(libsignal_protocol::IdentityKey),
     RestoreKey(libsignal_protocol::IdentityKey),
     Replaced,
     UnexpectedKey,
@@ -801,7 +801,7 @@ async fn search_own_at_sign_in(
                 && state.authorized.is_none()
                 && state.baseline.as_ref() == Some(&published) =>
         {
-            Republish
+            Republish(published_identity)
         }
         OwnIdentityCheck::Local(expected)
             if state.baseline.as_ref().is_some_and(|old| {
