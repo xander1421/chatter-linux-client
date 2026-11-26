@@ -223,7 +223,7 @@ impl MembershipState {
 
     pub(crate) fn routing_type(value: i32) -> Result<pb::ChannelType, VerifyError> {
         match pb::ChannelType::try_from(value) {
-            Ok(kind @ (pb::ChannelType::Unspecified | pb::ChannelType::ChannelPublic | pb::ChannelType::ChannelPrivate)) => Ok(kind),
+            Ok(kind @ (pb::ChannelType::ChannelPublic | pb::ChannelType::ChannelPrivate)) => Ok(kind),
             _ => Err(malformed("channel_type")),
         }
     }

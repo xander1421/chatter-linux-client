@@ -3,6 +3,9 @@
 //! Client for Signal-style encrypted attachments: presigned upload/download
 //! URLs. Bytes go directly to RustFS; the server only brokers URLs.
 
+use std::sync::Arc;
+
+use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::transport::GrpcTransport;
 use tonic::service::interceptor::InterceptedService;
 
@@ -22,6 +25,7 @@ use chatter_proto::chat_v1::{
 /// Wraps the generated FileServiceClient with ergonomic APIs and error mapping.
 pub struct FileClient {
     inner: FileServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
+    private_tokens: Option<Arc<TokenManager>>,
 }
 
 impl FileClient {
@@ -29,7 +33,24 @@ impl FileClient {
     pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
             inner: FileServiceClient::with_interceptor(channel, interceptor),
+            private_tokens: None,
         }
+    }
+
+    pub(super) fn private_channel(channel: GrpcTransport, tokens: Arc<TokenManager>) -> Self {
+        let mut client = Self::new(channel, AuthInterceptor::new());
+        client.private_tokens = Some(tokens);
+        client
+    }
+
+    fn mint_request<T>(&self, payload: T) -> Result<tonic::Request<T>, NetworkError> {
+        let mut request = tonic::Request::new(payload);
+        if let Some(tokens) = &self.private_tokens {
+            let token = tokens.claim_send_credential()?;
+            super::interceptors::insert_blind_credential(&mut request, &token.public_key, &token.signature)
+                .map_err(|status| NetworkError::from_status(&status))?;
+        }
+        Ok(request)
     }
 
     // ==================== Attachment URL RPCs ====================
@@ -45,6 +66,7 @@ impl FileClient {
     ) -> Result<GetAttachmentUploadUrlResponse, NetworkError> {
         let request = GetAttachmentUploadUrlRequest { encrypted_size };
 
+        let request = self.mint_request(request)?;
         self.inner
             .get_attachment_upload_url(request)
             .await
@@ -88,6 +110,7 @@ impl FileClient {
             cdn_key: cdn_key.to_string(),
         };
 
+        let request = self.mint_request(request)?;
         self.inner
             .get_attachment_download_url(request)
             .await
@@ -103,6 +126,7 @@ impl FileClient {
         encrypted_size: u64,
     ) -> Result<CreateAttachmentMultipartUploadResponse, NetworkError> {
         let request = CreateAttachmentMultipartUploadRequest { encrypted_size };
+        let request = self.mint_request(request)?;
         self.inner
             .create_attachment_multipart_upload(request)
             .await

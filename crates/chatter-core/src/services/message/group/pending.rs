@@ -354,7 +354,7 @@ impl MessageService {
                         let attachment_service =
                             crate::services::attachment::AttachmentService::new_local(
                                 messages.attachment_repo.clone(),
-                            );
+                            ).for_conversation(&crate::state::ActiveConversation::Channel(channel_id));
                         if let Err(error) = attachment_service.create_from_pointers_admitted(&dm.attachments, Some(&write_session))
                         {
                             tracing::warn!(%error, "Failed to store attachment records");

@@ -735,7 +735,7 @@ impl ConversationHandle {
             let server_targets = batch
                 .targets
                 .iter()
-                .filter(|_| matches!(&self.conversation, ActiveConversation::Channel(id) if !self.client.messages().is_private_channel(id)))
+                .filter(|_| matches!(&self.conversation, ActiveConversation::Channel(id) if self.client.messages().is_public_channel(id)))
                 .map(|t| (t.message_id.to_string(), t.conversation_id.to_string()))
                 .collect::<Vec<_>>();
             if !server_targets.is_empty() {

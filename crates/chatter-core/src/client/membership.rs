@@ -717,7 +717,7 @@ mod tests {
             policy: Policy::defaults(public),
             invites,
             disappearing_seconds: 0,
-            channel_type: chatter_proto::chat_v1::ChannelType::Unspecified,
+            channel_type: chatter_proto::chat_v1::ChannelType::ChannelPrivate,
         };
         VerifiedChannel {
             state_hash: [0xab; 32],

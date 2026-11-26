@@ -43,6 +43,35 @@ impl GrpcClientPool {
         )
     }
 
+    /// The CDN route shares the private-post isolation group.
+    #[cfg(feature = "onion")]
+    pub(crate) async fn private_channel_storage_tor(
+        &self,
+    ) -> Result<super::super::onion_transport::SharedTorClient, NetworkError> {
+        let base = super::super::onion_transport::shared_bootstrap(&self.onion_tor)
+            .await
+            .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
+        self.private_post_onion_tor
+            .get_or_init(|| async { base.isolated_client() })
+            .await;
+        Ok(self.private_post_onion_tor.clone())
+    }
+
+    /// Loopback stand-ins for the three Shield circuit streams in wire tests.
+    #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
+    pub(crate) fn install_loopback_shield_routes(&self, url: &str) {
+        self.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+        self.set_transport_mode(TransportMode::Onion).unwrap();
+        let endpoint = tonic::transport::Endpoint::from_shared(url.to_owned()).unwrap();
+        let connect = || {
+            GrpcTransport::from_onion(endpoint.connect_lazy(), self.transport_mode.clone())
+                .in_generation(self.transport_token.read().clone())
+        };
+        *self.channel.write() = Some(connect());
+        *self.unidentified_channel.write() = Some(connect());
+        *self.private_post_channel.write() = Some(connect());
+    }
+
     fn isolated_unidentified_channel(
         &self,
         cached: &RwLock<Option<GrpcTransport>>,

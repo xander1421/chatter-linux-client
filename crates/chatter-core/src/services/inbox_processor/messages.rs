@@ -53,6 +53,7 @@ impl InboxEventProcessor {
             }
 
             InboxEvent::ChannelMessageReceived {
+                channel_id,
                 sender_id,
                 message_id,
                 timestamp,
@@ -62,13 +63,20 @@ impl InboxEventProcessor {
                 // Create attachment records BEFORE UI handler reads from DB
                 // This prevents the "empty bubble" race condition
                 if !attachments.is_empty() {
+                    let service = self.attachment_service.for_conversation(
+                        &self.message_service.classify_active_conversation(
+                            channel_id,
+                            &self.message_service.conversation_type(channel_id),
+                            Some(*sender_id),
+                        ),
+                    );
                     let pointers: Vec<_> = attachments
                         .iter()
                         .filter(|p| !p.cdn_key.is_empty())
                         .cloned()
                         .collect();
                     if !pointers.is_empty()
-                        && let Err(error) = self.attachment_service.create_from_pointers(&pointers)
+                        && let Err(error) = service.create_from_pointers(&pointers)
                     {
                         tracing::warn!(%error, "Failed to store attachment records");
                     }

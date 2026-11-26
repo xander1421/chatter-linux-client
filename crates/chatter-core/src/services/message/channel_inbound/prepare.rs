@@ -316,7 +316,9 @@ impl ChannelInbound {
 
                     session.check().map_err(|_| Ingested::RetryableFailure)?;
                     if !dm.attachments.is_empty() {
-                        let attachments = self.attachments.clone();
+                        let attachments = self.attachments.for_conversation(
+                            &crate::state::ActiveConversation::Channel(channel_id),
+                        );
                         let pointers = dm.attachments.clone();
                         let admitted = session.clone();
                         if let Err(error) = self.messages.database.run_blocking(move || attachments.create_from_pointers_admitted(&pointers, Some(&admitted))).await {

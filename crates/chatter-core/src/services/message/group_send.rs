@@ -252,6 +252,40 @@ impl MessageService {
     }
 
     /// Send a prepared private-channel request anonymously and return the
+    pub(super) async fn send_private_channel_control(
+        &self,
+        channel_id: &ChannelId,
+        mut content: chatter_proto::content_v1::Content,
+    ) -> Result<(), MessageError> {
+        use prost::Message as _;
+
+        let named = content.content.as_ref()
+            .and_then(crate::services::gateway::inbound::content_channel)
+            .and_then(|id| id.parse::<ChannelId>().ok());
+        if named != Some(*channel_id) {
+            return Err(MessageError::InvalidContent("Control content must name its channel".into()));
+        }
+        self.group_gate().for_distribution(channel_id)?;
+        let distribution = self.create_sender_key_for_channel(channel_id).await?;
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        Self::pad_content_to_bucket(&mut content);
+        let (content, rotated) = self.prepare_encrypted_content(
+            channel_id,
+            &content.encode_to_vec(),
+            chat_v1::message::Content::default(),
+            true,
+            sent_at,
+        ).await?;
+        let request = chat_v1::SendMessageRequest {
+            channel_id: channel_id.to_string(),
+            content: Some(content),
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
+        };
+        self.submit_private_group(&request, rotated.as_ref().unwrap_or(&distribution), false).await?;
+        Ok(())
+    }
+
     /// `Message` the channel journal records (what `SendMessage` would have
     /// answered: our id, our device, the server's timestamp). The request's
     /// `client_request_id` is the queue GUID, so a replay queues nothing twice.
@@ -259,6 +293,15 @@ impl MessageService {
         &self,
         request: &chat_v1::SendMessageRequest,
         distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+    ) -> Result<chat_v1::Message, MessageError> {
+        self.submit_private_group(request, distribution, true).await
+    }
+
+    async fn submit_private_group(
+        &self,
+        request: &chat_v1::SendMessageRequest,
+        distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+        retain_resend_targets: bool,
     ) -> Result<chat_v1::Message, MessageError> {
         let channel_id: ChannelId = request.channel_id.parse().map_err(invalid)?;
         let verified = self.group_gate().for_distribution(&channel_id)?;
@@ -294,7 +337,7 @@ impl MessageService {
             repairs: Cell::new(0),
         };
         PRIVATE_POST_BUDGET.scope(budget, self.submit_verified_group(
-            request, distribution, channel_id, verified, me, members, contents, token,
+            request, distribution, channel_id, verified, me, members, contents, token, retain_resend_targets,
         )).await
     }
 
@@ -335,6 +378,7 @@ impl MessageService {
         members: Vec<String>,
         contents: Vec<u8>,
         token: Vec<u8>,
+        retain_resend_targets: bool,
     ) -> Result<chat_v1::Message, MessageError> {
         // Do not send a subset of lookups. A cold roster scan covers
         // every member, including accounts whose sessions are already warm.
@@ -429,10 +473,12 @@ impl MessageService {
                 .send_group_message(&request.channel_id, token.clone(), sealed, &request.client_request_id)
                 .await?;
             if resp.success {
-                use prost::Message as _;
-                let original = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())
-                    .map_err(invalid)?;
-                self.snapshot_private_resend_targets(channel_id, original.timestamp, &destinations)?;
+                if retain_resend_targets {
+                    use prost::Message as _;
+                    let original = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())
+                        .map_err(invalid)?;
+                    self.snapshot_private_resend_targets(channel_id, original.timestamp, &destinations)?;
+                }
                 return self.sent_group_message(request, resp.server_timestamp);
             }
             if resp.mismatched.is_empty() || round == MAX_RECONCILE_ROUNDS {

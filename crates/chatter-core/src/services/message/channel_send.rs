@@ -973,7 +973,7 @@ impl MessageService {
         }
         // A private channel's message has no server copy to delete; the
         // delete-for-everyone control reaches the members end to end.
-        let remote = if self.is_private_channel(&target.channel) {
+        let remote = if !self.is_public_channel(&target.channel) {
             Ok(())
         } else {
             tokio::time::timeout(

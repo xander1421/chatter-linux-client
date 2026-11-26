@@ -73,6 +73,18 @@ impl AttachmentRepository {
         Self { db }
     }
 
+    pub(crate) fn channel_uses_private_attachments(&self, channel: &crate::domain::ChannelId) -> bool {
+        use crate::domain::ChannelType;
+        let kind = self.db.read_connection().ok().and_then(|conn| {
+            super::channel_repo::ChannelRepository::routing_type_in(&conn, channel).ok().flatten()
+        });
+        !matches!(kind, Some(ChannelType::Public | ChannelType::SavedMessages))
+    }
+
+    pub(crate) fn attachment_tokens(&self) -> crate::mailbox::token_manager::TokenManager {
+        crate::mailbox::token_manager::TokenManager::new(self.db.clone())
+    }
+
     // ========================================================================
     // Attachment CRUD
     // ========================================================================
@@ -90,8 +102,8 @@ impl AttachmentRepository {
             "INSERT INTO attachments (
                 id, metadata_blob, status, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
-                secret_chat
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                secret_chat, private_channel
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
@@ -103,6 +115,7 @@ impl AttachmentRepository {
                 content_location_to_int(attachment.content_location),
                 attachment.created_at.to_rfc3339(),
                 attachment.secret_chat,
+                attachment.private_channel,
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -116,7 +129,7 @@ impl AttachmentRepository {
         let mut stmt = conn.prepare(
             "SELECT id, metadata_blob, status, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
-                    secret_chat
+                    secret_chat, private_channel
              FROM attachments WHERE id = ?1",
         )?;
 
@@ -176,8 +189,8 @@ impl AttachmentRepository {
             "INSERT INTO attachments (
                 id, metadata_blob, status, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes,
-                file_path, content_location, created_at, secret_chat
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                file_path, content_location, created_at, secret_chat, private_channel
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
@@ -190,6 +203,7 @@ impl AttachmentRepository {
                 content_location_to_int(ContentLocation::OnFilesystem),
                 attachment.created_at.to_rfc3339(),
                 attachment.secret_chat,
+                attachment.private_channel,
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -288,8 +302,8 @@ impl AttachmentRepository {
             "INSERT INTO attachments (
                 id, metadata_blob, status, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
-                secret_chat
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                secret_chat, private_channel
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(id) DO NOTHING",
             params![
                 attachment.id.to_string(),
@@ -302,15 +316,17 @@ impl AttachmentRepository {
                 content_location_to_int(attachment.content_location),
                 attachment.created_at.to_rfc3339(),
                 secret,
+                attachment.private_channel,
             ],
         )? == 1;
         if inserted {
             resolve_shared_content(&tx, attachment);
         } else {
             let rows = tx.execute(
-                "UPDATE attachments SET secret_chat = MAX(secret_chat, ?2)
+                "UPDATE attachments SET secret_chat = MAX(secret_chat, ?2),
+                    private_channel = MAX(private_channel, ?3)
                  WHERE id = ?1",
-                params![attachment.id.to_string(), secret],
+                params![attachment.id.to_string(), secret, attachment.private_channel],
             )?;
             if rows != 1 {
                 return Err(StorageError::NotFound(format!(
@@ -592,6 +608,7 @@ fn row_to_attachment(
     let content_location_int: i32 = row.get(7).unwrap_or(0); // Default to NotDownloaded for old rows
     let created_at_str: String = row.get(8)?;
     let secret_chat: bool = row.get(9)?;
+    let private_channel: bool = row.get(10)?;
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,
@@ -622,6 +639,7 @@ fn row_to_attachment(
         encryption_iv,
         created_at: parse_datetime(&created_at_str),
         secret_chat,
+        private_channel,
     }))
 }
 

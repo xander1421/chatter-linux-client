@@ -75,7 +75,11 @@ fn genesis(public: bool) -> Action {
     Action::Genesis(pb::Genesis {
         policy: Some(Policy::defaults(public).to_proto()),
         disappearing_seconds: 0,
-        channel_type: 0,
+        channel_type: if public {
+            pb::ChannelType::ChannelPublic as i32
+        } else {
+            pb::ChannelType::ChannelPrivate as i32
+        },
     })
 }
 
@@ -192,7 +196,7 @@ fn canonical_encoding_is_the_specified_layout() {
         policy: Policy::defaults(false),
         invites: Default::default(),
         disappearing_seconds: 3600,
-        channel_type: pb::ChannelType::Unspecified,
+        channel_type: pb::ChannelType::ChannelPrivate,
     };
     s.members.insert(
         "bbbbbbbb-0000-4000-8000-000000000000".into(),
@@ -223,7 +227,7 @@ fn canonical_encoding_is_the_specified_layout() {
         },
     );
 
-    let mut want = vec![2u8];
+    let mut want = vec![3, pb::ChannelType::ChannelPrivate as u8];
     want.extend(36u32.to_be_bytes());
     want.extend(CH.as_bytes());
     want.extend(7u64.to_be_bytes());
@@ -260,6 +264,9 @@ fn canonical_encoding_is_the_specified_layout() {
 fn received_states_are_validated() {
     let (_, s1) = channel();
     let good = s1.to_proto();
+    let mut untyped = good.clone();
+    untyped.channel_type = 0;
+    assert!(MembershipState::from_proto(&untyped).is_err());
     assert_eq!(MembershipState::from_proto(&good).unwrap(), s1);
 
     // Order of the received list does not matter: the encoding sorts.
@@ -1332,7 +1339,7 @@ fn vector_state(v: &serde_json::Value) -> pb::MembershipState {
             })
             .collect(),
         disappearing_seconds: v["disappearing_seconds"].as_u64().unwrap() as u32,
-        channel_type: 0,
+        channel_type: v["channel_type"].as_i64().unwrap() as i32,
     }
 }
 
@@ -1342,12 +1349,8 @@ fn vector_state(v: &serde_json::Value) -> pb::MembershipState {
 /// code) under libsignal's XEdDSA.
 #[test]
 fn golden_vectors_match_the_server_verifier() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../internal/services/channel/membership/testdata/membership_vectors.json"
-    );
-    let file = std::fs::read_to_string(path).expect("golden vectors (shared with the Go verifier)");
-    let v: serde_json::Value = serde_json::from_str(&file).unwrap();
+    let file = include_str!("testdata/membership_vectors.json");
+    let v: serde_json::Value = serde_json::from_str(file).unwrap();
     assert_eq!(v["version"], 1);
     assert_eq!(hexd(v["domains"]["state"].as_str().unwrap()), STATE_DOMAIN);
     assert_eq!(

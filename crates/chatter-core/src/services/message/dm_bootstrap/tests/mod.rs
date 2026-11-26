@@ -143,7 +143,7 @@ fn fixture_sender_certificate(
         me.to_string(),
         phone,
         *identity.public_key(),
-        DeviceId::new(1).unwrap(),
+        DeviceId::try_from(ms.current_device_id_or_zero()).unwrap(),
         Timestamp::from_epoch_millis(expiration / 1_000_000),
         server,
         &signer.private_key,

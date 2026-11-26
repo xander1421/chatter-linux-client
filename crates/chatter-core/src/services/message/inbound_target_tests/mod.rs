@@ -1127,7 +1127,7 @@ async fn channel_moderator_delete_needs_the_verified_role() {
             policy: Policy::defaults(false),
             invites: Default::default(),
             disappearing_seconds: 0,
-            channel_type: chatter_proto::chat_v1::ChannelType::Unspecified,
+            channel_type: chatter_proto::chat_v1::ChannelType::ChannelPrivate,
         };
         let hash = state.hash();
         crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository::new(svc.database.clone())

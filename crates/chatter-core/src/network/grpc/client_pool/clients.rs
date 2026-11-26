@@ -41,6 +41,13 @@ impl GrpcClientPool {
         super::super::FileClient::new(self.channel(), self.auth_clone())
     }
 
+    pub(crate) fn private_channel_file_client(
+        &self,
+        tokens: Arc<crate::mailbox::token_manager::TokenManager>,
+    ) -> super::super::FileClient {
+        super::super::FileClient::private_channel(self.private_post_channel(), tokens)
+    }
+
     /// Create an authenticated AI broker client.
     pub fn ai_client(&self) -> super::super::ai_client::AiClient {
         super::super::ai_client::AiClient::new(self.channel(), self.auth_clone())
