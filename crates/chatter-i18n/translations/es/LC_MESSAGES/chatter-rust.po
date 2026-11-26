@@ -298,14 +298,6 @@ msgstr "Reaccionó con {}"
 msgid "A new device was just linked to your account."
 msgstr "Se acaba de vincular un dispositivo nuevo a tu cuenta."
 
-#: crates/chatter-core/src/client/notification.rs:784
-msgid "\"{}\" is now linked to your account."
-msgstr "\"{}\" ya está vinculado a tu cuenta."
-
-#: crates/chatter-core/src/client/notification.rs:787
-msgid "{} was just linked to your account."
-msgstr "Se acaba de vincular {} a tu cuenta."
-
 #: crates/chatter-core/src/client/notification.rs:792
 #: crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
@@ -621,7 +613,7 @@ msgid "Outgoing call"
 msgstr "Llamada saliente"
 
 #: crates/chatter-core/src/domain/message/entity.rs:387
-#: crates/chatter-core/src/services/call_notification_bridge.rs:199
+#: crates/chatter-core/src/domain/message/entity.rs:388
 msgid "Incoming video call"
 msgstr "Videollamada entrante"
 
@@ -1051,14 +1043,6 @@ msgstr ""
 "cuenta, así que el inicio de sesión con contraseña está en pausa por ahora. "
 "Inicia sesión con un código de recuperación o vincula este dispositivo desde "
 "uno que ya tenga la sesión iniciada."
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:207
-msgid "{} is calling in {}"
-msgstr "{} está llamando en {}"
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:209
-msgid "{} is calling"
-msgstr "{} está llamando"
 
 #: crates/chatter-core/src/services/channel/error.rs:74
 #: crates/chatter-core/src/services/link_device_service/types.rs:32
@@ -3462,12 +3446,16 @@ msgstr ""
 "No se pudo crear la copia de los mensajes. Comprueba tu conexión y el PIN, y "
 "vuelve a intentarlo."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:254
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr ""
 "Filas restauradas: {} (ya presentes o conservadas en el dispositivo: {})"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
+msgid "This backup was made by an older version and can't be restored"
+msgstr "Esta copia de seguridad se creó con una versión anterior y no se puede restaurar."
+
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
 "This backup was made by a newer version of Chatter. Update the app to "
 "restore it."
@@ -3475,7 +3463,7 @@ msgstr ""
 "Esta copia la hizo una versión más nueva de Chatter. Actualiza la app para "
 "restaurarla."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:265
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 "No se pudo restaurar la copia. Comprueba tu frase de contraseña o el PIN, y "
@@ -3902,7 +3890,7 @@ msgstr "Llamadas"
 
 #: crates/chatter-ui/src/platform/android/notifications.rs:313
 #: crates/chatter-core/src/domain/message/entity.rs:388
-#: crates/chatter-core/src/services/call_notification_bridge.rs:201
+#: crates/chatter-core/src/services/notification_service/mod.rs:412
 #: crates/chatter-core/src/services/notification_service/mod.rs:326
 msgid "Incoming call"
 msgstr "Llamada entrante"

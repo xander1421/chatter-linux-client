@@ -193,22 +193,9 @@ fn reconcile(
             false
         });
         for event in &snapshot.presentations {
-            if let CallOrchestratorEvent::IncomingPresented { call, peer_name, is_video, channel_context, .. } = event {
+            if let CallOrchestratorEvent::IncomingPresented { call, .. } = event {
                 if posted.contains(call.as_str()) { continue; }
-                let title = if *is_video {
-                    chatter_i18n::tr("Incoming video call")
-                } else {
-                    chatter_i18n::tr("Incoming call")
-                };
-                let show_place = notifications.effective_detail_level()
-                    == super::notification_service::NotificationDetailLevel::NameAndMessage;
-                let body = match channel_context.as_deref() {
-                    Some(ch) if !ch.is_empty() && show_place => {
-                        chatter_i18n::trf("{} is calling in {}", &[&peer_name, &ch])
-                    }
-                    _ => chatter_i18n::trf("{} is calling", &[&peer_name]),
-                };
-                match notifications.show_incoming_call(call.as_str(), &title, &body) {
+                match notifications.show_incoming_call(call.as_str()) {
                     Ok(()) => {
                         tracing::warn!(target: "chatter_core::ring_lifecycle::posted", "ring notification posted");
                         posted.insert(call.as_str().to_owned());

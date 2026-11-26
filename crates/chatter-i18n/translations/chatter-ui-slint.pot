@@ -289,6 +289,10 @@ msgstr ""
 msgid "Turn on app lock"
 msgstr ""
 
+#: ui/app_lock.slint:170
+msgid "Lock now"
+msgstr ""
+
 #: ui/app_lock.slint:169
 msgid "Lock after leaving Chatter"
 msgstr ""

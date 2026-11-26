@@ -297,14 +297,6 @@ msgstr "Реакція {}"
 msgid "A new device was just linked to your account."
 msgstr "До вашого облікового запису щойно прив’язано новий пристрій."
 
-#: crates/chatter-core/src/client/notification.rs:784
-msgid "\"{}\" is now linked to your account."
-msgstr "«{}» тепер прив’язано до вашого облікового запису."
-
-#: crates/chatter-core/src/client/notification.rs:787
-msgid "{} was just linked to your account."
-msgstr "{} щойно прив’язано до вашого облікового запису."
-
 #: crates/chatter-core/src/client/notification.rs:792
 #: crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
@@ -619,7 +611,7 @@ msgid "Outgoing call"
 msgstr "Вихідний дзвінок"
 
 #: crates/chatter-core/src/domain/message/entity.rs:387
-#: crates/chatter-core/src/services/call_notification_bridge.rs:199
+#: crates/chatter-core/src/domain/message/entity.rs:388
 msgid "Incoming video call"
 msgstr "Вхідний відеодзвінок"
 
@@ -1050,14 +1042,6 @@ msgstr ""
 "Забагато спроб введення пароля для цього облікового запису, тож вхід за "
 "паролем поки призупинено. Увійдіть за кодом відновлення або прив’яжіть цей "
 "пристрій за допомогою того, на якому ви вже ввійшли."
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:207
-msgid "{} is calling in {}"
-msgstr "{} телефонує в {}"
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:209
-msgid "{} is calling"
-msgstr "{} телефонує"
 
 #: crates/chatter-core/src/services/channel/error.rs:74
 #: crates/chatter-core/src/services/link_device_service/types.rs:32
@@ -3474,11 +3458,15 @@ msgstr ""
 "Не вдалося створити резервну копію повідомлень. Перевірте з’єднання і PIN, "
 "потім повторіть."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:254
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "Відновлено рядків: {} (уже наявних або збережених локально: {})"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
+msgid "This backup was made by an older version and can't be restored"
+msgstr "Цю резервну копію створено в старішій версії, тому її неможливо відновити."
+
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
 "This backup was made by a newer version of Chatter. Update the app to "
 "restore it."
@@ -3486,7 +3474,7 @@ msgstr ""
 "Цю копію створено новішою версією Chatter. Оновіть застосунок, щоб відновити "
 "її."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:265
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 "Не вдалося відновити резервну копію. Перевірте парольну фразу або PIN, потім "
@@ -3905,7 +3893,7 @@ msgstr "Дзвінки"
 
 #: crates/chatter-ui/src/platform/android/notifications.rs:313
 #: crates/chatter-core/src/domain/message/entity.rs:388
-#: crates/chatter-core/src/services/call_notification_bridge.rs:201
+#: crates/chatter-core/src/services/notification_service/mod.rs:412
 #: crates/chatter-core/src/services/notification_service/mod.rs:326
 msgid "Incoming call"
 msgstr "Вхідний дзвінок"

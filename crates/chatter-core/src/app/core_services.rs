@@ -220,11 +220,11 @@ impl CoreServices {
             #[cfg(feature = "jarvis")]
             jarvis_engine: services.jarvis_engine.clone(),
             notification_service: {
-                let svc = NotificationService::with_account_keys(
+                let svc = Arc::new(NotificationService::with_account_keys(
                     notification_sink,
                     infra.settings_repo.clone(),
                     auth_state.clone(),
-                );
+                ));
                 // Load privacy setting from local DB
                 if let Ok(Some(level_str)) = infra.settings_repo.get::<String>(
                     crate::storage::repositories::settings_repo::keys::NOTIFICATION_DETAIL_LEVEL,
@@ -246,7 +246,7 @@ impl CoreServices {
                         .unwrap_or(true),
                 );
                 svc.set_app_lock(app_lock.clone());
-                Arc::new(svc)
+                svc
             },
             app_lock,
             section_service: services.section_service.clone(),

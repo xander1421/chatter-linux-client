@@ -282,6 +282,9 @@ msgstr "Confirmă PIN-ul"
 msgid "Turn on app lock"
 msgstr "Activează blocarea aplicației"
 
+msgid "Lock now"
+msgstr "Blochează acum"
+
 #: ui/app_lock.slint:169
 msgid "Lock after leaving Chatter"
 msgstr "Blochează după ce părăsești Chatter"

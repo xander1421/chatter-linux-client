@@ -285,15 +285,19 @@ async fn secret_request_and_message_events_reach_generic_notification_sink() {
         // reach the sink before this device notification.
         bus.emit_domain(DomainEvent::DeviceLinked {
             device_id: 2,
-            device_name: None,
-            device_info: None,
+            device_name: Some("Private device name".into()),
+            device_info: Some("Private device model".into()),
             approved_by_self: false,
         });
         let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(shown.0, "New device linked", "{suppression}");
+        assert_eq!(
+            shown,
+            ("New device linked".into(), "A new device was just linked to your account.".into()),
+            "{suppression}"
+        );
         assert!(rx.try_recv().is_err());
     }
     task.abort();
@@ -445,7 +449,7 @@ fn a_panicking_sink_is_an_error_not_a_panic() {
         }
     }
     let service = NotificationService::new(Arc::new(Panics));
-    assert!(service.show_incoming_call("c", "t", "b").is_err());
+    assert!(service.show_incoming_call("c").is_err());
     assert!(service
         .show_message("t", "b", NotificationPriority::Normal)
         .is_ok());
@@ -545,8 +549,8 @@ fn test_detail_level_roundtrip() {
     }
 }
 
-#[test]
-fn locked_app_hides_sender_and_content() {
+#[tokio::test]
+async fn locked_app_hides_sender_and_content() {
     use crate::services::app_lock::{AppLock, LockTimeout};
     let dir = tempfile::tempdir().unwrap();
     let db = crate::storage::Database::open(&dir.path().join("n.db"), "p").unwrap();
@@ -558,27 +562,270 @@ fn locked_app_hides_sender_and_content() {
         .enable(None, "482916", "482916", LockTimeout::Immediate)
         .unwrap();
     let lock = Arc::new(AppLock::new(settings));
-    let service = NotificationService::noop();
+    let service = Arc::new(NotificationService::noop());
     service.set_detail_level(NotificationDetailLevel::NameAndMessage);
     service.set_app_lock(lock.clone());
+    let message_text = || {
+        NotificationService::message_text(
+            service.effective_detail_level(),
+            Some("Alice"),
+            Some("meet at 6"),
+            false,
+        )
+    };
 
     // A fresh process with the lock on is locked.
-    assert_eq!(service.effective_detail_level(), NotificationDetailLevel::None);
     assert_eq!(
-        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        service.effective_detail_level(),
+        NotificationDetailLevel::None
+    );
+    assert_eq!(
+        message_text(),
         ("Chatter".to_string(), "New message".to_string())
     );
     lock.attempt_unlock("482916").unwrap();
     assert_eq!(
-        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        message_text(),
         ("Alice".to_string(), "meet at 6".to_string())
     );
     // Backgrounded past the (immediate) timeout: generic again.
     lock.set_visible(false);
     assert_eq!(
-        service.message_text(Some("Alice"), Some("meet at 6"), false),
+        message_text(),
         ("Chatter".to_string(), "New message".to_string())
     );
     // The stored setting itself is untouched.
-    assert_eq!(service.detail_level(), NotificationDetailLevel::NameAndMessage);
+    assert_eq!(
+        service.detail_level(),
+        NotificationDetailLevel::NameAndMessage
+    );
+}
+
+async fn receive_notification<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>) -> Option<T> {
+    tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for a notification action")
+}
+
+#[tokio::test]
+async fn app_lock_cancels_existing_previews_at_deadline_and_on_manual_lock() {
+    use crate::services::app_lock::{AppLock, LockTimeout};
+    use std::time::SystemTime;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Action {
+        Message(String, String),
+        Call(String, String, String),
+        CancelMessages,
+    }
+
+    struct Capture(tokio::sync::mpsc::UnboundedSender<Action>);
+    impl NotificationSink for Capture {
+        fn show(&self, _: &str, _: &str, _: NotificationPriority) -> Result<(), SystemError> {
+            unreachable!()
+        }
+        fn show_conversation(
+            &self,
+            _: &str,
+            title: &str,
+            body: &str,
+            _: NotificationPriority,
+        ) -> Result<(), SystemError> {
+            self.0
+                .send(Action::Message(title.into(), body.into()))
+                .unwrap();
+            Ok(())
+        }
+        fn show_incoming_call(&self, id: &str, title: &str, body: &str) -> Result<(), SystemError> {
+            self.0
+                .send(Action::Call(id.into(), title.into(), body.into()))
+                .unwrap();
+            Ok(())
+        }
+        fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+            self.0.send(Action::CancelMessages).unwrap();
+            Ok(true)
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::storage::Database::open(&dir.path().join("n.db"), "p").unwrap();
+    db.run_migrations().unwrap();
+    let settings = Arc::new(
+        crate::storage::repositories::settings_repo::SettingsRepository::new(Arc::new(db)),
+    );
+    let lock = Arc::new(AppLock::new(settings));
+    lock.enable(None, "482916", "482916", LockTimeout::OneMinute)
+        .unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let service = Arc::new(NotificationService::new(Arc::new(Capture(tx))));
+    service.set_detail_level(NotificationDetailLevel::NameAndMessage);
+    service.set_app_lock(lock.clone());
+
+    let channel = crate::domain::ids::ChannelId::new();
+    let post = || {
+        service
+            .show_tracked_message_notification(
+                crate::domain::ids::MessageId::new(),
+                &channel,
+                Some("Alice"),
+                Some("private text"),
+                false,
+                NotificationPriority::Normal,
+            )
+            .unwrap()
+    };
+    post();
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::Message("Alice".into(), "private text".into()))
+    );
+    service.show_incoming_call("ringing").unwrap();
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::Call(
+            "ringing".into(),
+            "Chatter".into(),
+            "Incoming call".into()
+        ))
+    );
+
+    lock.set_visible_at(false, SystemTime::now() - Duration::from_secs(59));
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::CancelMessages)
+    );
+    post();
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::Message("Chatter".into(), "New message".into()))
+    );
+    service.show_incoming_call("locked").unwrap();
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::Call(
+            "locked".into(),
+            "Chatter".into(),
+            "Incoming call".into()
+        ))
+    );
+
+    lock.set_visible(true);
+    lock.attempt_unlock("482916").unwrap();
+    post();
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::Message("Alice".into(), "private text".into()))
+    );
+    lock.lock_now();
+    assert_eq!(
+        receive_notification(&mut rx).await,
+        Some(Action::CancelMessages)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_lock_clears_a_preview_posted_during_lock_without_blocking_transition() {
+    use crate::services::app_lock::{AppLock, LockTimeout};
+    use std::sync::mpsc;
+    use tokio::sync::{mpsc as async_mpsc, oneshot};
+
+    struct PausedDelivery {
+        actions: async_mpsc::UnboundedSender<String>,
+        pause: Mutex<Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>>,
+    }
+
+    impl NotificationSink for PausedDelivery {
+        fn show(&self, _: &str, _: &str, _: NotificationPriority) -> Result<(), SystemError> {
+            unreachable!()
+        }
+
+        fn show_conversation(
+            &self,
+            _: &str,
+            _: &str,
+            body: &str,
+            _: NotificationPriority,
+        ) -> Result<(), SystemError> {
+            if let Some((entered, release)) = self.pause.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            self.actions.send(body.to_owned()).unwrap();
+            Ok(())
+        }
+
+        fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+            self.actions.send(String::new()).unwrap();
+            Ok(true)
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = crate::storage::Database::open(&dir.path().join("n.db"), "p").unwrap();
+    db.run_migrations().unwrap();
+    let settings = Arc::new(
+        crate::storage::repositories::settings_repo::SettingsRepository::new(Arc::new(db)),
+    );
+    let lock = Arc::new(AppLock::new(settings));
+    lock.enable(None, "482916", "482916", LockTimeout::OneMinute)
+        .unwrap();
+    let (actions, mut received) = async_mpsc::unbounded_channel();
+    let (entered, wait_for_entry) = oneshot::channel();
+    let (release, wait_for_release) = mpsc::channel();
+    let service = Arc::new(NotificationService::new(Arc::new(PausedDelivery {
+        actions,
+        pause: Mutex::new(Some((entered, wait_for_release))),
+    })));
+    service.set_detail_level(NotificationDetailLevel::NameAndMessage);
+    service.set_app_lock(lock.clone());
+
+    let channel = crate::domain::ids::ChannelId::new();
+    let post = move |service: &NotificationService| {
+        service
+            .show_message_notification(
+                &channel,
+                Some("Alice"),
+                Some("private text"),
+                false,
+                NotificationPriority::Normal,
+            )
+            .unwrap()
+    };
+    let first_post = tokio::task::spawn_blocking({
+        let service = service.clone();
+        move || post(&service)
+    });
+    tokio::time::timeout(Duration::from_secs(5), wait_for_entry)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let transition = tokio::task::spawn_blocking(move || {
+        lock.lock_now();
+        assert!(lock.is_locked());
+    });
+    let locked_while_posting = tokio::time::timeout(Duration::from_secs(2), transition).await;
+    release.send(()).unwrap();
+    locked_while_posting
+        .expect("platform notification delivery blocked App Lock")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), first_post)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        receive_notification(&mut received).await.as_deref(),
+        Some("private text")
+    );
+
+    assert_eq!(
+        receive_notification(&mut received).await.as_deref(),
+        Some("")
+    );
+    post(&service);
+    assert_eq!(
+        receive_notification(&mut received).await.as_deref(),
+        Some("New message")
+    );
 }

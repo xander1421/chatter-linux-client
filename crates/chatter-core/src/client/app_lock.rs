@@ -28,6 +28,10 @@ impl ChatterClient {
         self.services.app_lock.is_locked()
     }
 
+    pub fn lock_app_now(&self) {
+        self.services.app_lock.lock_now();
+    }
+
     /// Turn the lock on, or change its PIN (`current` required then).
     pub async fn enable_app_lock(
         &self,

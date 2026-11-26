@@ -281,6 +281,9 @@ msgstr "Confirmer le PIN"
 msgid "Turn on app lock"
 msgstr "Activer le verrouillage"
 
+msgid "Lock now"
+msgstr "Verrouiller maintenant"
+
 #: ui/app_lock.slint:169
 msgid "Lock after leaving Chatter"
 msgstr "Verrouiller en quittant Chatter"

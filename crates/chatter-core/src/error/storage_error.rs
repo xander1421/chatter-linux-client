@@ -27,9 +27,9 @@ pub enum StorageError {
     #[error("Invalid data: {0}")]
     InvalidData(String),
 
-    /// The backup uses a payload schema this build cannot restore safely.
-    #[error("Unsupported backup: {0}")]
-    UnsupportedBackup(String),
+    /// Only the current history backup payload can be restored.
+    #[error("Unsupported backup payload version {found} (expected {expected})")]
+    UnsupportedBackupVersion { found: u32, expected: u32 },
 
     /// SQLCipher encryption/decryption failure.
     #[error("Encryption error: {0}")]

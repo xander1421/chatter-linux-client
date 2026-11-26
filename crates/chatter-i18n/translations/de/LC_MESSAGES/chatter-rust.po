@@ -300,14 +300,6 @@ msgstr "Hat mit {} reagiert"
 msgid "A new device was just linked to your account."
 msgstr "Ein neues Gerät wurde gerade mit deinem Konto verknüpft."
 
-#: crates/chatter-core/src/client/notification.rs:784
-msgid "\"{}\" is now linked to your account."
-msgstr "\"{}\" ist jetzt mit deinem Konto verknüpft."
-
-#: crates/chatter-core/src/client/notification.rs:787
-msgid "{} was just linked to your account."
-msgstr "{} wurde gerade mit deinem Konto verknüpft."
-
 #: crates/chatter-core/src/client/notification.rs:792
 #: crates/chatter-core/src/services/activity_service.rs:348
 msgid "New device linked"
@@ -623,7 +615,7 @@ msgid "Outgoing call"
 msgstr "Ausgehender Anruf"
 
 #: crates/chatter-core/src/domain/message/entity.rs:387
-#: crates/chatter-core/src/services/call_notification_bridge.rs:199
+#: crates/chatter-core/src/domain/message/entity.rs:388
 msgid "Incoming video call"
 msgstr "Eingehender Videoanruf"
 
@@ -1053,14 +1045,6 @@ msgstr ""
 "Zu viele Passwortversuche für dieses Konto, deshalb ist die Anmeldung mit "
 "Passwort vorerst pausiert. Melde dich mit einem Wiederherstellungscode an "
 "oder verknüpfe dieses Gerät über ein bereits angemeldetes Gerät."
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:207
-msgid "{} is calling in {}"
-msgstr "{} ruft in {} an"
-
-#: crates/chatter-core/src/services/call_notification_bridge.rs:209
-msgid "{} is calling"
-msgstr "{} ruft an"
 
 #: crates/chatter-core/src/services/channel/error.rs:74
 #: crates/chatter-core/src/services/link_device_service/types.rs:32
@@ -3506,11 +3490,15 @@ msgstr ""
 "Nachrichten konnten nicht gesichert werden. Prüfe Verbindung und PIN, dann "
 "versuch es erneut."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:253
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:254
 msgid "Restored {} rows ({} already present or kept locally)"
 msgstr "{} Einträge wiederhergestellt ({} schon vorhanden oder lokal behalten)"
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:257
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
+msgid "This backup was made by an older version and can't be restored"
+msgstr "Diese Sicherung wurde mit einer älteren Version erstellt und kann nicht wiederhergestellt werden."
+
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
 "This backup was made by a newer version of Chatter. Update the app to "
 "restore it."
@@ -3518,7 +3506,7 @@ msgstr ""
 "Diese Sicherung stammt von einer neueren Version von Chatter. Aktualisiere "
 "die App, um sie wiederherzustellen."
 
-#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:260
+#: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:265
 msgid "Could not restore backup. Check your passphrase or PIN, then retry."
 msgstr ""
 "Sicherung konnte nicht wiederhergestellt werden. Prüfe Passphrase oder PIN, "
@@ -3949,7 +3937,7 @@ msgstr "Anrufe"
 
 #: crates/chatter-ui/src/platform/android/notifications.rs:313
 #: crates/chatter-core/src/domain/message/entity.rs:388
-#: crates/chatter-core/src/services/call_notification_bridge.rs:201
+#: crates/chatter-core/src/services/notification_service/mod.rs:412
 #: crates/chatter-core/src/services/notification_service/mod.rs:326
 msgid "Incoming call"
 msgstr "Eingehender Anruf"

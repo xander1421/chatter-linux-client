@@ -17,10 +17,8 @@ use notify_rust::Urgency;
 
 /// Desktop notification service.
 ///
-/// Wraps notify-rust to show system notifications. On Linux it keeps the
-/// handle of each conversation's notification, so a new message replaces it
-/// and a read closes it; Windows/macOS handles here cannot close by key, so
-/// there each notification is independent.
+/// Keeps conversation notifications addressable on Linux and Windows so a
+/// new message replaces them and a read or app lock can close them.
 pub struct DesktopNotifications {
     /// Settings › Notifications › Sound. Set through
     /// `NotificationSink::set_sound`; on until the persisted value arrives.
@@ -374,6 +372,96 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
             handle.close();
         }
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+        let mut conversations = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
+        for (_, handle) in conversations.drain() {
+            handle.close();
+        }
+        Ok(true)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn show_conversation(
+        &self,
+        conversation: &str,
+        title: &str,
+        body: &str,
+        _: NotificationPriority,
+    ) -> Result<(), SystemError> {
+        windows_toasts::show(
+            conversation,
+            title,
+            body,
+            self.sound.load(std::sync::atomic::Ordering::Relaxed),
+        )
+        .map_err(|e| SystemError::NotificationSend(e.to_string()))
+    }
+
+    #[cfg(target_os = "windows")]
+    fn cancel_conversation(&self, conversation: &str) -> Result<(), SystemError> {
+        windows_toasts::cancel(conversation)
+            .map_err(|e| SystemError::NotificationSend(e.to_string()))
+    }
+
+    #[cfg(target_os = "windows")]
+    fn cancel_message_notifications(&self) -> Result<bool, SystemError> {
+        windows_toasts::cancel_all()
+            .map(|()| true)
+            .map_err(|e| SystemError::NotificationSend(e.to_string()))
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_toasts {
+    use sha2::{Digest, Sha256};
+    use windows::Data::Xml::Dom::XmlDocument;
+    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+    use windows::core::{HSTRING, Result, h};
+
+    // Match notify-rust's AUMID for unpackaged apps. Limit history changes to
+    // our own message group so calls and other users of this AUMID stay visible.
+    const APP_ID: &HSTRING =
+        h!("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe");
+    const MESSAGE_GROUP: &HSTRING = h!("ChatterMessages");
+
+    fn tag(conversation: &str) -> HSTRING {
+        HSTRING::from(hex::encode(&Sha256::digest(conversation.as_bytes())[..8]))
+    }
+
+    pub(super) fn show(conversation: &str, title: &str, body: &str, sound: bool) -> Result<()> {
+        let xml = XmlDocument::new()?;
+        let audio = if sound {
+            ""
+        } else {
+            r#"<audio silent="true"/>"#
+        };
+        xml.LoadXml(&HSTRING::from(format!(
+            r#"<toast><visual><binding template="ToastGeneric"><text/><text/></binding></visual>{audio}</toast>"#,
+        )))?;
+        let text = xml.GetElementsByTagName(h!("text"))?;
+        text.Item(0)?
+            .AppendChild(&xml.CreateTextNode(&HSTRING::from(title))?)?;
+        text.Item(1)?
+            .AppendChild(&xml.CreateTextNode(&HSTRING::from(body))?)?;
+        let toast = ToastNotification::CreateToastNotification(&xml)?;
+        toast.SetTag(&tag(conversation))?;
+        toast.SetGroup(MESSAGE_GROUP)?;
+        ToastNotificationManager::CreateToastNotifierWithId(APP_ID)?.Show(&toast)
+    }
+
+    pub(super) fn cancel(conversation: &str) -> Result<()> {
+        ToastNotificationManager::History()?.RemoveGroupedTagWithId(
+            &tag(conversation),
+            MESSAGE_GROUP,
+            APP_ID,
+        )
+    }
+
+    pub(super) fn cancel_all() -> Result<()> {
+        ToastNotificationManager::History()?.RemoveGroupWithId(MESSAGE_GROUP, APP_ID)
     }
 }
 

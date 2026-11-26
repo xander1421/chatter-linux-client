@@ -76,7 +76,7 @@ fn groups(conn: &Connection, tables: &[&str], reverse: bool) -> Vec<Vec<u8>> {
                     "SELECT * FROM {table} ORDER BY {column} {}",
                     if reverse { "DESC" } else { "ASC" }
                 ),
-                &[],
+                [],
                 &mut rows,
                 &|_| Ok(true),
             )

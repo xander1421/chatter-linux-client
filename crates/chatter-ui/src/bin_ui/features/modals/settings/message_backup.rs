@@ -1,6 +1,7 @@
 //! Settings message backup callbacks.
 
 use super::*;
+use std::cmp::Ordering;
 
 pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // ── Message-history backup (L7) ─────────────────────────────────
@@ -254,11 +255,16 @@ fn message_restore_status(result: Result<ImportSummary, ClientError>) -> String 
             "Restored {} rows ({} already present or kept locally)",
             &[&summary.rows_inserted, &summary.rows_skipped],
         ),
-        Err(error) if error.is_unsupported_backup() => chatter_i18n::tr(
-            "This backup was made by a newer version of Chatter. Update the app to restore it.",
-        ),
-        Err(_) => chatter_i18n::tr(
-            "Could not restore backup. Check your passphrase or PIN, then retry.",
-        ),
+        Err(error) => match error.backup_version_mismatch() {
+            Some(Ordering::Less) => chatter_i18n::tr(
+                "This backup was made by an older version and can't be restored",
+            ),
+            Some(Ordering::Greater) => chatter_i18n::tr(
+                "This backup was made by a newer version of Chatter. Update the app to restore it.",
+            ),
+            _ => chatter_i18n::tr(
+                "Could not restore backup. Check your passphrase or PIN, then retry.",
+            ),
+        },
     }
 }

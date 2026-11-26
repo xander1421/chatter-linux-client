@@ -17,6 +17,17 @@ pub(crate) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
+        pane.on_lock_now(move || {
+            let Some(w) = weak.upgrade() else { return };
+            ui_ctx.lock_app_now();
+            clear_inputs(&w.global::<AppLockPane>());
+            refresh(&w, &ui_ctx);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
         pane.on_unlock(move |pin| {
             let Some(w) = weak.upgrade() else { return };
             let pane = w.global::<AppLockPane>();
