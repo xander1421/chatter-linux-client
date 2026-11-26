@@ -9294,9 +9294,11 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
 //
 // POSITIVE CONTROL: the encrypted avatar is present server-side (V32's fact) —
 //   without this the friend-fetch would decrypt nothing and pass vacuously.
-// PRIVACY HALF: a STRANGER C (not A's friend, holds no profile key) fetching
-//   A's profile gets avatar_bytes = None — the ciphertext is on the server
-//   (octet_length > 0, asserted) yet C cannot decrypt it.
+// PRIVACY HALF: a STRANGER C (not A's friend, no shared channel) is refused
+//   A's profile outright: the server grants profile_read only to contacts and
+//   channel co-members (SEC F5, schema.zed user:profile_read). Before that the
+//   server handed C the ciphertext and only the missing profile key kept the
+//   avatar private.
 //
 // MUTATION — RUN, RED, revert: change the byte-exact expectation below from
 //   `&avatar` to wrong bytes (e.g. `assert_eq!(got, vec![0u8; avatar.len()], ...)`)
@@ -9431,31 +9433,30 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
         got.len()
     );
 
-    // ---- PRIVACY HALF: a STRANGER C (no profile key) gets avatar_bytes=None -
-    // C is registered but NOT A's friend, so C holds no A profile key. The
-    // ciphertext is on the server (octet_length asserted > 0 above), yet C's
-    // get_user_profile -> try_decrypt_avatar returns None (no key -> None).
+    // ---- PRIVACY HALF: a STRANGER C is refused A's profile (SEC F5) --------
+    // C is registered but neither A's friend nor in any channel with A, so the
+    // server must not hand C even the ciphertext.
     let dir_c = tempfile::tempdir().unwrap();
     let client_c = build_client(dir_c.path());
     let _uid_c = register_and_start(&client_c, &unique_user("v38c"), "V38 Carol").await;
 
-    let c_prof = client_c
-        .get_user_profile(&uid_a)
-        .await
-        .expect("C get_user_profile(A) failed");
+    let c_prof = client_c.get_user_profile(&uid_a).await;
     assert!(
-        c_prof.avatar_bytes.is_none(),
-        "PRIVACY LEAK: stranger C (not A's friend, no profile key) got avatar_bytes=Some — \
-         the encrypted avatar is on the server but C must NOT be able to decrypt it."
+        matches!(
+            c_prof,
+            Err(chatter_core::testing::services::user::UserError::Network(
+                chatter_core::error::NetworkError::PermissionDenied
+            ))
+        ),
+        "PRIVACY LEAK: stranger C (not A's friend, no shared channel) was not refused A's \
+         profile: {c_prof:?}"
     );
-    println!(
-        "  privacy half: stranger C (no profile key) gets avatar_bytes=None despite ciphertext on server"
-    );
+    println!("  privacy half: stranger C is refused A's profile (PermissionDenied)");
 
     println!(
         "  V38 PASS — a friend actually SEES your new avatar: A changed avatar, B (friend) fetched \
          A's profile and decrypted the avatar BYTE-EXACT with A's profile key, while stranger C \
-         (no key) could not. This is the round-trip V32 scoped out."
+         was refused the profile. This is the round-trip V32 scoped out."
     );
 }
 
