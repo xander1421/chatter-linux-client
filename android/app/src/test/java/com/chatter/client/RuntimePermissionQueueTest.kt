@@ -1,38 +1,47 @@
 package com.chatter.client
 
-/** Standalone JVM regression for result routing through the Android request queue. */
-object RuntimePermissionQueueTest {
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val queue = RuntimePermissionQueue()
-        val notifications = "android.permission.POST_NOTIFICATIONS"
-        val microphone = "android.permission.RECORD_AUDIO"
-        val camera = "android.permission.CAMERA"
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Test
 
+class RuntimePermissionQueueTest {
+    private val notifications = "android.permission.POST_NOTIFICATIONS"
+    private val microphone = "android.permission.RECORD_AUDIO"
+    private val camera = "android.permission.CAMERA"
+
+    @Test
+    fun notificationResultLeavesQueuedCallRequestsWaiting() {
+        val queue = RuntimePermissionQueue()
         queue.enqueue(0, arrayOf(notifications))
-        check(queue.startNext()?.permissions?.single() == notifications)
+        assertEquals(notifications, queue.startNext()?.permissions?.single())
         queue.enqueue(41, arrayOf(microphone))
         queue.enqueue(42, arrayOf(camera))
-        check(queue.startNext() == null)
+        assertNull(queue.startNext())
 
-        // The notification result carries no waiter ID, even with the call queued.
-        check(queue.completeActive()?.id == 0L)
-        // A callback without an active request cannot claim the queued waiter.
-        check(queue.completeActive() == null)
+        assertEquals(0L, queue.completeActive()?.id)
+        assertNull(queue.completeActive())
         val call = checkNotNull(queue.startNext())
-        check(call.id == 41L && call.permissions.single() == microphone)
-        check(queue.completeActive()?.id == call.id)
+        assertEquals(41L, call.id)
+        assertEquals(microphone, call.permissions.single())
+        assertEquals(call.id, queue.completeActive()?.id)
 
         val video = checkNotNull(queue.startNext())
-        check(video.id == 42L && video.permissions.single() == camera)
-        check(queue.completeActive()?.id == video.id)
-        check(!queue.hasRequests())
+        assertEquals(42L, video.id)
+        assertEquals(camera, video.permissions.single())
+        assertEquals(video.id, queue.completeActive()?.id)
+        assertFalse(queue.hasRequests())
+    }
 
+    @Test
+    fun cancellationReturnsActiveAndQueuedRequestIds() {
+        val queue = RuntimePermissionQueue()
         queue.enqueue(43, arrayOf(microphone))
-        check(queue.startNext()?.id == 43L)
+        assertEquals(43L, queue.startNext()?.id)
         queue.enqueue(44, arrayOf(camera))
-        check(queue.cancelAll().map { it.id } == listOf(43L, 44L))
-        check(queue.completeActive() == null && !queue.hasRequests())
-        println("RuntimePermissionQueue regression passed")
+
+        assertEquals(listOf(43L, 44L), queue.cancelAll().map { it.id })
+        assertNull(queue.completeActive())
+        assertFalse(queue.hasRequests())
     }
 }
