@@ -70,6 +70,9 @@ pub struct AnnounceUpdate {
 /// its ID, and the next announce to claim it would be believed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinnedIdentity {
+    /// Local contact handle, retained when the radio routing ID changes.
+    pub contact: PeerId,
+    pub paired: bool,
     pub noise_public_key: Vec<u8>,
     pub signing_public_key: Vec<u8>,
     /// The nickname at first sight. Display only, for naming the peer in a
@@ -88,7 +91,7 @@ pub struct PinnedIdentity {
 pub const MAX_PINNED_IDENTITIES: usize = 4096;
 
 /// First byte of the persisted pin set.
-pub(super) const PIN_BLOB_VERSION: u8 = 2;
+pub(super) const PIN_BLOB_VERSION: u8 = 3;
 const MAX_UNPROVEN_PEERS: usize = 512;
 
 /// The persisted pin set could not be read. Carries nothing: the only thing a
@@ -130,6 +133,7 @@ pub struct PeerRegistry {
     /// Outlives `peers` on purpose — see [`PinnedIdentity`]. Nothing that
     /// forgets a peer touches it.
     pins: BTreeMap<PeerId, PinnedIdentity>,
+    routes: BTreeMap<PeerId, PeerId>,
 }
 
 impl PeerRegistry {
@@ -229,12 +233,67 @@ impl PeerRegistry {
     }
 
     pub fn can_pin(&self, peer: &PeerId) -> bool {
-        self.pins.contains_key(peer) || self.pins.len() < MAX_PINNED_IDENTITIES
+        self.pins.contains_key(peer)
+            || (!self.routes.contains_key(peer) && self.pins.len() < MAX_PINNED_IDENTITIES)
     }
 
     /// Forget every pin. For a panic wipe, and nothing else.
     pub fn clear_pins(&mut self) {
         self.pins.clear();
+        self.routes.clear();
+    }
+
+    /// Resolve a durable contact handle to the current wire address.
+    pub fn route<'a>(&'a self, peer: &'a PeerId) -> &'a PeerId {
+        self.routes.get(peer).unwrap_or(peer)
+    }
+
+    /// Resolve a wire address to the handle used by the local conversation.
+    pub fn contact<'a>(&'a self, peer: &'a PeerId) -> &'a PeerId {
+        self.pins.get(peer).map_or(peer, |pin| &pin.contact)
+    }
+
+    pub fn pinned_identities(&self) -> impl Iterator<Item = (&PeerId, &PinnedIdentity)> {
+        self.pins.iter()
+    }
+
+    /// The caller verified the transition under the prior pin and the new
+    /// identity in Noise. An unverified announce cannot use this entry point.
+    pub fn advance_pin(
+        &mut self,
+        prior: &PeerId,
+        noise: &[u8; 32],
+        signing: &[u8; 32],
+        now_ms: u64,
+    ) -> bool {
+        let next = PeerId::from_noise_key(noise);
+        let Some(old_pin) = self.pins.get(prior) else {
+            return false;
+        };
+        if !old_pin.paired
+            || prior == &next
+            || self.routes.contains_key(&next)
+            || self.pins.contains_key(&next)
+            || old_pin.signing_public_key.as_slice() == signing
+        {
+            return false;
+        }
+        let contact = old_pin.contact.clone();
+        let Some(old_pin) = self.pins.remove(prior) else {
+            return false;
+        };
+        if !self.pin_noise_identity(&next, noise, signing, now_ms) {
+            self.pins.insert(prior.clone(), old_pin);
+            return false;
+        }
+        self.routes.remove(&next);
+        if let Some(next_pin) = self.pins.get_mut(&next) {
+            next_pin.contact = contact.clone();
+            next_pin.paired = true;
+        }
+        self.routes.insert(contact, next);
+        self.peers.remove(prior);
+        true
     }
 
     /// The pin set, for the caller to seal and persist.
@@ -251,10 +310,12 @@ impl PeerRegistry {
         let mut out = vec![PIN_BLOB_VERSION];
         for (peer, pin) in &self.pins {
             field(&mut out, peer.as_str().as_bytes());
+            field(&mut out, pin.contact.as_str().as_bytes());
             field(&mut out, &pin.noise_public_key);
             field(&mut out, &pin.signing_public_key);
             field(&mut out, pin.nickname.as_bytes());
             out.extend_from_slice(&pin.pinned_at_ms.to_be_bytes());
+            out.push(u8::from(pin.paired));
         }
         out
     }
@@ -274,30 +335,39 @@ impl PeerRegistry {
             Ok(value)
         }
 
-        // Version 1 contained only announce claims, with no Noise binding.
-        if bytes.first() == Some(&1) {
-            return Ok(());
-        }
         let Some((&PIN_BLOB_VERSION, mut rest)) = bytes.split_first() else {
             return Err(MalformedPins);
         };
         let mut loaded = Vec::new();
         while !rest.is_empty() {
             let peer = std::str::from_utf8(field(&mut rest)?).map_err(|_| MalformedPins)?;
+            let contact = PeerId::from_str(
+                std::str::from_utf8(field(&mut rest)?).map_err(|_| MalformedPins)?,
+            );
             let noise_public_key = field(&mut rest)?.to_vec();
             let signing_public_key = field(&mut rest)?.to_vec();
             let nickname = String::from_utf8_lossy(field(&mut rest)?).into_owned();
             let (stamp, tail) = rest.split_first_chunk::<8>().ok_or(MalformedPins)?;
+            let (&paired, tail) = tail.split_first().ok_or(MalformedPins)?;
+            if paired > 1 {
+                return Err(MalformedPins);
+            }
             rest = tail;
             // A pin filed under an ID its own key does not derive to could
             // never have been recorded by `on_announce`, so the blob is not
             // one we wrote.
-            if PeerId::from_noise_key(&noise_public_key).as_str() != peer {
+            if noise_public_key.len() != 32
+                || signing_public_key.len() != 32
+                || contact.to_routing_bytes().is_none()
+                || PeerId::from_noise_key(&noise_public_key).as_str() != peer
+            {
                 return Err(MalformedPins);
             }
             loaded.push((
                 PeerId::from_str(peer),
                 PinnedIdentity {
+                    contact,
+                    paired: paired == 1,
                     noise_public_key,
                     signing_public_key,
                     nickname,
@@ -309,7 +379,14 @@ impl PeerRegistry {
             if self.pins.len() >= MAX_PINNED_IDENTITIES {
                 break;
             }
-            self.pins.entry(peer).or_insert(pin);
+            if self.pins.contains_key(&peer)
+                || self.routes.contains_key(&peer)
+                || self.routes.contains_key(&pin.contact)
+            {
+                continue;
+            }
+            self.routes.insert(pin.contact.clone(), peer.clone());
+            self.pins.insert(peer, pin);
         }
         Ok(())
     }
@@ -318,6 +395,23 @@ impl PeerRegistry {
         if let Some(record) = self.peers.get_mut(peer) {
             record.last_seen_ms = now_unix_millis;
         }
+    }
+
+    /// An in-person QR exchange authorized this Noise-proven identity.
+    pub fn pair_noise_identity(
+        &mut self,
+        peer: &PeerId,
+        noise: &[u8; 32],
+        signing: &[u8; 32],
+        now_ms: u64,
+    ) -> bool {
+        if !self.pin_noise_identity(peer, noise, signing, now_ms) {
+            return false;
+        }
+        if let Some(pin) = self.pins.get_mut(peer) {
+            pin.paired = true;
+        }
+        true
     }
 
     /// Record the keys proven by a binding received inside an authenticated Noise session.
@@ -364,9 +458,14 @@ impl PeerRegistry {
                 record.verified_nickname = false;
             }
         }
+        if existing_pin.is_none() {
+            self.routes.insert(peer.clone(), peer.clone());
+        }
         self.pins
             .entry(peer.clone())
             .or_insert_with(|| PinnedIdentity {
+                contact: peer.clone(),
+                paired: false,
                 noise_public_key: noise.to_vec(),
                 signing_public_key: signing.to_vec(),
                 nickname,

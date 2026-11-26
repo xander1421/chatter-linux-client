@@ -18,6 +18,9 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
     ) -> bool {
+        if self.state.route(claimed) != *claimed {
+            return false;
+        }
         let local = self.identity.peer_id();
         let now_ms = now_millis();
         let now_s = now_secs();
@@ -221,6 +224,7 @@ impl BleRuntime {
         }
 
         self.retry_pending_dm_handshake(claimed).await;
+        let recovery_candidate = direct && self.can_recover_rotation(claimed, now_s);
         // A known peer may return on a new link, where an old session alone
         // cannot authorize routing. Reopen Noise to restore private delivery.
         // Strangers still open Noise on demand.
@@ -243,7 +247,10 @@ impl BleRuntime {
                     now_ms.saturating_sub(last) >= known_peer_retry_delay_ms(attempts, jitter_ms)
                 });
                 let has_session = state.sessions.has_session(claimed);
-                let known = has_session || state.peers.pinned(claimed).is_some();
+                let known = has_session
+                    || state.peers.pinned(claimed).is_some()
+                    || self.pending_rotation_for(claimed)
+                    || recovery_candidate;
                 known && (!has_session || !state.links.presence(claimed).any()) && due
             })
             && self.state.can_open_session_to(claimed)
@@ -268,7 +275,7 @@ impl BleRuntime {
         if new_discovery || (is_new && (link_authenticated || direct_discovery)) {
             // Push anything retained for them, and offer them mail for others.
             let _ = self.router.send(RouterCommand::PeerAvailable {
-                peer: claimed.clone(),
+                peer: self.state.contact(claimed),
             });
             // A peer we have not synced with yet gets our public history.
             if let Ok(send) = self.gossip.initial_sync_to(claimed, now_s) {

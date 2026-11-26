@@ -246,29 +246,17 @@ impl MeshDirectory {
 
 impl CourierDirectory for MeshDirectory {
     fn noise_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
-        // A peer ID that *is* a full Noise key needs no lookup. This is the
-        // normal case for a peer addressed from the UI, where the stable
-        // 64-hex form is what gets stored.
-        if let Some(bytes) = peer.noise_key()
-            && let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice())
-        {
-            return Some(key);
-        }
-        // Otherwise: whatever the announce advertised, or a completed handshake
-        // proved.
-        let from_mesh = self.state.with(|state| {
+        let peer = peer.to_short();
+        self.state.with(|state| {
+            let route = state.peers.route(&peer);
             state
                 .peers
-                .info(peer)
-                .and_then(|record| record.noise_public_key.clone())
-                .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok())
-                .or_else(|| state.sessions.remote_static(peer))
-        });
-        // `None` for a Nostr-only peer: a secp256k1 pubkey is not a Noise static
-        // key and cannot be sealed to. Reporting one here would produce
-        // envelopes nobody can open, so the courier path stays closed for them —
-        // the bridge drop is their offline route, not the mesh courier.
-        from_mesh
+                .pinned(route)?
+                .noise_public_key
+                .as_slice()
+                .try_into()
+                .ok()
+        })
     }
 }
 
@@ -279,7 +267,7 @@ impl CourierDirectory for MeshDirectory {
 /// The mesh radio, as the router sees it.
 pub struct BleTransport {
     state: Arc<MeshState>,
-    identity: Arc<MeshIdentity>,
+    identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
     commands: Arc<super::CommandBus<BleCommand>>,
 }
 
@@ -287,7 +275,7 @@ impl BleTransport {
     #[must_use]
     pub fn new(
         state: Arc<MeshState>,
-        identity: Arc<MeshIdentity>,
+        identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
         commands: Arc<super::CommandBus<BleCommand>>,
     ) -> Self {
         Self {
@@ -318,7 +306,7 @@ impl BleTransport {
             &self.state,
             &payload,
             recipient_key,
-            &self.identity,
+            &self.identity.read(),
             now_unix_secs.saturating_mul(1_000),
         )?;
         let expiry_ms = now_unix_secs
@@ -379,7 +367,7 @@ impl RouterTransport for BleTransport {
         }
         self.commands
             .send(BleCommand::PrivateMessage {
-                peer: to.clone(),
+                peer: self.state.route(to),
                 message_id: message_id.to_string(),
                 content: content.to_string(),
             })
@@ -519,7 +507,11 @@ mod tests {
         let state = Arc::new(MeshState::new());
         let (bus, rx) = crate::services::mesh::CommandBus::new();
         (
-            BleTransport::new(Arc::clone(&state), identity, bus),
+            BleTransport::new(
+                Arc::clone(&state),
+                Arc::new(parking_lot::RwLock::new(identity)),
+                bus,
+            ),
             state,
             rx,
         )
@@ -718,19 +710,25 @@ mod tests {
     }
 
     #[test]
-    fn the_directory_reads_a_key_straight_out_of_a_full_key_peer_id() {
+    fn the_directory_uses_only_the_noise_bound_key() {
         let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
         let state = Arc::new(MeshState::new());
-        let directory = MeshDirectory::new(state);
-
+        let directory = MeshDirectory::new(state.clone());
         let key = identity.static_public();
-        let as_peer = PeerId::from_str(&hex::encode(key));
-        assert_eq!(directory.noise_key(&as_peer), Some(key));
+        let peer = identity.peer_id();
+        assert!(directory.noise_key(&peer).is_none());
+        state.with(|state| {
+            assert!(
+                state
+                    .peers
+                    .pin_noise_identity(&peer, &key, &identity.signing_public(), 1)
+            );
+        });
+        assert_eq!(directory.noise_key(&peer), Some(key));
     }
 
     #[test]
     fn the_directory_has_no_key_for_a_nostr_only_peer() {
-        let identity = MeshIdentity::generate(&mut os_rng());
         let directory = MeshDirectory::new(Arc::new(MeshState::new()));
         // A secp256k1 pubkey is not a Noise static key; sealing to it would
         // produce envelopes nobody can open.

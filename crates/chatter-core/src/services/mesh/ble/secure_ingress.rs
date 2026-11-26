@@ -2,6 +2,7 @@ use super::*;
 use chatter_mesh::tlv::courier_envelope::courier_receipt_id;
 use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
 
+use super::super::account_identity::{PAIRING_RECEIPT_MAGIC, store_paired_pin};
 use super::super::chatter_hello::COURIER_RECEIPTS;
 
 pub(super) const COURIER_RECEIPT_MAGIC: &[u8; 8] = b"CHTRCRP1";
@@ -14,6 +15,88 @@ fn signing_binding_bytes(noise: &[u8; 32], transcript: &[u8; 32], signing: &[u8;
 }
 
 impl BleRuntime {
+    fn on_pairing_receipt(&mut self, peer: &PeerId, receipt: &[u8]) {
+        let Ok(receipt) = <&[u8; 128]>::try_from(receipt) else {
+            return;
+        };
+        let key: &[u8; 32] = receipt[32..64].try_into().expect("pairing receipt layout");
+        let signature: &[u8; 64] = receipt[64..].try_into().expect("pairing receipt layout");
+        let paired = self.state.with(|state| {
+            let Some(offer) = state.pairing_offers.get(peer) else {
+                return false;
+            };
+            let Some(static_key) = state.sessions.remote_static(peer) else {
+                return false;
+            };
+            if offer.expires_at <= now_secs()
+                || offer.token != receipt[..32]
+                || state.sessions.handshake_hash(peer) != Some(offer.transcript)
+                || !verify_bytes(
+                    signature,
+                    &[
+                        PAIRING_RECEIPT_MAGIC.as_slice(),
+                        &offer.token,
+                        &offer.transcript,
+                        key,
+                    ]
+                    .concat(),
+                    key,
+                )
+            {
+                return false;
+            }
+            if !store_paired_pin(
+                &mut state.peers,
+                self.storage.as_ref(),
+                self.sealer.as_ref(),
+                peer,
+                &static_key,
+                key,
+            ) {
+                return false;
+            }
+            state.pairing_offers.remove(peer);
+            true
+        });
+        if paired {
+            self.gossip.retain_signing_key(peer, key);
+            self.emit_peers();
+        }
+    }
+
+    fn observe_account_session(&self, owner: &str, peer: &PeerId, noise: &[u8; 32]) -> bool {
+        let contact = self.state.contact(peer);
+        if self.state.route(&contact) != *peer {
+            return false;
+        }
+        if let Some((key, _)) = self.state.rotated_keys(peer) {
+            return key == *noise;
+        }
+        self.binding_store
+            .observe_live_key(owner, &contact, noise)
+            .is_ok()
+    }
+
+    pub(super) fn account_mesh_keys(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+    ) -> Option<([u8; 32], [u8; 32])> {
+        let contact = self.state.contact(peer);
+        if self.state.route(&contact) != *peer {
+            return None;
+        }
+        let noise = self
+            .binding_store
+            .verified_noise_key(owner, &contact)
+            .ok()??;
+        let signing = self
+            .binding_store
+            .verified_signing_key(owner, &contact)
+            .ok()??;
+        Some(self.state.rotated_keys(peer).unwrap_or((noise, signing)))
+    }
+
     async fn send_mesh_signing_binding(&mut self, peer: &PeerId) {
         let Some(transcript) = self.state.with(|state| state.sessions.handshake_hash(peer)) else {
             return;
@@ -45,7 +128,10 @@ impl BleRuntime {
             let step = state
                 .sessions
                 .on_handshake(claimed, &local, &identity, &packet.payload);
-            if step.as_ref().map_or(true, |step| step.established.is_some()) {
+            if step
+                .as_ref()
+                .map_or(true, |step| step.established.is_some())
+            {
                 state.sessions.release_inbound(claimed);
             }
             Some(step)
@@ -81,15 +167,19 @@ impl BleRuntime {
         }
 
         if let Some(recipient_key) = step.established {
+            self.finish_pending_rotation(claimed, &recipient_key);
             self.state.with(|state| {
                 state.dm_handshake_at_ms.remove(claimed);
                 state.known_peer_reopen_attempts.remove(claimed);
                 state.chatter_hello.forget_live(claimed);
                 state.pending_bindings.remove(claimed);
+                state.pairing_offers.remove(claimed);
             });
             // Only a direct handshake can authenticate this physical link.
             let direct = packet.ttl == chatter_mesh::relay::MESSAGE_TTL_DEFAULT
-                && self.state.with(|state| state.links.mark_noise_authenticated(link, claimed));
+                && self
+                    .state
+                    .with(|state| state.links.mark_noise_authenticated(link, claimed));
             if direct {
                 self.prune_duplicate_links(claimed, now_millis()).await;
                 let announced_key_matches = self.state.with(|state| {
@@ -109,11 +199,12 @@ impl BleRuntime {
             }
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.
+            self.send_rotation_recovery(claimed, direct).await;
             self.send_chatter_hello(claimed).await;
             // A session is the only signal strong enough for the router to send
             // without retaining, so this is the moment retained mail can go.
             let _ = self.router.send(RouterCommand::PeerAvailable {
-                peer: claimed.clone(),
+                peer: self.state.contact(claimed),
             });
             self.flush_pending_dms(claimed).await;
             if let Ok(leaves) = self.private_channels.pending_leaves_for(claimed) {
@@ -153,8 +244,13 @@ impl BleRuntime {
                             self.send_private_control(claimed, &hint).await;
                         }
                         if !state.stale
-                            && !state.unanswered_direct_invites.get(claimed.as_str())
-                                .is_some_and(|at| now_secs().saturating_sub(*at) >= super::super::DIRECT_INVITE_LIFETIME_SECS)
+                            && !state
+                                .unanswered_direct_invites
+                                .get(claimed.as_str())
+                                .is_some_and(|at| {
+                                    now_secs().saturating_sub(*at)
+                                        >= super::super::DIRECT_INVITE_LIFETIME_SECS
+                                })
                             && let Ok(bytes) = state.update_bytes()
                         {
                             let invite = state
@@ -175,7 +271,7 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
     ) {
-        if self.events.peer_blocked(claimed) {
+        if self.events.peer_blocked(&self.state.contact(claimed)) {
             return;
         }
         // Only accept encrypted traffic addressed to us; a directed packet for
@@ -206,9 +302,9 @@ impl BleRuntime {
                 // new one completes, so forged ciphertext cannot tear it down.
                 let due = self.state.with(|state| {
                     !state.sessions.is_handshaking(claimed)
-                        && now_millis().saturating_sub(
-                            *state.dm_handshake_at_ms.get(claimed).unwrap_or(&0),
-                        ) >= DM_HANDSHAKE_RETRY_MS
+                        && now_millis()
+                            .saturating_sub(*state.dm_handshake_at_ms.get(claimed).unwrap_or(&0))
+                            >= DM_HANDSHAKE_RETRY_MS
                 });
                 if due {
                     self.start_handshake(claimed).await;
@@ -226,10 +322,23 @@ impl BleRuntime {
             }
         });
 
+        if let Some(receipt) = plaintext.strip_prefix(PAIRING_RECEIPT_MAGIC) {
+            self.on_pairing_receipt(claimed, receipt);
+            return;
+        }
+        if self.on_rotation_control(claimed, &plaintext) {
+            return;
+        }
         if let Some(receipt) = plaintext.strip_prefix(COURIER_RECEIPT_MAGIC) {
-            let Ok(receipt) = <&[u8; 32]>::try_from(receipt) else { return };
-            if let Some(key) = self.state.with(|state| state.sessions.remote_static(claimed))
-                && let Err(error) = self.couriers.acknowledge_delivery(&key, receipt, now_secs())
+            let Ok(receipt) = <&[u8; 32]>::try_from(receipt) else {
+                return;
+            };
+            if let Some(key) = self
+                .state
+                .with(|state| state.sessions.remote_static(claimed))
+                && let Err(error) = self
+                    .couriers
+                    .acknowledge_delivery(&key, receipt, now_secs())
             {
                 tracing::warn!(target: "mesh::ble", %error, "courier receipt could not retire mail");
             }
@@ -263,7 +372,9 @@ impl BleRuntime {
                 }
             });
             if let Some(key) = recipient_key
-                && let Err(error) = self.couriers.resolve_receipt_support(&key, supports_receipts, now_secs())
+                && let Err(error) =
+                    self.couriers
+                        .resolve_receipt_support(&key, supports_receipts, now_secs())
             {
                 tracing::warn!(target: "mesh::ble", %error, "courier receipt support could not be recorded");
             }
@@ -278,44 +389,39 @@ impl BleRuntime {
                     self.request_signing_pin(claimed).await;
                 }
             }
-            if signal_capable {
-                if let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device() {
-                    if let Some(static_key) = self
-                        .state
-                        .with(|state| state.sessions.remote_static(claimed))
-                    {
-                        let _ = self
-                            .binding_store
-                            .observe_live_key(&owner, claimed, &static_key);
-                    }
-                    if matches!(
-                        self.binding_store.state(&owner, claimed),
-                        Ok(PeerBinding::Verified { .. })
+            if signal_capable
+                && let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device()
+                && let Some(static_key) = self
+                    .state
+                    .with(|state| state.sessions.remote_static(claimed))
+                && self.observe_account_session(&owner, claimed, &static_key)
+            {
+                let contact = self.state.contact(claimed);
+                if matches!(
+                    self.binding_store.state(&owner, &contact),
+                    Ok(PeerBinding::Verified { .. })
+                ) {
+                    match signal_mesh::bundle_for_peer(
+                        &self.key_store,
+                        &self.binding_store,
+                        &owner,
+                        &contact,
+                        device,
+                        now_secs(),
                     ) {
-                        match signal_mesh::bundle_for_peer(
-                            &self.key_store,
-                            &self.binding_store,
-                            &owner,
-                            claimed,
-                            device,
-                            now_secs(),
-                        ) {
-                            Ok(bytes) => self.send_signal_bundle(claimed, &bytes).await,
-                            Err(error) => {
-                                tracing::warn!(target: "mesh::ble", peer = %claimed, %error,
-                                "mesh Signal bundle generation failed")
-                            }
+                        Ok(bytes) => self.send_signal_bundle(claimed, &bytes).await,
+                        Err(error) => {
+                            tracing::warn!(target: "mesh::ble", peer = %claimed, %error,
+                                "mesh Signal bundle generation failed");
                         }
-                        if self.binding_store.signal_opted_in(&owner, claimed).ok() == Some(true)
-                            && let Ok(pending) = self.binding_store.pending_mesh_carriers(
-                                &owner,
-                                claimed,
-                                now_secs(),
-                            )
-                        {
-                            for bytes in pending {
-                                self.send_signal_carrier(claimed, bytes).await;
-                            }
+                    }
+                    if self.binding_store.signal_opted_in(&owner, &contact).ok() == Some(true)
+                        && let Ok(pending) =
+                            self.binding_store
+                                .pending_mesh_carriers(&owner, &contact, now_secs())
+                    {
+                        for bytes in pending {
+                            self.send_signal_carrier(claimed, bytes).await;
                         }
                     }
                 }
@@ -424,16 +530,13 @@ impl BleRuntime {
             else {
                 return;
             };
-            if self
-                .binding_store
-                .observe_live_key(&owner, claimed, &static_key)
-                .is_err()
-            {
+            let contact = self.state.contact(claimed);
+            if !self.observe_account_session(&owner, claimed, &static_key) {
                 return;
             }
             let received =
                 self.binding_store
-                    .receive_mesh_bundle(&owner, claimed, &frame, now_secs());
+                    .receive_mesh_bundle(&owner, &contact, &frame, now_secs());
             tracing::info!(target: "mesh::ble", peer = %claimed, ok = received.is_ok(),
                 new = matches!(received, Ok(true)), "mesh Signal bundle received");
             match received {
@@ -442,7 +545,7 @@ impl BleRuntime {
                         &self.key_store,
                         &self.binding_store,
                         &owner,
-                        claimed,
+                        &contact,
                         device,
                         now_secs(),
                     ) {
@@ -551,7 +654,7 @@ impl BleRuntime {
         let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() else {
             return false;
         };
-        let Ok(Some(signing)) = self.binding_store.verified_signing_key(&owner, claimed) else {
+        let Some((_, signing)) = self.account_mesh_keys(&owner, claimed) else {
             return false;
         };
         if !verify_packet(packet, &signing) {
@@ -571,6 +674,9 @@ impl BleRuntime {
         replay: bool,
     ) -> bool {
         use libsignal_protocol::{DeviceId, ProtocolAddress};
+        let wire_peer = self.state.route(claimed);
+        let contact = self.state.contact(&wire_peer);
+        let claimed = &wire_peer;
         let minute = now_secs() / 60;
         if self.carrier_ingress.len() >= 1024 {
             self.carrier_ingress
@@ -593,23 +699,23 @@ impl BleRuntime {
         let Some(frame) = frames::CarrierFrame::decode(bytes, now_secs()) else {
             return false;
         };
-        if self.events.peer_blocked(claimed) {
+        if self.events.peer_blocked(&self.state.contact(claimed)) {
             return false;
         }
         let Ok(Some((owner, local_device))) = self.key_store.mesh_local_account_device() else {
             return false;
         };
-        let Ok(Some(_signing)) = self.binding_store.verified_signing_key(&owner, claimed) else {
+        let Some(_) = self.account_mesh_keys(&owner, claimed) else {
             return false;
         };
-        if self.binding_store.signal_opted_in(&owner, claimed).ok() != Some(true) {
+        if self.binding_store.signal_opted_in(&owner, &contact).ok() != Some(true) {
             return false;
         }
         let Ok(PeerBinding::Verified {
             account_id,
             device_id,
             ..
-        }) = self.binding_store.state(&owner, claimed)
+        }) = self.binding_store.state(&owner, &contact)
         else {
             return false;
         };
@@ -628,14 +734,14 @@ impl BleRuntime {
         if replay
             && self
                 .binding_store
-                .abort_mesh_receive(&owner, claimed, &frame.message_id)
+                .abort_mesh_receive(&owner, &contact, &frame.message_id)
                 .is_err()
         {
             return false;
         }
         match self
             .binding_store
-            .mesh_received(&owner, claimed, &frame.message_id)
+            .mesh_received(&owner, &contact, &frame.message_id)
         {
             Ok(None) => {}
             Ok(Some(1)) => {
@@ -645,15 +751,12 @@ impl BleRuntime {
                     self.key_store.clone(),
                     self.binding_store.clone(),
                     owner.clone(),
-                    claimed.clone(),
+                    contact.clone(),
                 );
                 let receipt_id = uuid::Uuid::new_v4();
                 let receipt = signal_mesh::SignalPlaintext {
                     kind: signal_mesh::PlainKind::Delivered,
-                    conversation_id: signal_mesh::conversation_id(
-                        &self.identity.peer_id(),
-                        claimed,
-                    ),
+                    conversation_id: signal_mesh::conversation_id(&local, &remote),
                     message_id: frame.message_id,
                     sender_device: u32::from(local_device),
                     recipient_device: device_id,
@@ -667,7 +770,11 @@ impl BleRuntime {
                     &receipt,
                     *receipt_id.as_bytes(),
                 ))
-                .and_then(|frame| frame.encode().map_err(crate::services::mesh::MeshError::Binding))
+                .and_then(|frame| {
+                    frame
+                        .encode()
+                        .map_err(crate::services::mesh::MeshError::Binding)
+                })
                 .ok();
                 drop(store);
                 drop(_guard);
@@ -684,7 +791,7 @@ impl BleRuntime {
             .binding_store
             .begin_mesh_receive(
                 &owner,
-                claimed,
+                &contact,
                 &frame.message_id,
                 bytes,
                 timestamp,
@@ -699,7 +806,7 @@ impl BleRuntime {
             self.key_store.clone(),
             self.binding_store.clone(),
             owner.clone(),
-            claimed.clone(),
+            contact.clone(),
         );
         let plaintext = match futures::executor::block_on(signal_mesh::decrypt(
             &mut store, &remote, &local, &frame,
@@ -709,24 +816,24 @@ impl BleRuntime {
                 tracing::warn!(target: "mesh::ble", peer=%claimed, %error, "mesh Signal decrypt rejected");
                 let _ = self
                     .binding_store
-                    .abort_mesh_receive(&owner, claimed, &frame.message_id);
+                    .abort_mesh_receive(&owner, &contact, &frame.message_id);
                 return false;
             }
         };
         let Some(plain) = signal_mesh::SignalPlaintext::decode(&plaintext, now_secs()) else {
             let _ = self
                 .binding_store
-                .abort_mesh_receive(&owner, claimed, &frame.message_id);
+                .abort_mesh_receive(&owner, &contact, &frame.message_id);
             return false;
         };
-        if plain.conversation_id != signal_mesh::conversation_id(&self.identity.peer_id(), claimed)
+        if plain.conversation_id != signal_mesh::conversation_id(&local, &remote)
             || plain.sender_device != device_id
             || plain.recipient_device != u32::from(local_device)
             || plain.expires_at != frame.expires_at
         {
             let _ = self
                 .binding_store
-                .abort_mesh_receive(&owner, claimed, &frame.message_id);
+                .abort_mesh_receive(&owner, &contact, &frame.message_id);
             return false;
         }
         if matches!(plain.kind, signal_mesh::PlainKind::Text)
@@ -734,7 +841,7 @@ impl BleRuntime {
         {
             let _ = self
                 .binding_store
-                .abort_mesh_receive(&owner, claimed, &frame.message_id);
+                .abort_mesh_receive(&owner, &contact, &frame.message_id);
             return false;
         }
         let kind = match plain.kind {
@@ -752,7 +859,7 @@ impl BleRuntime {
         {
             let _ = self
                 .binding_store
-                .abort_mesh_receive(&owner, claimed, &frame.message_id);
+                .abort_mesh_receive(&owner, &contact, &frame.message_id);
             return false;
         }
         let delivery_id = mapping::wire_message_id(&wire_id).to_string();
@@ -760,7 +867,7 @@ impl BleRuntime {
             .then_some((&plain.message_id, delivery_id.as_str()));
         let Ok((true, acknowledged)) = self.binding_store.finish_mesh_receive(
             &owner,
-            claimed,
+            &contact,
             &frame.message_id,
             kind,
             frame.expires_at,
@@ -790,14 +897,18 @@ impl BleRuntime {
                     &receipt,
                     *receipt_id.as_bytes(),
                 ))
-                .and_then(|frame| frame.encode().map_err(crate::services::mesh::MeshError::Binding))
+                .and_then(|frame| {
+                    frame
+                        .encode()
+                        .map_err(crate::services::mesh::MeshError::Binding)
+                })
                 .ok()
             }
             signal_mesh::PlainKind::Delivered => {
                 if acknowledged {
                     self.events.send(MeshEvent::Delivery {
                         message_id: wire_id,
-                        peer: Some(claimed.clone()),
+                        peer: Some(contact.clone()),
                         state: super::super::events::MeshDelivery::Delivered,
                     });
                 }
@@ -819,7 +930,7 @@ impl BleRuntime {
         };
         let _ = self.router.send(RouterCommand::Acked {
             message_id,
-            peer: peer.clone(),
+            peer: self.state.contact(peer),
             kind,
         });
     }
@@ -834,23 +945,40 @@ impl BleRuntime {
 
         // Is it ours? Only the seal can answer that — the recipient tag rotates
         // and is a hint, not proof.
-        if let Some((plaintext, sender_key)) = super::super::prekeys::open_envelope(
+        let opened = super::super::prekeys::open_envelope(
             &self.state,
             &envelope,
             &self.identity,
             now_millis(),
-        ) {
+        )
+        .or_else(|| {
+            let now = now_secs();
+            if envelope.prekey_id.is_some() {
+                return None;
+            }
+            self.retired_identities
+                .iter()
+                .filter(|epoch| now < epoch.expires_at)
+                .find_map(|epoch| {
+                    chatter_mesh_noise::seal::open_courier(&envelope.ciphertext, &epoch.identity)
+                        .ok()
+                })
+        });
+        if let Some((plaintext, sender_key)) = opened {
             let sender = PeerId::from_noise_key(&sender_key);
             let delivered = if let Some(carrier) = plaintext.strip_prefix(b"CSM1") {
                 if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device()
-                    && self.binding_store.verified_noise_key(&owner, &sender).ok()
-                        == Some(Some(sender_key))
+                    && self
+                        .account_mesh_keys(&owner, &sender)
+                        .is_some_and(|(noise, _)| noise == sender_key)
                 {
-                    self.process_signal_carrier(carrier, &sender, packet.timestamp, false).await
+                    self.process_signal_carrier(carrier, &sender, packet.timestamp, false)
+                        .await
                 } else {
                     false
                 }
-            } else if let Some((NoisePayloadType::PrivateMessage, body)) = decode_noise_payload(&plaintext)
+            } else if let Some((NoisePayloadType::PrivateMessage, body)) =
+                decode_noise_payload(&plaintext)
                 && let Ok(message) = PrivateMessagePacket::decode(body)
             {
                 self.emit_dm(

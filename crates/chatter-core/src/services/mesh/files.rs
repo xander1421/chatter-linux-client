@@ -132,7 +132,7 @@ impl MeshService {
 
         let transfer_id: [u8; 8] = {
             let mut hasher = Sha256::new();
-            hasher.update(self.identity.peer_id().as_str().as_bytes());
+            hasher.update(self.local_peer().as_str().as_bytes());
             hasher.update(digest);
             let full: [u8; 32] = hasher.finalize().into();
             let mut id = [0u8; 8];

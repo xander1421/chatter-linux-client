@@ -36,12 +36,14 @@ fn service_with_radio_factory(
     radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
     connector: Option<Arc<dyn RelayConnector>>,
 ) -> MeshService {
-    let identity = Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
     let config = Arc::new(MeshConfig::default());
     let state = Arc::new(MeshState::new());
     let nostr_state = Arc::new(NostrState::new());
     let timeline = timeline::temp_timeline();
     let identity_store = timeline::temp_identity_store();
+    let identity = Arc::new(parking_lot::RwLock::new(Arc::new(
+        identity_store.get_or_create().expect("test identity"),
+    )));
     let dir = tempfile::tempdir().expect("mesh stores temp dir");
     let db = Arc::new(
         crate::storage::Database::open(&dir.path().join("mesh_stores.db"), "testpass")
@@ -97,8 +99,9 @@ fn service_with_radio_factory(
         radio_factory,
         relay_connector: connector,
         tasks: Mutex::new(Vec::new()),
-        running: AtomicBool::new(false),
-        identity_wiped: AtomicBool::new(false),
+        lifecycle: tokio::sync::Mutex::new(()),
+        running: Arc::new(AtomicBool::new(false)),
+        identity_wiped: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -135,6 +138,7 @@ async fn the_mesh_can_be_stopped_and_started_again() {
     }
 
     service.start().await.expect("start");
+    let first = service.identity();
     settle().await;
     assert!(service.is_running());
     assert_eq!(built.lock().len(), 1, "one radio built for the first start");
@@ -144,6 +148,11 @@ async fn the_mesh_can_be_stopped_and_started_again() {
     assert!(!service.is_running());
 
     service.start().await.expect("restart");
+    let second = service.identity();
+    assert_ne!(first.peer_id(), second.peer_id());
+    assert_ne!(first.static_public(), second.static_public());
+    assert_ne!(first.signing_public(), second.signing_public());
+    assert_ne!(first.fingerprint(), second.fingerprint());
     settle().await;
     assert!(service.is_running(), "a stopped mesh starts again");
     assert_eq!(

@@ -30,6 +30,7 @@ impl MeshService {
     /// whole decision the UI needs. Every DM remains in the outbox until the
     /// recipient acknowledges it, including one queued to a secure BLE link.
     pub async fn send_dm(&self, peer: &PeerId, text: &str) -> Result<MeshDelivery, MeshError> {
+        let peer = &self.state.contact(peer);
         if self.events.peer_blocked(peer) {
             return Err(MeshError::OutOfRange("peer is locally blocked"));
         }
@@ -51,14 +52,14 @@ impl MeshService {
         let message = mapping::outbound_message(
             &conversation,
             &message_id,
-            &self.identity.peer_id(),
+            &self.local_peer(),
             &content,
             now_millis(),
         );
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation,
-            sender: self.identity.peer_id(),
+            sender: self.local_peer(),
             nickname: self.config.nickname(),
             is_local: true,
             sender_verified: true,
@@ -99,6 +100,7 @@ impl MeshService {
         use libsignal_protocol::{DeviceId, ProtocolAddress};
         use rand::TryRngCore;
 
+        let peer = &self.state.contact(peer);
         if self.events.peer_blocked(peer) {
             return Err(MeshError::OutOfRange("peer is locally blocked"));
         }
@@ -168,7 +170,7 @@ impl MeshService {
         let message_id = id.to_string().to_uppercase();
         let plaintext = signal_mesh::SignalPlaintext {
             kind: signal_mesh::PlainKind::Text,
-            conversation_id: signal_mesh::conversation_id(&self.identity.peer_id(), peer),
+            conversation_id: signal_mesh::conversation_id(&local, &remote),
             message_id: *id.as_bytes(),
             sender_device: local_device_id,
             recipient_device: remote.device_id().into(),
@@ -190,14 +192,14 @@ impl MeshService {
         let message = mapping::outbound_message(
             &conversation,
             &message_id,
-            &self.identity.peer_id(),
+            &self.local_peer(),
             &content,
             now_millis(),
         );
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation,
-            sender: self.identity.peer_id(),
+            sender: self.local_peer(),
             nickname: self.config.nickname(),
             is_local: true,
             sender_verified: true,

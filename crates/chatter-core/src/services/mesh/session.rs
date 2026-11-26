@@ -93,8 +93,10 @@ impl SessionManager {
         if message.len() != OPENING_MESSAGE_LEN {
             return self.handshakes.contains_key(peer);
         }
-        if matches!(self.handshakes.get(peer), Some((_, HandshakeRole::Initiator)))
-            && local_peer < peer
+        if matches!(
+            self.handshakes.get(peer),
+            Some((_, HandshakeRole::Initiator))
+        ) && local_peer < peer
         {
             return true;
         }
@@ -376,6 +378,14 @@ impl SessionManager {
     }
 
     /// Forget every session. Used by the panic wipe and on shutdown.
+    pub(super) fn forget_peer(&mut self, peer: &PeerId) {
+        self.handshakes.remove(peer);
+        self.pending_inbound.remove(peer);
+        self.sessions.remove(peer);
+        self.handshake_hashes.remove(peer);
+        self.activity.remove(peer);
+    }
+
     pub fn clear(&mut self) {
         self.handshakes.clear();
         self.pending_inbound.clear();

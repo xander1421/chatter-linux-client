@@ -167,6 +167,9 @@ pub struct BleRuntime {
     /// resetting the relay count to zero every time a link changes.
     nostr_state: Arc<NostrState>,
     identity: Arc<MeshIdentity>,
+    rotation: Option<RadioRotation>,
+    retired_identities: Vec<crate::storage::mesh_identity_store::RetiredMeshEpoch>,
+    pending_rotations: std::collections::BTreeMap<PeerId, rotation::RotationProof>,
     config: Arc<MeshConfig>,
     events: MeshEvents,
     router: Arc<RouterHandle>,
@@ -269,6 +272,9 @@ impl BleRuntime {
             state,
             nostr_state,
             identity,
+            rotation: None,
+            retired_identities: Vec::new(),
+            pending_rotations: std::collections::BTreeMap::new(),
             config,
             events,
             router,
@@ -487,6 +493,20 @@ impl BleRuntime {
             self.degraded(format!("Peer identity pins could not be restored: {error}"));
             return;
         }
+        loop {
+            if !self.run_epoch(&mut commands).await {
+                break;
+            }
+            if !self.start_next_epoch().await {
+                break;
+            }
+        }
+    }
+
+    async fn run_epoch(&mut self, commands: &mut UnboundedReceiver<BleCommand>) -> bool {
+        if self.rotation_stopped() || !self.restore_retired_identities(now_secs()) {
+            return false;
+        }
         // Before `start`, because an advertiser already running will not pick it
         // up. This is what lets peers recognise us across a private address
         // rotation instead of spending a connection to find out who we are.
@@ -495,7 +515,7 @@ impl BleRuntime {
         }
         if let Err(error) = self.radio.start().await {
             self.degraded(format!("the radio would not start: {error}"));
-            return;
+            return false;
         }
         self.state.with(|state| {
             state.radio_running = true;
@@ -525,11 +545,17 @@ impl BleRuntime {
             self.degraded(format!("the courier pool could not be restored: {error}"));
         }
         match self.restore_prekeys() {
-            Ok(local) => self.state.with(|state| state.prekeys.local = Some(local)),
+            Ok(mut local) => {
+                local.rebind(&self.identity, &self.retired_identities);
+                self.state.with(|state| state.prekeys.local = Some(local));
+            }
             // Left `None`: generating a fresh set over secrets we merely could
             // not read would orphan every envelope already sealed to them. Mail
             // to us falls back to the static seal until the next start.
-            Err(error) => self.degraded(format!("mesh prekeys could not be restored: {error}")),
+            Err(error) => {
+                self.state.with(|state| state.prekeys.local = None);
+                self.degraded(format!("mesh prekeys could not be restored: {error}"));
+            }
         }
         self.maintain_prekeys(now_millis()).await;
 
@@ -560,7 +586,7 @@ impl BleRuntime {
         let mut ticker = tokio::time::interval(TICK);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        loop {
+        let rotate = loop {
             let backlogged = !self.state.with(|state| state.writes.is_empty());
             let quiet = !self.dial_in_flight
                 && self.state.with(|state| {
@@ -577,10 +603,10 @@ impl BleRuntime {
                         }
                     }
                     // The radio has shut down for good.
-                    None => break,
+                    None => break false,
                 },
                 command = commands.recv() => match command {
-                    Some(BleCommand::Stop) | None => break,
+                    Some(BleCommand::Stop) | None => break false,
                     Some(command) => {
                         self.on_command(command).await;
                         if quiet { ticker.reset_after(TICK); }
@@ -591,6 +617,13 @@ impl BleRuntime {
                     if quiet { ticker.reset_after(TICK); }
                 },
                 _ = ticker.tick() => {
+                    let now = now_secs();
+                    if self.rotation_stopped() || !self.expire_retired_identities(now) {
+                        break false;
+                    }
+                    if self.rotation_due(now) {
+                        break true;
+                    }
                     self.on_tick().await;
                     ticker.reset_after(if quiet { QUIET_TICK } else { TICK });
                 },
@@ -599,16 +632,35 @@ impl BleRuntime {
                     self.flush_buffered_writes().await;
                 }
             }
+        };
+        if !rotate {
+            self.stop_epoch().await;
         }
+        rotate
+    }
 
-        let _ = self.radio.stop().await;
+    async fn stop_epoch(&mut self) -> bool {
+        let stopped = self.radio.stop().await;
+        if let Err(error) = &stopped {
+            self.degraded(format!("the radio would not stop: {error}"));
+        }
         self.state.with(|state| {
             state.radio_running = false;
             state.sessions.clear();
             state.chatter_hello.clear_live();
             state.pending_bindings.clear();
+            state.pairing_offers.clear();
+            state.links.clear();
+            state.address_of.clear();
+            state.connecting.clear();
+            state.max_write.clear();
+            state.writes = Default::default();
+            state.fragments = chatter_mesh::fragment::FragmentAssembler::new();
+            state.assembler = chatter_mesh_link::backpressure::InboundAssembler::new();
+            state.last_announce_ms = 0;
         });
         self.emit_status();
+        stopped.is_ok()
     }
 }
 
@@ -622,6 +674,8 @@ mod links;
 mod maintenance;
 mod messages;
 mod outgoing_files;
+mod rotation;
+pub(super) use rotation::RadioRotation;
 mod secure_ingress;
 mod transmission;
 

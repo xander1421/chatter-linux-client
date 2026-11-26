@@ -100,6 +100,7 @@ impl MeshService {
             state.chatter_hello.clear_live();
             state.pending_bindings.clear();
             state.binding_offers.clear();
+            state.pairing_offers.clear();
             state.peers.clear_pins();
             state.peers.remove_all();
             state.prekeys = prekeys::PrekeyState::default();
@@ -156,7 +157,12 @@ impl MeshService {
 
     pub(super) fn nickname_for(&self, peer: &PeerId) -> String {
         self.state
-            .with(|state| state.peers.nickname(peer, false).map(str::to_string))
+            .with(|state| {
+                state
+                    .peers
+                    .nickname(state.peers.route(peer), false)
+                    .map(str::to_string)
+            })
             .or_else(|| self.nostr_state.nickname(peer))
             .unwrap_or_else(|| peer.as_str().to_string())
     }

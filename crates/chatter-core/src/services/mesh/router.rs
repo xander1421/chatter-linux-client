@@ -38,8 +38,8 @@ use chatter_mesh_store::router::{MessageRouter, RouterEvent, SendOutcome};
 use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::{MESSAGE_TTL_SECS, RouterTransport, StoreError};
 use parking_lot::Mutex;
-use rand::{RngCore, TryRngCore};
 use rand::rngs::OsRng;
+use rand::{RngCore, TryRngCore};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -61,7 +61,7 @@ type SharedBridge = Rc<RefCell<BridgeCourier<NostrDropRelay, MeshDropSink>>>;
 pub struct RouterDeps {
     pub state: Arc<MeshState>,
     pub nostr_state: Arc<NostrState>,
-    pub identity: Arc<MeshIdentity>,
+    pub identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
     pub storage: Arc<dyn Storage>,
     pub sealer: Arc<dyn Sealer>,
     pub ble: Arc<super::CommandBus<BleCommand>>,
@@ -231,7 +231,7 @@ impl DropRelay for NostrDropRelay {
 
 /// Where an inbound drop goes once it has been recognised.
 struct MeshDropSink {
-    identity: Arc<MeshIdentity>,
+    identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
     state: Arc<MeshState>,
     events: MeshEvents,
 }
@@ -242,7 +242,7 @@ impl MeshDropSink {
         let (plaintext, sender_key) = super::prekeys::open_envelope(
             &self.state,
             envelope,
-            &self.identity,
+            &self.identity.read(),
             now_secs().saturating_mul(1_000),
         )?;
         let (payload_type, body) = decode_noise_payload(&plaintext)?;
@@ -354,7 +354,7 @@ struct Actor {
     /// Drops evicted from the bridge's pending queue while the router held its
     /// own borrow. Drained after every command.
     abandoned: Rc<RefCell<Vec<AbandonedDrop>>>,
-    identity: Arc<MeshIdentity>,
+    identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     events: MeshEvents,
@@ -416,7 +416,7 @@ impl Actor {
             let now = now_secs();
             let Some(envelope) = seal_for_drop(
                 &deposit_state,
-                &deposit_identity,
+                &deposit_identity.read(),
                 content,
                 message_id,
                 recipient_key,
@@ -460,7 +460,9 @@ impl Actor {
     fn restore(&mut self) {
         match load_dedup(self.storage.as_ref(), self.sealer.as_ref()) {
             Ok(snapshot) => {
-                self.bridge.borrow_mut().restore_dedup(&snapshot, now_secs());
+                self.bridge
+                    .borrow_mut()
+                    .restore_dedup(&snapshot, now_secs());
                 self.persisted_dedup = Some(snapshot);
             }
             Err(error) => {
@@ -542,7 +544,7 @@ impl Actor {
                 let flushed = bridge.flush_pending(now);
                 self.abandoned.borrow_mut().extend(flushed);
                 if now >= bridge.next_refresh_due() {
-                    let key = self.identity.static_public();
+                    let key = self.identity.read().static_public();
                     let evicted = bridge.refresh(Some(key), now);
                     self.abandoned.borrow_mut().extend(evicted);
                 }

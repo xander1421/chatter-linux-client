@@ -28,10 +28,11 @@ impl MeshService {
         let (ble_bus, _) = CommandBus::new();
         let (nostr_bus, _) = CommandBus::new();
 
+        let active_identity = Arc::new(parking_lot::RwLock::new(identity));
         let router = Arc::new(RouterHandle::spawn(RouterDeps {
             state: Arc::clone(&state),
             nostr_state: Arc::clone(&nostr_state),
-            identity: Arc::clone(&identity),
+            identity: Arc::clone(&active_identity),
             storage: Arc::clone(&deps.storage),
             sealer: Arc::clone(&deps.sealer),
             ble: Arc::clone(&ble_bus),
@@ -64,7 +65,7 @@ impl MeshService {
             binding_store: deps.binding_store,
             private_channels: deps.private_channels,
             signal_lock: Arc::new(Mutex::new(())),
-            identity,
+            identity: active_identity,
             config,
             state,
             nostr_state,
@@ -80,8 +81,9 @@ impl MeshService {
             radio_factory: deps.radio_factory,
             relay_connector: deps.relay_connector,
             tasks: Mutex::new(Vec::new()),
-            running: AtomicBool::new(false),
-            identity_wiped: AtomicBool::new(false),
+            lifecycle: tokio::sync::Mutex::new(()),
+            running: Arc::new(AtomicBool::new(false)),
+            identity_wiped: Arc::new(AtomicBool::new(false)),
             sealer_unavailable,
         })
     }
@@ -109,6 +111,7 @@ impl MeshService {
     /// carries geohash channels, and a client with no relay connector still
     /// carries the BLE mesh. Neither absence is an error.
     pub async fn start(&self) -> Result<(), MeshError> {
+        let _lifecycle = self.lifecycle.lock().await;
         // Checked before the radio is touched. A mesh whose sealer has no key
         // would advertise, connect, and then fail every retained write — a peer
         // list that looks healthy over a store that cannot keep anything. Better
@@ -120,9 +123,19 @@ impl MeshService {
         if self.identity_wiped.load(Ordering::SeqCst) {
             return Err(MeshError::IdentityWiped);
         }
-        if self.running.swap(true, Ordering::SeqCst) {
+        if self.running.load(Ordering::SeqCst) {
             return Ok(());
         }
+        let epoch = {
+            let _signal_guard = self.signal_lock.lock();
+            if self.identity_wiped.load(Ordering::SeqCst) {
+                return Err(MeshError::IdentityWiped);
+            }
+            self.identity_store.advance(now_secs(), true)?
+        };
+        self.identity_store.schedule_cleanup(epoch.started_at);
+        *self.identity.write() = Arc::clone(&epoch.identity);
+        self.running.store(true, Ordering::SeqCst);
         // Fresh channels for fresh runtimes. Every holder — this service and the
         // router — sends through the bus, so none of them has to be told.
         let ble_rx = self.ble.rebind();
@@ -131,16 +144,17 @@ impl MeshService {
         let mut tasks = Vec::new();
 
         // Fresh per start, never reused: see `radio_override`.
-        let radio = match self.radio_factory.as_ref() {
+        let factory = self.radio_factory.clone();
+        let build_radio = Arc::new(move || match factory.as_ref() {
             Some(build) => Some(build()),
             None => radio::platform_radio(),
-        };
-        if let Some(radio) = radio {
+        });
+        if let Some(radio) = build_radio() {
             let runtime = BleRuntime::new(
                 radio,
                 Arc::clone(&self.state),
                 Arc::clone(&self.nostr_state),
-                Arc::clone(&self.identity),
+                Arc::clone(&epoch.identity),
                 Arc::clone(&self.config),
                 self.events.clone(),
                 Arc::clone(&self.router),
@@ -150,7 +164,15 @@ impl MeshService {
                 Arc::clone(&self.private_channels),
                 Arc::clone(&self.key_store),
                 Arc::clone(&self.signal_lock),
-            );
+            )
+            .with_rotation(ble::RadioRotation {
+                store: self.identity_store.clone(),
+                active: self.identity.clone(),
+                build_radio,
+                wiped: self.identity_wiped.clone(),
+                running: self.running.clone(),
+                started_at: epoch.started_at,
+            });
             tasks.push(tokio::spawn(runtime.run(ble_rx)));
         } else {
             tracing::info!(
@@ -173,7 +195,7 @@ impl MeshService {
                 pool,
                 Arc::clone(&self.nostr_state),
                 Arc::clone(&self.state),
-                NostrIdentities::from_mesh(&self.identity),
+                NostrIdentities::from_mesh(&self.identity()),
                 Arc::clone(&self.config),
                 self.events.clone(),
                 Arc::clone(&self.router),
@@ -192,6 +214,7 @@ impl MeshService {
 
     /// Stop and join both transport runtimes; the router lives until service drop.
     pub async fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
         if !self.running.swap(false, Ordering::SeqCst) {
             return;
         }
@@ -206,6 +229,10 @@ impl MeshService {
         // alive across a radio restart; RouterHandle::drop joins it at teardown.
     }
 
+    pub(super) fn identity(&self) -> Arc<MeshIdentity> {
+        Arc::clone(&self.identity.read())
+    }
+
     // -------------------------------------------------------------- read paths
 
     /// Subscribe to everything the mesh reports.
@@ -217,13 +244,23 @@ impl MeshService {
     /// This device's mesh peer ID — `SHA256(static key)[..8]` as hex.
     #[must_use]
     pub fn local_peer(&self) -> PeerId {
-        self.identity.peer_id()
+        self.identity().peer_id()
     }
 
     /// This device's mesh fingerprint, for out-of-band verification.
     #[must_use]
     pub fn fingerprint(&self) -> String {
-        self.identity.fingerprint()
+        self.identity().fingerprint()
+    }
+
+    /// Whether an in-person pairing authorizes this contact's current keys.
+    pub fn is_paired(&self, peer: &PeerId) -> bool {
+        self.state.with(|state| {
+            state
+                .peers
+                .pinned(state.peers.route(peer))
+                .is_some_and(|pin| pin.paired)
+        })
     }
 
     /// Every peer the mesh currently knows, shaped for display.
