@@ -82,7 +82,15 @@ async fn read_archive(
     mut response: reqwest::Response,
     context: &str,
 ) -> Result<Vec<u8>, MessageBackupError> {
-    // Count actual chunks; never trust Content-Length for bounds or allocation.
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_ARCHIVE_BYTES as u64)
+    {
+        return Err(MessageBackupError::Generic(
+            "archive exceeds its byte limit".into(),
+        ));
+    }
+    // Count actual chunks even when Content-Length is missing.
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -429,9 +437,7 @@ impl MessageBackupService {
     }
 
     /// GET an archive from a presigned storage URL, over Tor in Shield (see
-    /// [`Self::storage_put`]). The Tor path caps the body at the attachment
-    /// response limit, so an archive larger than that fails rather than
-    /// going direct.
+    /// [`Self::storage_put`]). Both routes enforce the same archive size limit.
     async fn storage_get(&self, url: &str, context: &str) -> Result<Vec<u8>, MessageBackupError> {
         let (mode, generation) = self.grpc_pool.route_generation_snapshot();
         fence_cdn_transfer(generation, NetworkError::TransportChanged.into(), async {
@@ -441,7 +447,7 @@ impl MessageBackupService {
                 #[cfg(feature = "onion")]
                 {
                     let tor = self.grpc_pool.onion_tor();
-                    return crate::network::anon_http::get(&tor, url)
+                    return crate::network::anon_http::get_with_limit(&tor, url, MAX_ARCHIVE_BYTES)
                         .await
                         .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")));
                 }
