@@ -260,6 +260,9 @@ pub struct Attachment {
     /// over Tor. Set where the row is made — the secret-chat receive path or
     /// an upload routed for a secret chat — and never cleared.
     pub secret_chat: bool,
+    /// CDN credentials and connections must be isolated from the account route.
+    #[serde(default)]
+    pub private_channel: Option<crate::domain::ChannelId>,
 }
 
 impl Attachment {
@@ -298,6 +301,7 @@ impl Attachment {
             encryption_iv: None,
             created_at: Utc::now(),
             secret_chat: false,
+            private_channel: None,
         }
     }
 

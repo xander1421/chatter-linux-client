@@ -65,37 +65,67 @@ impl ChatterClient {
         !self.anon_mode_enabled() && kind.gif_picker_available()
     }
 
-    /// [`Self::gif_picker_available_for`] the open conversation.
+    /// Whether the open conversation has a permitted GIF picker route.
     pub fn gif_picker_available(&self) -> bool {
+        self.gif_picker_available_in(&self.active_conversation())
+    }
+
+    pub(crate) fn gif_picker_available_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+    ) -> bool {
+        if self.services.uses_anonymous_gif_picker(conversation) {
+            return true;
+        }
         !self.anon_mode_enabled()
-            && self
-                .chat_state()
-                .active_conversation()
+            && conversation
                 .routing_key()
                 .is_none_or(|(kind, _)| kind.gif_picker_available())
     }
 
-    /// Search GIFs. Refused in a secret chat ([`Self::gif_picker_available`]).
+    /// Search GIFs for the open conversation.
     pub async fn search_gifs(
         &self,
         query: &str,
         limit: u32,
     ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, NetworkError> {
-        if !self.gif_picker_available() {
-            return Err(NetworkError::PermissionDenied);
-        }
-        self.services.search_gifs(query, limit).await
+        self.search_gifs_in(&self.active_conversation(), query, limit)
+            .await
     }
 
-    /// Fetch trending GIFs. Refused in a secret chat ([`Self::gif_picker_available`]).
+    /// Search GIFs for the conversation whose picker initiated the request.
+    pub async fn search_gifs_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, NetworkError> {
+        if !self.gif_picker_available_in(conversation) {
+            return Err(NetworkError::PermissionDenied);
+        }
+        self.services
+            .search_gifs_in(conversation, query, limit)
+            .await
+    }
+
+    /// Fetch trending GIFs for the open conversation.
     pub async fn trending_gifs(
         &self,
         limit: u32,
     ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, NetworkError> {
-        if !self.gif_picker_available() {
-            return Err(NetworkError::PermissionDenied);
-        }
-        self.services.trending_gifs(limit).await
+        self.trending_gifs_in(&self.active_conversation(), limit)
+            .await
     }
 
+    /// Fetch trending GIFs for the conversation whose picker initiated the request.
+    pub async fn trending_gifs_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        limit: u32,
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, NetworkError> {
+        if !self.gif_picker_available_in(conversation) {
+            return Err(NetworkError::PermissionDenied);
+        }
+        self.services.trending_gifs_in(conversation, limit).await
+    }
 }

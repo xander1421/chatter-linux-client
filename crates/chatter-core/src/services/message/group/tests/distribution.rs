@@ -268,7 +268,7 @@
             channel_type: match c.messages().channel_repo.routing_type(&channel_id).unwrap() {
                 Some(crate::domain::ChannelType::Public) => pb::ChannelType::ChannelPublic,
                 Some(crate::domain::ChannelType::Private) => pb::ChannelType::ChannelPrivate,
-                _ => pb::ChannelType::Unspecified,
+                _ => pb::ChannelType::ChannelPrivate,
             },
         };
         let hash = state.hash();

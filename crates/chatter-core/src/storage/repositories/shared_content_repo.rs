@@ -527,6 +527,7 @@ mod tests {
             encryption_iv: None,
             created_at: chrono::Utc::now(),
             secret_chat: false,
+            private_channel: None,
         }
     }
 

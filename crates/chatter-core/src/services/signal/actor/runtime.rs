@@ -191,6 +191,15 @@ impl SignalActorHandle {
                                 for destination in &destinations {
                                     store.require_sendable_peer(destination)?;
                                 }
+                                use prost::Message as _;
+                                let group = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())
+                                    .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+                                let sender_key = libsignal_protocol::SenderKeyMessage::try_from(group.ciphertext.as_slice())
+                                    .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+                                // Use the encrypted body length, excluding the variable-width
+                                // sender-key chain ID, ratchet counter and certificate fields.
+                                const PRIVATE_GROUP_OVERHEAD: usize = 768;
+                                let size = sender_key.ciphertext().len() + PRIVATE_GROUP_OVERHEAD;
                                 let usmc = SealedSenderManager::create_content(
                                     libsignal_protocol::CiphertextMessageType::SenderKey,
                                     sender_cert,
@@ -198,6 +207,7 @@ impl SignalActorHandle {
                                     libsignal_protocol::ContentHint::Resendable,
                                     Some(group_id),
                                 )?;
+                                let usmc = SealedSenderManager::pad_usmc(&usmc, size)?;
                                 SealedSenderManager::encrypt_multi_recipient(
                                     &usmc, &destinations, &local_address, &store, echo_registration,
                                 ).await

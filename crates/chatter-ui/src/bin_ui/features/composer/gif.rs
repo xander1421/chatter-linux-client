@@ -13,7 +13,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::{ChatterClient, ComposerSend};
 use chatter_core::domain::ids::AttachmentId;
-use chatter_core::state::PendingAttachment;
+use chatter_core::state::{ActiveConversation, PendingAttachment};
 use chatter_core::ui::picker_history::RecentGif;
 
 use crate::{GifData, MainWindow};
@@ -74,6 +74,7 @@ fn request_gifs(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: String) {
     w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
     let generation = w.get_composer_gif_generation();
     let session = ui_ctx.auth_snapshot().session_revision;
+    let conversation = ui_ctx.active_conversation();
     w.global::<crate::ChatPane>()
         .set_composer_gif_picker_loading(true);
     w.global::<crate::ChatPane>()
@@ -98,17 +99,24 @@ fn request_gifs(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: String) {
     }
     w.global::<crate::ChatPane>()
         .set_composer_gif_picker_recent(rows_model(&recent));
-    spawn_previews(&recent, w.as_weak(), ui_ctx.clone(), generation, session);
+    spawn_previews(
+        &recent,
+        w.as_weak(),
+        ui_ctx.clone(),
+        generation,
+        session,
+        conversation,
+    );
 
     let weak = w.as_weak();
     let ctx = ui_ctx.clone();
     tokio::spawn(async move {
         let raw_gifs = if query.is_empty() {
-            fetch_trending_gifs_raw(&ctx).await
+            fetch_trending_gifs_raw(&ctx, &conversation).await
         } else {
-            search_gifs_raw(&query, &ctx).await
+            search_gifs_raw(&query, &ctx, &conversation).await
         };
-        load_gif_previews(raw_gifs, weak, ctx, generation, session);
+        load_gif_previews(raw_gifs, weak, ctx, generation, session, conversation);
     });
 }
 
@@ -165,7 +173,7 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             show_gif_pending(&w, &ui_ctx, &send);
             let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
             tokio::spawn(async move {
-                let upload = upload_gif(ctx.clone(), url, id);
+                let upload = upload_gif(ctx.clone(), url, id, send.conversation);
                 if let Some(failed) = finish_gif_send(weak.clone(), ctx.clone(), send, upload).await
                 {
                     let _ = slint::invoke_from_event_loop(move || {
@@ -230,9 +238,10 @@ async fn upload_gif(
     ui_ctx: Arc<ChatterClient>,
     url: String,
     gif_id: String,
+    conversation: chatter_core::state::ActiveConversation,
 ) -> Result<PendingAttachment, String> {
     let upload = ui_ctx
-        .download_and_upload_gif(&url, &gif_id)
+        .download_and_upload_gif_to(&url, &gif_id, &conversation)
         .await
         .map_err(|e| e.to_string())?;
     tracing::info!("GIF uploaded to CDN (encrypted on filesystem)");
@@ -376,11 +385,13 @@ fn request_is_current(
     ui_ctx: &ChatterClient,
     generation: i32,
     session: u64,
+    conversation: ActiveConversation,
 ) -> bool {
     w.global::<crate::ChatPane>()
         .get_composer_gif_picker_visible()
         && w.get_composer_gif_generation() == generation
         && ui_ctx.composer_session_is_current(session)
+        && ui_ctx.active_conversation() == conversation
 }
 
 /// Raw decoded frames (Send-safe).
@@ -395,6 +406,7 @@ async fn fetch_full_gif_frames<F>(
     ui_ctx: &std::sync::Arc<ChatterClient>,
     generation: u64,
     session: chatter_core::client::SessionGuard,
+    conversation: ActiveConversation,
     // Called once, the instant the first frame is decoded, so the tile can
     // show immediately instead of waiting for the whole animation to decode.
     on_first_frame: F,
@@ -412,15 +424,16 @@ where
     let current =
         move || session.is_current() && generation == crate::bin_ui::gif_state::picker_generation();
     let fetch = FETCH.clone().acquire_owned().await.ok()?;
-    if !current() {
+    if !current() || ui_ctx.active_conversation() != conversation {
         return None;
     }
     // Time-box the fetch: without it a hung or dead preview URL holds its permit
     // forever, and the picker reopened after a send stalled on "Loading" because
     // a stranded fetch never released (OPEN-ITEMS: GIF picker stall after send).
+    let fetch_timeout = if ui_ctx.anon_mode_enabled() { 30 } else { 8 };
     let bytes = match tokio::time::timeout(
-        std::time::Duration::from_secs(8),
-        ui_ctx.fetch_gif_media(url),
+        std::time::Duration::from_secs(fetch_timeout),
+        ui_ctx.fetch_gif_media_in(&conversation, url),
     )
     .await
     {
@@ -515,6 +528,7 @@ fn load_gif_previews(
     ui_ctx: std::sync::Arc<ChatterClient>,
     generation: i32,
     session: u64,
+    conversation: ActiveConversation,
 ) {
     let raw_gifs = match raw_gifs {
         Ok(gifs) => gifs,
@@ -522,7 +536,7 @@ fn load_gif_previews(
             tracing::warn!("GIF request failed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_window.upgrade() {
-                    if !request_is_current(&w, &ui_ctx, generation, session) {
+                    if !request_is_current(&w, &ui_ctx, generation, session, conversation) {
                         return;
                     }
                     w.global::<crate::ChatPane>()
@@ -541,7 +555,7 @@ fn load_gif_previews(
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_window.upgrade() {
-            if !request_is_current(&w, &ui_ctx, generation, session) {
+            if !request_is_current(&w, &ui_ctx, generation, session, conversation) {
                 return;
             }
             w.global::<crate::ChatPane>()
@@ -550,7 +564,14 @@ fn load_gif_previews(
                 .set_composer_gif_picker_failed(false);
             w.global::<crate::ChatPane>()
                 .set_composer_gif_picker_loading(false);
-            spawn_previews(&raw_gifs, w.as_weak(), ui_ctx.clone(), generation, session);
+            spawn_previews(
+                &raw_gifs,
+                w.as_weak(),
+                ui_ctx.clone(),
+                generation,
+                session,
+                conversation,
+            );
         }
     });
 }
@@ -564,6 +585,7 @@ fn spawn_previews(
     ui_ctx: std::sync::Arc<ChatterClient>,
     generation: i32,
     session: u64,
+    conversation: ActiveConversation,
 ) {
     for (id, preview_url, _full_url, _width, _height) in rows {
         let weak = weak_window.clone();
@@ -583,7 +605,7 @@ fn spawn_previews(
             let publish_first = move |pixels: slint::SharedPixelBuffer<slint::Rgba8Pixel>| {
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak_first.upgrade() else { return };
-                    if !request_is_current(&w, &ctx_first, generation, session) {
+                    if !request_is_current(&w, &ctx_first, generation, session, conversation) {
                         return;
                     }
                     let img = slint::Image::from_rgba8(pixels);
@@ -599,12 +621,13 @@ fn spawn_previews(
                 &ui_ctx_fetch,
                 picker_generation,
                 preview_session,
+                conversation,
                 publish_first,
             )
             .await;
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                if !request_is_current(&w, &ui_ctx_fetch, generation, session) {
+                if !request_is_current(&w, &ui_ctx_fetch, generation, session, conversation) {
                     return;
                 }
                 let Some(decoded) = decoded else {
@@ -626,9 +649,10 @@ fn spawn_previews(
 
 async fn fetch_trending_gifs_raw(
     ui_ctx: &ChatterClient,
+    conversation: &ActiveConversation,
 ) -> Result<Vec<RawGifData>, chatter_core::error::NetworkError> {
     Ok(ui_ctx
-        .trending_gifs(20)
+        .trending_gifs_in(conversation, 20)
         .await?
         .into_iter()
         .map(|r| {
@@ -642,9 +666,10 @@ async fn fetch_trending_gifs_raw(
 async fn search_gifs_raw(
     query: &str,
     ui_ctx: &ChatterClient,
+    conversation: &ActiveConversation,
 ) -> Result<Vec<RawGifData>, chatter_core::error::NetworkError> {
     Ok(ui_ctx
-        .search_gifs(query, 20)
+        .search_gifs_in(conversation, query, 20)
         .await?
         .into_iter()
         .map(|r| {

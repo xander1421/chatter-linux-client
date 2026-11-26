@@ -44,27 +44,43 @@ async fn seal_padded_usmc(
     identities: &impl IdentityKeyStore,
     size: usize,
 ) -> Result<Vec<u8>, CryptoError> {
-    use prost::encoding::{WireType, encode_key, encode_varint, encoded_len_varint, key_len};
-    const PADDING_FIELD: u32 = 15;
     let usmc = UnidentifiedSenderMessageContent::new(
         message_type, sender_cert.clone(), contents, ContentHint::Default,
         group_id.map(<[u8]>::to_vec),
     ).map_err(encryption_error)?;
-    let mut bytes = usmc.serialized().map_err(encryption_error)?.to_vec();
-    if bytes.len() != size {
-        let padding = (1..=3).find_map(|len_bytes| {
-            let n = size.checked_sub(bytes.len() + key_len(PADDING_FIELD) + len_bytes)?;
-            (encoded_len_varint(n as u64) == len_bytes).then_some(n)
-        }).ok_or_else(|| CryptoError::EncryptionFailed("Sealed content does not fit fixed envelope".into()))?;
-        encode_key(PADDING_FIELD, WireType::LengthDelimited, &mut bytes);
-        encode_varint(padding as u64, &mut bytes);
-        bytes.resize(size, 0);
-    }
-    let padded = UnidentifiedSenderMessageContent::deserialize(&bytes).map_err(encryption_error)?;
+    let padded = SealedSenderManager::pad_usmc(&usmc, size)?;
     SealedSenderManager::encrypt_from_content(&padded, destination, identities).await
 }
 
 impl SealedSenderManager {
+    pub(crate) fn pad_usmc(
+        usmc: &UnidentifiedSenderMessageContent,
+        size: usize,
+    ) -> Result<UnidentifiedSenderMessageContent, CryptoError> {
+        use prost::encoding::{WireType, encode_key, encode_varint, encoded_len_varint, key_len};
+        const PADDING_FIELD: u32 = 15;
+        let mut bytes = usmc.serialized().map_err(encryption_error)?.to_vec();
+        if bytes.len() != size {
+            let fit = |len: usize| (1..=3).find_map(|len_bytes| {
+                let n = size.checked_sub(len + key_len(PADDING_FIELD) + len_bytes)?;
+                (encoded_len_varint(n as u64) == len_bytes).then_some(n)
+            });
+            if fit(bytes.len()).is_none() {
+                // One empty field covers gaps at protobuf varint boundaries.
+                encode_key(PADDING_FIELD, WireType::LengthDelimited, &mut bytes);
+                encode_varint(0, &mut bytes);
+            }
+            let padding = fit(bytes.len()).ok_or_else(|| {
+                CryptoError::EncryptionFailed("Sealed content does not fit fixed envelope".into())
+            })?;
+            encode_key(PADDING_FIELD, WireType::LengthDelimited, &mut bytes);
+            encode_varint(padding as u64, &mut bytes);
+            bytes.resize(size, 0);
+        }
+        UnidentifiedSenderMessageContent::deserialize(&bytes).map_err(encryption_error)
+    }
+
+
     /// Encrypt against an in-memory write overlay, then admit ALL envelopes
     /// before persisting any ratchet state. Return these exact ciphertexts:
     /// never probe-and-re-encrypt, estimate Kyber/SPQR overhead or classify a

@@ -307,27 +307,65 @@ impl CoreServices {
         }
     }
 
-    /// Fetch trending GIFs.
-    ///
-    /// Plain Basic-auth RPC: GifService has no anonymous-credential path on the
-    /// server, so a mailbox token here bought nothing and burned the daily
-    /// budget (OPEN-ITEMS §120).
+    pub(crate) fn uses_anonymous_gif_picker(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+    ) -> bool {
+        self.attachment_service
+            .for_conversation(conversation)
+            .uses_private_channel_route()
+    }
+
+    /// Fetch trending GIFs for the open conversation.
     pub async fn trending_gifs(
         &self,
         limit: u32,
     ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        self.trending_gifs_in(&self.chat_state.active_conversation(), limit)
+            .await
+    }
+
+    pub(crate) async fn trending_gifs_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        limit: u32,
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        if self.uses_anonymous_gif_picker(conversation) {
+            return self
+                .grpc_pool
+                .anonymous_gif_client(self.token_manager.for_gifs())
+                .trending(limit as i32)
+                .await;
+        }
         match self.gif_client() {
             Some(mut client) => client.trending(limit as i32).await,
             None => Err(crate::error::NetworkError::Unavailable),
         }
     }
 
-    /// Search GIFs. Basic-auth, no mailbox token — see [`Self::trending_gifs`].
+    /// Search GIFs for the open conversation.
     pub async fn search_gifs(
         &self,
         query: &str,
         limit: u32,
     ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        self.search_gifs_in(&self.chat_state.active_conversation(), query, limit)
+            .await
+    }
+
+    pub(crate) async fn search_gifs_in(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<chatter_proto::chat_v1::GifResult>, crate::error::NetworkError> {
+        if self.uses_anonymous_gif_picker(conversation) {
+            return self
+                .grpc_pool
+                .anonymous_gif_client(self.token_manager.for_gifs())
+                .search(query, limit as i32)
+                .await;
+        }
         match self.gif_client() {
             Some(mut client) => client.search(query, limit as i32).await,
             None => Err(crate::error::NetworkError::Unavailable),
@@ -357,40 +395,64 @@ impl CoreServices {
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
         let auth = self.auth_state.clone();
-        let refill = async move {
-            const QUOTA_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
-            initial_token_refill_sleep().await;
-            let mut ticks = credential_refill_clock();
-            let mut quota_retry = None;
-            loop {
-                let tick = ticks.tick().await;
-                let state = auth.get();
-                if state.current_user_id.is_none() || state.session_ended {
-                    continue;
-                }
-                if quota_retry.is_some_and(|(revision, next)| {
-                    revision == state.session_revision && tick < next
-                }) {
-                    continue;
-                }
-                match token_manager.request_tokens(
-                    &grpc_pool, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
-                ).await {
-                    Ok(granted) => {
-                        quota_retry = None;
-                        tracing::debug!(granted, "Scheduled credential batch received");
+        let refill = |token_manager: Arc<crate::mailbox::token_manager::TokenManager>, batches| {
+            let grpc_pool = grpc_pool.clone();
+            let auth = auth.clone();
+            async move {
+                const QUOTA_PROBE_INTERVAL: std::time::Duration =
+                    std::time::Duration::from_secs(3600);
+                initial_token_refill_sleep().await;
+                let mut ticks = credential_refill_clock();
+                let mut quota_retry = None;
+                loop {
+                    let tick = ticks.tick().await;
+                    let state = auth.get();
+                    if state.current_user_id.is_none() || state.session_ended {
+                        continue;
                     }
-                    Err(error @ crate::error::MailboxError::QuotaExhausted) => {
-                        quota_retry = Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
+                    if quota_retry.is_some_and(|(revision, next)| {
+                        revision == state.session_revision && tick < next
+                    }) {
+                        continue;
+                    }
+                    for _ in 0..batches {
+                        if auth.get().session_revision != state.session_revision {
+                            break;
+                        }
+                        match token_manager
+                            .request_tokens(
+                                &grpc_pool,
+                                crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
+                            )
+                            .await
+                        {
+                            Ok(granted) => {
+                                quota_retry = None;
+                                tracing::debug!(granted, "Scheduled credential batch received");
+                            }
+                            Err(error @ crate::error::MailboxError::QuotaExhausted) => {
+                                quota_retry =
+                                    Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
+                                trace_token_refill_failure(&error);
+                                break;
+                            }
+                            Err(error) => {
+                                trace_token_refill_failure(&error);
+                                break;
+                            }
+                        }
+                    }
+                    if let Err(error) = token_manager.prune_expired_unused_tokens() {
                         trace_token_refill_failure(&error);
                     }
-                    Err(error) => trace_token_refill_failure(&error),
-                }
-                if let Err(error) = token_manager.prune_expired_unused_tokens() {
-                    trace_token_refill_failure(&error);
                 }
             }
         };
+
+        let mailbox_refill = refill(token_manager.clone(), 1);
+        let attachment_refill = refill(Arc::new(token_manager.for_attachments()), 1);
+        // A scheduled GIF refill can cover a 20-tile page in its first tick.
+        let gif_refill = refill(Arc::new(token_manager.for_gifs()), 3);
 
         let anon_group_service = self.anon_group_service.clone();
         let mut keys = self.event_bus.subscribe_domain();
@@ -410,7 +472,7 @@ impl CoreServices {
         };
 
         tokio::spawn(async move {
-            tokio::join!(refill, retry_parked);
+            tokio::join!(mailbox_refill, attachment_refill, gif_refill, retry_parked);
         })
     }
 

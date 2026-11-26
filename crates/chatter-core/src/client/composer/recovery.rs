@@ -33,24 +33,22 @@ impl ChatterClient {
         self.directories().data_dir().join("composer-staging")
     }
 
-    fn staged_upload_temp_root() -> PathBuf {
-        crate::services::attachment::attachments_dir().join("staged-upload-tmp")
+    fn staged_upload_temp_root(&self) -> PathBuf {
+        self.directories().data_dir().join("attachments").join("staged-upload-tmp")
     }
 
     /// Upload plaintext is only needed for one send. A process death skips
     /// TempDir's destructor, so remove any leftovers before a client can send.
     pub(in crate::client) fn cleanup_staged_upload_temps(&self) -> std::io::Result<()> {
-        let root = Self::staged_upload_temp_root();
+        let root = self.staged_upload_temp_root();
         if root.exists() {
             std::fs::remove_dir_all(&root)?;
         }
-        Self::ensure_staged_upload_temp_root()?;
+        Self::ensure_staged_upload_temp_root(root)?;
         Ok(())
     }
 
-    fn ensure_staged_upload_temp_root() -> std::io::Result<PathBuf> {
-        crate::services::attachment::ensure_attachments_dir()?;
-        let root = Self::staged_upload_temp_root();
+    fn ensure_staged_upload_temp_root(root: PathBuf) -> std::io::Result<PathBuf> {
         std::fs::create_dir_all(&root)?;
         #[cfg(unix)]
         {
@@ -337,7 +335,10 @@ impl ChatterClient {
                 AttachmentError::DecryptionError("staged file has no encryption key".into())
             })?;
         let path = path.to_path_buf();
+        let root = self.staged_upload_temp_root();
         crate::services::attachment::run_attachment_work(move || {
+            let root = Self::ensure_staged_upload_temp_root(root)
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
             let key: [u8; 64] = crypto
                 .key
                 .try_into()
@@ -364,8 +365,6 @@ impl ChatterClient {
             decryptor
                 .init_decryption()
                 .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
-            let root = Self::ensure_staged_upload_temp_root()
-                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
             let temp = tempfile::Builder::new()
                 .prefix("upload-")
                 .tempdir_in(root)

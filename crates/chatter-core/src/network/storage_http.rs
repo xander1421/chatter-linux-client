@@ -10,17 +10,32 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 type CachedClient = Result<reqwest::Client, String>;
 
+#[cfg(all(test, feature = "dev-trust-root", feature = "onion"))]
+tokio::task_local! {
+    pub(crate) static STORAGE_FIXTURE_ROOTS: rustls::RootCertStore;
+}
+
+fn storage_tls() -> Result<rustls::ClientConfig, String> {
+    #[cfg(all(test, feature = "dev-trust-root", feature = "onion"))]
+    if let Ok(roots) = STORAGE_FIXTURE_ROOTS.try_with(Clone::clone) {
+        return Ok(crate::network::pq_tls::client_config(roots));
+    }
+    crate::network::pq_tls::pinned_client_config()
+}
+
 pub(crate) fn storage_client() -> CachedClient {
+
     static CLIENTS: OnceLock<Mutex<HashMap<tokio::runtime::Id, Weak<CachedClient>>>> =
         OnceLock::new();
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|_| "storage HTTP requires a running async runtime".to_string())?;
+    let route = runtime.id();
     let mut clients = CLIENTS
         .get_or_init(Default::default)
         .lock()
         .map_err(|_| "storage HTTP client cache lock poisoned".to_string())?;
     clients.retain(|_, client| client.strong_count() > 0);
-    if let Some(client) = clients.get(&runtime.id()).and_then(Weak::upgrade) {
+    if let Some(client) = clients.get(&route).and_then(Weak::upgrade) {
         return (*client).clone();
     }
 
@@ -29,7 +44,7 @@ pub(crate) fn storage_client() -> CachedClient {
     // client/test runtime shuts down. Keep one pool per runtime, including a
     // cached construction failure, and release it when that runtime stops.
     let client = Arc::new(build_client());
-    clients.insert(runtime.id(), Arc::downgrade(&client));
+    clients.insert(route, Arc::downgrade(&client));
     drop(clients);
     let retained = Arc::clone(&client);
     runtime.spawn(async move {
@@ -39,11 +54,10 @@ pub(crate) fn storage_client() -> CachedClient {
     (*client).clone()
 }
 
-fn build_client() -> CachedClient {
+pub(crate) fn build_client() -> CachedClient {
     // Explicit config: no process-global provider, no platform/WebPKI roots
     // beside the pinned Chatter CA, post-quantum key exchange only.
-    let tls =
-        crate::network::pq_tls::pinned_client_config().map_err(|e| format!("storage TLS: {e}"))?;
+    let tls = storage_tls().map_err(|e| format!("storage TLS: {e}"))?;
     reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .https_only(true)

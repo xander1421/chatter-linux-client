@@ -689,7 +689,8 @@ impl MessageService {
     ) -> Result<Message, MessageError> {
         // Upload attachments with encryption
         let attachment_service =
-            AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
+            AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone())
+                .for_conversation(&crate::state::ActiveConversation::Channel(*channel_id));
         let mut attachment_ids = Vec::with_capacity(file_paths.len());
         let mut attachment_pointers = Vec::with_capacity(file_paths.len());
 
@@ -765,13 +766,8 @@ impl MessageService {
         .await
     }
 
-    /// Send control content (reactions, typing, pin, edit, delete, …) to
-    /// every channel member's device inbox as a pairwise sealed-sender
-    /// envelope.
-    ///
-    /// Replaces the former group-mailbox transport: the server-managed
-    /// channels already expose membership, so the additional mailbox buys
-    /// no privacy and costs a second polling loop.
+    /// Dispatch a control using the local channel's signed routing type.
+    /// Private channels use their verified sender-key and SSv2 delivery path.
     pub async fn send_control_content(
         &self,
         _message_client: &mut MessageClient,
@@ -783,13 +779,16 @@ impl MessageService {
     ) -> Result<(), MessageError> {
         let _ = self.settings_repo.current_user_id()?;
 
-        if matches!(content.content, Some(chatter_proto::content_v1::content::Content::Typing(_)))
-            && !self.is_public_channel(channel_id)
-        {
+        if self.is_public_channel(channel_id) {
+            return self.fanout_control_to_device_inboxes(auth_client, channel_id, &content).await;
+        }
+        if matches!(content.content, Some(chatter_proto::content_v1::content::Content::Typing(_))) {
             return Ok(());
         }
-        self.fanout_control_to_device_inboxes(auth_client, channel_id, &content)
-            .await
+        if !self.channel_send_requires_encryption(channel_id)? {
+            return Err(crate::error::NetworkError::Unavailable.into());
+        }
+        self.send_private_channel_control(channel_id, content).await
     }
 
     /// Send control content to a channel (simplified API — no client params).
@@ -982,7 +981,7 @@ impl MessageService {
 
         // Call server: SpiceDB authorizes us as the message's author. A private
         // channel's message has no server copy.
-        if !self.is_private_channel(channel_id) {
+        if !self.channel_send_requires_encryption(channel_id)? {
             self.message_client()
                 .delete_message(&message_id.to_string(), &channel_id.to_string())
                 .await?;
@@ -1028,7 +1027,7 @@ impl MessageService {
             }
             targets.push((id.to_string(), channel_id.to_string()));
         }
-        if !self.is_private_channel(channel_id) {
+        if !self.channel_send_requires_encryption(channel_id)? {
             self.message_client().delete_messages(targets).await?;
         }
         self.message_repo.soft_delete_batch(message_ids)?;

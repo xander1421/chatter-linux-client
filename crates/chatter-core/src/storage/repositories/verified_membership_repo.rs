@@ -105,13 +105,11 @@ impl VerifiedMembershipRepository {
         )?;
         use crate::domain::channel::ChannelType;
         let kind = match st.channel_type {
-            pb::ChannelType::ChannelPublic => Some(ChannelType::Public),
-            pb::ChannelType::ChannelPrivate => Some(ChannelType::Private),
-            _ => None,
+            pb::ChannelType::ChannelPublic => ChannelType::Public,
+            pb::ChannelType::ChannelPrivate => ChannelType::Private,
+            _ => return Err(bad("channel_type")),
         };
-        if let Some(kind) = kind {
-            super::channel_repo::ChannelRepository::pin_type_in(&tx, channel_id, kind)?;
-        }
+        super::channel_repo::ChannelRepository::pin_type_in(&tx, channel_id, kind)?;
         tx.execute(
             "DELETE FROM verified_channel_members WHERE channel_id = ?1",
             params![cid],
@@ -590,32 +588,6 @@ mod tests {
         assert_eq!(channels.save_remote(metadata).unwrap().channel_type, ChannelType::Private);
     }
 
-    #[test]
-    fn untyped_open_membership_does_not_authorize_plaintext() {
-        use crate::domain::{Channel, ChannelType, UserId};
-        use crate::storage::repositories::ChannelRepository;
-
-        let (_dir, repo) = repo();
-        let channels = ChannelRepository::new(repo.db.clone());
-        let channel = ChannelId::new();
-        let owner = UserId::new();
-        let identity = KeyPair::generate(&mut rand::rng());
-        let (signed, verified) = change(
-            &channel.to_string(),
-            None,
-            (&owner.to_string(), &identity),
-            vec![Action::Genesis(pb::Genesis {
-                policy: Some(Policy::defaults(true).to_proto()),
-                disappearing_seconds: 0,
-                channel_type: pb::ChannelType::Unspecified as i32,
-            })],
-        );
-        repo.commit(&channel, &signed, &verified).unwrap();
-        channels.save_remote(Channel::new(channel, "Open".into(), ChannelType::Public, owner)).unwrap();
-
-        assert_eq!(channels.routing_type(&channel).unwrap(), None);
-    }
-
     /// The signed mute survives storage exactly, `u64::MAX` (stored as the
     /// i64 -1) included, and is 0 for anyone outside the verified state.
     #[test]
@@ -633,7 +605,7 @@ mod tests {
                 Action::Genesis(pb::Genesis {
                     policy: Some(Policy::defaults(false).to_proto()),
                     disappearing_seconds: 0,
-                    channel_type: 0,
+                    channel_type: pb::ChannelType::ChannelPrivate as i32,
                 }),
                 Action::AddMember(pb::AddMember {
                     user_id: bob.0.clone(),
@@ -682,7 +654,7 @@ mod tests {
                 Action::Genesis(pb::Genesis {
                     policy: Some(Policy::defaults(false).to_proto()),
                     disappearing_seconds: 30,
-                    channel_type: 0,
+                    channel_type: pb::ChannelType::ChannelPrivate as i32,
                 }),
                 Action::AddMember(pb::AddMember {
                     user_id: bob.0.clone(),

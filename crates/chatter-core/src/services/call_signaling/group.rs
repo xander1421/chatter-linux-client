@@ -67,13 +67,17 @@ impl CallSignalingService {
             .drop_ringing_group_call_invite(call_id);
     }
 
-    /// Whether `user_id` is a member of `channel_id`, per the server's full
-    /// (paginated) member list.
+    /// Whether `user_id` is a member of `channel_id`. Private channels
+    /// use the signed roster so handling a signal does not identify its sender
+    /// to the channel service.
     pub async fn is_channel_member(
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
     ) -> Result<bool, CallSignalingError> {
+        if self.message_service.channel_send_requires_encryption(channel_id)? {
+            return Ok(self.message_service.group_gate().admits(channel_id, user_id));
+        }
         let members = with_policy_deadline(
             "channel member list",
             self.channel_service.get_all_channel_members(channel_id),
@@ -104,25 +108,29 @@ impl CallSignalingService {
         // IS in the room used to be silently skipped here and left unable to
         // decrypt after rotation (OPEN-ITEMS §16).
         let membership_started = std::time::Instant::now();
-        let membership = with_policy_deadline(
-            "channel member list",
-            self.channel_service.get_all_channel_members(channel_id),
-        )
-        .await;
-        let stage = if membership.is_ok() {
-            "rotation_membership_refresh_succeeded"
+        let recipients = if self.message_service.channel_send_requires_encryption(channel_id)? {
+            let verified = self.message_service.group_gate().for_distribution(channel_id)?;
+            verified.state.active_members()
+                .filter(|(id, _)| room_identities.contains(id))
+                .filter_map(|(id, _)| id.parse::<UserId>().ok())
+                .filter(|peer| peer != &current_user)
+                .collect()
         } else {
-            "rotation_membership_refresh_failed"
+            let membership = with_policy_deadline(
+                "channel member list",
+                self.channel_service.get_all_channel_members(channel_id),
+            ).await;
+            let stage = if membership.is_ok() {
+                "rotation_membership_refresh_succeeded"
+            } else {
+                "rotation_membership_refresh_failed"
+            };
+            tracing::info!(
+                stage, call_id, epoch, elapsed_us = membership_started.elapsed().as_micros() as u64,
+                "Call stage"
+            );
+            rotation_recipients(&membership?, room_identities, &current_user)
         };
-        tracing::info!(
-            stage,
-            call_id,
-            epoch,
-            elapsed_us = membership_started.elapsed().as_micros() as u64,
-            "Call stage"
-        );
-        let members = membership?;
-        let recipients = rotation_recipients(&members, room_identities, &current_user);
         let channel_id_str = channel_id.to_string();
 
         // In parallel: one slow recipient (a first session, a KT fetch) must
@@ -187,7 +195,7 @@ impl CallSignalingService {
             epoch,
             sent_count,
             roster = room_identities.len(),
-            members = members.len(),
+            eligible = recipients.len(),
             "Completed rotated group call key redistribution"
         );
         Ok(sent_count)
@@ -202,6 +210,21 @@ impl CallSignalingService {
         call_id: &str,
     ) -> Result<usize, CallSignalingError> {
         let current_user = self.channel_service.current_user_id()?;
+        if self.message_service.channel_send_requires_encryption(channel_id)? {
+            if super::start_cancelled() {
+                return Ok(0);
+            }
+            let count = self.message_service.group_gate().for_distribution(channel_id)?
+                .state.active_members().count().saturating_sub(1);
+            self.message_service.send_control(
+                channel_id,
+                build_group_call_signal_content(
+                    call_id, &channel_id.to_string(), crate::domain::call::GroupCallSignal::Ring,
+                ),
+                None,
+            ).await?;
+            return Ok(count);
+        }
         // Full membership, paginated — a member past the server's page size
         // otherwise never rings (OPEN-ITEMS §16).
         let members = self
@@ -249,6 +272,10 @@ impl CallSignalingService {
             &channel_id.to_string(),
             crate::domain::call::GroupCallSignal::KeyRequest,
         );
+        if self.message_service.channel_send_requires_encryption(channel_id)? {
+            self.message_service.send_control(channel_id, content, None).await?;
+            return Ok(());
+        }
         with_policy_deadline(
             "group call key request",
             self.message_service

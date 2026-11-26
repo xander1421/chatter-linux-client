@@ -41,6 +41,14 @@ impl GrpcClientPool {
         super::super::FileClient::new(self.channel(), self.auth_clone())
     }
 
+    pub(crate) fn private_channel_file_client(
+        self: &Arc<Self>,
+        channel: crate::domain::ChannelId,
+        tokens: Arc<crate::mailbox::token_manager::TokenManager>,
+    ) -> super::super::FileClient {
+        super::super::FileClient::private_channel(self.private_post_channel(channel), tokens)
+    }
+
     /// Create an authenticated AI broker client.
     pub fn ai_client(&self) -> super::super::ai_client::AiClient {
         super::super::ai_client::AiClient::new(self.channel(), self.auth_clone())
@@ -59,6 +67,13 @@ impl GrpcClientPool {
     /// Create an authenticated UserClient.
     pub fn user_client(&self) -> super::super::UserClient {
         super::super::UserClient::new(self.channel(), self.auth_clone())
+    }
+
+    pub(crate) fn anonymous_gif_client(
+        &self,
+        tokens: crate::mailbox::token_manager::TokenManager,
+    ) -> super::super::gif_client::AnonymousGifClient {
+        super::super::gif_client::AnonymousGifClient::new(self.one_shot_anonymous_channel(), tokens)
     }
 
     /// Create an authenticated GifClient.
@@ -106,12 +121,18 @@ impl GrpcClientPool {
     }
 
     /// Isolate anonymous private posts from other unidentified RPCs.
-    pub(crate) fn private_post_client(&self) -> super::super::AnonymousMessageClient {
-        super::super::AnonymousMessageClient::new(self.private_post_channel())
+    pub(crate) fn private_post_client(
+        self: &Arc<Self>,
+        channel: crate::domain::ChannelId,
+    ) -> super::super::AnonymousMessageClient {
+        super::super::AnonymousMessageClient::new(self.private_post_channel(channel))
     }
 
-    pub(crate) fn private_post_auth_client(&self) -> super::super::AnonymousAuthClient {
-        super::super::AnonymousAuthClient::new(self.private_post_channel())
+    pub(crate) fn private_post_auth_client(
+        self: &Arc<Self>,
+        channel: crate::domain::ChannelId,
+    ) -> super::super::AnonymousAuthClient {
+        super::super::AnonymousAuthClient::new(self.private_post_channel(channel))
     }
 
     /// Public KT proofs for the account pin, including the mailbox signing

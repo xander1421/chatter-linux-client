@@ -447,7 +447,8 @@ impl MessageService {
 
         crate::state::send_session::check_send_session()
             .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
-        let mut client = self.grpc_pool.private_post_client();
+        let channel = super::super::group_send::private_post_channel_id()?;
+        let mut client = self.grpc_pool.private_post_client(channel);
         let token = super::super::group_send::claim_private_post_credential(&self.token_manager)?;
         client.send_with_anonymous_credential(
             request_id, recipient_id, messages, SealedDelivery::AllDevices, 0,

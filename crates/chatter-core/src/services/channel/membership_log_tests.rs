@@ -42,7 +42,7 @@ fn genesis() -> Vec<pb::ChannelAction> {
     vec![act(Action::Genesis(pb::Genesis {
         policy: Some(Policy::defaults(false).to_proto()),
         disappearing_seconds: 0,
-        channel_type: 0,
+        channel_type: pb::ChannelType::ChannelPrivate as i32,
     }))]
 }
 

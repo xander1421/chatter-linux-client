@@ -235,6 +235,8 @@ pub struct AttachmentService {
     /// Serving a secret chat (anonymous DM / group): every URL mint and CDN
     /// transfer goes over Tor, whatever the pool's transport, or fails.
     pub(crate) secret_chat: bool,
+    private_channel: Option<crate::domain::ChannelId>,
+    upload_route: Option<crate::network::grpc::client_pool::PrivateUploadRoute>,
 }
 
 impl AttachmentService {
@@ -244,8 +246,8 @@ impl AttachmentService {
     }
 
     /// Get the gRPC pool, returns error if not configured.
-    pub(crate) fn grpc_pool(&self) -> Result<&GrpcClientPool, AttachmentError> {
-        self.grpc_pool.as_ref().map(|p| p.as_ref()).ok_or_else(|| {
+    pub(crate) fn grpc_pool(&self) -> Result<&Arc<GrpcClientPool>, AttachmentError> {
+        self.grpc_pool.as_ref().ok_or_else(|| {
             AttachmentError::NetworkError(
                 "gRPC pool not configured — cannot perform network operations".into(),
             )
@@ -262,49 +264,66 @@ impl AttachmentService {
         }
     }
 
-    /// This service routed for `conversation`: [`Self::for_secret_chat`] for
-    /// an anonymous DM or group, unchanged otherwise.
+    /// Select the transport from the conversation's trusted local routing type.
     pub fn for_conversation(
         &self,
         conversation: &crate::state::chat_state::ActiveConversation,
     ) -> Self {
-        if conversation.is_anon() {
-            self.for_secret_chat()
-        } else {
-            self.clone()
+        match conversation {
+            crate::state::chat_state::ActiveConversation::Channel(channel)
+                if self
+                    .attachment_repo
+                    .channel_uses_private_attachments(channel) =>
+            {
+                Self {
+                    private_channel: Some(*channel),
+                    ..self.clone()
+                }
+            }
+            conversation if conversation.is_anon() => self.for_secret_chat(),
+            _ => self.clone(),
         }
     }
 
-    /// The service to download `attachment_id` with: routed for a secret chat
-    /// when the row's [`Attachment::secret_chat`] marker says it was created
-    /// for one.
-    ///
-    /// [`Attachment::secret_chat`]: crate::domain::attachment::Attachment::secret_chat
+    pub(crate) fn uses_private_channel_route(&self) -> bool {
+        self.private_channel.is_some()
+    }
+
+    /// Preserve the most private transport required by the caller or stored origin.
     fn for_download(&self, attachment_id: &AttachmentId) -> Result<Self, AttachmentError> {
         if self.secret_chat {
             return Ok(self.clone());
         }
         let storage = |e: crate::error::StorageError| AttachmentError::StorageError(e.to_string());
-        let secret = match self.attachment_repo.get(attachment_id).map_err(storage)? {
-            Some(attachment) => attachment.secret_chat,
-            // No row: the transfer fails on its own lookup before any request.
-            None => false,
-        };
-        Ok(if secret {
-            self.for_secret_chat()
-        } else {
-            self.clone()
-        })
+        Ok(
+            match self.attachment_repo.get(attachment_id).map_err(storage)? {
+                Some(attachment) if attachment.secret_chat => self.for_secret_chat(),
+                Some(attachment) if attachment.private_channel.is_some() => Self {
+                    private_channel: attachment.private_channel,
+                    ..self.clone()
+                },
+                _ => self.clone(),
+            },
+        )
     }
 
-    /// File client for URL mints: the secret-chat client (no auth header,
-    /// Tor) for a secret chat, else the pool's transport-following one.
+    /// Use blind credentials for private-channel URL mints and isolate their
+    /// connection alongside the anonymous post traffic.
     pub(crate) fn file_client(&self) -> Result<crate::network::grpc::FileClient, AttachmentError> {
         let pool = self.grpc_pool()?;
         if self.secret_chat {
             return pool
                 .secret_file_client()
                 .map_err(|e| AttachmentError::NetworkError(e.to_string()));
+        }
+        if let Some(route) = &self.upload_route {
+            return Ok(route.file_client(Arc::new(self.attachment_repo.attachment_tokens())));
+        }
+        if let Some(channel) = self.private_channel {
+            return Ok(pool.private_channel_file_client(
+                channel,
+                Arc::new(self.attachment_repo.attachment_tokens()),
+            ));
         }
         Ok(pool.file_client())
     }
@@ -349,8 +368,32 @@ impl AttachmentService {
             pool.secret_storage_tor()
                 .await
                 .map_err(|e| AttachmentError::NetworkError(e.to_string()))
+        } else if let Some(route) = &self.upload_route {
+            route
+                .storage_tor(pool)
+                .await
+                .map_err(|e| AttachmentError::NetworkError(e.to_string()))
+        } else if let Some(channel) = self.private_channel {
+            pool.private_channel_storage_tor(channel)
+                .await
+                .map_err(|e| AttachmentError::NetworkError(e.to_string()))
         } else {
             Ok(pool.onion_tor())
+        }
+    }
+
+    fn cdn_client(&self) -> Result<reqwest::Client, AttachmentError> {
+        if let Some(route) = &self.upload_route {
+            return route
+                .storage_client()
+                .map_err(AttachmentError::NetworkError);
+        }
+        if let Some(channel) = self.private_channel {
+            self.grpc_pool()?
+                .private_channel_storage_client(channel)
+                .map_err(AttachmentError::NetworkError)
+        } else {
+            cdn_client()
         }
     }
 
@@ -387,7 +430,7 @@ impl AttachmentService {
             return Err(no_tor());
         }
 
-        let mut response = cdn_client()?.get(url).send().await.map_err(|e| {
+        let mut response = self.cdn_client()?.get(url).send().await.map_err(|e| {
             AttachmentError::NetworkError(format!("HTTP download failed: {}", e.without_url()))
         })?;
         if !response.status().is_success() {
@@ -452,7 +495,7 @@ impl AttachmentService {
             return Err(no_tor());
         }
 
-        let mut response = cdn_client()?
+        let mut response = self.cdn_client()?
             .get(url)
             .send()
             .await
@@ -503,7 +546,7 @@ impl AttachmentService {
         }
 
         let content_length = body.len();
-        let response = cdn_client()?
+        let response = self.cdn_client()?
             .put(url)
             .header("Content-Type", content_type)
             .header("Content-Length", content_length)
@@ -529,6 +572,8 @@ impl AttachmentService {
             attachment_repo,
             grpc_pool: Some(grpc_pool),
             secret_chat: false,
+            private_channel: None,
+            upload_route: None,
         }
     }
 
@@ -540,6 +585,8 @@ impl AttachmentService {
             attachment_repo,
             grpc_pool: None,
             secret_chat: false,
+            private_channel: None,
+            upload_route: None,
         }
     }
 
@@ -660,6 +707,7 @@ impl AttachmentService {
                 encryption_iv: Some(pointer.digest.clone()),
                 created_at: chrono::Utc::now(),
                 secret_chat: self.secret_chat,
+                private_channel: self.private_channel,
             };
 
             let inserted = self.attachment_repo.insert_or_raise_secret_admitted(&attachment, session)?;

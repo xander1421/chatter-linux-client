@@ -319,7 +319,10 @@ impl ChannelInbound {
                         let attachments = self.attachments.clone();
                         let pointers = dm.attachments.clone();
                         let admitted = session.clone();
-                        if let Err(error) = self.messages.database.run_blocking(move || attachments.create_from_pointers_admitted(&pointers, Some(&admitted))).await {
+                        if let Err(error) = self.messages.database.run_blocking(move || {
+                            attachments.for_conversation(&crate::state::ActiveConversation::Channel(channel_id))
+                                .create_from_pointers_admitted(&pointers, Some(&admitted))
+                        }).await {
                             tracing::warn!(%error, "Failed to store attachment records");
                         }
                         session.check().map_err(|_| Ingested::RetryableFailure)?;

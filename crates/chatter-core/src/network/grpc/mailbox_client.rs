@@ -7,6 +7,7 @@ use crate::network::grpc::transport::GrpcTransport;
 use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
+use crate::mailbox::token_manager::CredentialPurpose;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use chatter_proto::mailbox_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
@@ -33,6 +34,7 @@ use chatter_proto::mailbox_v1::{
 /// ```
 #[derive(Clone)]
 pub struct MailboxClient {
+    purpose: CredentialPurpose,
     inner: EphemeralMailboxServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
@@ -40,8 +42,14 @@ impl MailboxClient {
     /// Create a new MailboxClient from pool components.
     pub fn new(channel: GrpcTransport, interceptor: AuthInterceptor) -> Self {
         Self {
+            purpose: CredentialPurpose::Mailbox,
             inner: EphemeralMailboxServiceClient::with_interceptor(channel, interceptor),
         }
+    }
+
+    pub(crate) fn with_purpose(mut self, purpose: CredentialPurpose) -> Self {
+        self.purpose = purpose;
+        self
     }
 
     // ==================== Token & Challenge RPCs ====================
@@ -67,19 +75,22 @@ impl MailboxClient {
             key_id,
         };
 
-        self.inner
-            .get_mailbox_tokens(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|status| {
-                // The mailbox handler's application refusal is distinct from
-                // a transport or gateway throttle, which uses the same code.
-                if status.code() == tonic::Code::ResourceExhausted && status.message() == "quota exceeded" {
-                    NetworkError::MailboxQuotaExceeded
-                } else {
-                    NetworkError::from_status(&status)
-                }
-            })
+        let response = match self.purpose {
+            CredentialPurpose::Mailbox => self.inner.get_mailbox_tokens(request).await,
+            CredentialPurpose::Attachment => self.inner.get_attachment_tokens(request).await,
+            CredentialPurpose::Gif => self.inner.get_gif_tokens(request).await,
+        };
+        response.map(|r| r.into_inner()).map_err(|status| {
+            // The mailbox handler's application refusal is distinct from
+            // a transport or gateway throttle, which uses the same code.
+            if status.code() == tonic::Code::ResourceExhausted
+                && status.message() == "quota exceeded"
+            {
+                NetworkError::MailboxQuotaExceeded
+            } else {
+                NetworkError::from_status(&status)
+            }
+        })
     }
 
     /// Get the server's blind signature public key.
@@ -92,9 +103,12 @@ impl MailboxClient {
     ) -> Result<GetBlindSignaturePublicKeyResponse, NetworkError> {
         let request = GetBlindSignaturePublicKeyRequest { consistency: Some(consistency) };
 
-        self.inner
-            .get_blind_signature_public_key(request)
-            .await
+        let response = match self.purpose {
+            CredentialPurpose::Mailbox => self.inner.get_blind_signature_public_key(request).await,
+            CredentialPurpose::Attachment => self.inner.get_attachment_signing_key(request).await,
+            CredentialPurpose::Gif => self.inner.get_gif_signing_key(request).await,
+        };
+        response
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }

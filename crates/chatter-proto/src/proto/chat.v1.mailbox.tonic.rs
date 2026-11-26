@@ -92,6 +92,122 @@ pub mod ephemeral_mailbox_service_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
+        pub async fn get_attachment_tokens(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetMailboxTokensRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetMailboxTokensResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.mailbox.EphemeralMailboxService/GetAttachmentTokens",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.mailbox.EphemeralMailboxService",
+                        "GetAttachmentTokens",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_attachment_signing_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetBlindSignaturePublicKeyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetBlindSignaturePublicKeyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.mailbox.EphemeralMailboxService/GetAttachmentSigningKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.mailbox.EphemeralMailboxService",
+                        "GetAttachmentSigningKey",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_gif_tokens(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetMailboxTokensRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetMailboxTokensResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.mailbox.EphemeralMailboxService/GetGifTokens",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.mailbox.EphemeralMailboxService",
+                        "GetGifTokens",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_gif_signing_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetBlindSignaturePublicKeyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetBlindSignaturePublicKeyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.mailbox.EphemeralMailboxService/GetGifSigningKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.mailbox.EphemeralMailboxService",
+                        "GetGifSigningKey",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn get_mailbox_tokens(
             &mut self,
             request: impl tonic::IntoRequest<super::GetMailboxTokensRequest>,

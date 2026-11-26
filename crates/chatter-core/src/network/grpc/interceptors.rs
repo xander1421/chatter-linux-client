@@ -321,19 +321,7 @@ impl Interceptor for AuthInterceptor {
                 );
             }
             AuthMode::Anonymous(token) => {
-                // Serialize token to JSON for the header
-                // Match the backend's AnonymousCredential struct
-                let cred = serde_json::json!({
-                    "public_key": BASE64.encode(&token.public_key),
-                    "signature": BASE64.encode(&token.signature),
-                });
-                let value = cred.to_string();
-                request.metadata_mut().insert(
-                    "x-anonymous-credential",
-                    value.parse().map_err(|_| {
-                        Status::internal("invalid anonymous credential header value")
-                    })?,
-                );
+                insert_blind_credential(&mut request, &token.public_key, &token.signature)?;
             }
             AuthMode::None => {
                 // No authentication header
@@ -342,6 +330,26 @@ impl Interceptor for AuthInterceptor {
 
         Ok(request)
     }
+}
+
+pub(super) fn insert_blind_credential<T>(
+    request: &mut Request<T>,
+    public_key: &[u8],
+    signature: &[u8],
+) -> Result<(), Status> {
+    let value = serde_json::json!({
+        "public_key": BASE64.encode(public_key),
+        "signature": BASE64.encode(signature),
+    })
+    .to_string();
+    let mut value: tonic::metadata::MetadataValue<_> = value
+        .parse()
+        .map_err(|_| Status::internal("invalid anonymous credential header value"))?;
+    value.set_sensitive(true);
+    request
+        .metadata_mut()
+        .insert("x-anonymous-credential", value);
+    Ok(())
 }
 
 #[cfg(test)]

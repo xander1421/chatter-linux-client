@@ -66,7 +66,9 @@ impl GrpcClientPool {
             transport_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             active_unconsented_media: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             unidentified_channel: Arc::new(RwLock::new(None)),
-            private_post_channel: Arc::new(RwLock::new(None)),
+            private_channels: Default::default(),
+            #[cfg(all(test, feature = "onion", feature = "dev-trust-root"))]
+            loopback_shield_endpoint: Default::default(),
             #[cfg(feature = "onion")]
             unidentified_health: Arc::new(RwLock::new(None)),
             secret_channel: Arc::new(RwLock::new(None)),
@@ -82,8 +84,6 @@ impl GrpcClientPool {
             onion_tor: Arc::new(tokio::sync::OnceCell::new()),
             #[cfg(feature = "onion")]
             unidentified_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "onion")]
-            private_post_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
             #[cfg(feature = "onion")]
             secret_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
         })
@@ -332,7 +332,7 @@ impl GrpcClientPool {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *channel = None;
         *self.unidentified_channel.write() = None;
-        *self.private_post_channel.write() = None;
+        self.private_channels.lock().clear();
         self.disconnect_secret();
         #[cfg(feature = "onion")]
         {
