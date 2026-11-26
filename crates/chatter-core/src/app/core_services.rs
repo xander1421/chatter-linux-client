@@ -334,82 +334,50 @@ impl CoreServices {
         }
     }
 
-    /// Pre-fetch anonymous tokens for sealed sender messaging.
-    ///
-    /// Ensures tokens are available before the first SKDM distribution.
-    /// Returns the number of mailbox tokens fetched, or 0 if already sufficient.
+    /// Test fixtures can fill the pool before driving the send path.
+    #[cfg(any(test, feature = "testing"))]
     pub async fn prefetch_tokens(
         &self,
         target_count: u32,
     ) -> Result<u32, crate::error::MailboxError> {
-        let current = self.token_manager.available_token_count()?;
-        if current >= target_count {
-            tracing::debug!(
-                "Sufficient anonymous tokens available: {} (target: {})",
-                current,
-                target_count
-            );
+        let count = target_count.saturating_sub(self.token_manager.available_token_count()?);
+        if count == 0 {
             return Ok(0);
         }
-
-        let needed = target_count - current;
-        tracing::info!(
-            "Pre-fetching anonymous tokens (current: {}, target: {})",
-            current,
-            target_count
-        );
-
-        let mut mailbox_client = self.grpc_pool.mailbox_client();
-        let mut kt = self.grpc_pool.anonymous_kt_client();
-
-        let fetched = self
-            .token_manager
-            .request_tokens(&mut mailbox_client, &mut kt, needed)
-            .await?;
-        tracing::info!("Pre-fetched {} anonymous tokens", fetched);
-        Ok(fetched)
+        self.token_manager.request_tokens(
+            &mut self.grpc_pool.mailbox_client(),
+            &mut self.grpc_pool.anonymous_kt_client(),
+            count,
+        ).await
     }
 
-    /// Spawn the token refill loop and the parked-send retry loop.
-    ///
-    /// Sends spend only from the pre-fetched pool
-    /// (`TokenManager::claim_prefetched_token`) and never request tokens
-    /// themselves; this loop is the only thing that tops the pool up, at a
-    /// random interval, so the authenticated token request is not tied in
-    /// time to the anonymous send that spends it (NDSS'21 §VI-F).
-    ///
-    /// Anon-group posts parked because the batch ran dry are retried by a
-    /// second loop on its own independent jitter, for the same reason: a
-    /// retry right after a refill would spend the fresh tokens next to the
-    /// request that fetched them. Aborting the returned handle stops both.
+    /// Run credential issuance on its own clock. Every signed-in tick sends
+    /// one fixed batch regardless of the local balance or last grant, including
+    /// quota refusals. A separate jittered loop retries parked anonymous sends.
     pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
-        let messages = self.message_service.clone();
         let auth = self.auth_state.clone();
         let refill = async move {
-            // Session startup, never Shield entry or a send, schedules the
-            // first refill. Avoid a 5–15 minute empty pool after sign-in.
             initial_token_refill_sleep().await;
+            let mut ticks = credential_refill_clock();
             loop {
+                ticks.tick().await;
+                let state = auth.get();
+                if state.current_user_id.is_none() || state.session_ended {
+                    continue;
+                }
                 let mut client = grpc_pool.mailbox_client();
                 let mut kt = grpc_pool.anonymous_kt_client();
-                let target = auth.get().current_user_id
-                    .and_then(|owner| messages.anonymous_credential_pool_target(owner).ok())
-                    .unwrap_or(20);
-                match token_manager.available_token_count() {
-                    Ok(current) if current < target / 2 => {
-                        let now =
-                            top_up(&token_manager, &mut client, &mut kt, current, target).await;
-                        tracing::info!(had = current, now, "Token refill: pool topped up");
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        trace_token_refill_failure(&e);
-                        tracing::warn!("Token refill: could not count tokens: {}", e);
-                    }
+                match token_manager.request_tokens(
+                    &mut client, &mut kt, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
+                ).await {
+                    Ok(granted) => tracing::debug!(granted, "Scheduled credential batch received"),
+                    Err(error) => trace_token_refill_failure(&error),
                 }
-                jittered_sleep().await;
+                if let Err(error) = token_manager.prune_expired_unused_tokens() {
+                    trace_token_refill_failure(&error);
+                }
             }
         };
 
@@ -955,27 +923,10 @@ pub(crate) async fn initial_token_refill_sleep() {
     tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
 }
 
-/// Top the mailbox token pool up from `have` to `target` in rounds (the
-/// server grants at most 10 per request). Returns the claimable count reached.
-async fn top_up(
-    tm: &TokenManager,
-    client: &mut crate::network::grpc::MailboxClient,
-    kt: &mut crate::network::grpc::AnonymousKtClient,
-    mut have: u32,
-    target: u32,
-) -> u32 {
-    while have < target {
-        match tm.request_tokens(client, kt, target - have).await {
-            Ok(0) => break,
-            Ok(n) => have += n,
-            Err(e) => {
-                trace_token_refill_failure(&e);
-                tracing::warn!("Token refill failed: {}", e);
-                break;
-            }
-        }
-    }
-    have
+fn credential_refill_clock() -> tokio::time::Interval {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticks
 }
 
 // Only constant targets cross the log redactor; never include error payloads.
@@ -986,7 +937,7 @@ fn trace_token_refill_failure(error: &crate::error::MailboxError) {
             tracing::warn!(target: "token_refill::no_tokens", "token refill failed")
         }
         MailboxError::QuotaExhausted => {
-            tracing::warn!(target: "token_refill::quota", "token refill failed")
+            tracing::debug!(target: "token_refill::quota", "scheduled token grant exhausted")
         }
         MailboxError::Network(_) => {
             tracing::warn!(target: "token_refill::network", "token refill failed")
@@ -1014,5 +965,17 @@ mod initial_token_refill_tests {
         assert!(futures::poll!(&mut wait).is_pending());
         tokio::time::advance(std::time::Duration::from_secs(21)).await;
         wait.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn credential_clock_does_not_burst_after_a_missed_tick() {
+        use std::time::Duration;
+        let mut ticks = super::credential_refill_clock();
+        let first = ticks.tick().await;
+        tokio::time::advance(Duration::from_secs(25 * 60)).await;
+        assert_eq!(ticks.tick().await, first + Duration::from_secs(10 * 60));
+        let mut next = std::pin::pin!(ticks.tick());
+        assert!(futures::poll!(&mut next).is_pending());
+        assert_eq!(next.await, first + Duration::from_secs(30 * 60));
     }
 }

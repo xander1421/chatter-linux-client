@@ -2,6 +2,7 @@
 use super::{MessageError, MessageService};
 use crate::domain::ids::{ChannelId, DeviceId, MessageId, UserId};
 use crate::domain::message::ConversationType;
+use crate::error::NetworkError;
 use crate::inbox::DomainEvent;
 use crate::storage::repositories::message_receipt_repo::{DeviceReceipt, MessageReceiptRepository};
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
@@ -342,9 +343,8 @@ impl MessageService {
         Ok(())
     }
 
-    /// Public channel transcripts can be sent immediately. Private channel
-    /// transcripts wait for a time independent of the anonymous send, so the
-    /// linked-device sync cannot label the post with a simultaneous Basic RPC.
+    /// Private channel transcripts leave on the background schedule, sealed
+    /// to our linked devices and authorized by a blind credential.
     pub(super) async fn sync_channel_receipt_targets(
         &self,
         channel: ChannelId,
@@ -404,18 +404,71 @@ impl MessageService {
             )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
-        let mut auth = self.auth_client();
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let recipient = owner.to_string();
+        let current_device = self.current_device_id_or_zero();
+        let mut devices = self.signal_service.session_devices(&recipient).await
+            .map_err(|error| MessageError::from_signal_send(error, "Linked-device receipt sync"))?;
+        devices.retain(|&device| device != current_device);
+        if !devices.is_empty() && self.signal_service.get_cached_sender_certificate()
+            .map_err(|error| MessageError::from_signal_send(error, "Sender certificate"))?
+            .is_none()
+        {
+            return Ok(());
+        }
         for (key, payload) in rows {
             crate::state::send_session::check_send_session()?;
             let sync = serde_json::from_str::<Vec<u8>>(&payload).ok()
                 .and_then(|bytes| chatter_proto::content_v1::Content::decode(bytes.as_slice()).ok());
-            if let Some(sync) = sync {
-                self.send_prepared_own_device_sync(&mut auth, sync, false).await;
+            if let Some(sync) = sync.filter(|_| !devices.is_empty()) {
+                match self.send_private_receipt_sync(&recipient, &devices, sync).await {
+                    Ok(()) => {}
+                    Err(MessageError::Network(NetworkError::AnonymousCredentialsUnavailable)) => break,
+                    Err(error) => tracing::warn!(%error, "Private-channel receipt delivery failed"),
+                }
             }
             // Receipt transcripts use the same best-effort delivery as the
-            // immediate sync. The obligation survives restart until attempted.
+            // immediate sync. The obligation survives restart and a dry pool.
             self.database.connection()?.execute("DELETE FROM settings WHERE key=?1", [key])?;
         }
+        Ok(())
+    }
+
+    async fn send_private_receipt_sync(
+        &self,
+        recipient: &str,
+        devices: &[u32],
+        mut sync: chatter_proto::content_v1::Content,
+    ) -> Result<(), MessageError> {
+        use chatter_proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage};
+
+        let token = self.token_manager.claim_budgeted_credential(
+            super::group_send::RESERVED_MAILBOX_CREDENTIALS,
+            |_| Ok(()),
+        )?;
+        Self::pad_content_to_bucket(&mut sync);
+        let sealed = self.signal_service
+            .encrypt_cached_devices_bounded(recipient, devices, &sync.encode_to_vec(), None)
+            .await
+            .map_err(|error| MessageError::from_signal_send(error, "Linked-device receipt sync"))?;
+        let server_key_id = self.signal_service.get_server_key_id();
+        let timestamp = crate::util::time::TimestampNanos::now_anonymized().as_u64();
+        let messages = sealed.into_iter().map(|(device_id, message)| SealedDeviceMessage {
+            device_id,
+            registration_id: message.registration_id,
+            sealed_message: Some(SealedSenderMessage {
+                sealed_body: message.ciphertext,
+                server_key_id,
+                timestamp,
+            }),
+        }).collect();
+        crate::state::send_session::check_send_session()?;
+        self.grpc_pool.anonymous_message_client().send_with_anonymous_credential(
+            &uuid::Uuid::new_v4().to_string(), recipient, messages, SealedDelivery::NamedDevices,
+            0, &token.public_key, &token.signature,
+        ).await?;
         Ok(())
     }
 

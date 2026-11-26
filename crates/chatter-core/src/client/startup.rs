@@ -498,7 +498,7 @@ impl ChatterClient {
         // ── DM mailbox key rolling (L4 anonymity rotation) ───────────
         let h_key_rolling = self.services.spawn_key_rolling();
 
-        // ── Mailbox-token refill (jittered, decoupled from sends) ────
+        // ── Mailbox-token refill (fixed cadence, decoupled from sends) ──
         let h_token_refill = self.services.spawn_token_refill();
         let h_shield_retry = shield_recovery::spawn_shield_send_recovery(self);
 

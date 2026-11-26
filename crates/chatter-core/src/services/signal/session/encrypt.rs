@@ -307,10 +307,23 @@ impl SignalService {
         group_id: Option<&[u8]>,
     ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
         let devices = self.require_group_device_sessions(source, recipient_id).await?;
-        let ciphertexts = self.encrypt_prepared_devices_bounded(
-            None, recipient_id, &devices, plaintext, group_id, false,
-        ).await?;
+        let ciphertexts = self
+            .encrypt_cached_devices_bounded(recipient_id, &devices, plaintext, group_id)
+            .await?;
         Ok((ciphertexts, self.unrestricted_access(recipient_id).unwrap_or(false)))
+    }
+
+    /// Seal only to established sessions, using a cached certificate. This
+    /// entry point can neither fetch prekeys nor acquire a sender certificate.
+    pub(crate) async fn encrypt_cached_devices_bounded(
+        &self,
+        recipient_id: &str,
+        devices: &[u32],
+        plaintext: &[u8],
+        group_id: Option<&[u8]>,
+    ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
+        self.encrypt_prepared_devices_bounded(None, recipient_id, devices, plaintext, group_id, false)
+            .await
     }
 
     /// Original-recipient retry uses precisely these devices. Never replace

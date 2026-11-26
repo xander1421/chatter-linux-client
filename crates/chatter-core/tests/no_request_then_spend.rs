@@ -2,10 +2,9 @@
 //!
 //! An authenticated `GetMailboxTokens` followed a moment later by the
 //! anonymous operation that spends its output links the two in time. Sends
-//! spend only via `TokenManager::claim_prefetched_token`; the pool is
-//! refilled by `CoreServices::spawn_token_refill` (and the login prefetch),
-//! which live in `app/core_services.rs`. Any other caller of
-//! `request_tokens` reintroduces request-then-spend.
+//! claim credentials locally. The pool is filled by the fixed clock in
+//! `CoreServices::spawn_token_refill` in `app/core_services.rs`.
+//! Any other production caller of `request_tokens` can reintroduce the link.
 
 use std::path::Path;
 

@@ -37,7 +37,7 @@ const MAX_RECONCILE_ROUNDS: usize = 2;
 const MAX_DEVICES_PER_MISMATCH: usize = 8;
 const MAX_REPAIRS_PER_POST: usize = 12;
 // Keep enough credentials for a secret-chat start or a mailbox rotation.
-const RESERVED_MAILBOX_CREDENTIALS: usize = 4;
+pub(super) const RESERVED_MAILBOX_CREDENTIALS: usize = 4;
 
 struct PostBudget {
     token_limit: usize,
@@ -192,17 +192,6 @@ impl MessageService {
         channels.retain(|channel| self.is_private_channel(channel));
         channels.sort_unstable_by_key(|channel| *channel.as_uuid());
         Ok(channels)
-    }
-
-    pub(crate) fn anonymous_credential_pool_target(&self, owner: crate::domain::UserId) -> Result<u32, MessageError> {
-        let owner_id = owner.to_string();
-        let largest_roster = self.private_memberships(&owner)?.into_iter()
-            .filter_map(|channel| self.group_gate().for_distribution(&channel).ok())
-            .filter(|verified| verified.state.active_members().any(|(user, _)| user == &owner_id))
-            .map(|verified| verified.state.active_members().count().saturating_sub(1))
-            .max().unwrap_or(0);
-        // The issuer permits five ten-token RPCs in one burst.
-        Ok((20 + 3 * largest_roster).min(50) as u32)
     }
 
     async fn refresh_private_endorsements(&self, owner: crate::domain::UserId) -> Result<(), MessageError> {

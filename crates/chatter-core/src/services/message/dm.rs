@@ -231,7 +231,7 @@ impl MessageService {
         self.send_prepared_own_device_sync(auth_client, sync, strict).await
     }
 
-    pub(super) async fn send_prepared_own_device_sync(
+    async fn send_prepared_own_device_sync(
         &self,
         auth_client: &mut AuthClient,
         mut sync: chatter_proto::content_v1::Content,

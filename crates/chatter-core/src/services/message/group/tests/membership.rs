@@ -177,7 +177,8 @@
         let alice = t.alice.messages();
         alice.grpc_pool.auth().set_basic(format!("{}.1", t.alice_id), "fixture".into());
         let mut rng = StdRng::seed_from_u64(1844);
-        let identity = libsignal_protocol::IdentityKeyPair::generate(&mut rng);
+        let mut own_rng = StdRng::seed_from_u64(t.alice_id.as_uuid().as_u128() as u64);
+        let identity = libsignal_protocol::IdentityKeyPair::generate(&mut own_rng);
         let store = &alice.signal_service.key_store;
         store.set_local_identity(42, &identity.serialize()).unwrap();
         // SSv2 includes Alice's sending device, which needs her own prekeys
@@ -288,7 +289,7 @@
 
         // A private post with linked devices saves its receipt transcript and
         // can be flushed only after the independent delay.
-        store_session(&t.alice, t.alice_id, 2, 1200).await;
+        cache_device(alice, &t.alice_id, 2, &mut rng).await;
         let mut auth = alice.auth_client();
         let before = chrono::Utc::now().timestamp();
         alice.sync_channel_receipt_targets(t.channel_id, 42, &mut auth, true).await;
@@ -300,6 +301,31 @@
         ).unwrap();
         drop(conn);
         assert!((before + 300..=chrono::Utc::now().timestamp() + 900).contains(&due));
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert!(probe.calls.lock().unwrap().is_empty());
+
+        let conn = alice.database.connection().unwrap();
+        conn.execute(
+            "UPDATE settings SET value=json_set(value,'$.due',0) WHERE key LIKE 'private.receipt-sync:%'",
+            [],
+        ).unwrap();
+        drop(conn);
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert!(probe.calls.lock().unwrap().is_empty(), "reserve must be kept");
+
+        let conn = alice.database.connection().unwrap();
+        conn.execute(
+            "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
+             VALUES ('receipt', x'fa', x'fb', x'fc', 'live', '0010')",
+            [],
+        ).unwrap();
+        drop(conn);
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [("/chat.v1.MessageService/SendSealedMessage".into(), false, true)],
+        );
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
         alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
         assert!(probe.calls.lock().unwrap().is_empty());
         server.abort();

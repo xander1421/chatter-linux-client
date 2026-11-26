@@ -636,7 +636,7 @@ async fn t7_file_transfer() {
 /// Run all tests sequentially and report summary.
 /// Invoke manually (the server has no plaintext mode -- point CHATTER_TLS_ROOT_CA_PEM
 /// at its cert, e.g. `certs/server.crt` from `./create-certs.sh`):
-/// `CHATTER_TLS_ROOT_CA_PEM="$(cat certs/server.crt)" INTEGRATION_TESTS=1 cargo test --test e2e_two_user_suite full_e2e_suite -- --nocapture`
+/// `CHATTER_TLS_ROOT_CA_PEM="$(cat certs/server.crt)" INTEGRATION_TESTS=1 cargo test --features testing --test e2e_two_user_suite full_e2e_suite -- --nocapture`
 #[tokio::test]
 async fn full_e2e_suite() {
     skip_if_no_server!();
