@@ -11700,7 +11700,9 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         );
         println!("  wrong PIN: login refused with {need:?} — {err}");
 
-        let refused = c.accept_new_identity(need, PASSWORD).await;
+        let refused = c
+            .accept_new_identity(need, PASSWORD, "Wr0ngPin!x7", None)
+            .await;
         assert!(
             refused.is_err(),
             "minting a new identity on a wrong PIN would destroy a recoverable account"
@@ -11771,7 +11773,7 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     // (`crypto/logtree.go`), where a rotation is just another append, so the
     // rotation runs concurrently with everything else.
     client_fresh
-        .accept_new_identity(need, PASSWORD)
+        .accept_new_identity(need, PASSWORD, PIN, None)
         .await
         .expect("identity reset failed — there is still no way to publish a rotated key");
 
@@ -11818,6 +11820,19 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         "expected one leaf for registration and one for the rotation"
     );
     println!("  reset: KT log witnessed the new key ({kt_count} leaves)");
+
+    let restore_dir = tempfile::tempdir().unwrap();
+    let restored = build_client(restore_dir.path());
+    let restored_login = restored
+        .login(&user, PASSWORD, "validated-reset-backup", Some(PIN))
+        .await
+        .expect("a fresh install must be able to restore the reset identity");
+    assert!(restored_login.keys_restored);
+    assert_eq!(
+        restored.signal().get_identity_public_key().await.unwrap(),
+        new_key
+    );
+    restored.shutdown().await;
 
     println!(
         "\nV53 PASS — no backup is reported, never silently re-keyed; an explicit reset publishes a rotated identity key atomically and KT records it\n"

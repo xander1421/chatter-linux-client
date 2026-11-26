@@ -47,6 +47,8 @@ pub enum KeyRecoveryNeed {
     /// The server destroyed the backup after too many wrong PINs. Same
     /// finality as [`Self::NoBackup`], different cause, and worth saying so.
     BackupDestroyed,
+    /// The PIN opened the backup, but it contains an older identity.
+    StaleBackup,
     /// Too many recent restore attempts. The backup is intact; only waiting is
     /// required.
     RateLimited,
@@ -70,7 +72,7 @@ impl KeyRecoveryNeed {
             // the real key.
             Self::NoPinProvided | Self::WrongPin | Self::RateLimited | Self::Unavailable => true,
             // There is nothing left to recover from.
-            Self::NoBackup | Self::BackupDestroyed => false,
+            Self::NoBackup | Self::BackupDestroyed | Self::StaleBackup => false,
         }
     }
 
@@ -91,6 +93,7 @@ impl KeyRecoveryNeed {
             Self::BackupDestroyed => chatter_i18n::tr(
                 "Your key backup was destroyed after too many incorrect PIN attempts. Your previous conversations cannot be recovered. You can start over with new encryption keys — your contacts will be asked to verify you again.",
             ),
+            Self::StaleBackup => chatter_i18n::tr("Your backup is out of date; set up a new PIN"),
             Self::RateLimited => chatter_i18n::tr(
                 "Too many recovery attempts. Wait before trying your PIN again — your backup is still intact.",
             ),
@@ -203,6 +206,7 @@ mod tests {
             KeyRecoveryNeed::WrongPin,
             KeyRecoveryNeed::NoBackup,
             KeyRecoveryNeed::BackupDestroyed,
+            KeyRecoveryNeed::StaleBackup,
             KeyRecoveryNeed::RateLimited,
             KeyRecoveryNeed::Unavailable,
         ] {

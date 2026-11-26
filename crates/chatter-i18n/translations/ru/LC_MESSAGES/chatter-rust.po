@@ -3977,3 +3977,12 @@ msgstr "Сервер опубликовал неожиданный ключ ши
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr "Это устройство было заменено. Локальные данные удалены. Войдите снова, чтобы продолжить."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Резервная копия устарела. Настройте новый PIN-код."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Это устройство было заменено. Локальные данные удаляются…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "Новые ключи шифрования опубликованы. Войдите снова с новым ПИН-кодом."

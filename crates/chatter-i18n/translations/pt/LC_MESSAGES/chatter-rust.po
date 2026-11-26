@@ -3983,3 +3983,12 @@ msgstr "O servidor publicou uma chave de criptografia inesperada para a sua cont
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr "Este dispositivo foi substituído. Os dados locais foram apagados. Entre novamente para continuar."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "A sua cópia de segurança está desatualizada. Configure um novo PIN."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Este dispositivo foi substituído. A apagar os dados locais…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "As novas chaves de criptografia foram publicadas. Entre novamente com o seu novo PIN."

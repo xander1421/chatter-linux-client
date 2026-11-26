@@ -3996,3 +3996,12 @@ msgstr "El servidor publicó una clave de cifrado inesperada para tu cuenta."
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr "Se reemplazó este dispositivo. Se borraron los datos locales. Vuelve a iniciar sesión para continuar."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Tu copia de seguridad está desactualizada. Configura un PIN nuevo."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Se reemplazó este dispositivo. Borrando los datos locales…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "Se publicaron las nuevas claves de cifrado. Vuelve a iniciar sesión con tu nuevo PIN."

@@ -4010,3 +4010,12 @@ msgstr "Le serveur a publié une clé de chiffrement inattendue pour votre compt
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr "Cet appareil a été remplacé. Les données locales ont été effacées. Reconnectez-vous pour continuer."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Votre sauvegarde est obsolète. Configurez un nouveau code PIN."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Cet appareil a été remplacé. Effacement des données locales…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "Les nouvelles clés de chiffrement ont été publiées. Reconnectez-vous avec votre nouveau code PIN."

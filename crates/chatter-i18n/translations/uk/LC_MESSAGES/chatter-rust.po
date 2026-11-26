@@ -3999,3 +3999,12 @@ msgstr "Сервер опублікував неочікуваний ключ ш
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr "Цей пристрій було замінено. Локальні дані видалено. Увійдіть знову, щоб продовжити."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Резервна копія застаріла. Налаштуйте новий PIN-код."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Цей пристрій було замінено. Локальні дані видаляються…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "Нові ключі шифрування опубліковано. Увійдіть знову з новим PIN-кодом."

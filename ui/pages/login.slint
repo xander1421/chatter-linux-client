@@ -39,6 +39,7 @@ export component LoginPage inherits Rectangle {
     // unreachable server the real key is still out there, and chatter-core
     // refuses the reset rather than letting the UI decide.
     in property <bool> identity-reset-available: false;
+    in property <bool> reset-needs-new-pin: false;
     // Touch density for the Shield header control.
     in property <bool> touch: false;
 
@@ -74,7 +75,7 @@ export component LoginPage inherits Rectangle {
     callback go-to-recovery();
     callback go-to-link-device();
     callback continue-without-account();
-    callback accept-new-identity(string);
+    callback accept-new-identity(string, string);
 
     background: Materials.ambient;
 
@@ -222,6 +223,8 @@ export component LoginPage inherits Rectangle {
                     // second action rather than something login does for you.
                     if root.identity-reset-available: identity-reset := VerticalLayout {
                         property <string> confirmation-password;
+                        property <string> new-pin;
+                        property <string> confirm-new-pin;
                         spacing: Spacing.sm;
 
                         Text {
@@ -238,13 +241,31 @@ export component LoginPage inherits Rectangle {
                             text <=> identity-reset.confirmation-password;
                         }
 
+                        if root.reset-needs-new-pin: Input {
+                            placeholder: @tr("New PIN (8+ characters)");
+                            password: true;
+                            disabled: root.loading;
+                            text <=> identity-reset.new-pin;
+                        }
+
+                        if root.reset-needs-new-pin: Input {
+                            placeholder: @tr("Confirm new PIN");
+                            password: true;
+                            disabled: root.loading;
+                            text <=> identity-reset.confirm-new-pin;
+                        }
+
                         Button {
                             text: @tr("Start over with new keys");
                             variant: "destructive";
-                            disabled: root.loading || identity-reset.confirmation-password == "";
+                            disabled: root.loading || identity-reset.confirmation-password == "" ||
+                                (root.reset-needs-new-pin &&
+                                    (identity-reset.new-pin == "" || identity-reset.new-pin != identity-reset.confirm-new-pin));
                             clicked => {
-                                root.accept-new-identity(identity-reset.confirmation-password);
+                                root.accept-new-identity(identity-reset.confirmation-password, identity-reset.new-pin);
                                 identity-reset.confirmation-password = "";
+                                identity-reset.new-pin = "";
+                                identity-reset.confirm-new-pin = "";
                             }
                         }
                     }

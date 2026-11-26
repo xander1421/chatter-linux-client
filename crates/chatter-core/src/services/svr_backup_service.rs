@@ -141,14 +141,21 @@ impl SvrBackupService {
 
     /// The account handle every backup carries (`keys::FULL_USERNAME`).
     ///
-    /// Required: a backup without it restores an account with no handle
-    /// (§117), and every later backup would carry that loss forward.
+    /// Preserve the full handle whenever this installation knows it. If the
+    /// account lost its only copy, keep the verified login nickname in the
+    /// backup until the full handle is available again.
     pub fn local_full_username(&self) -> Result<String, SvrBackupError> {
         use crate::storage::repositories::settings_repo::keys;
-        self.signal_service
-            .settings_repo
+        let settings = &self.signal_service.settings_repo;
+        let full = settings
             .get_string(keys::FULL_USERNAME)
             .map_err(|e| SvrBackupError::Generic(format!("failed to read username: {e}")))?
+            .filter(|s| !s.is_empty());
+        if let Some(full) = full {
+            return Ok(full);
+        }
+        settings
+            .get_string(keys::SVR_SALT_USERNAME)?
             .filter(|s| !s.is_empty())
             .ok_or_else(|| SvrBackupError::Generic("no local username to back up".into()))
     }

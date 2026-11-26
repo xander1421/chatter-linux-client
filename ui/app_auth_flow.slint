@@ -20,7 +20,8 @@ export global AuthFlow {
     // AuthStateData::login_verifying). Set from Rust.
     in property <bool> login-verifying: false;
     in property <bool> login-identity-reset-available: false;
-    callback accept-new-identity(string);
+    in property <bool> login-reset-needs-new-pin: false;
+    callback accept-new-identity(string, string);
 
     in-out property <string> register-display-name: "";
     in-out property <string> register-username: "";

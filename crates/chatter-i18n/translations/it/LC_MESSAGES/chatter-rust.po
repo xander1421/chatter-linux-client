@@ -3982,3 +3982,12 @@ msgstr "Il server ha pubblicato una chiave di cifratura inattesa per il tuo acco
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr "Questo dispositivo è stato sostituito. I dati locali sono stati cancellati. Accedi di nuovo per continuare."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Il backup è obsoleto. Configura un nuovo PIN."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Questo dispositivo è stato sostituito. Cancellazione dei dati locali…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "Le nuove chiavi di cifratura sono state pubblicate. Accedi di nuovo con il tuo nuovo PIN."

@@ -185,6 +185,19 @@ impl ChatterClient {
         device_name: &str,
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
+        self.login_with_replacement_notice(username, password, device_name, pin, async {})
+            .await
+    }
+
+    /// Run the UI notice before clearing a replaced installation.
+    pub async fn login_with_replacement_notice(
+        self: &Arc<Self>,
+        username: &str,
+        password: &str,
+        device_name: &str,
+        pin: Option<&str>,
+        replacement_notice: impl std::future::Future<Output = ()> + Send,
+    ) -> Result<LoginResult, ClientError> {
         let _lifecycle = self.auth_lifecycle_lock.lock().await;
         if self.started.load(std::sync::atomic::Ordering::SeqCst)
             || (self.auth_state().is_logged_in()
@@ -227,7 +240,7 @@ impl ChatterClient {
             match pin {
                 Some(p) => {
                     if let Err(error) = self.attempt_svr_restore(p, username, &mut result).await {
-                        self.cleanup_failed_sign_in(result.device_id, &error)
+                        self.cleanup_failed_sign_in(result.device_id, &error, replacement_notice)
                             .await?;
                         return Err(error);
                     }
@@ -278,9 +291,17 @@ impl ChatterClient {
                     .await?
                     == OwnIdentityAtSignIn::Republish;
             if needs_republish {
-                let proof = prove_password(&mut auth_client, password).await?;
-                self.republish_identity_keys(&mut auth_client, proof)
-                    .await?;
+                if self.reset_needs_pin_change()? {
+                    return Err(ClientError::IdentityRecoveryRequired(
+                        KeyRecoveryNeed::StaleBackup,
+                    ));
+                }
+                let pin = pin.ok_or(AuthError::NotLoggedIn)?;
+                publish_after_reset_backup(self.upload_identity_reset_backup(pin, None), async {
+                    let proof = prove_password(&mut auth_client, password).await?;
+                    self.republish_identity_keys(&mut auth_client, proof).await
+                })
+                .await?;
                 self.verify_republished_identity(&mut auth_client, &owner, &expected)
                     .await?;
             }
@@ -292,7 +313,13 @@ impl ChatterClient {
             Ok::<(), ClientError>(())
         }.await;
         if let Err(error) = publish {
-            self.cleanup_failed_sign_in(result.device_id, &error)
+            if matches!(
+                error,
+                ClientError::IdentityRecoveryRequired(KeyRecoveryNeed::StaleBackup)
+            ) {
+                return Err(error);
+            }
+            self.cleanup_failed_sign_in(result.device_id, &error, replacement_notice)
                 .await?;
             return Err(error);
         }
@@ -328,8 +355,10 @@ impl ChatterClient {
         &self,
         device_id: u32,
         error: &ClientError,
+        replacement_notice: impl std::future::Future<Output = ()>,
     ) -> Result<(), ClientError> {
         if matches!(error, ClientError::DeviceReplaced) {
+            replacement_notice.await;
             return self.wipe_replaced_device(device_id).await;
         }
         self.auth().end_session()?;
@@ -395,14 +424,15 @@ impl ChatterClient {
     /// back to the real key, and minting over it is exactly the silent
     /// destruction this whole change exists to stop.
     ///
-    /// On success the new key is published atomically with prekeys signed by
-    /// it, so peers see one coherent bundle and get the safety-number-change
-    /// prompt (`pending_identity_changes`) instead of an account that quietly
-    /// stopped working.
+    /// Upload the backup under the PIN before publishing the new identity.
+    /// A stale backup requires a new PIN. The server publishes the identity
+    /// and its signed prekeys together after the backup succeeds.
     pub async fn accept_new_identity(
         self: &Arc<Self>,
         need: KeyRecoveryNeed,
         password: &str,
+        pin: &str,
+        new_pin: Option<&str>,
     ) -> Result<(), ClientError> {
         let _lifecycle = self.auth_lifecycle_lock.lock().await;
         if need.is_retryable() {
@@ -415,16 +445,39 @@ impl ChatterClient {
             ));
         }
 
-        if self
-            .signal()
-            .key_store
-            .has_local_identity()
-            .map_err(|e| ClientError::Validation(format!("failed to read local identity: {e}")))?
-        {
-            return Err(ClientError::Validation(
-                "this device already has an identity key; refusing to overwrite it".into(),
-            ));
+        if self.auth().is_logged_in() {
+            return Err(AuthError::AlreadyLoggedIn.into());
         }
+        let pin_matches = |pin| {
+            self.link_device().verify_pin(pin)
+                == crate::services::link_device_service::PinVerification::Match
+        };
+        let (backup_pin, change_to) = if need == KeyRecoveryNeed::StaleBackup {
+            let chosen = new_pin.ok_or_else(|| ClientError::Validation(need.user_message()))?;
+            crate::crypto::svr::validate_pin(chosen)
+                .map_err(|error| ClientError::Validation(error.to_string()))?;
+            if chosen == pin {
+                return Err(ClientError::Validation(
+                    chatter_i18n::tr("New PIN must be different from current PIN").into(),
+                ));
+            }
+            if pin_matches(pin) {
+                (pin, Some(chosen))
+            } else if pin_matches(chosen) {
+                // The PIN change already committed. Resume with the new PIN.
+                (chosen, None)
+            } else {
+                return Err(ClientError::Validation(
+                    chatter_i18n::tr("Current PIN is incorrect").into(),
+                ));
+            }
+        } else if pin_matches(pin) {
+            (pin, None)
+        } else {
+            return Err(ClientError::Validation(
+                chatter_i18n::tr("Current PIN is incorrect").into(),
+            ));
+        };
 
         let mut auth_client = self
             .auth()
@@ -432,15 +485,54 @@ impl ChatterClient {
             .ok_or(ClientError::NotConnected)?;
         let (owner, _) = self.current_user().ok_or(AuthError::NotLoggedIn)?;
         let owner = owner.to_string();
-        self.own_identity_at_sign_in(&mut auth_client, &owner, OwnIdentityCheck::BeforeReset)
-            .await?;
+        let has_identity = self
+            .signal()
+            .key_store
+            .has_local_identity()
+            .map_err(AuthError::Storage)?;
+        if has_identity {
+            let expected = self
+                .signal()
+                .get_identity_public_key()
+                .await
+                .map_err(read_identity_error)?;
+            let status = self
+                .own_identity_at_sign_in(
+                    &mut auth_client,
+                    &owner,
+                    OwnIdentityCheck::Local(&expected),
+                )
+                .await;
+            match status {
+                Ok(OwnIdentityAtSignIn::Republish) => {}
+                Err(error) if !matches!(error, ClientError::DeviceReplaced) => return Err(error),
+                _ => {
+                    return Err(ClientError::Validation(
+                        chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
+                    ));
+                }
+            }
+        } else {
+            self.own_identity_at_sign_in(&mut auth_client, &owner, OwnIdentityCheck::BeforeReset)
+                .await?;
+        }
         let proof = prove_password(&mut auth_client, password).await?;
-        self.auth()
-            .generate_identity_for_recovery()
-            .map_err(ClientError::Auth)?;
+        auth_client
+            .verify_password(proof)
+            .await
+            .map_err(AuthError::Network)?;
+        if !has_identity {
+            self.auth().generate_identity_for_recovery()?;
+        }
 
-        self.republish_identity_keys(&mut auth_client, proof)
-            .await?;
+        publish_after_reset_backup(
+            self.upload_identity_reset_backup(backup_pin, change_to),
+            async {
+                let proof = prove_password(&mut auth_client, password).await?;
+                self.republish_identity_keys(&mut auth_client, proof).await
+            },
+        )
+        .await?;
         let expected = self
             .signal()
             .get_identity_public_key()
@@ -454,6 +546,50 @@ impl ChatterClient {
         tracing::warn!(
             "minted and published a NEW identity key — every contact's safety number has changed"
         );
+        Ok(())
+    }
+
+    async fn upload_identity_reset_backup(
+        &self,
+        pin: &str,
+        new_pin: Option<&str>,
+    ) -> Result<(), ClientError> {
+        use zeroize::Zeroizing;
+        let settings = &self.auth().settings_repo;
+        let profile_key = Zeroizing::new(
+            match settings
+                .get_bytes(keys::PROFILE_KEY)
+                .map_err(AuthError::Storage)?
+            {
+                Some(key) => <[u8; 32]>::try_from(key.as_slice()).map_err(|_| {
+                    ClientError::Validation(
+                        chatter_i18n::tr("Something went wrong. Try again.").into(),
+                    )
+                })?,
+                None => {
+                    let key = crate::crypto::auth_crypto::generate_profile_key();
+                    settings
+                        .set_bytes(keys::PROFILE_KEY, &key)
+                        .map_err(AuthError::Storage)?;
+                    key
+                }
+            },
+        );
+        if let Some(next_pin) = new_pin {
+            self.change_pin(pin, next_pin).await?;
+        } else {
+            let username = self.svr_salt_username()?;
+            self.svr_backup()
+                .backup_with_profile_key(pin, &username, &profile_key)
+                .await
+                .map_err(publish_svr_backup_error)?;
+        }
+        self.auth()
+            .set_unidentified_access_key(&profile_key)
+            .await?;
+        settings
+            .delete(keys::STALE_SVR_BACKUP)
+            .map_err(AuthError::Storage)?;
         Ok(())
     }
 
@@ -1040,12 +1176,27 @@ impl ChatterClient {
                     _ => Err(unexpected_own_identity()),
                 }
             },
-            self.svr_backup().fetch_and_restore_backup(&svr_secret),
+            async |key| {
+                self.fetch_backup_unless_stale(
+                    key,
+                    &svr_secret,
+                    self.svr_backup().fetch_and_restore_backup(&svr_secret),
+                )
+                .await
+            },
         )
         .await?;
+        let Some(restored) = restored else {
+            result.key_recovery = Some(KeyRecoveryNeed::StaleBackup);
+            return Ok(());
+        };
         let restore_result = match restored {
             Ok(r) => r,
             Err(crate::services::svr_backup_service::SvrBackupError::BackupDestroyed) => {
+                crate::services::svr_backup_service::SvrBackupService::clear_local_backup_version(
+                    &self.auth().settings_repo,
+                )
+                .map_err(publish_svr_backup_error)?;
                 tracing::error!(
                     "SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN."
                 );
@@ -1057,6 +1208,11 @@ impl ChatterClient {
                 // whether the user retypes a PIN, waits, or accepts losing
                 // their conversations — see `key_recovery::classify_restore_failure`.
                 let need = crate::services::key_recovery::classify_restore_failure(&e);
+                if need == KeyRecoveryNeed::NoBackup {
+                    crate::services::svr_backup_service::SvrBackupService::clear_local_backup_version(
+                        &self.auth().settings_repo,
+                    ).map_err(publish_svr_backup_error)?;
+                }
                 tracing::warn!(?need, "SVR restore failed: {}", e);
                 result.key_recovery = Some(need);
                 return Ok(());
@@ -1067,7 +1223,14 @@ impl ChatterClient {
         let restored_profile_key = Zeroizing::new(restore_result.profile_key);
         // The comparison uses the already-verified key and needs no network.
         if published_key.public_key().public_key_bytes() != &restored_keypair[32..] {
-            return Err(unexpected_own_identity());
+            self.remember_stale_backup(
+                published_key,
+                &svr_secret,
+                &restored_profile_key,
+                &restore_result.full_username,
+            )?;
+            result.key_recovery = Some(KeyRecoveryNeed::StaleBackup);
+            return Ok(());
         }
 
         // 4. Reconstruct and save the libsignal identity keypair.
@@ -1120,21 +1283,104 @@ impl ChatterClient {
         // 6. Hydrate the account handle. It was written only at registration,
         //    so a reinstall had none and showed no username (§117). Keys are
         //    already restored, so a failure here does not undo them.
-        if let Err(e) = self
-            .signal()
-            .settings_repo
-            .set_string(keys::FULL_USERNAME, &restore_result.full_username)
+        if restore_result.full_username.contains('.')
+            && let Err(e) = self
+                .signal()
+                .settings_repo
+                .set_string(keys::FULL_USERNAME, &restore_result.full_username)
         {
             tracing::warn!("SVR restore: failed to store username: {}", e);
         }
 
         result.keys_restored = true;
         result.key_recovery = None;
+        if let Err(error) = self.auth().settings_repo.delete(keys::STALE_SVR_BACKUP) {
+            tracing::warn!(%error, "Could not clear the stale backup observation");
+        }
 
         tracing::info!(
             remaining_attempts = restore_result.remaining_attempts,
             "SVR key restore completed successfully"
         );
+        Ok(())
+    }
+
+    async fn fetch_backup_unless_stale<T>(
+        &self,
+        published: libsignal_protocol::IdentityKey,
+        secret: &[u8; 32],
+        fetch: impl std::future::Future<Output = T>,
+    ) -> Result<Option<T>, ClientError> {
+        if self.known_stale_backup(published, secret)? {
+            return Ok(None);
+        }
+        Ok(Some(fetch.await))
+    }
+
+    fn known_stale_backup(
+        &self,
+        published: libsignal_protocol::IdentityKey,
+        secret: &[u8; 32],
+    ) -> Result<bool, AuthError> {
+        use subtle::ConstantTimeEq;
+        let fingerprint =
+            zeroize::Zeroizing::new(crate::crypto::svr::pin_fingerprint_from_secret(secret));
+        Ok(self
+            .auth()
+            .settings_repo
+            .get::<(Vec<u8>, [u8; 32])>(keys::STALE_SVR_BACKUP)?
+            .is_some_and(|(key, pin)| {
+                key == published.serialize().as_ref() && fingerprint.ct_eq(&pin).unwrap_u8() == 1
+            }))
+    }
+
+    fn reset_needs_pin_change(&self) -> Result<bool, AuthError> {
+        use subtle::ConstantTimeEq;
+        let settings = &self.auth().settings_repo;
+        let stale = settings.get::<(Vec<u8>, [u8; 32])>(keys::STALE_SVR_BACKUP)?;
+        let pin = settings
+            .get_bytes(keys::PIN_FINGERPRINT)?
+            .map(zeroize::Zeroizing::new);
+        Ok(stale
+            .zip(pin)
+            .is_some_and(|((_, old), pin)| pin.ct_eq(&old).unwrap_u8() == 1))
+    }
+
+    fn remember_stale_backup(
+        &self,
+        published: libsignal_protocol::IdentityKey,
+        secret: &[u8; 32],
+        profile_key: &[u8; 32],
+        handle: &str,
+    ) -> Result<(), AuthError> {
+        use crate::storage::repositories::SettingsRepository;
+        use base64::Engine;
+        let fingerprint =
+            zeroize::Zeroizing::new(crate::crypto::svr::pin_fingerprint_from_secret(secret));
+        let mut conn = self.auth().settings_repo.database().connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(crate::error::StorageError::from)?;
+        SettingsRepository::set_with_connection(
+            &tx,
+            keys::STALE_SVR_BACKUP,
+            &(published.serialize().as_ref(), &*fingerprint),
+        )?;
+        // The stale payload can still recover the profile and account handle.
+        // Preserve fresher metadata already held by a previous installation.
+        if SettingsRepository::get_with_connection::<String>(&tx, keys::PROFILE_KEY)?.is_none() {
+            let encoded = zeroize::Zeroizing::new(
+                base64::engine::general_purpose::STANDARD.encode(profile_key),
+            );
+            SettingsRepository::set_with_connection(&tx, keys::PROFILE_KEY, &*encoded)?;
+        }
+        if handle.contains('.')
+            && SettingsRepository::get_with_connection::<String>(&tx, keys::FULL_USERNAME)?
+                .is_none()
+        {
+            SettingsRepository::set_with_connection(&tx, keys::FULL_USERNAME, &handle)?;
+        }
+        tx.commit().map_err(crate::error::StorageError::from)?;
         Ok(())
     }
 
@@ -1213,8 +1459,25 @@ impl ChatterClient {
     }
 }
 
+async fn publish_after_reset_backup(
+    backup: impl std::future::Future<Output = Result<(), ClientError>>,
+    publish: impl std::future::Future<Output = Result<(), ClientError>>,
+) -> Result<(), ClientError> {
+    backup.await?;
+    publish.await
+}
+
 fn publish_key_material_error(error: crate::error::ServiceError) -> ClientError {
     tracing::warn!(%error, "Could not publish the device's encryption keys");
+    ClientError::Validation(
+        chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
+    )
+}
+
+fn publish_svr_backup_error(
+    error: crate::services::svr_backup_service::SvrBackupError,
+) -> ClientError {
+    tracing::warn!(%error, "Could not prepare the replacement encryption backup");
     ClientError::Validation(
         chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
     )
@@ -1234,10 +1497,10 @@ fn unexpected_own_identity() -> ClientError {
 
 async fn fetch_after_own_key_verification<T>(
     verify: impl std::future::Future<Output = Result<libsignal_protocol::IdentityKey, ClientError>>,
-    fetch: impl std::future::Future<Output = T>,
+    fetch: impl AsyncFnOnce(libsignal_protocol::IdentityKey) -> Result<T, ClientError>,
 ) -> Result<(libsignal_protocol::IdentityKey, T), ClientError> {
     let key = verify.await?;
-    Ok((key, fetch.await))
+    Ok((key, fetch(key).await?))
 }
 
 #[cfg(test)]
@@ -1249,12 +1512,98 @@ mod tests {
     #[tokio::test]
     async fn failed_kt_verification_never_polls_the_pin_backup_fetch() {
         for error in [unexpected_own_identity(), ClientError::NotConnected] {
-            let outcome = fetch_after_own_key_verification(async { Err(error) }, async {
+            let outcome = fetch_after_own_key_verification::<()>(async { Err(error) }, async |_| {
                 panic!("an unverified sign-in must never spend a backup attempt");
             })
             .await;
             assert!(outcome.is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn identity_reset_waits_for_the_backup_upload_before_publishing() {
+        assert!(
+            publish_after_reset_backup(async { Err(ClientError::NotConnected) }, async {
+                panic!("failed backup upload must leave the published identity alone")
+            },)
+            .await
+            .is_err()
+        );
+
+        let uploaded = std::cell::Cell::new(false);
+        publish_after_reset_backup(
+            async {
+                uploaded.set(true);
+                Ok(())
+            },
+            async {
+                assert!(uploaded.get());
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_known_stale_backup_is_terminal_and_does_not_fetch_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = || {
+            ChatterClient::builder()
+                .server_url("https://localhost:1")
+                .data_dir(dir.path().to_str().unwrap())
+                .build()
+                .unwrap()
+        };
+        use rand::TryRngCore;
+        let key = libsignal_protocol::IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let identity = *key.identity_key();
+        let secret = [3; 32];
+        {
+            let client = client();
+            client
+                .remember_stale_backup(identity, &secret, &[4; 32], "owner.123")
+                .unwrap();
+        }
+        let client = client();
+        let fingerprint = crate::crypto::svr::pin_fingerprint_from_secret(&secret);
+        client
+            .auth()
+            .settings_repo
+            .set_bytes(keys::PIN_FINGERPRINT, &fingerprint)
+            .unwrap();
+        assert!(client.reset_needs_pin_change().unwrap());
+        let next = client
+            .fetch_backup_unless_stale(identity, &secret, async {
+                panic!("a terminal stale restore must never spend another PIN attempt");
+            })
+            .await
+            .unwrap();
+        assert_eq!(next, None::<()>);
+        assert!(!KeyRecoveryNeed::StaleBackup.is_retryable());
+        assert!(
+            client
+                .auth()
+                .settings_repo
+                .get_bytes(keys::PROFILE_KEY)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!client.signal().key_store.has_local_identity().unwrap());
+        assert_eq!(
+            client
+                .fetch_backup_unless_stale(identity, &[5; 32], async { 1 })
+                .await
+                .unwrap(),
+            Some(1),
+        );
+        let different_pin = crate::crypto::svr::pin_fingerprint_from_secret(&[5; 32]);
+        client
+            .auth()
+            .settings_repo
+            .set_bytes(keys::PIN_FINGERPRINT, &different_pin)
+            .unwrap();
+        assert!(!client.reset_needs_pin_change().unwrap());
     }
 
     #[tokio::test]
@@ -1283,14 +1632,16 @@ mod tests {
         std::fs::write(&attachment, b"fixture").unwrap();
 
         client
-            .cleanup_failed_sign_in(3, &unexpected_own_identity())
+            .cleanup_failed_sign_in(3, &unexpected_own_identity(), async {})
             .await
             .unwrap();
         assert!(client.signal().key_store.has_local_identity().unwrap());
         assert!(attachment.exists());
 
         client
-            .cleanup_failed_sign_in(3, &ClientError::DeviceReplaced)
+            .cleanup_failed_sign_in(3, &ClientError::DeviceReplaced, async {
+                assert!(attachment.exists(), "notice must precede the wipe");
+            })
             .await
             .unwrap();
 

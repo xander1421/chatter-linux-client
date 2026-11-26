@@ -4043,3 +4043,12 @@ msgstr "Der Server hat einen unerwarteten Verschlüsselungsschlüssel für dein 
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr "Dieses Gerät wurde ersetzt. Die lokalen Daten wurden gelöscht. Melde dich erneut an, um fortzufahren."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Deine Sicherung ist veraltet. Richte eine neue PIN ein."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Dieses Gerät wurde ersetzt. Lokale Daten werden gelöscht…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "Die neuen Verschlüsselungsschlüssel wurden veröffentlicht. Melde dich erneut mit deiner neuen PIN an."

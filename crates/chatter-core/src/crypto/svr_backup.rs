@@ -54,9 +54,8 @@ pub struct KeyBackupPayload {
     pub identity_keypair: [u8; 64],
     /// 32-byte profile encryption key.
     pub profile_key: [u8; 32],
-    /// The account's `nickname.discriminator` handle (`keys::FULL_USERNAME`).
-    /// It is chosen at registration and exists nowhere else on a reinstalled
-    /// device, so without it a restored account has no handle to share.
+    /// The account's `nickname.discriminator` handle. An identity reset that
+    /// could not recover the original handle backs up the login nickname here.
     pub full_username: String,
 }
 

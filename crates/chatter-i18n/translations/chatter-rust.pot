@@ -3454,3 +3454,12 @@ msgstr ""
 
 msgid "This device was replaced. Local data was cleared. Sign in again to continue."
 msgstr ""
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr ""
+
+msgid "This device was replaced. Clearing local data…"
+msgstr ""
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr ""
