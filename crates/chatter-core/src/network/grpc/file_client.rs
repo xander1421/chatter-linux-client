@@ -47,8 +47,12 @@ impl FileClient {
         let mut request = tonic::Request::new(payload);
         if let Some(tokens) = &self.private_tokens {
             let token = tokens.claim_send_credential()?;
-            super::interceptors::insert_blind_credential(&mut request, &token.public_key, &token.signature)
-                .map_err(|status| NetworkError::from_status(&status))?;
+            super::interceptors::insert_blind_credential(
+                &mut request,
+                &token.public_key,
+                &token.signature,
+            )
+            .map_err(|status| NetworkError::from_status(&status))?;
         }
         Ok(request)
     }

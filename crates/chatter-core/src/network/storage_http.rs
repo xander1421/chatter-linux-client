@@ -64,8 +64,7 @@ fn storage_client_for_route(private_channel: bool) -> CachedClient {
 fn build_client() -> CachedClient {
     // Explicit config: no process-global provider, no platform/WebPKI roots
     // beside the pinned Chatter CA, post-quantum key exchange only.
-    let tls =
-        storage_tls().map_err(|e| format!("storage TLS: {e}"))?;
+    let tls = storage_tls().map_err(|e| format!("storage TLS: {e}"))?;
     reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .https_only(true)

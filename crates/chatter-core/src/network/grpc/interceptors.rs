@@ -340,11 +340,15 @@ pub(super) fn insert_blind_credential<T>(
     let value = serde_json::json!({
         "public_key": BASE64.encode(public_key),
         "signature": BASE64.encode(signature),
-    }).to_string();
-    let mut value: tonic::metadata::MetadataValue<_> = value.parse()
+    })
+    .to_string();
+    let mut value: tonic::metadata::MetadataValue<_> = value
+        .parse()
         .map_err(|_| Status::internal("invalid anonymous credential header value"))?;
     value.set_sensitive(true);
-    request.metadata_mut().insert("x-anonymous-credential", value);
+    request
+        .metadata_mut()
+        .insert("x-anonymous-credential", value);
     Ok(())
 }
 
