@@ -151,7 +151,9 @@ pub const REKOR_LOG_PUBLIC_KEY: [u8; 65] = DEV_REKOR_LOG_PUBLIC_KEY;
 /// (`{hostname} - {tree ID}`) a release entry may come from. A device moves
 /// only forward through it (`update::rekor::check_consistency`). Add Sigstore's
 /// next shard here before it goes live; a shard missing from this list cannot
-/// deliver updates to this build. Mirrored in `scripts/publish-update.py`
+/// deliver updates to this build. Never remove a retired shard: a device whose
+/// stored checkpoint names an unlisted origin refuses every update, because
+/// its order against the listed shards is unknown. Mirrored in `scripts/publish-update.py`
 /// (server repo) `PUBLIC_REKOR_ORIGINS`.
 pub const PUBLIC_GOOD_REKOR_ORIGINS: &[&str] = &["rekor.sigstore.dev - 1193050959916656506"];
 

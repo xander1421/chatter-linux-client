@@ -33,7 +33,9 @@
 //! (`config::REKOR_ORIGINS`). A device moves only forward through that list;
 //! the new shard starts with no proof from the old one. A shard this build
 //! does not list is refused, so a real rotation needs a client release (and
-//! one manual install for clients already in the field) first.
+//! one manual install for clients already in the field) first. A stored
+//! checkpoint from an unlisted shard is refused as well: its order against
+//! the list is unknown, so leaving it could be a rollback.
 
 use base64::Engine;
 use p256::ecdsa::signature::Verifier;
@@ -357,9 +359,15 @@ pub fn check_consistency(
         return Ok(());
     };
     if stored.origin != new.origin {
-        // A stored origin this build no longer lists came from an older pin
-        // set; moving from it to a listed shard is the rotation it allowed.
-        if rank(&stored.origin).is_some_and(|old| old > new_rank) {
+        // Order is known only between listed shards. A stored origin outside
+        // the list could be newer than every listed one, so moving off it
+        // could be a rollback: refuse rather than guess.
+        let Some(old_rank) = rank(&stored.origin) else {
+            return Err(
+                "Rekor checkpoint already seen is from a shard this build does not pin".into(),
+            );
+        };
+        if old_rank > new_rank {
             return Err("Rekor checkpoint is from a shard this device already rotated past".into());
         }
         tracing::warn!(old = %stored.origin, new = %new.origin, "Rekor shard rotated to the next pinned origin");
@@ -855,8 +863,16 @@ mod tests {
                 .unwrap_err()
                 .contains("rotated past")
         );
-        // A stored shard from an older pin set may move to a listed one.
-        assert!(check(Some(&cp("retired - 0", 50, 4)), &a, None).is_ok());
+        // A stored shard outside the list has no known order, so leaving it
+        // could be a rollback: refused, for every listed shard.
+        let unlisted = cp("retired - 0", 50, 4);
+        for listed in [&a, &b] {
+            assert!(
+                check(Some(&unlisted), listed, None)
+                    .unwrap_err()
+                    .contains("does not pin")
+            );
+        }
         // Proof file for some other checkpoint.
         let newer = cp("log - 1", 12, 3);
         let stale = ConsistencyFile {
