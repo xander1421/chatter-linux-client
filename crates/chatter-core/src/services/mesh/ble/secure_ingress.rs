@@ -257,7 +257,7 @@ impl BleRuntime {
     }
 
     pub(super) async fn sync_private_groups(&mut self, claimed: &PeerId) {
-        if !self.pairing_verified(claimed) {
+        if self.verified_pairing_link(claimed).is_none() {
             return;
         }
         let Some(group) = self.state.group_peer_for_wire(claimed) else {

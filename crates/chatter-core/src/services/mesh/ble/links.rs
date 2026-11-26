@@ -66,6 +66,7 @@ impl BleRuntime {
                     self.matched_scans.lock().clear();
                     *self.pairing_previews.lock() = Default::default();
                     self.link_admission.clear();
+                    self.pairing_exchanges.clear();
                     self.pending_central = None;
                     self.central_admissions.clear();
                 }
@@ -437,8 +438,7 @@ impl BleRuntime {
             }
         }
         self.central_admissions.remove(link);
-        self.pairing_proofs_received
-            .retain(|(proved_link, _), _| proved_link != link);
+        self.pairing_exchanges.remove(link);
         let peer = self.state.with(|state| {
             let (moved, discarded) = rescue_link_writes(state, link, None);
             let peer = state.links.link_down(link);

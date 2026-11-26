@@ -171,7 +171,7 @@ pub struct BleRuntime {
     private_group_identity: Arc<MeshIdentity>,
     rotation: Option<RadioRotation>,
     pairing_candidates: std::collections::BTreeMap<PeerId, (PeerId, u64)>,
-    pairing_exchanges: std::collections::BTreeMap<PeerId, pairing::PairingExchange>,
+    pairing_exchanges: std::collections::BTreeMap<LinkId, pairing::PairingExchange>,
     courier_claims: std::collections::BTreeMap<PeerId, std::collections::BTreeSet<[u8; 32]>>,
     beacon_cursor: usize,
     published_beacons: Vec<chatter_mesh::tlv::pairing::PairingBeacon>,
@@ -680,6 +680,7 @@ impl BleRuntime {
         self.pending_central = None;
         self.central_admissions.clear();
         self.link_admission.clear();
+        self.pairing_exchanges.clear();
         self.state.with(|state| {
             state.radio_running = false;
             state.sessions.clear();

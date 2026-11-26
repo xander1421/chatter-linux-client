@@ -189,21 +189,42 @@ impl BleRuntime {
         {
             return false;
         }
-        let Ok(ciphertext) = self.state.with(|s| s.sessions.encrypt(peer, bytes)) else {
-            // A current member retries when this peer establishes Noise again.
+        let Some(packet) = self.private_control_packet(peer, bytes) else {
             return false;
         };
-        let packet = self.build_packet(
+        self.transmit(&packet, Some(peer), None).await
+    }
+
+    fn private_control_packet(&self, peer: &PeerId, bytes: &[u8]) -> Option<BitchatPacket> {
+        let ciphertext = self
+            .state
+            .with(|state| state.sessions.encrypt(peer, bytes))
+            .ok()?;
+        Some(self.build_packet(
             MessageType::NoiseEncrypted,
             Some(peer),
             ciphertext,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-        );
-        self.transmit(&packet, Some(peer), None).await
+        ))
+    }
+
+    pub(super) async fn send_private_control_on_link(
+        &self,
+        link: &LinkId,
+        peer: &PeerId,
+        bytes: &[u8],
+    ) -> bool {
+        let Some(packet) = self.private_control_packet(peer, bytes) else {
+            return false;
+        };
+        self.transmit_on_link(&packet, peer, link).await
     }
 
     pub(super) async fn send_group_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
-        self.pairing_verified(peer) && self.send_private_control(peer, bytes).await
+        let Some(link) = self.verified_pairing_link(peer) else {
+            return false;
+        };
+        self.send_private_control_on_link(&link, peer, bytes).await
     }
 
     pub(super) async fn send_group_state(&mut self, peer: &PeerId, bytes: &[u8], invite: bool) {
@@ -211,43 +232,29 @@ impl BleRuntime {
             return;
         };
         let peer = &wire;
-        if !self.config.public_chat_enabled() && !self.state.paired_session(peer) {
-            return;
-        }
         let kind = if invite {
             NoisePayloadType::GroupInvite
         } else {
             NoisePayloadType::GroupKeyUpdate
         };
         let payload = chatter_mesh::packet::encode_noise_payload(kind, bytes);
-        let sealed = self.pairing_verified(peer).then(|| {
-            self.state
-                .with(|state| state.sessions.encrypt(peer, &payload))
-        });
-        let Some(Ok(ciphertext)) = sealed else {
-            let now = now_millis();
-            let due = self.state.with(|state| {
-                state
-                    .links
-                    .links_to(peer)
-                    .iter()
-                    .any(|link| state.links.is_writable(link))
-                    && !state.sessions.has_session(peer)
-                    && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
-                        >= DM_HANDSHAKE_RETRY_MS
-            });
-            if due {
-                self.start_handshake(peer).await;
-            }
+        if self.send_group_control(peer, &payload).await {
             return;
-        };
-        let packet = self.build_packet(
-            MessageType::NoiseEncrypted,
-            Some(peer),
-            ciphertext,
-            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-        );
-        self.transmit(&packet, Some(peer), None).await;
+        }
+        let now = now_millis();
+        let due = self.state.with(|state| {
+            state
+                .links
+                .links_to(peer)
+                .iter()
+                .any(|link| state.links.is_writable(link))
+                && !state.sessions.has_session(peer)
+                && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
+                    >= DM_HANDSHAKE_RETRY_MS
+        });
+        if due {
+            self.start_handshake(peer).await;
+        }
     }
 
     pub(super) async fn broadcast_private_channel(
