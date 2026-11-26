@@ -25,6 +25,23 @@ pub(crate) const SHIELD_WAITING_FOR_TOKENS: &str =
 pub(crate) const NO_TOR_ROUTE: &str = "No Tor route";
 pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
+pub(crate) const VERIFYING_KEY: &str = "Verifying key";
+pub(crate) const SHIELD_VERIFYING_KEY: &str = "Verifying key over Tor";
+
+pub(crate) async fn wait_for_key_verification(
+    rx: &mut tokio::sync::broadcast::Receiver<crate::events::DomainEvent>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+    loop {
+        match rx.recv().await {
+            Ok(crate::events::DomainEvent::PeerKeyVerificationUpdated { .. })
+            | Err(RecvError::Lagged(_)) => return,
+            Err(RecvError::Closed) => std::future::pending::<()>().await,
+            Ok(_) => {}
+        }
+    }
+}
+
 impl MessageError {
     /// User-facing label for a send that did not land.
     ///
@@ -60,6 +77,7 @@ impl MessageError {
                 Some(DELIVERY_UNCONFIRMED)
             }
             Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
+            Self::RecipientKeyVerifying { .. } => None,
             Self::RecipientKeyUnverified { .. } => Some("Key not verified"),
             Self::MembershipNotVerified { .. } => Some("Membership not verified"),
             Self::ChannelNotFound(_) | Self::Network(NetworkError::NotFound(_)) => {
@@ -70,7 +88,7 @@ impl MessageError {
     }
 }
 
-fn update_retry_status(
+pub(crate) fn update_retry_status(
     db: &crate::storage::database::Database,
     id: &MessageId,
     status: &str,
@@ -176,8 +194,9 @@ impl MessageService {
         // The devices this send is for. Recorded before encryption so a later
         // failure still has an original recipient set, and a resend cannot
         // grow it. Receipts use the same rows.
-        self.snapshot_channel_receipt_targets(*channel_id, sent_at, auth_client, channel_client)
-            .await?;
+        if !self.is_private_channel(channel_id) {
+            self.snapshot_channel_receipt_targets(*channel_id, sent_at, channel_client).await?;
+        }
 
         let plaintext_bytes = {
             use prost::Message as _;
@@ -222,12 +241,15 @@ impl MessageService {
             wrap.encode_to_vec()
         };
 
-        // Sender-key channel: members who lack our current key get it BEFORE
-        // this message is encrypted, or they can never read it.
-        if require_encryption {
-            self.distribute_sender_key_to_new_members(channel_id)
-                .await?;
-        }
+        let private = self.is_private_channel(channel_id);
+        let previous_distribution = if private {
+            Some(self.create_sender_key_for_channel(channel_id).await?)
+        } else {
+            if require_encryption {
+                self.distribute_sender_key_to_new_members(channel_id).await?;
+            }
+            None
+        };
 
         let (content_to_send, skdm_opt) = self
             .prepare_encrypted_content(
@@ -240,10 +262,14 @@ impl MessageService {
             .await?;
 
         // If a new sender key was created, distribute SKDM to channel members
-        if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm)
-                .await?;
-        }
+        let private_distribution = if private {
+            skdm_opt.or(previous_distribution)
+        } else {
+            if let Some(skdm) = skdm_opt {
+                self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
+            }
+            None
+        };
 
         // Call server
         tracing::debug!(
@@ -281,13 +307,14 @@ impl MessageService {
         let request = super::channel_send::retain_channel_request(
             request,
             group_state.as_ref().map(|state| state.state_hash.to_vec()),
+            private_distribution.as_ref(),
         )?;
         // A private channel goes out anonymously to every member device
         // (group_send.rs). A public channel posts to the server, encrypted
         // (sender keys, so `group_state` is set) or not: the server issues
         // group send endorsements for private channels only.
-        let proto_message = if self.is_private_channel(channel_id) {
-            self.submit_group_request(&request).await?
+        let proto_message = if let Some(distribution) = private_distribution.as_ref() {
+            self.submit_group_request(&request, distribution).await?
         } else {
             message_client.send_prepared_message(request).await?
         };

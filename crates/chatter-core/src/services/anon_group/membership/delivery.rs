@@ -21,6 +21,7 @@ impl AnonGroupService {
         content: Content,
     ) -> Result<(), AnonGroupError> {
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
+        self.pairwise_service.require_sendable_existing(peer_id)?;
         // 1. Serialize content
         let plaintext = content.encode_to_vec();
         let retained = if crate::services::gateway::submission::user_post(&content) {
@@ -117,32 +118,28 @@ impl AnonGroupService {
                 }
                 AnonGroupError::from(e)
             })?;
-        let ciphertext = if has_session {
-            self.check_group_recipient(&content, peer_id, mailbox_pk)?;
-            self.admit_recipient_encryption(retained.as_deref())?;
-            // Local only; a session that vanished since the check fails here
-            // rather than being re-established.
-            self.pairwise_service
-                .encrypt_existing_session(peer_id, device, &plaintext)
-                .await?
-        } else {
-            // Refuse an expired originating session before consuming a token.
+        let discard = |error: AnonGroupError| {
+            if let Some(key) = retained.as_ref() {
+                crate::services::gateway::submission::discard_before_encryption(
+                    self.settings_repo.database(), key,
+                );
+            }
+            error
+        };
+        if !has_session {
             self.check_recipient_session(retained.as_deref())?;
-            let token = self.claim_token().map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                e
-            })?;
-            self.check_group_recipient(&content, peer_id, mailbox_pk)?;
-            self.admit_recipient_encryption(retained.as_deref())?;
-            self.pairwise_service
-                .encrypt_anonymous(peer_id, Some(device), &plaintext, &token)
-                .await?
-                .0
+            let token = self.claim_token().map_err(discard)?;
+            self.pairwise_service.prepare_anonymous_session(peer_id, Some(device), &token)
+                .await.map_err(|error| discard(error.into()))?;
+        }
+        self.check_group_recipient(&content, peer_id, mailbox_pk)?;
+        self.admit_recipient_encryption(retained.as_deref())?;
+        let ciphertext = match self.pairwise_service.encrypt_existing_session(peer_id, device, &plaintext).await {
+            Ok(ciphertext) => ciphertext,
+            Err(error @ crate::services::pairwise::PairwiseError::Identity(_)) => {
+                return Err(discard(error.into()));
+            }
+            Err(error) => return Err(error.into()),
         };
 
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;

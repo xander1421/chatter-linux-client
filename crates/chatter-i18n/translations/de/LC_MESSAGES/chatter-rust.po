@@ -4004,3 +4004,10 @@ msgstr "Registriert"
 
 msgid "This username link is invalid or expired."
 msgstr "Dieser Benutzernamen-Link ist ungültig oder abgelaufen."
+
+msgid "Verifying key"
+msgstr "Schlüssel wird überprüft"
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr "Der Verlauf des Schlüsseltransparenzprotokolls konnte nicht überprüft werden."

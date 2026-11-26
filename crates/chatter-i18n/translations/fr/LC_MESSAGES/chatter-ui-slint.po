@@ -6004,3 +6004,13 @@ msgstr "Aller au message"
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr "Non lu : {}"
+
+msgid "Verifying key"
+msgstr "Vérification de la clé"
+
+msgid "Key not verified"
+msgstr "Clé non vérifiée"
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr "Identité modifiée"

@@ -43,7 +43,7 @@ fn shield_client(me: UserId) -> (Arc<ChatterClient>, tempfile::TempDir) {
 
 /// Cache `peer`'s `device` the way a normal-mode send does: a session.
 /// One identity per user, shared by all its devices.
-async fn cache_device(
+pub(in crate::services::message) async fn cache_device(
     ms: &MessageService,
     peer: &UserId,
     device: u32,
@@ -98,6 +98,9 @@ async fn cache_device(
         )
         .await
         .unwrap();
+    ms.signal_service.key_store.mark_peer_verified(
+        &peer.to_string(), &peer_identity.identity_key().serialize(),
+    ).unwrap();
     ms.signal_service
         .actor
         .establish_session(ProtocolAddress::new(peer.to_string(), device_id), bundle)
@@ -151,7 +154,7 @@ fn fixture_sender_certificate(
 }
 
 #[cfg(feature = "dev-trust-root")]
-fn cache_fixture_sender_certificate(
+pub(in crate::services::message) fn cache_fixture_sender_certificate(
     client: &ChatterClient,
     me: UserId,
 ) -> libsignal_protocol::SenderCertificate {

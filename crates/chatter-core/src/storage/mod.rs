@@ -17,6 +17,7 @@ pub mod receive_artifact;
 pub mod repositories;
 pub mod serialization;
 pub mod unlink;
+pub(crate) mod peer_verification;
 
 pub use database::Database;
 pub use key_store::KeyStore;

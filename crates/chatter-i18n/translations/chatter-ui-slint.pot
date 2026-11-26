@@ -5967,3 +5967,13 @@ msgstr ""
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr ""
+
+msgid "Verifying key"
+msgstr ""
+
+msgid "Key not verified"
+msgstr ""
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr ""

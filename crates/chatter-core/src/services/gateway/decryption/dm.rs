@@ -34,6 +34,7 @@ impl MessageGateway {
         // Layer 2: Decrypt Signal layer (sealed sender with Double Ratchet)
         let (sender_address, mut plaintext, msg_type) = self
             .signal_service
+            .for_anonymous_route()
             .decrypt_message(&signal_ciphertext, server_timestamp_ns)
             .await?;
 

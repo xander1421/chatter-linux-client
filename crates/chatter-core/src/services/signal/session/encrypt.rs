@@ -328,13 +328,30 @@ impl SignalService {
         self.refuse_pending_identity_change(recipient_id)?;
         if ensure_missing {
             let usable = self.session_devices(recipient_id).await?;
-            for destination in &destinations {
+            let mut ready = Vec::with_capacity(destinations.len());
+            let mut blocked = None;
+            for destination in destinations {
                 let device = u32::from(destination.device_id());
-                if !usable.contains(&device) {
-                    self.ensure_session(auth_client, recipient_id, device)
-                        .await?;
+                let result = if usable.contains(&device) { Ok(()) } else {
+                    self.ensure_session(auth_client, recipient_id, device).await
+                };
+                match result {
+                    Ok(()) => ready.push(destination),
+                    Err(error @ ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }
+                        | CryptoError::UntrustedIdentity { new_identity_key: None, .. })) => {
+                        if blocked.is_none() || matches!(error, ServiceError::Crypto(CryptoError::KeyVerificationPending { .. })) {
+                            blocked = Some(error);
+                        }
+                    }
+                    Err(error) => return Err(error),
                 }
             }
+            if ready.is_empty() {
+                if let Some(error) = blocked {
+                    return Err(error);
+                }
+            }
+            destinations = ready;
         }
         let certificate = self.get_or_request_sender_certificate(auth_client).await?;
         let batch = self
@@ -374,6 +391,7 @@ impl SignalService {
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         let mut ciphertexts = HashMap::with_capacity(device_ids.len());
+        let mut blocked = None;
         for device_id in device_ids {
             let Ok(device) = DeviceId::try_from(device_id) else {
                 continue;
@@ -391,6 +409,13 @@ impl SignalService {
                 Ok(ciphertext) => {
                     ciphertexts.insert(device_id, ciphertext);
                 }
+                Err(e @ ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }
+                    | CryptoError::UntrustedIdentity { new_identity_key: None, .. })) => {
+                    if blocked.is_none() || matches!(e, ServiceError::Crypto(CryptoError::KeyVerificationPending { .. })) {
+                        blocked = Some(e);
+                    }
+                }
+                Err(e @ ServiceError::Crypto(CryptoError::UntrustedIdentity { .. })) => return Err(e),
                 Err(e) => tracing::warn!(
                     recipient = %recipient_id,
                     device_id,
@@ -400,9 +425,9 @@ impl SignalService {
             }
         }
         if ciphertexts.is_empty() {
-            return Err(ServiceError::Validation(format!(
+            return Err(blocked.unwrap_or_else(|| ServiceError::Validation(format!(
                 "no usable session with any device of {recipient_id}"
-            )));
+            ))));
         }
         Ok(ciphertexts)
     }
@@ -419,6 +444,17 @@ impl SignalService {
         recipient_id: &str,
         device_id: u32,
         plaintext: &[u8],
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.encrypt_message_anonymous_with_permit(recipient_id, device_id, plaintext, None)
+            .await
+    }
+
+    pub(crate) async fn encrypt_message_anonymous_with_permit(
+        &self,
+        recipient_id: &str,
+        device_id: u32,
+        plaintext: &[u8],
+        permit: Option<crate::services::gateway::submission::SubmissionPermit>,
     ) -> Result<Vec<u8>, ServiceError> {
         let lock_key = format!("{}:{}", recipient_id, device_id);
         let lock = self.get_encrypt_lock(&lock_key).await;
@@ -450,7 +486,8 @@ impl SignalService {
         })?;
 
         self.actor
-            .encrypt_sealed(plaintext.to_vec(), sender_cert, address)
+            .for_anonymous_route()
+            .encrypt_sealed_with_permit(plaintext.to_vec(), sender_cert, address, permit)
             .await
     }
 }

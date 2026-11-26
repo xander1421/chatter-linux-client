@@ -5,12 +5,14 @@ use libsignal_protocol::DeviceId;
 use std::{cell::RefCell, rc::Rc};
 #[derive(Clone)]
 pub(crate) struct ReceiveStore {
+    authenticated_whisper_receive: bool,
     base: SignalStore,
     changes: Rc<RefCell<ReceiveChanges>>,
 }
 impl ReceiveStore {
     pub(crate) fn new(base: SignalStore) -> Self {
         Self {
+            authenticated_whisper_receive: false,
             base,
             changes: Default::default(),
         }
@@ -87,6 +89,12 @@ impl ReceiveStore {
         self.observe(table, key, column)
     }
 }
+impl ReceiveStore {
+    fn allow_archived_whisper_receive(&mut self) {
+        self.authenticated_whisper_receive = true;
+    }
+}
+
 #[async_trait(?Send)]
 impl IdentityKeyStore for ReceiveStore {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair> {
@@ -123,9 +131,32 @@ impl IdentityKeyStore for ReceiveStore {
         &self,
         a: &ProtocolAddress,
         key: &IdentityKey,
-        _: Direction,
+        direction: Direction,
     ) -> Result<bool> {
-        Ok(self.get_identity(a).await?.is_none_or(|old| old == *key))
+        let local = self.observe("settings", "auth.current_user_id", "CAST(value AS BLOB)")?;
+        let may_record_archived = self.authenticated_whisper_receive
+            && matches!(direction, Direction::Receiving)
+            && !super::local_account_matches(local.as_deref(), a.name())?;
+        Ok(self.get_identity(a).await?.is_none_or(|old| old == *key || may_record_archived))
+    }
+
+    async fn record_received_identity(
+        &mut self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<()> {
+        let own = self.observe("settings", "auth.current_user_id", "CAST(value AS BLOB)")?;
+        if super::local_account_matches(own.as_deref(), address.name())? {
+            return Ok(());
+        }
+        if let Some(pinned) = self.get_identity(address).await? {
+            if pinned != *identity {
+                self.changes.borrow_mut().archived_identities.push((
+                    address.name().to_owned(), pinned.serialize().to_vec(), identity.serialize().to_vec(),
+                ));
+            }
+        }
+        Ok(())
     }
     async fn save_identity(
         &mut self,
@@ -419,6 +450,7 @@ async fn decrypt_durable_inner(
         &mut prekeys,
         &signed,
         &mut kyber,
+        ReceiveStore::allow_archived_whisper_receive,
     )
     .await
     .map_err(ServiceError::Crypto)?;
@@ -502,9 +534,11 @@ async fn decrypt_durable_inner(
     } else {
         None
     };
+    let mut changes = identities.changes();
+    changes.prekey_identity = result.prekey_identity.map(|identity|
+        (result.sender_uuid.clone(), identity.serialize().to_vec()));
     let committed =
-        base.key_store
-            .commit_receive(&key, &identities.changes(), artifact.as_ref())?;
+        base.key_store.commit_receive(&key, &changes, artifact.as_ref())?;
     if let Some(a) = committed {
         tracing::info!(envelope_id = %a.key.envelope_id, kind = a.kind.as_str(), "secret receive artifact committed");
         return from_artifact(a).map(Some);
@@ -763,6 +797,9 @@ mod tests {
         decrypt_durable(f.store.clone(), &first, &f.root, f.key.clone())
             .await
             .unwrap();
+        let peer = f.sender_address.name();
+        let identity = f.store.key_store.get_identity(peer).unwrap().unwrap();
+        f.store.key_store.mark_peer_verified(peer, &identity).unwrap();
         // Actual receiver reply acknowledges the PreKey session at the sender.
         let reply = libsignal_protocol::message_encrypt(
             b"session reply",
@@ -790,6 +827,56 @@ mod tests {
         .unwrap();
         f.key.envelope_id = "established".into();
     }
+    #[tokio::test]
+    async fn inbound_prekey_verification_blocks_a_send_without_changing_session_bytes() {
+        let mut f = fixture().await;
+        let ciphertext = encrypt(&mut f).await;
+        decrypt_durable(f.store.clone(), &ciphertext, &f.root, f.key.clone()).await.unwrap();
+        let address = address_to_string(&f.sender_address);
+        let before = f.store.key_store.load_session(&address).unwrap().unwrap();
+        let sender_key = f.sender.identity_store.get_identity_key_pair().await.unwrap()
+            .identity_key().serialize();
+        let jobs = f.store.key_store.due_kt_jobs(KtRoute::AnonymousTor, i64::MAX).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].key, sender_key.as_ref());
+        let error = libsignal_protocol::message_encrypt(
+            b"reply", &f.sender_address, &f.recipient,
+            &mut f.store.clone(), &mut f.store.clone(),
+            std::time::SystemTime::now(), &mut rand::rngs::OsRng.unwrap_err(),
+        ).await.unwrap_err();
+        assert!(matches!(outbound_identity_error(&error),
+            Some(CryptoError::KeyVerificationPending { .. })));
+        assert_eq!(f.store.key_store.load_session(&address).unwrap().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn archived_receive_records_the_authenticated_key_without_replacing_the_pin() {
+        let mut f = fixture().await;
+        establish(&mut f).await;
+        let ciphertext = encrypt(&mut f).await;
+        let peer = f.sender_address.name();
+        let old = f.store.key_store.get_identity(peer).unwrap().unwrap();
+        let new = IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err())
+            .identity_key().serialize();
+        let address = address_to_string(&f.sender_address);
+        let record = f.store.key_store.load_session(&address).unwrap().unwrap();
+        let mut archived = SessionRecord::deserialize(&record).unwrap();
+        archived.archive_current_state().unwrap();
+        f.store.key_store.store_session(&address, &archived.serialize().unwrap()).unwrap();
+        f.store.key_store.save_identity(peer, &new).unwrap();
+
+        let received = decrypt_durable(f.store.clone(), &ciphertext, &f.root, f.key.clone()).await.unwrap();
+        assert_eq!(received.msg_type, CiphertextMessageType::Whisper);
+        assert_eq!(received.content, f.body);
+        assert_eq!(f.store.key_store.get_identity(peer).unwrap().unwrap(), new.as_ref());
+        let archived_jobs = f.store.key_store.due_kt_jobs(KtRoute::AnonymousTor, i64::MAX).unwrap();
+        assert!(archived_jobs.iter().any(|job| job.archived && job.key == old));
+        assert!(f.store.key_store.get_pending_identity_change(peer).unwrap().is_none());
+
+        let fresh = decrypt_durable(f.store.clone(), &ciphertext, &f.root, f.key.clone()).await.unwrap();
+        assert_eq!(received.artifact, fresh.artifact);
+    }
+
     #[tokio::test]
     async fn actual_established_receive_failures_and_committed_replay_do_not_advance_twice() {
         for table in [
@@ -1172,6 +1259,7 @@ mod tests {
             &mut prekeys,
             &signed,
             &mut kyber,
+            ReceiveStore::allow_archived_whisper_receive,
         )
         .await
         .unwrap();

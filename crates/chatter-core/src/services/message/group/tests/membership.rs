@@ -8,7 +8,7 @@
     ) {
         use libsignal_protocol::{
             DeviceId, IdentityKeyPair, InMemSignalProtocolStore, KeyPair, PreKeyBundle,
-            ProtocolAddress, SessionStore, kem, process_prekey_bundle,
+            ProtocolAddress, SessionStore, kem, initiate_session,
         };
         use rand::SeedableRng;
         let mut rng =
@@ -42,7 +42,7 @@
         let address = ProtocolAddress::new(user.to_string(), device_id);
         let local = ProtocolAddress::new("me".into(), DeviceId::try_from(1u32).unwrap());
         let mut identities = ours.clone();
-        process_prekey_bundle(
+        initiate_session(
             &address,
             &local,
             &mut ours,
@@ -70,6 +70,111 @@
             registration_ids: devices.iter().copied().collect(),
             ..Default::default()
         }
+    }
+
+    #[cfg(feature = "dev-trust-root")]
+    #[tokio::test]
+    async fn private_submit_reuses_cached_sessions_and_blocks_an_unverified_roster() {
+        use chatter_proto::chat_v1 as pb;
+        use crate::services::message::dm_bootstrap::tests::{
+            cache_device, cache_fixture_sender_certificate,
+        };
+        use rand::{SeedableRng, rngs::StdRng};
+        use std::{convert::Infallible, future::Ready, sync::{Arc, Mutex}, task::{Context, Poll}};
+        use tokio::net::TcpListener;
+        use tonic::{body::Body, server::NamedService, transport::Server};
+
+        #[derive(Clone)]
+        struct RpcProbe<const AUTH: bool>(Arc<Mutex<Vec<(String, bool)>>>);
+        impl<const AUTH: bool> NamedService for RpcProbe<AUTH> {
+            const NAME: &'static str = if AUTH { "chat.v1.AuthService" } else { "chat.v1.MessageService" };
+        }
+        impl<const AUTH: bool> tower::Service<http::Request<Body>> for RpcProbe<AUTH> {
+            type Response = http::Response<Body>;
+            type Error = Infallible;
+            type Future = Ready<Result<Self::Response, Self::Error>>;
+
+            fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+                self.0.lock().unwrap().push((
+                    request.uri().path().to_owned(),
+                    request.headers().contains_key(http::header::AUTHORIZATION),
+                ));
+                std::future::ready(Ok(tonic::Status::aborted("fixture reached").into_http()))
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let incoming = futures::stream::unfold(listener, |listener| async {
+            Some((listener.accept().await.map(|(stream, _)| stream), listener))
+        });
+        let rpc_calls = Arc::new(Mutex::new(Vec::new()));
+        let server = tokio::spawn(Server::builder()
+            .add_service(RpcProbe::<true>(rpc_calls.clone()))
+            .add_service(RpcProbe::<false>(rpc_calls.clone()))
+            .serve_with_incoming(incoming));
+
+        let t = two_members_at(&url);
+        let alice = t.alice.messages();
+        alice.grpc_pool.auth().set_basic(format!("{}.1", t.alice_id), "fixture".into());
+        let mut rng = StdRng::seed_from_u64(1844);
+        let identity = libsignal_protocol::IdentityKeyPair::generate(&mut rng);
+        let store = &alice.signal_service.key_store;
+        store.set_local_identity(42, &identity.serialize()).unwrap();
+        // SSv2 includes Alice's sending device, which needs her own prekeys
+        // to construct its ephemeral self-session.
+        alice.signal_service.actor.rotate_signed_prekey().await.unwrap();
+        cache_device(alice, &t.bob_id, 1, &mut rng).await;
+        cache_fixture_sender_certificate(&t.alice, t.alice_id);
+        let bob = t.bob_id.to_string();
+        let registration = alice.signal_service.session_registration_id(&bob, 1).unwrap();
+        let gate = alice.group_gate().for_distribution(&t.channel_id).unwrap();
+        let distribution = alice.create_sender_key_for_channel(&t.channel_id).await.unwrap();
+        let (content, _) = alice.prepare_encrypted_content(
+            &t.channel_id,
+            &chatter_proto::protovalidate::test_plaintext("group post"),
+            pb::message::Content::default(),
+            true,
+            1,
+        ).await.unwrap();
+        let request = pb::SendMessageRequest {
+            channel_id: t.channel_id.to_string(),
+            content: Some(content),
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
+        };
+
+        // The recorder intentionally refuses each send after recording it.
+        for path in ["SendSealedMessage", "SendGroupMessage"] {
+            alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
+            let result = alice.submit_group_request(&request, &distribution).await;
+            assert!(matches!(
+                result,
+                Err(MessageError::Network(crate::error::NetworkError::ServerError(ref detail)))
+                    if detail.contains("fixture reached")
+            ), "{result:?}");
+            assert_eq!(
+                std::mem::take(&mut *rpc_calls.lock().unwrap()),
+                [(format!("/chat.v1.MessageService/{path}"), false)]
+            );
+            // On the second submit Bob already holds our sender key.
+            alice.record_sender_key_holders(&t.channel_id, &bob, &reached(&[(1, registration)]));
+        }
+
+        alice.database.connection().unwrap().execute(
+            "UPDATE peer_key_transparency SET state='unverified-inbound' WHERE account=?1",
+            [&bob],
+        ).unwrap();
+        assert!(matches!(
+            alice.submit_group_request(&request, &distribution).await,
+            Err(MessageError::RecipientKeyVerifying { peer_id }) if peer_id == bob
+        ));
+        assert!(rpc_calls.lock().unwrap().is_empty());
+        server.abort();
     }
 
     /// The registration id comes from the session itself — the bundle's,

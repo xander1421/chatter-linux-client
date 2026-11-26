@@ -50,6 +50,10 @@ pub enum AnonGroupError {
     #[error("message error: {0}")]
     MessageError(String),
 
+    /// The exact identity is waiting for verification or user acceptance.
+    #[error(transparent)]
+    RecipientIdentity(crate::error::CryptoError),
+
     /// Crypto error.
     #[error("crypto error: {0}")]
     CryptoError(String),
@@ -75,6 +79,7 @@ impl From<crate::services::pairwise::PairwiseError> for AnonGroupError {
     fn from(e: crate::services::pairwise::PairwiseError) -> Self {
         use crate::services::pairwise::PairwiseError;
         match e {
+            PairwiseError::Identity(e) => Self::RecipientIdentity(e),
             PairwiseError::Network(e) => Self::MessageError(e.to_string()),
             PairwiseError::Storage(e) => Self::Storage(e),
             e => Self::CryptoError(e.to_string()),
@@ -83,6 +88,22 @@ impl From<crate::services::pairwise::PairwiseError> for AnonGroupError {
 }
 
 impl AnonGroupError {
+    pub(super) fn verifying_key(&self) -> bool {
+        matches!(self, Self::RecipientIdentity(crate::error::CryptoError::KeyVerificationPending { .. }))
+    }
+
+    pub(super) fn identity_rejected(&self) -> bool {
+        matches!(self, Self::RecipientIdentity(crate::error::CryptoError::UntrustedIdentity {
+            new_identity_key: None, ..
+        }))
+    }
+
+    pub(super) fn awaiting_identity_acceptance(&self) -> bool {
+        matches!(self, Self::RecipientIdentity(crate::error::CryptoError::UntrustedIdentity {
+            new_identity_key: Some(_), ..
+        }))
+    }
+
     /// Static metadata survives redaction without exposing error text or IDs.
     pub(crate) fn trace_invite_failure(&self) {
         match self {

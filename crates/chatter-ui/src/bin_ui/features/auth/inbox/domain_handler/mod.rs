@@ -747,7 +747,16 @@ pub async fn handle_domain_event(
                 crate::bin_ui::features::calls::history::refresh_in_place(&w, &ui_ctx);
             });
         }
-        DomainEvent::DmSessionHealed { .. } => {}
+        DomainEvent::DmSessionHealed { .. } | DomainEvent::PeerKeyVerificationUpdated { .. } => {}
+        DomainEvent::KeyTransparencyHistoryUnverified => {
+            crate::run_ui!(window, |w| {
+                w.set_toast_message(
+                    chatter_i18n::tr("Could not verify the Key Transparency log history.").into(),
+                );
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            });
+        }
         DomainEvent::PeerDevicesChanged { .. } => {}
         // A peer's identity key changed while we were running. If their
         // conversation is the one on screen, raise the prompt now rather than
@@ -756,10 +765,8 @@ pub async fn handle_domain_event(
         DomainEvent::PeerIdentityChanged { peer_user_id, .. } => {
             let ui_ctx = ui_ctx.clone();
             let _ = window.upgrade_in_event_loop(move |w| {
-                if ui_ctx.active_conversation()
-                    == (chatter_core::state::ActiveConversation::ServerDm {
-                        peer_id: peer_user_id,
-                    })
+                if crate::bin_ui::features::chat::identity_change::active_peer(&ui_ctx)
+                    == Some(peer_user_id)
                 {
                     crate::bin_ui::features::chat::identity_change::refresh(
                         &w,

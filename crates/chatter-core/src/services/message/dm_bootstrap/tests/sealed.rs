@@ -300,3 +300,99 @@ async fn public_sealed_envelope_refusal_releases_admission_without_advancing_dev
     assert_eq!(another.message.unwrap().delivery_status, "sending");
     assert_eq!(envelope(&small.id), Some(retained));
 }
+
+#[cfg(feature = "dev-trust-root")]
+#[tokio::test]
+async fn sealed_batch_skips_a_blocked_device_and_commits_the_ready_device() {
+    use crate::error::{CryptoError, IdentityChangeSource, ServiceError};
+    use crate::storage::peer_verification::KtRoute;
+    let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
+    let ready = UserId::new();
+    let blocked = UserId::new();
+    let (client, _dir) = shield_client(me);
+    let ms = client.messages();
+    let mut rng = StdRng::seed_from_u64(0xC501);
+    cache_device(ms, &ready, 2, &mut rng).await;
+    cache_device(ms, &blocked, 3, &mut rng).await;
+    let store = &ms.signal_service.key_store;
+    let key = store.get_identity(&blocked.to_string()).unwrap().unwrap();
+    ms.database.connection().unwrap().execute(
+        "UPDATE peer_key_transparency SET state='unverified-inbound' WHERE account=?1 AND identity_key=?2",
+        rusqlite::params![blocked.to_string(), key],
+    ).unwrap();
+    let address = |peer: UserId, device| ProtocolAddress::new(peer.to_string(), DeviceId::new(device).unwrap());
+    let bytes = |peer: UserId, device| store.load_session(&format!("{peer}:{device}")).unwrap().unwrap();
+    let blocked_before = bytes(blocked, 3);
+    let ready_before = bytes(ready, 2);
+    let cert = cache_fixture_sender_certificate(&client, me);
+    let batch = ms.signal_service.actor.encrypt_sealed_bounded_batch(
+        chatter_proto::protovalidate::test_plaintext("one ready device"), cert.clone(),
+        vec![address(ready, 2), address(blocked, 3)], None,
+    ).await.unwrap();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0].0, address(ready, 2));
+    assert_ne!(bytes(ready, 2), ready_before);
+    assert_eq!(bytes(blocked, 3), blocked_before);
+    let jobs = store.due_kt_jobs(KtRoute::AnonymousTor, i64::MAX).unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].key, key);
+
+    let candidate = super::IdentityKeyPair::generate(&mut rng);
+    store.record_pending_identity_change(
+        &blocked.to_string(),
+        &candidate.identity_key().serialize(),
+        IdentityChangeSource::ServerClaimed.as_db_str(),
+        3,
+    ).unwrap();
+    let ready_before = bytes(ready, 2);
+    let result = ms.signal_service.actor.encrypt_sealed_bounded_batch(
+        chatter_proto::protovalidate::test_plaintext("wait for the identity change"), cert,
+        vec![address(ready, 2), address(blocked, 3)], None,
+    ).await;
+    assert!(matches!(
+        result,
+        Err(ServiceError::Crypto(CryptoError::UntrustedIdentity { new_identity_key: Some(_), .. }))
+    ));
+    assert_eq!(bytes(ready, 2), ready_before);
+    assert_eq!(bytes(blocked, 3), blocked_before);
+}
+
+#[cfg(feature = "dev-trust-root")]
+#[tokio::test]
+async fn secret_mailbox_submission_starts_only_after_the_actors_identity_check() {
+    use crate::error::{CryptoError, ServiceError};
+    use crate::services::gateway::submission::{SubmissionPermit, track_submission};
+
+    let (client, _dir) = shield_client(UserId::from_uuid(uuid::Uuid::from_u128(1)));
+    let ms = client.messages();
+    let peer = UserId::new();
+    cache_device(ms, &peer, 2, &mut StdRng::seed_from_u64(921)).await;
+    let cert = cache_fixture_sender_certificate(&client, ms.current_user_id().unwrap());
+    let store = &ms.signal_service.key_store;
+    let session = || store.load_session(&format!("{peer}:2")).unwrap().unwrap();
+    let original = session();
+
+    ms.database.connection().unwrap().execute(
+        "UPDATE peer_key_transparency SET state='unverified-inbound' WHERE account=?1",
+        [peer.to_string()],
+    ).unwrap();
+    let encrypt = || async {
+        ms.signal_service.actor.for_anonymous_route().encrypt_sealed_with_permit(
+            chatter_proto::protovalidate::test_plaintext("secret mailbox post"),
+            cert.clone(),
+            ProtocolAddress::new(peer.to_string(), DeviceId::new(2).unwrap()),
+            Some(SubmissionPermit::capture()),
+        ).await
+    };
+    let (result, started, _) = track_submission(encrypt(), None).await;
+    assert!(matches!(result, Err(ServiceError::Crypto(CryptoError::KeyVerificationPending { .. }))));
+    assert!(!started);
+    assert_eq!(session(), original);
+
+    let key = store.get_identity(&peer.to_string()).unwrap().unwrap();
+    store.mark_peer_verified(&peer.to_string(), &key).unwrap();
+    let (result, started, _) = track_submission(encrypt(), None).await;
+    assert!(result.is_ok());
+    assert!(started);
+    assert_ne!(session(), original);
+}

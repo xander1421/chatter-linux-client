@@ -438,14 +438,20 @@ impl MessageService {
                         .unwrap_or("Not delivered"),
                 ),
             )?,
-            Err(_) => {
+            Err(error) => {
+                let reason = if matches!(error, MessageError::RecipientKeyVerifying { .. }) {
+                    super::core::VERIFYING_KEY
+                } else {
+                    "Waiting for connection"
+                };
                 let waiting = tx.execute(
                     "UPDATE dm_outbox SET attempts=MIN(attempts+1,6), next_attempt_at=?4+(5 << MIN(attempts,6))
                      WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
                     params![owner, id.to_string(), generation, now()],
                 )? == 1;
                 if waiting {
-                    tx.execute("UPDATE messages SET failure_reason='Waiting for connection' WHERE id=?1 AND delivery_status='sending'", params![id.to_string()])?;
+                    tx.execute("UPDATE messages SET failure_reason=?2 WHERE id=?1 AND delivery_status='sending'",
+                        params![id.to_string(), reason])?;
                 }
                 waiting
             }
@@ -526,6 +532,7 @@ fn expired_error(envelope_stored: bool) -> MessageError {
 fn claim_due(
     service: &MessageService,
     owner: &UserId,
+    key_updated: bool,
 ) -> Result<
     (
         Vec<(MessageId, String, ChannelId, u64)>,
@@ -540,6 +547,11 @@ fn claim_due(
     }
     let mut conn = service.database.connection()?;
     let tx = conn.transaction()?;
+    if key_updated {
+        tx.execute("UPDATE dm_outbox SET next_attempt_at=0 WHERE owner_id=?1
+            AND EXISTS (SELECT 1 FROM messages m WHERE m.id=dm_outbox.message_id AND m.failure_reason=?2)",
+            params![owner_s, super::core::VERIFYING_KEY])?;
+    }
     let rows: Vec<(String, i64, u32, bool)> = {
         let mut stmt = tx.prepare(
             "SELECT message_id,created_at,device_id,request IS NOT NULL FROM dm_outbox
@@ -603,6 +615,7 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
     client: &Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
+    let mut keys = client.event_bus().subscribe_domain();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -614,7 +627,10 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
             if !crate::network::connection::await_foreground(&mut visible_rx).await {
                 break;
             }
-            ticker.tick().await;
+            let key_updated = tokio::select! {
+                _ = ticker.tick() => false,
+                _ = super::core::wait_for_key_verification(&mut keys) => true,
+            };
             let Some(client) = weak.upgrade() else {
                 break;
             };
@@ -632,7 +648,7 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
             {
                 continue;
             }
-            let (due, expired) = match claim_due(&messages, &owner) {
+            let (due, expired) = match claim_due(&messages, &owner, key_updated) {
                 Ok(claimed) => claimed,
                 Err(error) => {
                     tracing::warn!(%error, "Sealed DM outbox unavailable");

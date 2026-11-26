@@ -152,6 +152,7 @@ impl AnonDmService {
         content: Content,
     ) -> Result<(), AnonDmError> {
         let peer_id = &dm.peer_id;
+        self.pairwise_service.require_sendable_existing(peer_id)?;
         // Secret-chat traffic goes over Tor or not at all; refuse before any
         // submission is recorded or token spent.
         self.grpc_pool
@@ -209,20 +210,23 @@ impl AnonDmService {
             .ensure_sender_certificate()
             .await
             .map_err(|e| discard(e.into()))?;
-        let ciphertext = if has_session {
-            crate::services::gateway::submission::mark_submission_started()
-                .map_err(|e| discard(e.into()))?;
-            self.pairwise_service
-                .encrypt_existing_session(peer_id, device, &plaintext)
-                .await?
-        } else {
+        if !has_session {
             let token = self.claim_token().map_err(discard)?;
-            crate::services::gateway::submission::mark_submission_started()
-                .map_err(|e| discard(e.into()))?;
             self.pairwise_service
-                .encrypt_anonymous(peer_id, Some(device), &plaintext, &token)
-                .await?
-                .0
+                .prepare_anonymous_session(peer_id, Some(device), &token)
+                .await
+                .map_err(|e| discard(e.into()))?;
+        }
+        let permit = crate::services::gateway::submission::SubmissionPermit::capture();
+        let ciphertext = match self.pairwise_service
+            .encrypt_existing_session_with_permit(peer_id, device, &plaintext, Some(permit))
+            .await
+        {
+            Ok(ciphertext) => ciphertext,
+            Err(error @ crate::services::pairwise::PairwiseError::Identity(_)) => {
+                return Err(discard(error.into()));
+            }
+            Err(error) => return Err(error.into()),
         };
 
         if let Some(key) = retained.as_ref() {

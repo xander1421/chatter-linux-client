@@ -294,6 +294,14 @@ pub enum DomainEvent {
         attributed: bool,
     },
 
+    /// Local KT verification settled. Retry workers recheck the exact key.
+    PeerKeyVerificationUpdated {
+        peer_user_id: UserId,
+    },
+
+    /// A background verifier rejected the transparency log's history proof.
+    KeyTransparencyHistoryUnverified,
+
     /// A peer who shares a channel with the local user added, revoked or
     /// re-registered a device. Handled by
     /// `MessageService::handle_peer_device_change`.
@@ -760,7 +768,8 @@ impl DomainEvent {
             DomainEvent::PushWakeup { .. } => None,
             DomainEvent::CallHistoryChanged => None,
             DomainEvent::DmSessionHealed { .. } => None,
-            DomainEvent::PeerIdentityChanged { .. } => None,
+            DomainEvent::PeerIdentityChanged { .. } | DomainEvent::PeerKeyVerificationUpdated { .. } => None,
+            DomainEvent::KeyTransparencyHistoryUnverified => None,
             DomainEvent::PeerDevicesChanged { .. } => None,
         }
     }

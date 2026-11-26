@@ -46,6 +46,8 @@ impl MessageService {
             "MessageService: send_dm_content called"
         );
 
+        self.require_mailbox_peer_key(peer_id)?;
+
         // Inject profile key if profile sharing is enabled for this peer
         let content = self.inject_profile_key_if_sharing(peer_id, content)?;
 
@@ -335,6 +337,16 @@ impl MessageService {
         (outcome.delivered, acknowledged)
     }
 
+    pub(crate) fn require_mailbox_peer_key(&self, peer: &UserId) -> Result<(), MessageError> {
+        let peer = peer.to_string();
+        let signal = self.signal_service.for_anonymous_route();
+        if let Some(key) = signal.get_peer_identity(&peer)? {
+            signal.require_sendable_key(&peer, &key)
+                .map_err(|error| MessageError::from_signal_send(error.into(), "mailbox identity"))?;
+        }
+        Ok(())
+    }
+
     /// Seal `plaintext` for one peer device and deposit it in its mailbox.
     async fn send_to_peer_device(
         &self,
@@ -348,6 +360,7 @@ impl MessageService {
         let device_id = mailbox.device_id;
         let peer_ciphertexts = self
             .signal_service
+            .for_anonymous_route()
             .encrypt_message_session_devices(
                 auth_client,
                 &peer_id.to_string(),
@@ -475,6 +488,7 @@ impl MessageService {
         content: chatter_proto::content_v1::Content,
         devices: &[u32],
     ) -> Result<(), MessageError> {
+        self.require_mailbox_peer_key(peer_id)?;
         if devices.is_empty() {
             return Err(MessageError::InvalidContent(
                 "no original device of this message can be retried".into(),
@@ -571,6 +585,9 @@ impl MessageService {
         mailbox_manager: &MailboxManager,
     ) -> PendingFlush {
         let mut flush = PendingFlush::default();
+        if self.require_mailbox_peer_key(peer_id).is_err() {
+            return flush;
+        }
         let pending = match self.pending_dms.drain(peer_id) {
             Ok(pending) => pending,
             Err(e) => {

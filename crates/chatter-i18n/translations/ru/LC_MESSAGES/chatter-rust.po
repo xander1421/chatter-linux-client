@@ -3938,3 +3938,10 @@ msgstr "Зарегистрировано"
 
 msgid "This username link is invalid or expired."
 msgstr "Эта ссылка на имя пользователя недействительна или устарела."
+
+msgid "Verifying key"
+msgstr "Проверка ключа"
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr "Не удалось проверить историю журнала прозрачности ключей."

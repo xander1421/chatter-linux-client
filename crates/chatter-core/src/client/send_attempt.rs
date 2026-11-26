@@ -192,8 +192,10 @@ pub(super) fn settle_failure(
         // The row stays "sending" (retry stays locked) but says why, so its
         // bubble reads "not confirmed" rather than "sending" for good.
         conn.execute(
-            "UPDATE messages SET failure_reason=?2 WHERE id=?1 AND delivery_status='sending'",
-            params![id, crate::services::message::core::DELIVERY_UNCONFIRMED],
+            "UPDATE messages SET failure_reason=?2 WHERE id=?1 AND delivery_status='sending'
+             AND failure_reason IS NOT ?3",
+            params![id, crate::services::message::core::DELIVERY_UNCONFIRMED,
+                crate::services::message::core::VERIFYING_KEY],
         )
         .map_err(|e| storage_error(StorageError::Database(e)))?;
     }

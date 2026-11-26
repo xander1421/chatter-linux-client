@@ -225,7 +225,8 @@ impl ChatterClient {
                 }
                 ConversationType::AnonDm => {
                     message.delivery_status == "failed"
-                        && message.failure_reason.as_deref() == Some("Message not submitted")
+                        && matches!(message.failure_reason.as_deref(),
+                            Some("Message not submitted" | crate::services::message::core::VERIFYING_KEY))
                 }
                 ConversationType::AnonGroup
                 | ConversationType::SavedMessages

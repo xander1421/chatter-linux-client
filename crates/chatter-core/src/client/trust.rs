@@ -145,14 +145,20 @@ impl ChatterClient {
                 )
             })?;
 
-        self.services
+        let dropped = self
+            .services
             .signal_service
             .accept_peer_identity_change(
                 peer_user_id,
                 &new_identity_key,
                 &self.services.channel_repo,
             )
-            .map_err(|e| ClientError::Validation(e.to_string()))
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        self.event_bus()
+            .emit_domain(crate::events::DomainEvent::PeerKeyVerificationUpdated {
+                peer_user_id: *peer_user_id,
+            });
+        Ok(dropped)
     }
 
     /// Compute the local Signal identity fingerprint (displayed in settings /

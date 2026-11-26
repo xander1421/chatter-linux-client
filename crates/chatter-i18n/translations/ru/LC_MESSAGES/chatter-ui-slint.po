@@ -5993,3 +5993,13 @@ msgstr "Перейти к сообщению"
 #: ui/server_records/screen.slint:110
 msgid "Unread: {}"
 msgstr "Не прочитано: {}"
+
+msgid "Verifying key"
+msgstr "Проверка ключа"
+
+msgid "Key not verified"
+msgstr "Ключ не проверен"
+
+#: ui/chat/message_footer.slint
+msgid "Identity changed"
+msgstr "Ключ идентификации изменился"

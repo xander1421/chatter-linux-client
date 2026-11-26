@@ -1,12 +1,34 @@
 use super::*;
 
 impl SignalActorHandle {
+    pub(crate) fn shield_mode(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.shield_mode.clone()
+    }
+
+    pub(crate) fn for_anonymous_route(&self) -> Self {
+        Self { force_anonymous: true, ..self.clone() }
+    }
+
+    pub(crate) fn kt_route(&self) -> KtRoute {
+        if self.force_anonymous || self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            KtRoute::AnonymousTor
+        } else {
+            KtRoute::Normal
+        }
+    }
+
+    pub(crate) async fn complete_kt_job(
+        &self, owner: String, job: KtJob, verdict: KtVerdict,
+    ) -> Result<KtUpdate, ServiceError> {
+        self.send(|response| SignalCommand::CompleteKtJob { owner, job, verdict, response }).await?
+    }
+
     pub(crate) async fn drain_submitted(&self) -> Result<(), ServiceError> {
         self.send(|response| SignalCommand::Barrier { response }).await
     }
     #[cfg(test)]
     pub(crate) async fn test_pause(&self, entered: oneshot::Sender<()>, resume: oneshot::Receiver<()>) {
-        self.sender.send(SignalCommand::TestPause { entered, resume }).await.unwrap();
+        self.sender.send((self.kt_route(), SignalCommand::TestPause { entered, resume })).await.unwrap();
     }
 
     async fn send<T>(
@@ -15,7 +37,7 @@ impl SignalActorHandle {
     ) -> Result<T, ServiceError> {
         let (tx, rx) = oneshot::channel();
         self.sender
-            .send(cmd_fn(tx))
+            .send((self.kt_route(), cmd_fn(tx)))
             .await
             .map_err(|_| ServiceError::Internal("Actor dropped".into()))?;
         rx.await
@@ -109,11 +131,23 @@ impl SignalActorHandle {
         sender_cert: SenderCertificate,
         recipient_address: ProtocolAddress,
     ) -> Result<Vec<u8>, ServiceError> {
+        self.encrypt_sealed_with_permit(plaintext, sender_cert, recipient_address, None)
+            .await
+    }
+
+    pub(crate) async fn encrypt_sealed_with_permit(
+        &self,
+        plaintext: Vec<u8>,
+        sender_cert: SenderCertificate,
+        recipient_address: ProtocolAddress,
+        permit: Option<crate::services::gateway::submission::SubmissionPermit>,
+    ) -> Result<Vec<u8>, ServiceError> {
         admit_outgoing_content(&plaintext)?;
         self.send(|tx| SignalCommand::EncryptSealed {
             plaintext,
             sender_cert,
             recipient_address,
+            permit,
             response: tx,
         })
         .await?

@@ -23,6 +23,16 @@ pub use libsignal_protocol::{
     UnidentifiedSenderMessageContent,
 };
 
+/// The exact identity libsignal authenticated when opening a prekey message.
+#[derive(Debug)]
+pub struct ReceivedSealedSender {
+    pub sender_uuid: String,
+    pub sender_e164: Option<String>,
+    pub device_id: libsignal_protocol::DeviceId,
+    pub message: Vec<u8>,
+    pub(crate) prekey_identity: Option<libsignal_protocol::IdentityKey>,
+}
+
 /// Sealed sender manager for anonymous messaging.
 ///
 /// This manager provides methods for encrypting and decrypting sealed sender

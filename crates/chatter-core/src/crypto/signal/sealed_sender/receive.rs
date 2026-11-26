@@ -23,7 +23,7 @@ use rand::rngs::OsRng;
 
 use crate::error::{CryptoError, IdentityChangeSource};
 
-use super::{SealedSenderDecryptionResult, SealedSenderManager};
+use super::{ReceivedSealedSender, SealedSenderManager};
 
 impl SealedSenderManager {
     /// Decrypt sealed sender message and validate the sender certificate.
@@ -69,7 +69,8 @@ impl SealedSenderManager {
         pre_key_store: &mut P,
         signed_pre_key_store: &SP,
         kyber_pre_key_store: &mut K,
-    ) -> Result<(SealedSenderDecryptionResult, CiphertextMessageType), CryptoError>
+        allow_archived_whisper: impl FnOnce(&mut I),
+    ) -> Result<(ReceivedSealedSender, CiphertextMessageType), CryptoError>
     where
         I: IdentityKeyStore,
         S: SessionStore,
@@ -187,8 +188,10 @@ impl SealedSenderManager {
         };
 
         let mut rng = OsRng.unwrap_err();
+        let mut prekey_identity = None;
         let message = match msg_type {
             CiphertextMessageType::Whisper => {
+                allow_archived_whisper(identity_store);
                 let ctext = SignalMessage::try_from(contents).map_err(map_inner_err)?;
                 message_decrypt_signal(
                     &ctext,
@@ -203,7 +206,7 @@ impl SealedSenderManager {
             }
             CiphertextMessageType::PreKey => {
                 let ctext = PreKeySignalMessage::try_from(contents).map_err(map_inner_err)?;
-                message_decrypt_prekey(
+                let decrypted = message_decrypt_prekey(
                     &ctext,
                     &remote_address,
                     &local_address,
@@ -215,8 +218,9 @@ impl SealedSenderManager {
                     &mut rng,
                 )
                 .await
-                .map_err(map_inner_err)?
-                .plaintext
+                .map_err(map_inner_err)?;
+                prekey_identity = Some(decrypted.sender_identity_key);
+                decrypted.plaintext
             }
             // A DecryptionErrorMessage ride-along: the "message" is the
             // serialized `PlaintextContent` (0xC0-prefixed), not ratchet
@@ -237,7 +241,8 @@ impl SealedSenderManager {
             }
         };
 
-        let result = SealedSenderDecryptionResult {
+        let result = ReceivedSealedSender {
+            prekey_identity,
             sender_uuid,
             sender_e164,
             device_id: sender_device_id,

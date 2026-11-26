@@ -46,7 +46,7 @@ impl SignalService {
         channel_id: &crate::domain::ids::ChannelId,
         contents: Vec<u8>,
         members: &[String],
-    ) -> Result<Vec<u8>, ServiceError> {
+    ) -> Result<(Vec<u8>, Vec<ProtocolAddress>), ServiceError> {
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
         let ours = self.get_our_address()?;
         let mut destinations = Vec::new();
@@ -60,9 +60,10 @@ impl SignalService {
                 destinations.push(ours.clone());
             }
         }
-        self.actor
-            .encrypt_multi_recipient(contents, sender_cert, destinations, channel_id.as_bytes().to_vec())
-            .await
+        let sealed = self.actor
+            .encrypt_multi_recipient(contents, sender_cert, destinations.clone(), channel_id.as_bytes().to_vec())
+            .await?;
+        Ok((sealed, destinations))
     }
 
     /// Get cached sender certificate without making auth request.

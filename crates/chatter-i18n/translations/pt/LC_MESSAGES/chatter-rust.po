@@ -3944,3 +3944,10 @@ msgstr "Registrado"
 
 msgid "This username link is invalid or expired."
 msgstr "Este link de nome de usuário é inválido ou expirou."
+
+msgid "Verifying key"
+msgstr "Verificando a chave"
+
+#: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
+msgid "Could not verify the Key Transparency log history."
+msgstr "Não foi possível verificar o histórico do registo de transparência das chaves."

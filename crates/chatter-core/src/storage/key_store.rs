@@ -6,7 +6,8 @@
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
+use super::peer_verification::KtRoute;
 use std::sync::Arc;
 
 /// Signal key store.
@@ -14,13 +15,14 @@ use std::sync::Arc;
 /// Provides CRUD operations for all Signal Protocol key material.
 /// Uses Arc<Database> for shared access to the encrypted database.
 pub struct KeyStore {
-    db: Arc<Database>,
+    pub(super) db: Arc<Database>,
+    pub(super) kt_work: tokio::sync::Notify,
 }
 
 impl KeyStore {
     /// Create a new KeyStore.
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self { db, kt_work: tokio::sync::Notify::new() }
     }
 
     // ========================================================================
@@ -147,6 +149,9 @@ impl KeyStore {
         conn.execute("DELETE FROM signed_prekeys", [])?;
         conn.execute("DELETE FROM prekeys", [])?;
         conn.execute("DELETE FROM remote_identities", [])?;
+        conn.execute("DELETE FROM peer_kt_jobs", [])?;
+        conn.execute("DELETE FROM peer_kt_archived_receives", [])?;
+        conn.execute("DELETE FROM peer_key_transparency", [])?;
         conn.execute("DELETE FROM local_identity", [])?;
 
         Ok(())
@@ -178,22 +183,24 @@ impl KeyStore {
     /// Uses upsert semantics. Returns `true` if an existing identity was
     /// updated (key change detected), `false` if this is a new identity.
     pub fn save_identity(&self, address: &str, identity_key: &[u8]) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
+        self.save_routed_identity(address, identity_key, None)
+    }
+
+    pub(crate) fn save_routed_identity(
+        &self,
+        address: &str,
+        identity_key: &[u8],
+        route: Option<KtRoute>,
+    ) -> Result<bool, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
         let now = Utc::now().to_rfc3339();
-
-        // Check if identity exists and if key changed
-        let existing: Option<Vec<u8>> = {
-            let mut stmt =
-                conn.prepare("SELECT identity_key FROM remote_identities WHERE address = ?1")?;
-            let result: Result<Vec<u8>, _> = stmt.query_row(params![address], |row| row.get(0));
-            result.ok()
-        };
-
-        let key_changed = existing
-            .as_ref()
-            .is_some_and(|existing_key| existing_key.as_slice() != identity_key);
-
-        conn.execute(
+        let existing: Option<Vec<u8>> = tx.query_row(
+            "SELECT identity_key FROM remote_identities WHERE address = ?1",
+            [address],
+            |row| row.get(0),
+        ).optional()?;
+        tx.execute(
             "INSERT INTO remote_identities (address, identity_key, first_seen_at, updated_at)
              VALUES (?1, ?2, ?3, ?3)
              ON CONFLICT(address) DO UPDATE SET
@@ -201,8 +208,15 @@ impl KeyStore {
                  updated_at = excluded.updated_at",
             params![address, identity_key, now],
         )?;
-
-        Ok(key_changed)
+        let queued = match route {
+            Some(route) => Self::enqueue_kt_in(&tx, address, identity_key, route)?,
+            None => false,
+        };
+        tx.commit()?;
+        if queued {
+            self.kt_work.notify_one();
+        }
+        Ok(existing.is_some_and(|old| old != identity_key))
     }
 
     /// Check if a remote identity exists.
@@ -1317,8 +1331,19 @@ impl KeyStore {
             }
         }
         let now = Utc::now().to_rfc3339();
+        let mut queued_kt = false;
         for (address, identity) in &changes.identities {
             tx.execute("INSERT INTO remote_identities(address,identity_key,first_seen_at,updated_at) VALUES(?1,?2,?3,?3) ON CONFLICT(address) DO UPDATE SET identity_key=excluded.identity_key,updated_at=excluded.updated_at",params![address,identity,now])?;
+        }
+        if let Some((address, identity)) = &changes.prekey_identity {
+            if address != &key.local_account {
+                queued_kt |= Self::enqueue_inbound_kt_in(&tx, address, identity, KtRoute::AnonymousTor)?;
+            }
+        }
+        for (address, pinned, archived) in &changes.archived_identities {
+            if address != &key.local_account {
+                queued_kt |= Self::enqueue_archived_kt_in(&tx, address, pinned, archived, KtRoute::AnonymousTor)?;
+            }
         }
         for (id, record) in &changes.signed {
             tx.execute("INSERT INTO signed_prekeys(id,record,created_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record,created_at=excluded.created_at",params![id,record,now])?;
@@ -1344,6 +1369,9 @@ impl KeyStore {
             receive_artifact::insert(&tx, a)?;
         }
         tx.commit()?;
+        if queued_kt {
+            self.kt_work.notify_one();
+        }
         Ok(artifact.cloned())
     }
 }

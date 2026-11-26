@@ -44,6 +44,7 @@ impl MessageService {
 
         // Distribute to each member's devices pairwise via Sealed Sender.
         let mut success_count = 0;
+        let mut remote_success = 0;
         let mut error_count = 0;
         let mut failure = None;
 
@@ -63,6 +64,9 @@ impl MessageService {
                 )
                 .await;
             success_count += outcome.delivered;
+            if !is_self {
+                remote_success += outcome.delivered;
+            }
             self.record_sender_key_holders(channel_id, member_id, &outcome);
             if outcome.delivered == 0 && !is_self {
                 error_count += 1;
@@ -87,7 +91,7 @@ impl MessageService {
             .iter()
             .filter(|u| *u != &our_user_id)
             .count();
-        sender_key_distribution_result(success_count, non_self_members, failure)
+        sender_key_distribution_result(remote_success, non_self_members, failure)
     }
 
     /// Our mailbox public key for this channel, if we have one (NDSS '21
@@ -105,7 +109,7 @@ impl MessageService {
     /// with our verified `(revision, state_hash)` for the receiver's fork /
     /// staleness cross-check, our mailbox announcement, and our profile key
     /// (see [`Self::skdm_profile_key`]).
-    pub(super) fn skdm_plaintext(
+    pub(in crate::services::message) fn skdm_plaintext(
         &self,
         channel_id: &ChannelId,
         verified: &VerifiedChannel,
@@ -179,7 +183,7 @@ impl MessageService {
     /// [`super::super::server_dm::DepositOutcome`]), each under the registration id
     /// of the session it was encrypted with (`registration_ids`). A device
     /// without one is not recorded, so it still counts as lacking our key.
-    pub(super) fn record_sender_key_holders(
+    pub(in crate::services::message) fn record_sender_key_holders(
         &self,
         channel_id: &ChannelId,
         member_id: &str,
@@ -420,6 +424,8 @@ impl MessageService {
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|_, (_, next, _)| *next + std::time::Duration::from_secs(900) > now);
         }
+        let mut key_wait = None;
+        let had_remote_lacking = lacking.iter().any(|(member, _)| member.to_string() != our_user_id);
         for (member_id, mut devices) in lacking {
             devices.sort_unstable();
             let fingerprint = format!(
@@ -445,6 +451,13 @@ impl MessageService {
             let result = self
                 .send_skdm_to_member(channel_id, &member_id, &skdm)
                 .await;
+            let result = match result {
+                Err(error @ MessageError::RecipientKeyVerifying { .. }) => {
+                    key_wait = Some(error);
+                    continue;
+                }
+                result => result,
+            };
             // A partial deposit is success for availability, but the devices
             // still lacking the key must also observe cooldown.
             let current_devices = self
@@ -496,6 +509,14 @@ impl MessageService {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(&key);
+            }
+        }
+        if had_remote_lacking {
+            let holders = self.signal_service.sender_key_holders(channel_id).map_err(crypto)?;
+            let has_recipient = holders.iter().any(|(peer, _, _)|
+                peer != &our_user_id && verified.state.members.contains_key(peer));
+            if !has_recipient {
+                return Err(key_wait.unwrap_or(MessageError::Network(crate::error::NetworkError::Unavailable)));
             }
         }
         Ok(())

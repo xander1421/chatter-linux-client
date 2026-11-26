@@ -21,7 +21,15 @@ pub fn advance_delivery_status<'a>(current: &'a str, incoming: &'a str) -> &'a s
 /// mid-request, the message may well have arrived) is `"unconfirmed"`, not
 /// "sending" forever and not "failed": nothing offers a retry for it.
 pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>) -> &'a str {
-    if status == "failed" && failure_reason == Some(super::core::SHIELD_WAITING_FOR_TOKENS) {
+    if matches!(status, "failed" | "sending")
+        && matches!(failure_reason, Some(super::core::VERIFYING_KEY | super::core::SHIELD_VERIFYING_KEY))
+    {
+        "verifying-key"
+    } else if matches!(status, "failed" | "sending") && failure_reason == Some("Key not verified") {
+        "key-not-verified"
+    } else if status == "sending" && failure_reason == Some("Identity changed") {
+        "identity-changed"
+    } else if status == "failed" && failure_reason == Some(super::core::SHIELD_WAITING_FOR_TOKENS) {
         "parked"
     } else if status == "sending" && failure_reason == Some(super::core::DELIVERY_UNCONFIRMED) {
         "unconfirmed"
@@ -150,11 +158,36 @@ impl MessageService {
         Ok(())
     }
 
+    pub(super) fn snapshot_private_receipt_targets(
+        &self,
+        channel: ChannelId,
+        sent_at: u64,
+        destinations: &[libsignal_protocol::ProtocolAddress],
+    ) -> Result<(), MessageError> {
+        let author = self.current_user_id()?;
+        let mut peers = Vec::new();
+        let mut own = Vec::new();
+        for address in destinations {
+            let peer: UserId = address.name().parse()
+                .map_err(|_| MessageError::InvalidContent("invalid sealed recipient".into()))?;
+            let device = DeviceId(u32::from(address.device_id()));
+            if peer != author {
+                peers.push((peer, device));
+            } else if device.0 != self.current_device_id_or_zero() {
+                own.push(device);
+            }
+        }
+        let repo = MessageReceiptRepository::new(self.database.clone());
+        let kind = self.conversation_type(&channel);
+        repo.snapshot_for_send(channel, kind.clone(), author, sent_at, &peers)?;
+        repo.snapshot_own_devices_for_send(channel, kind, author, sent_at, &own)?;
+        Ok(())
+    }
+
     pub(super) async fn snapshot_channel_receipt_targets(
         &self,
         channel: ChannelId,
         sent_at: u64,
-        auth: &mut crate::network::grpc::auth_client::AuthClient,
         channels: &mut crate::network::grpc::channel_client::ChannelClient,
     ) -> Result<(), MessageError> {
         let author = self.current_user_id()?;
@@ -180,15 +213,12 @@ impl MessageService {
                 author_is_member = true;
                 continue;
             }
-            let devices = self
-                .signal_service
-                .ensure_sessions_all_devices(auth, &peer.to_string())
-                .await
-                .map_err(|error| match error {
-                    crate::error::ServiceError::Network(error) => MessageError::Network(error),
-                    other => MessageError::EncryptionFailed(other.to_string()),
-                })?;
-            targets.extend(devices.into_iter().map(|device| (peer, DeviceId(device))));
+            // Public channel membership is authoritative for receipt
+            // aggregates. The server roster contains account IDs, no devices.
+            targets.push((
+                peer,
+                crate::storage::repositories::message_receipt_repo::ACCOUNT_RECEIPT_TARGET,
+            ));
         }
         let receipts = MessageReceiptRepository::new(self.database.clone());
         receipts.snapshot_for_send(
@@ -454,6 +484,7 @@ mod tests {
         let shown = |status, reason| display_delivery_status(status, reason);
         assert_eq!(shown("sending", Some(DELIVERY_UNCONFIRMED)), "unconfirmed");
         assert_eq!(shown("sending", Some("Waiting for connection")), "sending");
+        assert_eq!(shown("sending", Some("Identity changed")), "identity-changed");
         assert_eq!(shown("sending", None), "sending");
         assert_eq!(shown("failed", Some(DELIVERY_UNCONFIRMED)), "failed");
         assert_eq!(

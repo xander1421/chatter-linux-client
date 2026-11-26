@@ -494,6 +494,7 @@ impl AnonGroupService {
         let mut sent_count = 0;
         let mut parked_count = 0;
         let mut unconfirmed = false;
+        let mut verifying_key = false;
         // Fan out to each member's anonymous mailbox
         for member in &members {
             if member.user_id == current_user {
@@ -523,7 +524,11 @@ impl AnonGroupService {
                     unconfirmed = true;
                     self.record_group_delivery(group_id, &content, &member.user_id, "unknown")?;
                 }
+                Err(e) if parkable && e.identity_rejected() => {
+                    self.record_group_delivery(group_id, &content, &member.user_id, "failed")?;
+                }
                 Err(e) if parkable => {
+                    verifying_key |= e.verifying_key();
                     // An expired originating session must not park old content.
                     crate::services::gateway::submission::mark_submission_started()?;
                     tracing::info!("Send to member failed ({}); parked for retry", e);
@@ -574,6 +579,13 @@ impl AnonGroupService {
             parked_count,
             queued_count
         );
+        if verifying_key && sent_count == 0 && !unconfirmed {
+            self.message_service.database.connection()?.execute(
+                "UPDATE messages SET failure_reason=?2 WHERE delivery_status='sending'
+                 AND id=(SELECT json_extract(value,'$.message_id') FROM settings WHERE key=?1)",
+                rusqlite::params![ledger_key, crate::services::message::core::VERIFYING_KEY],
+            ).map_err(crate::error::StorageError::Database)?;
+        }
         if unconfirmed || parked_count > 0 {
             return Err(AnonGroupError::DeliveryUnconfirmed);
         }
@@ -658,6 +670,11 @@ impl AnonGroupService {
                         outcome = "unconfirmed", "Pending anon group delivery retained");
                     break;
                 }
+                Err(error) if error.identity_rejected() => {
+                    self.record_group_delivery(group_id, &content, recipient_user_id, "failed")?;
+                    self.anon_group_repo.delete_pending_message(row_id)?;
+                }
+                Err(error) if error.verifying_key() || error.awaiting_identity_acceptance() => break,
                 Err(e) => {
                     // Stop draining on first failure so messages stay in order.
                     if self.token_manager.available_token_count().unwrap_or(0) == 0 {

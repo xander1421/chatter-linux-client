@@ -23,6 +23,11 @@ use rand::rngs::OsRng;
 
 use crate::error::CryptoError;
 
+fn encryption_error(error: SignalProtocolError) -> CryptoError {
+    crate::crypto::signal::outbound_identity_error(&error)
+        .unwrap_or_else(|| CryptoError::EncryptionFailed(error.to_string()))
+}
+
 use super::{
     ContentHint, MAX_SEALED_BODY_BYTES, SealedSenderManager, SenderCertificate,
     UnidentifiedSenderMessageContent, validate_sealed_body_size,
@@ -44,16 +49,15 @@ impl SealedSenderManager {
         let mut staged = super::super::store::StagedSignalStore::new(base.clone());
         let mut identities = staged.clone();
         let mut envelopes = Vec::with_capacity(destinations.len());
+        let mut blocked = None;
+        let mut seen = std::collections::HashSet::new();
         for destination in destinations {
-            if envelopes
-                .iter()
-                .any(|(address, _, _)| address == destination)
-            {
+            if !seen.insert(destination) {
                 return Err(crate::error::ServiceError::Validation(
                     "duplicate sealed destination".into(),
                 ));
             }
-            let ciphertext = Self::encrypt_in_group(
+            let ciphertext = match Self::encrypt_in_group(
                 plaintext,
                 sender_cert,
                 destination,
@@ -61,8 +65,17 @@ impl SealedSenderManager {
                 &mut staged,
                 &mut identities,
             )
-            .await
-            .map_err(crate::error::ServiceError::Crypto)?;
+            .await {
+                Ok(ciphertext) => ciphertext,
+                Err(error @ (CryptoError::KeyVerificationPending { .. }
+                    | CryptoError::UntrustedIdentity { new_identity_key: None, .. })) => {
+                    if blocked.is_none() || matches!(error, CryptoError::KeyVerificationPending { .. }) {
+                        blocked = Some(error);
+                    }
+                    continue;
+                }
+                Err(error) => return Err(crate::error::ServiceError::Crypto(error)),
+            };
             validate_sealed_body_size(ciphertext.len(), MAX_SEALED_BODY_BYTES)?;
             let record = staged
                 .load_session(destination)
@@ -83,7 +96,11 @@ impl SealedSenderManager {
             }
             envelopes.push((destination.clone(), ciphertext, registration_id));
         }
-        if !envelopes.is_empty() {
+        if envelopes.is_empty() {
+            if let Some(error) = blocked {
+                return Err(crate::error::ServiceError::Crypto(error));
+            }
+        } else {
             permit
                 .start()
                 .map_err(crate::error::ServiceError::Storage)?;
@@ -92,6 +109,24 @@ impl SealedSenderManager {
             })?;
         }
         Ok(envelopes)
+    }
+
+    /// Prepare a mailbox envelope in memory. A trust refusal leaves both
+    /// the send journal and the ratchet untouched.
+    pub(crate) async fn encrypt_for_submission(
+        plaintext: &[u8],
+        sender_cert: &SenderCertificate,
+        destination: &ProtocolAddress,
+        base: &crate::crypto::SignalStore,
+        permit: &crate::services::gateway::submission::SubmissionPermit,
+    ) -> Result<Vec<u8>, crate::error::ServiceError> {
+        let mut staged = super::super::store::StagedSignalStore::new(base.clone());
+        let mut identities = staged.clone();
+        let ciphertext = Self::encrypt(plaintext, sender_cert, destination, &mut staged, &mut identities)
+            .await?;
+        permit.start().map_err(crate::error::ServiceError::Storage)?;
+        staged.commit().await.map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        Ok(ciphertext)
     }
 
     /// Encrypt plaintext to sealed sender format.
@@ -147,7 +182,7 @@ impl SealedSenderManager {
                 error = %e,
                 "SealedSender: encryption failed"
             );
-            CryptoError::EncryptionFailed(e.to_string())
+            encryption_error(e)
         })?;
 
         tracing::debug!(
@@ -185,7 +220,7 @@ impl SealedSenderManager {
             )
             .await;
         };
-        let failed = |e: SignalProtocolError| CryptoError::EncryptionFailed(e.to_string());
+        let failed = encryption_error;
         let mut rng = OsRng.unwrap_err();
         let sender_address = ProtocolAddress::new(
             sender_cert.sender_uuid().map_err(failed)?.to_owned(),

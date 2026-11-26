@@ -203,7 +203,14 @@ impl ChatterClient {
                 let outbox_queued = !result.bootstrap_initiated && result.send_error.is_none();
                 if !confirmed {
                     if let Some(message) = result.message.as_mut() {
-                        *message = if outbox_queued
+                        *message = if matches!(message.failure_reason.as_deref(),
+                            Some(crate::services::message::core::VERIFYING_KEY
+                                | crate::services::message::core::SHIELD_VERIFYING_KEY))
+                        {
+                            self.messages().get_message_local(&message.id)
+                                .map_err(|error| (error.into(), original_row.clone()))?
+                                .unwrap_or_else(|| message.clone())
+                        } else if outbox_queued
                             && message.conversation_type
                                 == crate::domain::message::ConversationType::ServerDm
                         {
@@ -417,7 +424,11 @@ impl ChatterClient {
                     .as_ref()
                     .is_some_and(|m| matches!(m.delivery_status.as_str(), "failed" | "sending")));
         result.send_error.take();
-        let failure_notice = if known_failed {
+        let is_key_wait = result.message.as_ref().is_some_and(|message| matches!(
+            message.failure_reason.as_deref(),
+            Some(crate::services::message::core::VERIFYING_KEY | crate::services::message::core::SHIELD_VERIFYING_KEY)
+        ));
+        let failure_notice = if known_failed && !is_key_wait {
             Some(
                 result
                     .message
@@ -681,6 +692,15 @@ impl ChatterClient {
                 self.finish_send_attempt(&key, attempt, Some(id.to_string()), true)
                     .map_err(|_| SendError::DeliveryUnconfirmed)?;
                 Ok(updated)
+            }
+            Err(crate::services::anon_dm::AnonDmError::RecipientIdentity(
+                crate::error::CryptoError::KeyVerificationPending { .. }
+            )) if !started => {
+                self.finish_send_attempt(&key, attempt, None, true)
+                    .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                Ok(service.finish_retry_row(
+                    &id, "failed", Some(crate::services::message::core::VERIFYING_KEY),
+                )?)
             }
             Err(error) => {
                 let error = send_attempt::settle_failure(

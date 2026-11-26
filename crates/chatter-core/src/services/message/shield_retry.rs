@@ -23,27 +23,27 @@ where
         .shield_mode
         .load(std::sync::atomic::Ordering::Acquire)
         || service.current_user_id()? != owner
-        || service
-            .token_manager
-            .available_token_count()
-            .map_err(|e| MessageError::DmError(e.to_string()))?
-            == 0
     {
         return Ok(0);
     }
+    let tokens = service.token_manager.available_token_count()
+        .map_err(|e| MessageError::DmError(e.to_string()))? > 0;
     let ids = {
         let conn = service.database.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id FROM messages WHERE conversation_type='server_dm' AND sender_id=?1
-             AND delivery_status='failed' AND failure_reason=?2 AND is_deleted=0
+             AND delivery_status='failed' AND (failure_reason=?2 OR (?3 AND failure_reason=?4))
+             AND is_deleted=0
              ORDER BY sent_at,id LIMIT 4",
             )
             .map_err(crate::error::StorageError::from)?;
         let mut rows = stmt
             .query(rusqlite::params![
                 owner.to_string(),
-                super::core::SHIELD_WAITING_FOR_TOKENS
+                super::core::SHIELD_VERIFYING_KEY,
+                tokens,
+                super::core::SHIELD_WAITING_FOR_TOKENS,
             ])
             .map_err(crate::error::StorageError::from)?;
         crate::storage::repositories::repo_utils::collect_decoded_rows(

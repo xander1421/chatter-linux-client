@@ -51,6 +51,12 @@ pub(crate) enum SignalCommand {
             >,
         >,
     },
+    CompleteKtJob {
+        owner: String,
+        job: KtJob,
+        verdict: KtVerdict,
+        response: oneshot::Sender<Result<KtUpdate, ServiceError>>,
+    },
     EstablishSession {
         address: ProtocolAddress,
         bundle: PreKeyBundle,
@@ -60,6 +66,7 @@ pub(crate) enum SignalCommand {
         plaintext: Vec<u8>,
         sender_cert: SenderCertificate,
         recipient_address: ProtocolAddress,
+        permit: Option<crate::services::gateway::submission::SubmissionPermit>,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
     EncryptSealedBoundedBatch {
