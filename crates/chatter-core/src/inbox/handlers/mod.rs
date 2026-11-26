@@ -299,8 +299,11 @@ pub enum DomainEvent {
         peer_user_id: UserId,
     },
 
-    /// A background verifier rejected the transparency log's history proof.
+    /// A background verifier could not verify the transparency log's history.
     KeyTransparencyHistoryUnverified,
+
+    /// The durable transparency warning for our account's identity key changed.
+    OwnIdentityChanged { user_id: UserId },
 
     /// A peer who shares a channel with the local user added, revoked or
     /// re-registered a device. Handled by
@@ -770,6 +773,7 @@ impl DomainEvent {
             DomainEvent::DmSessionHealed { .. } => None,
             DomainEvent::PeerIdentityChanged { .. } | DomainEvent::PeerKeyVerificationUpdated { .. } => None,
             DomainEvent::KeyTransparencyHistoryUnverified => None,
+            DomainEvent::OwnIdentityChanged { .. } => None,
             DomainEvent::PeerDevicesChanged { .. } => None,
         }
     }

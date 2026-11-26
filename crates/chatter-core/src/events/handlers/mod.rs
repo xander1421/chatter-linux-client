@@ -259,6 +259,7 @@ impl EventHandlers {
             }
             DomainEvent::PeerKeyVerificationUpdated { .. } => {}
             DomainEvent::KeyTransparencyHistoryUnverified => {}
+            DomainEvent::OwnIdentityChanged { .. } => {}
             event @ DomainEvent::PeerDevicesChanged { .. } => self.handle_key_exchange_event(event),
             event @ DomainEvent::AnonGroupInviteReceived { .. } => {
                 self.handle_anonymous_event(event)

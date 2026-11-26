@@ -310,6 +310,11 @@ impl ChatterClient {
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
+        if self.auth().key_republish_pending().map_err(AuthError::Storage)? {
+            return Err(ClientError::Validation(
+                chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
+            ));
+        }
         struct StartupListeners<'a> {
             handles: Vec<tokio::task::JoinHandle<()>>,
             channel_delivery_shutdown: &'a AtomicBool,
@@ -494,6 +499,7 @@ impl ChatterClient {
 
         // ── PreKey replenishment (runs initial check immediately) ────
         let h_prekey = self.services.spawn_prekey_replenishment();
+        let h_own_identity = self.spawn_own_identity_monitor();
 
         // ── DM mailbox key rolling (L4 anonymity rotation) ───────────
         let h_key_rolling = self.services.spawn_key_rolling();
@@ -611,6 +617,7 @@ impl ChatterClient {
             h_dm_bootstrap,
             h_sync,
             h_prekey,
+            h_own_identity,
             h_key_rolling,
             h_token_refill,
             h_shield_retry,

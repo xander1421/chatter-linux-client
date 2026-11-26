@@ -12,7 +12,6 @@
 //! `grant_error`).
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use chatter_proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use chrono::Utc;
@@ -132,7 +131,7 @@ impl TokenManager {
     /// # Arguments
     ///
     /// * `client` - MailboxClient for server communication
-    /// * `kt` - anonymous KT client for the manifest's consistency proof
+    /// * `kt` - anonymous KT client for the distinguished checkpoint
     pub async fn refresh_server_key(
         &self,
         client: &mut MailboxClient,
@@ -173,30 +172,21 @@ impl TokenManager {
 
         // Fetch new key from server with timeout to prevent hangs
         let settings = SettingsRepository::new(self.db.clone());
+        let previous = cached.as_ref();
         let (response, server_key) = ServerPublicKey::fetch_manifest(
-            || async {
-                tracing::info!("TokenManager: calling get_blind_signature_public_key RPC...");
-                let response = tokio::time::timeout(
-                    Duration::from_secs(10),
-                    client.get_blind_signature_public_key(),
-                )
-                .await
-                .map_err(|_| {
-                    tracing::error!("get_blind_signature_public_key timed out after 10s");
-                    MailboxError::Network("RPC timeout".to_string())
-                })?
-                .map_err(|e| {
-                    tracing::error!("get_blind_signature_public_key failed: {}", e);
-                    MailboxError::Network(e.to_string())
-                })?;
-                if let Some(previous) = &cached {
-                    manifest_skipped_rotation(previous, &response)?;
+            |consistency| {
+                let mut client = client.clone();
+                async move {
+                    let response = client.get_blind_signature_public_key(consistency).await
+                        .map_err(|error| MailboxError::Network(error.to_string()))?;
+                    if let Some(previous) = previous {
+                        manifest_skipped_rotation(previous, &response)?;
+                    }
+                    Ok(response)
                 }
-                tracing::info!("Got blind signature public key from server");
-                Ok(response)
             },
             &settings,
-            |old, new| kt.get_consistency_proof(old, new),
+            kt,
         )
         .await?;
         let discontinuity = match cached.as_ref() {
@@ -225,7 +215,7 @@ impl TokenManager {
             Self::store_server_key(&tx, &next.key_id, &next.public_key, next.valid_until)?;
         }
         tx.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', ?1, ?2)",
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.libsignal_key_manifest', ?1, ?2)",
             rusqlite::params![hex::encode(response.encode_to_vec()), now],
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
@@ -268,7 +258,7 @@ impl TokenManager {
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let encoded: Option<String> = conn
             .query_row(
-                "SELECT value FROM settings WHERE key = 'mailbox.signed_key_manifest'",
+                "SELECT value FROM settings WHERE key = 'mailbox.libsignal_key_manifest'",
                 [],
                 |r| r.get(0),
             )
@@ -713,7 +703,7 @@ mod tests {
         .unwrap();
         assert!(tm.get_cached_server_key().unwrap().is_none());
         let conn = tm.db.connection().unwrap();
-        conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', 'corrupt', 'now')", []).unwrap();
+        conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('mailbox.libsignal_key_manifest', 'corrupt', 'now')", []).unwrap();
         drop(conn);
         assert!(tm.get_cached_server_key().unwrap().is_none());
     }
@@ -738,7 +728,7 @@ mod tests {
         let tm = TokenManager::new(test_db());
         let cache = |m: &GetBlindSignaturePublicKeyResponse| {
             tm.db.connection().unwrap().execute(
-                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', ?1, 'now')",
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.libsignal_key_manifest', ?1, 'now')",
                 [hex::encode(m.encode_to_vec())],
             ).unwrap();
         };

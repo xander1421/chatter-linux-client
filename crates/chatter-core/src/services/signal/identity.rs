@@ -285,8 +285,13 @@ impl SignalService {
         auth_client: &mut AuthClient,
         proof: chatter_proto::chat_v1::PasswordProof,
     ) -> Result<RepublishOutcome, ServiceError> {
+        use crate::storage::repositories::settings_repo::keys;
+
+        let owner = self.settings_repo.get_string(keys::CURRENT_USER_ID)?
+            .ok_or_else(|| ServiceError::Validation("missing owner for identity republish".into()))?;
         let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
             self.build_device_key_material().await?;
+        let published_key = bundle.identity_key.clone();
 
         let response = auth_client
             .republish_identity_key(
@@ -298,6 +303,7 @@ impl SignalService {
             .await
             .map_err(ServiceError::Network)?;
 
+        super::kt_anchor::authorize_own_identity(&self.settings_repo, &owner, &published_key)?;
         tracing::info!(
             identity_key_changed = response.identity_key_changed,
             devices_reset = response.devices_reset,

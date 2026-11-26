@@ -311,7 +311,7 @@ impl KeyStore {
                 KtUpdate::Refused
             }
         } else {
-            // GetProof's NotFound is unsigned. Keep the existing trust
+            // KT Search's NotFound is unsigned. Keep the existing trust
             // decision and the durable job, including for grandfathered pins.
             tx.execute(
                 "UPDATE peer_kt_jobs SET attempts=8,due_at=?4

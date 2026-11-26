@@ -776,6 +776,14 @@ pub async fn handle_domain_event(
                 }
             });
         }
+        DomainEvent::OwnIdentityChanged { user_id } => {
+            let ui_ctx = ui_ctx.clone();
+            let _ = window.upgrade_in_event_loop(move |w| {
+                if ui_ctx.auth_snapshot().current_user_id == Some(user_id) {
+                    crate::bin_ui::features::chat::identity_change::refresh_own(&w, &ui_ctx);
+                }
+            });
+        }
         // Server-managed profile updated. Core already upserted user_repo.
         // Refresh display_name + status across sidebar / header / profile
         // modal in real time, then refresh friends-list (Friends tab).

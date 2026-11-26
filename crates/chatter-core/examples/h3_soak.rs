@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use chatter_core::testing::network::grpc::{GrpcClientPool, transport::GrpcTransport};
 use chatter_proto::chat_v1::{
-    GetConsistencyProofRequest, key_transparency_service_client::KeyTransparencyServiceClient,
+    KtMonitorRequest, key_transparency_service_client::KeyTransparencyServiceClient,
 };
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until, timeout};
@@ -14,12 +14,6 @@ use tokio::time::{Instant, sleep_until, timeout};
 const ORIGIN: &str = "https://chat.offai.app";
 const DURATION: u64 = 720;
 const SPARSE: [u64; 5] = [60, 150, 270, 420, 600];
-// The log is append-only. Validate the earliest possible pair with the two
-// public priming requests before scheduling any samples.
-const EPOCHS: GetConsistencyProofRequest = GetConsistencyProofRequest {
-    old_epoch: 1,
-    new_epoch: 2,
-};
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct Handle {
@@ -51,17 +45,19 @@ impl Handle {
             .map(|at| format!("{:.3}", started.saturating_duration_since(at).as_secs_f64()))
             .unwrap_or_else(|| "-".into());
         let mut client = KeyTransparencyServiceClient::new(self.channel.clone());
-        let error = match timeout(RPC_TIMEOUT, client.get_consistency_proof(EPOCHS)).await {
-            Ok(Ok(response)) => match response.into_inner().proof {
-                Some(proof)
-                    if proof.old_epoch == EPOCHS.old_epoch
-                        && proof.new_epoch == EPOCHS.new_epoch =>
+        let error = match timeout(RPC_TIMEOUT, client.monitor(KtMonitorRequest::default())).await {
+            Ok(Ok(response)) => {
+                let response = response.into_inner();
+                if response.tree_head.and_then(|head| head.tree_head)
+                    .is_some_and(|head| head.tree_size > 0)
+                    && matches!(response.inclusion.as_slice(), [root] if root.len() == 32)
                 {
                     *self.last_success.lock().unwrap() = Some(Instant::now());
                     None
+                } else {
+                    Some("response did not contain a monitored head".into())
                 }
-                _ => Some("response did not contain the requested proof".into()),
-            },
+            }
             Ok(Err(status)) => Some(error_chain(&status)),
             Err(elapsed) => Some(error_chain(&elapsed)),
         };
@@ -113,12 +109,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Prime TCP sockets so the first sparse request tests an existing socket.
     let (t_ready, c_ready) = tokio::join!(t.fetch(setup, 0, 0), c.fetch(setup, 0, 0));
     if !t_ready || !c_ready {
-        return Err("TCP priming or epoch validation failed".into());
+        return Err("TCP priming or monitor validation failed".into());
     }
-    println!(
-        "validated public consistency proof epochs {} and {}",
-        EPOCHS.old_epoch, EPOCHS.new_epoch
-    );
+    println!("validated public monitor response");
     let q = timeout(Duration::from_secs(5), async {
         loop {
             let channel = pool.channel();
@@ -136,7 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let epoch = Instant::now();
     println!("soak start: {DURATION}s; Q quiet between +300s and +390s");
-    let mut running = JoinSet::new();
+    let mut running = JoinSet::<bool>::new();
     let mut failures = 0;
     for second in (0..DURATION).step_by(5) {
         sleep_until(epoch + Duration::from_secs(second)).await;

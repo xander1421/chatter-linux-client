@@ -102,8 +102,8 @@ pub mod keys {
     /// Our identity public key (33 bytes - 0x05 + Curve25519, base64 encoded)
     /// Used for NDSS'21 private friend codes that embed cryptographic material.
     pub const IDENTITY_KEY_PUBLIC: &str = "crypto.identity_key_public";
-    /// Set while this device owes the server a key-material republish, and
-    /// cleared once the server has acknowledged it.
+    /// The account-bound operation this device owes the server, stored in one
+    /// record and deleted once the server acknowledges the key-material republish.
     ///
     /// A recovery hands this device an identity key whose published prekeys
     /// belong to a device that no longer exists. If the republish that fixes
@@ -111,7 +111,8 @@ pub mod keys {
     /// are already in place, so the next login would see a local identity, skip
     /// the restore, and never retry. The account would sit there serving
     /// prekeys nobody can complete a handshake with: the original bug, reached
-    /// by a different road. This flag is what makes the retry happen.
+    /// by a different road. The record survives logout alongside the local
+    /// identity and is wiped with it.
     pub const KEY_REPUBLISH_PENDING: &str = "crypto.key_republish_pending";
     /// Who receives our profile key ("everyone" | "contacts" | "nobody"),
     /// see `services::profile_visibility`. Absent = everyone.
@@ -198,6 +199,13 @@ impl SettingsRepository {
     /// Returns `None` if the key doesn't exist.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, StorageError> {
         let conn = self.db.read_connection()?;
+        Self::get_with_connection(&conn, key)
+    }
+
+    pub(crate) fn get_with_connection<T: DeserializeOwned>(
+        conn: &rusqlite::Connection,
+        key: &str,
+    ) -> Result<Option<T>, StorageError> {
         // Cached per pooled connection: this one statement is read very often
         // (every get/get_string/get_bool routes here — e.g. the current user id
         // is read a few times per message row while a conversation loads), so
@@ -239,7 +247,7 @@ impl SettingsRepository {
         Ok(())
     }
 
-    fn set_with_connection<T: Serialize>(conn: &rusqlite::Connection, key: &str, value: &T) -> Result<(), StorageError> {
+    pub(crate) fn set_with_connection<T: Serialize>(conn: &rusqlite::Connection, key: &str, value: &T) -> Result<(), StorageError> {
         let json = serde_json::to_string(value).map_err(|e| {
             StorageError::InvalidData(format!("Failed to serialize setting '{}': {}", key, e))
         })?;

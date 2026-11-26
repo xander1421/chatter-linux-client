@@ -355,8 +355,8 @@ fn requires_device_auth(path: &str) -> bool {
             | "/chat.v1.provisioning.DeviceProvisioningService/GetProvisioningMessage"
             | "/chat.v1.provisioning.DeviceProvisioningService/CompleteDeviceLinking"
             | "/chat.v1.provisioning.DeviceProvisioningService/GetTransferArchive"
-            | "/chat.v1.KeyTransparencyService/GetProof"
-            | "/chat.v1.KeyTransparencyService/GetConsistencyProof"
+            | "/chat.v1.KeyTransparencyService/Search"
+            | "/chat.v1.KeyTransparencyService/Monitor"
     )
 }
 
@@ -664,11 +664,8 @@ pub(crate) mod outcome_tests {
         assert!(ready.is_ok());
         let err = handle.call(Request::new(Body::empty())).await.unwrap_err();
         assert!(err.to_string().contains("transport changed"));
-        let mut kt = chatter_proto::chat_v1::key_transparency_service_client::KeyTransparencyServiceClient::new(handle);
-        let status = kt
-            .get_proof(chatter_proto::chat_v1::GetProofRequest::default())
-            .await
-            .unwrap_err();
+        let mut kt = KeyTransparencyServiceClient::new(handle);
+        let status = kt.search(KtSearchRequest::default()).await.unwrap_err();
         assert!(matches!(
             crate::error::NetworkError::from_status(&status),
             crate::error::NetworkError::TransportChanged
@@ -683,7 +680,9 @@ pub(crate) mod outcome_tests {
 
     use crate::network::grpc::interceptors::AuthInterceptor;
     use chatter_proto::chat_v1::{
-        GetDeviceMessagesRequest, message_service_client::MessageServiceClient,
+        GetDeviceMessagesRequest, KtSearchRequest,
+        key_transparency_service_client::KeyTransparencyServiceClient,
+        message_service_client::MessageServiceClient,
     };
     use http_body::Frame;
     use std::collections::VecDeque;

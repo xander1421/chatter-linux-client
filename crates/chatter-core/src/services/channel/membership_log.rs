@@ -901,17 +901,12 @@ impl LogBackend for SignalLogBackend {
     }
 
     async fn claimed_identity_key(&self, user_id: &str) -> Result<KeyBytes, LogError> {
-        let proof = self
-            .grpc_pool
-            .auth_client()
-            .get_key_transparency_proof(user_id)
-            .await?
-            .ok_or_else(|| {
-                LogError::Other(format!(
-                    "{user_id} has no identity key in the transparency log"
-                ))
-            })?;
-        vs::key33(&proof.identity_key).map_err(LogError::Verify)
+        let mut auth = self.grpc_pool.auth_client();
+        let key = self
+            .signal_service
+            .verified_identity_key_from_kt(&mut auth, user_id)
+            .await?;
+        vs::key33(&key).map_err(LogError::Verify)
     }
 
     async fn vouched_identity_key(
@@ -932,12 +927,7 @@ impl LogBackend for SignalLogBackend {
                 Err(e) => Err(LogError::Verify(e)),
             };
         }
-        let mut auth = self.grpc_pool.auth_client();
-        let key = self
-            .signal_service
-            .verified_identity_key_from_kt(&mut auth, user_id)
-            .await?;
-        vs::key33(&key).map_err(LogError::Verify)
+        self.claimed_identity_key(user_id).await
     }
 }
 
@@ -989,15 +979,14 @@ impl IdentityKeyVerifier for SignalKtVerifier {
         let mut auth = self.grpc_pool.auth_client();
         match self
             .signal_service
-            .verify_identity_key_transparency(&mut auth, user_id, identity_key)
+            .verified_identity_key_from_kt(&mut auth, user_id)
             .await
         {
-            Ok(()) => Ok(true),
-            Err(ServiceError::Network(e)) => Err(VerifyError::KtUnavailable(e.to_string())),
-            Err(e) => {
-                tracing::warn!(user_id, error = %e, "Channel change author key is not the KT key");
+            Ok(key) => Ok(key == *identity_key),
+            Err(ServiceError::Crypto(crate::error::CryptoError::NotInTransparencyLog { .. })) => {
                 Ok(false)
             }
+            Err(e) => Err(VerifyError::KtUnavailable(e.to_string())),
         }
     }
 }

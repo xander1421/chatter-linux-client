@@ -1,6 +1,85 @@
 use super::*;
 
 impl ChatterClient {
+    /// Whether this account has a durably recorded transparency mismatch.
+    pub fn own_identity_change_detected(&self) -> Result<bool, crate::error::ServiceError> {
+        let Some(owner) = self.auth_snapshot().current_user_id else {
+            return Ok(false);
+        };
+        Ok(crate::services::signal::kt_anchor::own_mismatch(
+            &self.signal().settings_repo,
+            owner.to_string().as_bytes(),
+        )?)
+    }
+
+    pub(super) fn spawn_own_identity_monitor(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        use crate::error::ServiceError;
+        use crate::network::grpc::client_pool::TransportMode;
+        use crate::services::signal::kt_anchor;
+        use std::time::Duration;
+
+        let client = self.clone();
+        let session = self.auth_snapshot();
+        tokio::spawn(async move {
+            let Some(user_id) = session.current_user_id else {
+                return;
+            };
+            let label = user_id.to_string();
+            let mut last_mismatch = None;
+            let mut consecutive_failures = 0u8;
+            while client.session_revision() == session.session_revision {
+                let check = async {
+                    let expected = client.signal().get_identity_public_key().await?;
+                    let pool = &client.services.grpc_pool;
+                    let deadline = match pool.transport_mode() {
+                        TransportMode::Direct => kt_anchor::PIN_RPC_DEADLINE,
+                        TransportMode::Onion => kt_anchor::TOR_RPC_DEADLINE,
+                    };
+                    // The label names our account. Use the account's transport,
+                    // which keeps it off the isolated anonymous circuit.
+                    let mut auth = pool.auth_client();
+                    Ok::<_, ServiceError>(
+                        kt_anchor::monitor_own(
+                            auth.key_transparency_client(),
+                            &client.signal().settings_repo,
+                            &label,
+                            &expected,
+                            deadline,
+                        )
+                        .await?,
+                    )
+                };
+                let result = check.await;
+                if client.session_revision() != session.session_revision {
+                    return;
+                }
+                let delay = match result {
+                    Ok(mismatch) => {
+                        consecutive_failures = 0;
+                        if last_mismatch != Some(mismatch) {
+                            last_mismatch = Some(mismatch);
+                            client
+                                .event_bus()
+                                .emit_domain(DomainEvent::OwnIdentityChanged { user_id });
+                        }
+                        Duration::from_secs(60 * 60)
+                    }
+                    Err(error) => {
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        tracing::warn!(%error, consecutive_failures, "Own identity transparency check failed");
+                        if consecutive_failures == 3 {
+                            client
+                                .event_bus()
+                                .emit_domain(DomainEvent::KeyTransparencyHistoryUnverified);
+                        }
+                        Duration::from_secs(5 * 60)
+                    }
+                };
+                tokio::time::sleep(delay).await;
+            }
+        })
+    }
+
     // ── Safety number verification ────────────────────────────────────
 
     /// Get the safety number for a peer (60-digit numeric fingerprint).
@@ -166,5 +245,4 @@ impl ChatterClient {
     pub async fn my_identity_fingerprint(&self) -> Result<String, crate::error::ServiceError> {
         self.signal().get_identity_fingerprint().await
     }
-
 }

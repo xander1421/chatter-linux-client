@@ -481,7 +481,7 @@ const _: () = {
 
 // ─── Key Transparency tree-head signing key (pinned) ───────────────────────
 //
-// The KT server signs every SignedTreeHead with an Ed25519 key; the client
+// The KT server signs each libsignal tree head with an Ed25519 key; the client
 // pins its PUBLIC key here, exactly as it pins TRUST_ROOT_PUBLIC_KEY for
 // sealed-sender certificates. A signed tree head whose signature does not
 // verify under this key is worthless, so a malicious server cannot forge a
@@ -515,14 +515,8 @@ const DEV_KT_TREE_HEAD_BYTES: [u8; 32] = [
 /// `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX` (64 hex chars) at build time to pin a
 /// real one.
 ///
-/// The append-only half is wired now (2026-08-03, OPEN-ITEMS §3):
-/// `services/signal/kt_anchor.rs` pins the highest tree head accepted so far
-/// and only advances it through a verified `verify_consistency_proof`, on
-/// every KT-verified send — `production_wiring.rs` fails if that caller
-/// disappears. So the two checks are complementary and BOTH need a real key
-/// here: against the dev key a forged head satisfies the inclusion proof and
-/// the consistency proof alike, because the forger can sign every head in the
-/// chain. A provisioned key is what makes either one mean anything.
+/// Chatter's libsignal KT configuration uses this key for the operator's
+/// signed head, and the mailbox uses it to authenticate key manifests.
 #[cfg(feature = "dev-trust-root")]
 pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_TREE_HEAD_BYTES;
 
@@ -584,7 +578,7 @@ const _: () = {
 // EDWARDS25519-SHA512-TAI output — instead of SHA-256(user_id). This hides the
 // user_id -> leaf-index mapping from an auditor scanning the public log while
 // keeping it committed and verifiable. The client PINS the server's VRF PUBLIC
-// key here and verifies the `vrf_proof` in every GetProofResponse under it, so a
+// key here and verifies the VRF proof in each search response under it, so a
 // malicious server cannot substitute a different VRF key (which would let it
 // answer with an arbitrary leaf). This is the raw 32-byte Ed25519-form VRF
 // public key.
@@ -634,7 +628,7 @@ pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = match option_env!("CHATTER_KT_VRF_
     None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_VRF_BYTES,
     None => panic!(
         "no key-transparency VRF public key is baked into this build.\n\n\
-             Every GetProof response carries a VRF proof binding the queried user_id\n\
+             Each key transparency search includes a VRF proof binding the queried user ID\n\
              to the leaf index served. Pinned against the development key, that proof\n\
              either verifies nothing (dev server) or fails outright (real server), and\n\
              the log's user_id -> leaf-index mapping is public to anyone with this\n\

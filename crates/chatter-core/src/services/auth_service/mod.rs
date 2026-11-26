@@ -11,6 +11,7 @@
 use base64::Engine;
 use rand::TryRngCore;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use zeroize::Zeroize;
 
 use crate::crypto::DeviceCredentials;
@@ -144,6 +145,14 @@ pub struct PendingRecoveryCodes {
     pub regenerated: bool,
 }
 
+/// Belongs to the local identity that is awaiting publication. The owner
+/// survives logout only as part of this operation, until completion or wipe.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingKeyRepublish {
+    owner: UserId,
+    login_identifier: String,
+}
+
 /// Authentication service.
 ///
 /// Orchestrates login, registration, and logout flows by coordinating
@@ -155,6 +164,8 @@ pub struct AuthService {
     user_repo: Arc<UserRepository>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) auth_interceptor: AuthInterceptor,
+    /// An acknowledged republish whose pending record could not be deleted.
+    republish_completed: AtomicBool,
     /// `(login identifier, grant)` from the last recovery, spent by the next
     /// login for that identifier (server OPEN-ITEMS §133). Memory only: it
     /// lives 10 minutes on the server.

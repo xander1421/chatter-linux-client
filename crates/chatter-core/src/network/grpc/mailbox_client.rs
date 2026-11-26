@@ -31,6 +31,7 @@ use chatter_proto::mailbox_v1::{
 /// let mut mailbox = MailboxClient::new(pool.channel(), pool.auth_clone());
 /// let tokens = mailbox.get_mailbox_tokens(5, vec![], "manifest-key-id".into()).await?;
 /// ```
+#[derive(Clone)]
 pub struct MailboxClient {
     inner: EphemeralMailboxServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
@@ -79,8 +80,9 @@ impl MailboxClient {
     /// Clients use this to blind their ephemeral keys before requesting tokens.
     pub async fn get_blind_signature_public_key(
         &mut self,
+        consistency: chatter_proto::chat_v1::KtConsistency,
     ) -> Result<GetBlindSignaturePublicKeyResponse, NetworkError> {
-        let request = GetBlindSignaturePublicKeyRequest {};
+        let request = GetBlindSignaturePublicKeyRequest { consistency: Some(consistency) };
 
         self.inner
             .get_blind_signature_public_key(request)

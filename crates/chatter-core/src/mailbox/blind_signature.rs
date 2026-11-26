@@ -23,9 +23,10 @@ use rsa::traits::PublicKeyParts;
 use std::future::Future;
 
 use crate::error::{MailboxError, NetworkError};
+use chatter_proto::chat_v1::{KtConsistency, KtSearchResponse};
+use crate::network::grpc::AnonymousKtClient;
 use crate::services::signal::kt_anchor;
 use crate::storage::repositories::SettingsRepository;
-use chatter_proto::chat_v1::GetConsistencyProofResponse;
 
 /// Server's RSA public key for blind signatures.
 ///
@@ -85,67 +86,61 @@ impl ServerPublicKey {
     pub fn from_manifest(
         manifest: &GetBlindSignaturePublicKeyResponse,
     ) -> Result<Self, MailboxError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| MailboxError::InvalidServerKey("clock before Unix epoch".into()))?
-            .as_nanos() as u64;
-        Self::authenticated_manifest_at(manifest, now)
+        Self::authenticated_manifest_at(manifest, manifest_now()?)
     }
 
-    pub(super) fn authenticated_manifest_at(
+    pub(crate) fn authenticated_manifest_at(
         manifest: &GetBlindSignaturePublicKeyResponse,
         now: u64,
     ) -> Result<Self, MailboxError> {
-        verify_manifest_in_log(manifest).inspect_err(|_| {
-            tracing::warn!(target: "token_manifest::kt_proof", "manifest verification failed");
-        })?;
-        Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)
+        let key = Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)
             .inspect_err(|_| {
                 tracing::warn!(target: "token_manifest::signature_schedule_or_key", "manifest verification failed");
+            })?;
+        manifest_proof(manifest)
+            .and_then(|(proof, digest)| {
+                kt_anchor::verify_cached(manifest_label(&manifest.key_id).as_bytes(), proof, &digest)
+                    .map_err(manifest_kt_error)
             })
+            .inspect_err(|_| {
+                tracing::warn!(target: "token_manifest::kt_proof", "manifest verification failed");
+            })?;
+        Ok(key)
     }
 
-    /// Fetch the manifest with `fetch`, check it with [`Self::from_manifest`],
-    /// then hold its tree head to the one this device pinned from every other
-    /// KT proof (`kt_anchor`), so a log forked for this client alone is
-    /// refused. `fetch_consistency` is the anonymous KT client's RPC.
-    ///
-    /// The fetch runs under the pin lock (`kt_anchor::lock_pin`): a manifest
-    /// fetched before a concurrent check advanced the pin carries an older head
-    /// than the pin, and would be rejected as a rollback.
-    pub async fn fetch_manifest<M, MFut, C, CFut>(
-        fetch: M,
+    /// Verify against the shared pin, retrying on the caller's route if another
+    /// request advances the pin during the fetch.
+    pub(crate) async fn fetch_manifest<M, MFut>(
+        mut fetch: M,
         settings: &SettingsRepository,
-        fetch_consistency: C,
+        kt: &mut AnonymousKtClient,
     ) -> Result<(GetBlindSignaturePublicKeyResponse, Self), MailboxError>
     where
-        M: FnOnce() -> MFut,
+        M: FnMut(KtConsistency) -> MFut,
         MFut: Future<Output = Result<GetBlindSignaturePublicKeyResponse, MailboxError>>,
-        C: FnOnce(u64, u64) -> CFut,
-        CFut: Future<Output = Result<GetConsistencyProofResponse, NetworkError>>,
     {
-        let pin = kt_anchor::lock_pin().await;
-        // Under the process-wide pin lock, so it gets the pin deadline: a
-        // withheld manifest must not stall every KT check behind it.
-        let manifest = tokio::time::timeout(kt_anchor::PIN_RPC_DEADLINE, fetch())
-            .await
-            .map_err(|_| MailboxError::Network(NetworkError::Timeout.to_string()))??;
-        let key = Self::from_manifest(&manifest)?;
-        let sth = manifest
-            .kt_proof
-            .as_ref()
-            .and_then(|p| p.signed_tree_head.as_ref())
-            .ok_or_else(|| MailboxError::InvalidServerKey("manifest has no tree head".into()))?;
-        kt_anchor::hold_head_locked(&pin, settings, sth, fetch_consistency)
-            .await
-            .map_err(|e| {
-                e.trace_rejection();
-                tracing::warn!(target: "token_manifest::consistency", "manifest verification failed");
-                MailboxError::InvalidServerKey(format!(
-                    "manifest tree head contradicts this device's pinned head: {e}"
-                ))
-            })?;
-        Ok((manifest, key))
+        tokio::time::timeout(kt_anchor::PIN_RPC_DEADLINE, async {
+            loop {
+                let pin = match kt_anchor::Pin::load(kt, settings).await {
+                    Err(kt_anchor::KtError::PinChanged) => continue,
+                    result => result.map_err(manifest_kt_error)?,
+                };
+                let manifest = fetch(pin.consistency()).await?;
+                let key = Self::verify_manifest_at(
+                    &manifest,
+                    &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES,
+                    manifest_now()?,
+                )?;
+                let (proof, digest) = manifest_proof(&manifest)?;
+                match pin.verify(manifest_label(&manifest.key_id).as_bytes(), proof, &digest) {
+                    Err(kt_anchor::KtError::PinChanged) => continue,
+                    result => result.map_err(manifest_kt_error)?,
+                }
+                return Ok((manifest, key));
+            }
+        })
+        .await
+        .unwrap_or_else(|_| Err(MailboxError::Network(NetworkError::Timeout.to_string())))
     }
 
     fn verify_manifest_at(
@@ -216,19 +211,28 @@ fn manifest_label(key_id: &str) -> String {
     format!("chatter/mailbox-manifest/v1/{key_id}")
 }
 
-// The pinned signer can sign a different manifest for each client; this makes
-// it prove the one it gave us is the one the KT log holds for the key, with the
-// same verifier as a peer's identity key.
-fn verify_manifest_in_log(m: &GetBlindSignaturePublicKeyResponse) -> Result<(), MailboxError> {
+fn manifest_proof(m: &GetBlindSignaturePublicKeyResponse) -> Result<(KtSearchResponse, [u8; 32]), MailboxError> {
     use sha2::{Digest, Sha256};
-    let proof = m.kt_proof.as_ref().ok_or_else(|| {
+    let proof = m.kt_proof.clone().ok_or_else(|| {
         MailboxError::InvalidServerKey("manifest has no key-transparency proof".into())
     })?;
-    let digest = Sha256::digest(manifest_bytes(m));
-    crate::crypto::verify_kt_proof(&manifest_label(&m.key_id), &digest, proof).map_err(|e| {
-        e.trace_rejection();
-        MailboxError::InvalidServerKey(format!("manifest key-transparency proof: {e}"))
-    })
+    Ok((proof, Sha256::digest(manifest_bytes(m)).into()))
+}
+
+fn manifest_kt_error(error: kt_anchor::KtError) -> MailboxError {
+    match error {
+        kt_anchor::KtError::Network(error) => MailboxError::Network(error.to_string()),
+        kt_anchor::KtError::Storage(error) => MailboxError::Storage(error.to_string()),
+        error => MailboxError::InvalidServerKey(format!("manifest key-transparency proof: {error}")),
+    }
+}
+
+fn manifest_now() -> Result<u64, MailboxError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_nanos()).ok())
+        .ok_or_else(|| MailboxError::InvalidServerKey("invalid local clock".into()))
 }
 
 // Must match service/manifest.go. Explicit framing avoids protobuf serialization
@@ -557,102 +561,23 @@ pub(crate) mod tests {
         missing.kt_proof = None;
         assert!(ServerPublicKey::from_manifest(&missing).is_err());
 
-        // Committed value is not this manifest's digest.
         let mut wrong_value = m.clone();
-        wrong_value
-            .kt_proof
-            .as_mut()
-            .unwrap()
-            .inclusion_proof
-            .as_mut()
-            .unwrap()
-            .value[0] ^= 1;
+        wrong_value.kt_proof.as_mut().unwrap().condensed.as_mut().unwrap()
+            .value.as_mut().unwrap().value[0] ^= 1;
         assert!(ServerPublicKey::from_manifest(&wrong_value).is_err());
 
-        // Inclusion path does not reach the committed root.
         let mut bad_path = m.clone();
-        bad_path
-            .kt_proof
-            .as_mut()
-            .unwrap()
-            .inclusion_proof
-            .as_mut()
-            .unwrap()
-            .sibling_hashes
-            .last_mut()
-            .unwrap()[0] ^= 1;
+        bad_path.kt_proof.as_mut().unwrap().condensed.as_mut().unwrap()
+            .search.as_mut().unwrap().steps[0].prefix.as_mut().unwrap().proof[0][0] ^= 1;
         assert!(ServerPublicKey::from_manifest(&bad_path).is_err());
 
-        // Tree head not signed by the pinned key.
         let mut bad_head = m.clone();
-        bad_head
-            .kt_proof
-            .as_mut()
-            .unwrap()
-            .signed_tree_head
-            .as_mut()
-            .unwrap()
-            .signature[0] ^= 1;
+        bad_head.kt_proof.as_mut().unwrap().tree_head.as_mut().unwrap()
+            .tree_head.as_mut().unwrap().signatures[0].signature[0] ^= 1;
         assert!(ServerPublicKey::from_manifest(&bad_head).is_err());
 
-        // A valid proof for a different label (a user's, or another key's) does
-        // not cover this manifest.
-        assert_ne!(manifest_label(&m.key_id), "vector-current");
-        assert!(crate::crypto::verify_kt_proof(
-            "vector-current",
-            &m.kt_proof
-                .as_ref()
-                .unwrap()
-                .inclusion_proof
-                .as_ref()
-                .unwrap()
-                .value,
-            m.kt_proof.as_ref().unwrap(),
-        )
-        .is_err());
-    }
-
-    /// The manifest is fetched only once the pin lock is held, so its head
-    /// cannot predate a pin another check advanced meanwhile.
-    #[tokio::test]
-    async fn manifest_is_fetched_under_the_pin_lock() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let Some(m) = kt_manifest_vector() else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let db = std::sync::Arc::new(
-            crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap(),
-        );
-        db.run_migrations().unwrap();
-        let settings = SettingsRepository::new(db);
-
-        let fetched = AtomicBool::new(false);
-        let pin = kt_anchor::lock_pin().await;
-        let other_check = async {
-            tokio::task::yield_now().await;
-            assert!(
-                !fetched.load(Ordering::SeqCst),
-                "fetched while another check held the pin"
-            );
-            drop(pin);
-        };
-        let fetch = ServerPublicKey::fetch_manifest(
-            || async {
-                fetched.store(true, Ordering::SeqCst);
-                Ok(m)
-            },
-            &settings,
-            |_, _| async {
-                Err(NetworkError::ConnectionFailed(
-                    "first pin needs no proof".into(),
-                ))
-            },
-        );
-        let ((), result) = tokio::join!(other_check, fetch);
-        assert_eq!(result.unwrap().1.key_id, "vector-current");
-        assert!(fetched.load(Ordering::SeqCst));
-        assert!(kt_anchor::pinned_head(&settings).unwrap().is_some());
+        let (proof, digest) = manifest_proof(&m).unwrap();
+        assert!(kt_anchor::verify_cached(b"vector-current", proof, &digest).is_err());
     }
 
     #[test]

@@ -63,7 +63,7 @@ impl AnonymousMailboxClient {
     pub async fn get_blind_signature_public_key(
         &mut self,
     ) -> Result<GetBlindSignaturePublicKeyResponse, NetworkError> {
-        let request = GetBlindSignaturePublicKeyRequest {};
+        let request = GetBlindSignaturePublicKeyRequest::default();
 
         self.inner
             .get_blind_signature_public_key(request)
