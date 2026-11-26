@@ -13,21 +13,35 @@
 
 use jni::Env;
 use jni::objects::{JObject, JObjectArray, JString, JValue};
-use jni::sys::jsize;
+use jni::sys::{jlong, jsize};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::activity;
 
-/// The `ensure()` call waiting on the dialog, woken by the result callback.
-/// One at a time: a newer request drops the older sender, which wakes that
-/// waiter too, and it then reads the grant state like any other.
-// The bool is whether the system dialog returned an answer: a request the
-// system cancelled (blocked from the background, then torn down when the
-// activity came to front) reports neither granted nor denied.
-static WAITER: Mutex<Option<tokio::sync::oneshot::Sender<bool>>> = Mutex::new(None);
-// ActivityResult has one launcher. Serialize awaitable requests so an Accept
-// tap during the early incoming-call prompt waits for that same result.
+// Fire-and-forget requests have no waiter. Give every awaitable request its own
+// ID so older results, including cancelled requests, cannot wake a newer call.
+const NO_WAITER: jlong = 0;
+static NEXT_REQUEST_ID: AtomicI64 = AtomicI64::new(1);
+
+struct PermissionWaiter {
+    request_id: jlong,
+    // False when the platform could not show a dialog or cancelled it.
+    answered: tokio::sync::oneshot::Sender<bool>,
+}
+
+static WAITER: Mutex<Option<PermissionWaiter>> = Mutex::new(None);
+// Another awaitable request checks the grant state after the current one ends.
 static REQUEST_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn take_waiter(request_id: jlong) -> Option<PermissionWaiter> {
+    let mut waiter = WAITER.lock().unwrap_or_else(|e| e.into_inner());
+    if waiter.as_ref().is_some_and(|waiter| waiter.request_id == request_id) {
+        waiter.take()
+    } else {
+        None
+    }
+}
 
 /// Common dangerous / special permissions we request.
 pub const CAMERA: &str = "android.permission.CAMERA";
@@ -54,7 +68,7 @@ pub fn request(permissions: &[&str]) {
         tracing::debug!("Android permissions: all already granted, no prompt");
         return;
     }
-    if let Err(e) = launch_request(&pending) {
+    if let Err(e) = launch_request(&pending, NO_WAITER) {
         tracing::error!("Android permissions: request failed: {e}");
     }
 }
@@ -74,14 +88,18 @@ pub async fn ensure_answered(permissions: &[&str]) -> Option<bool> {
     if pending.is_empty() {
         return Some(true);
     }
+    let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = tokio::sync::oneshot::channel();
-    *WAITER.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
-    if let Err(e) = launch_request(&pending) {
-        WAITER.lock().unwrap_or_else(|e| e.into_inner()).take();
+    *WAITER.lock().unwrap_or_else(|e| e.into_inner()) = Some(PermissionWaiter {
+        request_id,
+        answered: tx,
+    });
+    if let Err(e) = launch_request(&pending, request_id) {
+        take_waiter(request_id);
         tracing::error!("Android permissions: request failed: {e}");
         return Some(false);
     }
-    let answered = rx.await.unwrap_or(true);
+    let answered = rx.await.unwrap_or(false);
     let granted = pending.iter().all(|p| has(p));
     (answered || granted).then_some(granted)
 }
@@ -126,7 +144,7 @@ fn check(permission: &str) -> Result<bool, String> {
     })
 }
 
-fn launch_request(permissions: &[&str]) -> Result<(), String> {
+fn launch_request(permissions: &[&str], request_id: jlong) -> Result<(), String> {
     activity::with_jni_env(|env| {
         let act = activity::activity()?;
         let string_class = env
@@ -143,8 +161,8 @@ fn launch_request(permissions: &[&str]) -> Result<(), String> {
         let res = env.call_method(
             act,
             jni::jni_str!("requestPermissions"),
-            jni::jni_sig!("([Ljava/lang/String;)V"),
-            &[JValue::Object(&arr_obj)],
+            jni::jni_sig!("([Ljava/lang/String;J)V"),
+            &[JValue::Object(&arr_obj), JValue::Long(request_id)],
         );
         if res.is_err() {
             activity::clear_exception(env);
@@ -160,6 +178,7 @@ fn launch_request(permissions: &[&str]) -> Result<(), String> {
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnPermissionsResult(
     mut env: jni::EnvUnowned<'_>,
     _this: JObject,
+    request_id: jlong,
     granted: JObjectArray,
     denied: JObjectArray,
 ) {
@@ -173,8 +192,8 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnPermissionsR
             if !d.is_empty() {
                 tracing::warn!("Android permissions denied: {:?}", d);
             }
-            if let Some(waiter) = WAITER.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                let _ = waiter.send(!g.is_empty() || !d.is_empty());
+            if request_id != NO_WAITER && let Some(waiter) = take_waiter(request_id) {
+                let _ = waiter.answered.send(!g.is_empty() || !d.is_empty());
             }
         })())
     })

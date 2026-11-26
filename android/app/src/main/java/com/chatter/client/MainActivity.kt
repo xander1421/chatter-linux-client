@@ -304,6 +304,9 @@ class MainActivity : GameActivity() {
             connectivity.unregisterNetworkCallback(callback)
         }
         torNetworkCallback = null
+        for (request in runtimePermissionRequests.cancelAll()) {
+            nativeOnPermissionsResult(request.id, emptyArray(), emptyArray())
+        }
         nativeClearActivity()
         super.onDestroy()
     }
@@ -782,19 +785,21 @@ class MainActivity : GameActivity() {
         refreshFullScreenCallState()
         maybeShowFullScreenCallPrompt()
         // A prelaunched Activity can be resumed without ever gaining focus.
-        messagingBackground = !window.decorView.hasWindowFocus()
-        nativeSetAppVisible(!messagingBackground)
-        updateMessagingService()
+        updateAppVisibility(window.decorView.hasWindowFocus())
         if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        val visible = hasFocus && activityResumed
-        if (visible) {
+        if (hasFocus && activityResumed) {
             refreshFullScreenCallState()
             maybeShowFullScreenCallPrompt()
         }
+        updateAppVisibility(hasFocus)
+    }
+
+    private fun updateAppVisibility(hasFocus: Boolean) {
+        val visible = activityResumed && (hasFocus || fullScreenCallDialog?.isShowing == true)
         messagingBackground = !visible
         nativeSetAppVisible(visible)
         updateMessagingService()
@@ -1434,7 +1439,8 @@ class MainActivity : GameActivity() {
     private data class FullScreenCallPrompt(val message: String, val allow: String, val later: String)
 
     private var fullScreenCallPrompt: FullScreenCallPrompt? = null
-    private var runtimePermissionPending = false
+    private var fullScreenCallDialog: android.app.AlertDialog? = null
+    private val runtimePermissionRequests = RuntimePermissionQueue()
 
     private fun refreshFullScreenCallState(): Int {
         if (Build.VERSION.SDK_INT < 34) return 0
@@ -1456,7 +1462,7 @@ class MainActivity : GameActivity() {
 
     private fun maybeShowFullScreenCallPrompt() {
         val prompt = fullScreenCallPrompt ?: return
-        if (!activityResumed || !window.decorView.hasWindowFocus() || runtimePermissionPending ||
+        if (!activityResumed || !window.decorView.hasWindowFocus() || runtimePermissionRequests.hasRequests() ||
             isFinishing || isDestroyed || lockScreenCallId != null ||
             getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return
 
@@ -1465,14 +1471,21 @@ class MainActivity : GameActivity() {
             fullScreenCallPrompt = null
             return
         }
-        if (refreshFullScreenCallState() != 1) return
+        if (getSystemService(NotificationManager::class.java)?.areNotificationsEnabled() != true ||
+            refreshFullScreenCallState() != 1) return
 
-        fullScreenCallPrompt = null
-        android.app.AlertDialog.Builder(this)
+        val dialog = android.app.AlertDialog.Builder(this)
             .setMessage(prompt.message)
             .setNegativeButton(prompt.later, null)
             .setPositiveButton(prompt.allow) { _, _ -> openFullScreenCallSettings() }
-            .show()
+            .create()
+        dialog.setOnDismissListener {
+            fullScreenCallDialog = null
+            updateAppVisibility(window.decorView.hasWindowFocus())
+        }
+        fullScreenCallPrompt = null
+        fullScreenCallDialog = dialog
+        dialog.show()
         prefs.edit().putBoolean("full_screen_call_prompt_shown", true).apply()
     }
 
@@ -1501,15 +1514,28 @@ class MainActivity : GameActivity() {
     // --- Runtime permissions ---------------------------------------------------
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            if (Build.VERSION.SDK_INT >= 34) {
-                runtimePermissionPending = false
-                window.decorView.post { maybeShowFullScreenCallPrompt() }
-            }
+            val requestId = runtimePermissionRequests.completeActive()?.id ?: 0L
             val granted = result.filterValues { it }.keys.toTypedArray()
             val denied = result.filterValues { !it }.keys.toTypedArray()
             callAudio.retryMediaService()
-            nativeOnPermissionsResult(granted, denied)
+            nativeOnPermissionsResult(requestId, granted, denied)
+            window.decorView.post { launchNextRuntimePermissionRequest() }
         }
+
+    private fun launchNextRuntimePermissionRequest() {
+        while (true) {
+            val request = runtimePermissionRequests.startNext() ?: break
+            try {
+                permissionRequest.launch(request.permissions)
+                return
+            } catch (error: RuntimeException) {
+                runtimePermissionRequests.completeActive()
+                Log.w("ChatterCalls", "Runtime permission request unavailable", error)
+                nativeOnPermissionsResult(request.id, emptyArray(), emptyArray())
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 34) maybeShowFullScreenCallPrompt()
+    }
 
     /** Android 11 and older require system Location for BLE discovery. */
     @Suppress("unused")
@@ -1529,20 +1555,14 @@ class MainActivity : GameActivity() {
 
     /** Called from Rust (JNI). Shows the system grant dialog for [permissions]. */
     @Suppress("unused")
-    fun requestPermissions(permissions: Array<String>) {
+    fun requestPermissions(permissions: Array<String>, requestId: Long) {
         runOnUiThread {
-            if (Build.VERSION.SDK_INT < 34) {
-                permissionRequest.launch(permissions)
+            if (isFinishing || isDestroyed) {
+                nativeOnPermissionsResult(requestId, emptyArray(), emptyArray())
                 return@runOnUiThread
             }
-            runtimePermissionPending = true
-            try {
-                permissionRequest.launch(permissions)
-            } catch (error: RuntimeException) {
-                runtimePermissionPending = false
-                Log.w("ChatterCalls", "Runtime permission request unavailable", error)
-                maybeShowFullScreenCallPrompt()
-            }
+            runtimePermissionRequests.enqueue(requestId, permissions)
+            launchNextRuntimePermissionRequest()
         }
     }
 
@@ -1563,7 +1583,7 @@ class MainActivity : GameActivity() {
     }
 
     /** Implemented in Rust (libchatter_ui.so). Delivers grant results. */
-    private external fun nativeOnPermissionsResult(granted: Array<String>, denied: Array<String>)
+    private external fun nativeOnPermissionsResult(requestId: Long, granted: Array<String>, denied: Array<String>)
 
     /** Called from Rust (JNI, platform/android/qr_scanner.rs). See QrScanner. */
     @Suppress("unused")

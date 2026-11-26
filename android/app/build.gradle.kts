@@ -143,6 +143,8 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+
     // Java GameActivity class — its native glue is compiled INTO libchatter_ui.so
     // by the android-activity `game-activity` feature. Do NOT enable prefab.
     implementation("androidx.games:games-activity:4.4.2")
