@@ -74,6 +74,7 @@ pub(crate) enum SignalCommand {
         sender_cert: SenderCertificate,
         destinations: Vec<ProtocolAddress>,
         group_id: Option<Vec<u8>>,
+        shape: crate::crypto::signal::sealed_sender::SealedBatchShape,
         permit: crate::services::gateway::submission::SubmissionPermit,
         response: oneshot::Sender<Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError>>,
     },

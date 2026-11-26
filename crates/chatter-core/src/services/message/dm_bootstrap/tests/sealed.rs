@@ -1,4 +1,5 @@
 use super::*;
+use crate::crypto::signal::sealed_sender::SealedBatchShape;
 
 #[cfg(feature = "dev-trust-root")]
 #[tokio::test]
@@ -28,6 +29,7 @@ async fn actual_sealed_batch_checks_fresh_kyber_and_established_devices_before_c
             cert.clone(),
             vec![bob.clone()],
             None,
+            SealedBatchShape::Standard,
         )
         .await
         .unwrap();
@@ -92,6 +94,7 @@ async fn actual_sealed_batch_checks_fresh_kyber_and_established_devices_before_c
             cert.clone(),
             vec![bob.clone(), fresh],
             None,
+            SealedBatchShape::Standard,
         ),
         None,
     )
@@ -121,6 +124,7 @@ async fn actual_sealed_batch_checks_fresh_kyber_and_established_devices_before_c
             cert,
             vec![bob.clone()],
             None,
+            SealedBatchShape::Standard,
         ),
         None,
     )
@@ -188,6 +192,7 @@ async fn actual_sealed_envelope_exact_cap_is_admitted_and_cap_plus_one_is_not() 
                 cert,
                 vec![address.clone()],
                 None,
+                SealedBatchShape::Standard,
             ),
             None,
         )
@@ -328,6 +333,7 @@ async fn sealed_batch_skips_a_blocked_device_and_commits_the_ready_device() {
     let batch = ms.signal_service.actor.encrypt_sealed_bounded_batch(
         chatter_proto::protovalidate::test_plaintext("one ready device"), cert.clone(),
         vec![address(ready, 2), address(blocked, 3)], None,
+        SealedBatchShape::Standard,
     ).await.unwrap();
     assert_eq!(batch.len(), 1);
     assert_eq!(batch[0].0, address(ready, 2));
@@ -348,6 +354,7 @@ async fn sealed_batch_skips_a_blocked_device_and_commits_the_ready_device() {
     let result = ms.signal_service.actor.encrypt_sealed_bounded_batch(
         chatter_proto::protovalidate::test_plaintext("wait for the identity change"), cert,
         vec![address(ready, 2), address(blocked, 3)], None,
+        SealedBatchShape::Standard,
     ).await;
     assert!(matches!(
         result,

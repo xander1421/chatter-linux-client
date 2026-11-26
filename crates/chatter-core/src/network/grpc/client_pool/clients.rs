@@ -110,6 +110,17 @@ impl GrpcClientPool {
         super::super::AnonymousMessageClient::new(self.private_post_channel())
     }
 
+    pub(crate) fn private_receipt_client(&self) -> super::super::AnonymousMessageClient {
+        super::super::AnonymousMessageClient::new(self.private_receipt_channel())
+    }
+
+    /// The public consistency proof for the mailbox signing-key manifest
+    /// travels on the same connection as its authenticated manifest fetch.
+    /// Keep both steps away from connections used to spend credentials.
+    pub(crate) fn credential_manifest_kt_client(&self) -> super::super::AnonymousKtClient {
+        super::super::AnonymousKtClient::new(self.channel())
+    }
+
     /// Create an anonymous auth client (no auth headers) on the unidentified
     /// channel.
     pub fn anonymous_auth_client(&self) -> super::super::AnonymousAuthClient {

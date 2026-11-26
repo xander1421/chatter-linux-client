@@ -2,6 +2,7 @@
 const MAX_ENCRYPT_LOCKS: usize = 500;
 
 use super::*;
+use crate::crypto::signal::sealed_sender::SealedBatchShape;
 
 impl SignalService {
     /// Get or create a lock for encrypting to a specific recipient.
@@ -294,6 +295,7 @@ impl SignalService {
                 plaintext,
                 group_id,
                 false,
+                SealedBatchShape::Standard,
             )
             .await?;
         Ok((ciphertexts, unrestricted))
@@ -305,12 +307,15 @@ impl SignalService {
         recipient_id: &str,
         plaintext: &[u8],
         group_id: Option<&[u8]>,
-    ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
-        let devices = self.require_group_device_sessions(source, recipient_id).await?;
-        let ciphertexts = self
-            .encrypt_cached_devices_bounded(recipient_id, &devices, plaintext, group_id)
-            .await?;
-        Ok((ciphertexts, self.unrestricted_access(recipient_id).unwrap_or(false)))
+    ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
+        let mut devices = self.require_group_device_sessions(source, recipient_id).await?;
+        let own = self.get_our_address()?;
+        if recipient_id == own.name() {
+            devices.push(u32::from(own.device_id()));
+        }
+        self.encrypt_cached_devices_bounded(
+            recipient_id, &devices, plaintext, group_id, SealedBatchShape::PrivateChannelKey,
+        ).await
     }
 
     /// Seal only to established sessions, using a cached certificate. This
@@ -321,8 +326,9 @@ impl SignalService {
         devices: &[u32],
         plaintext: &[u8],
         group_id: Option<&[u8]>,
+        shape: SealedBatchShape,
     ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
-        self.encrypt_prepared_devices_bounded(None, recipient_id, devices, plaintext, group_id, false)
+        self.encrypt_prepared_devices_bounded(None, recipient_id, devices, plaintext, group_id, false, shape)
             .await
     }
 
@@ -343,6 +349,7 @@ impl SignalService {
             plaintext,
             group_id,
             true,
+            SealedBatchShape::Standard,
         )
         .await
     }
@@ -358,6 +365,7 @@ impl SignalService {
         plaintext: &[u8],
         group_id: Option<&[u8]>,
         ensure_missing: bool,
+        shape: SealedBatchShape,
     ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
         let mut devices = devices.to_vec();
         devices.sort_unstable();
@@ -415,6 +423,7 @@ impl SignalService {
                 certificate,
                 destinations,
                 group_id.map(<[u8]>::to_vec),
+                shape,
             )
             .await?;
         Ok(batch

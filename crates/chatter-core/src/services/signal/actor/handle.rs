@@ -159,6 +159,7 @@ impl SignalActorHandle {
         sender_cert: SenderCertificate,
         destinations: Vec<ProtocolAddress>,
         group_id: Option<Vec<u8>>,
+        shape: crate::crypto::signal::sealed_sender::SealedBatchShape,
     ) -> Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError> {
         admit_outgoing_content(&plaintext)?;
         let permit = crate::services::gateway::submission::SubmissionPermit::capture();
@@ -167,6 +168,7 @@ impl SignalActorHandle {
             sender_cert,
             destinations,
             group_id,
+            shape,
             permit,
             response: tx,
         })

@@ -136,6 +136,7 @@ impl GrpcClientPool {
             *channel = None;
             *self.unidentified_channel.write() = None;
             *self.private_post_channel.write() = None;
+            *self.private_receipt_channel.write() = None;
             *self.unidentified_health.write() = None;
         }
     }

@@ -68,6 +68,24 @@ pub struct SealedSenderManager;
 /// serialized envelope, including the actual certificate, PQXDH and SPQR data.
 pub(crate) const MAX_SEALED_BODY_BYTES: usize = 8192;
 
+#[derive(Clone, Copy)]
+pub(crate) enum SealedBatchShape {
+    Standard,
+    PrivateChannelKey,
+    PrivateReceipt,
+}
+
+impl SealedBatchShape {
+    fn padded_usmc_size(self) -> Option<usize> {
+        match self {
+            Self::Standard => None,
+            Self::PrivateChannelKey => Some(4096),
+            // V1 framing adds 94 bytes at this length, including its MACs.
+            Self::PrivateReceipt => Some(MAX_SEALED_BODY_BYTES - 94),
+        }
+    }
+}
+
 /// Exact cap comparison; equality is permitted by the server.
 pub(crate) fn validate_sealed_body_size(
     size: usize,

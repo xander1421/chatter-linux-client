@@ -178,7 +178,7 @@ pub(in crate::services::message) fn cache_fixture_sender_certificate(
 }
 
 #[cfg(feature = "dev-trust-root")]
-async fn open_fixture_sealed(
+pub(in crate::services::message) async fn open_fixture_sealed(
     remote: &mut libsignal_protocol::InMemSignalProtocolStore,
     alice: &ProtocolAddress,
     bob: &ProtocolAddress,

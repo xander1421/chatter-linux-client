@@ -171,8 +171,8 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, permit, response } => {
-                            let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), &store, &permit).await;
+                        SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, shape, permit, response } => {
+                            let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), shape, &store, &permit).await;
                             let _ = response.send(res);
                         }
 

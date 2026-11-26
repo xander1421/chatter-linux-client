@@ -43,6 +43,14 @@ impl GrpcClientPool {
         )
     }
 
+    pub(super) fn private_receipt_channel(&self) -> GrpcTransport {
+        self.isolated_unidentified_channel(
+            &self.private_receipt_channel,
+            #[cfg(feature = "onion")]
+            &self.private_receipt_onion_tor,
+        )
+    }
+
     fn isolated_unidentified_channel(
         &self,
         cached: &RwLock<Option<GrpcTransport>>,

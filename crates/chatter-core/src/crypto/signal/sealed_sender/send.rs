@@ -23,15 +23,46 @@ use rand::rngs::OsRng;
 
 use crate::error::CryptoError;
 
+use super::{
+    ContentHint, MAX_SEALED_BODY_BYTES, SealedBatchShape, SealedSenderManager, SenderCertificate,
+    UnidentifiedSenderMessageContent, validate_sealed_body_size,
+};
+
 fn encryption_error(error: SignalProtocolError) -> CryptoError {
     crate::crypto::signal::outbound_identity_error(&error)
         .unwrap_or_else(|| CryptoError::EncryptionFailed(error.to_string()))
 }
 
-use super::{
-    ContentHint, MAX_SEALED_BODY_BYTES, SealedSenderManager, SenderCertificate,
-    UnidentifiedSenderMessageContent, validate_sealed_body_size,
-};
+/// Pad inside the authenticated encryption. The protobuf decoder skips
+/// this unknown USMC field, while libsignal seals the full serialized bytes.
+async fn seal_padded_usmc(
+    message_type: CiphertextMessageType,
+    contents: Vec<u8>,
+    sender_cert: &SenderCertificate,
+    destination: &ProtocolAddress,
+    group_id: Option<&[u8]>,
+    identities: &impl IdentityKeyStore,
+    size: usize,
+) -> Result<Vec<u8>, CryptoError> {
+    use prost::encoding::{WireType, encode_key, encode_varint, encoded_len_varint, key_len};
+    const PADDING_FIELD: u32 = 15;
+    let usmc = UnidentifiedSenderMessageContent::new(
+        message_type, sender_cert.clone(), contents, ContentHint::Default,
+        group_id.map(<[u8]>::to_vec),
+    ).map_err(encryption_error)?;
+    let mut bytes = usmc.serialized().map_err(encryption_error)?.to_vec();
+    if bytes.len() != size {
+        let padding = (1..=3).find_map(|len_bytes| {
+            let n = size.checked_sub(bytes.len() + key_len(PADDING_FIELD) + len_bytes)?;
+            (encoded_len_varint(n as u64) == len_bytes).then_some(n)
+        }).ok_or_else(|| CryptoError::EncryptionFailed("Sealed content does not fit fixed envelope".into()))?;
+        encode_key(PADDING_FIELD, WireType::LengthDelimited, &mut bytes);
+        encode_varint(padding as u64, &mut bytes);
+        bytes.resize(size, 0);
+    }
+    let padded = UnidentifiedSenderMessageContent::deserialize(&bytes).map_err(encryption_error)?;
+    SealedSenderManager::encrypt_from_content(&padded, destination, identities).await
+}
 
 impl SealedSenderManager {
     /// Encrypt against an in-memory write overlay, then admit ALL envelopes
@@ -43,6 +74,7 @@ impl SealedSenderManager {
         sender_cert: &SenderCertificate,
         destinations: &[ProtocolAddress],
         group_id: Option<&[u8]>,
+        shape: SealedBatchShape,
         base: &crate::crypto::SignalStore,
         permit: &crate::services::gateway::submission::SubmissionPermit,
     ) -> Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, crate::error::ServiceError> {
@@ -57,6 +89,22 @@ impl SealedSenderManager {
                     "duplicate sealed destination".into(),
                 ));
             }
+            if let Some(size) = shape.padded_usmc_size() {
+                if destination.name() == sender_cert.sender_uuid().map_err(encryption_error)?
+                    && destination.device_id() == sender_cert.sender_device_id().map_err(encryption_error)?
+                {
+                    // Our device drops this echo as soon as it authenticates
+                    // the certificate. It needs no pairwise session with itself.
+                    let ciphertext = seal_padded_usmc(
+                        CiphertextMessageType::Whisper, Vec::new(), sender_cert,
+                        destination, group_id, &identities, size,
+                    ).await?;
+                    validate_sealed_body_size(ciphertext.len(), MAX_SEALED_BODY_BYTES)?;
+                    let registration_id = base.get_local_registration_id().await.map_err(encryption_error)?;
+                    envelopes.push((destination.clone(), ciphertext, registration_id));
+                    continue;
+                }
+            }
             let ciphertext = match Self::encrypt_in_group(
                 plaintext,
                 sender_cert,
@@ -64,11 +112,15 @@ impl SealedSenderManager {
                 group_id,
                 &mut staged,
                 &mut identities,
+                shape,
             )
             .await {
                 Ok(ciphertext) => ciphertext,
                 Err(error @ (CryptoError::KeyVerificationPending { .. }
                     | CryptoError::UntrustedIdentity { new_identity_key: None, .. })) => {
+                    if shape.padded_usmc_size().is_some() {
+                        return Err(error.into());
+                    }
                     if blocked.is_none() || matches!(error, CryptoError::KeyVerificationPending { .. }) {
                         blocked = Some(error);
                     }
@@ -198,19 +250,20 @@ impl SealedSenderManager {
     /// of a channel message names its channel there, inside the sealed layer,
     /// so a recipient that cannot decrypt it still knows where the loss
     /// belongs.
-    pub(crate) async fn encrypt_in_group<S, I>(
+    async fn encrypt_in_group<S, I>(
         plaintext: &[u8],
         sender_cert: &SenderCertificate,
         destination: &ProtocolAddress,
         group_id: Option<&[u8]>,
         session_store: &mut S,
         identity_store: &mut I,
+        shape: SealedBatchShape,
     ) -> Result<Vec<u8>, CryptoError>
     where
         S: SessionStore,
         I: IdentityKeyStore,
     {
-        let Some(group_id) = group_id else {
+        if group_id.is_none() && shape.padded_usmc_size().is_none() {
             return Self::encrypt(
                 plaintext,
                 sender_cert,
@@ -219,7 +272,7 @@ impl SealedSenderManager {
                 identity_store,
             )
             .await;
-        };
+        }
         let failed = encryption_error;
         let mut rng = OsRng.unwrap_err();
         let sender_address = ProtocolAddress::new(
@@ -237,12 +290,18 @@ impl SealedSenderManager {
         )
         .await
         .map_err(failed)?;
+        if let Some(size) = shape.padded_usmc_size() {
+            return seal_padded_usmc(
+                message.message_type(), message.serialize().to_vec(), sender_cert,
+                destination, group_id, identity_store, size,
+            ).await;
+        }
         let usmc = UnidentifiedSenderMessageContent::new(
             message.message_type(),
             sender_cert.clone(),
             message.serialize().to_vec(),
             ContentHint::Default,
-            Some(group_id.to_vec()),
+            group_id.map(<[u8]>::to_vec),
         )
         .map_err(failed)?;
         sealed_sender_encrypt_from_usmc(destination, &usmc, identity_store, &mut rng)

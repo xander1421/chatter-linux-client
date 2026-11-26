@@ -105,6 +105,18 @@ impl MessageService {
             AccessPolicy::FetchIfNeeded => self.signal_service
                 .reconcile_devices(auth_client, recipient_id, missing, extra, stale).await,
             AccessPolicy::AnonymousGroup => {
+                let local_device_named = self.current_user_id()
+                    .is_ok_and(|me| me.to_string() == recipient_id)
+                    && missing.iter().chain(extra).chain(stale)
+                        .any(|device| *device == self.current_device_id_or_zero());
+                if local_device_named {
+                    return DepositOutcome {
+                        error: Some(MessageError::Network(crate::error::NetworkError::InvalidRequest(
+                            "device mismatch for the sending device".into(),
+                        ))),
+                        ..Default::default()
+                    };
+                }
                 match super::super::group_send::charge_private_repairs(missing.len() + extra.len() + stale.len()) {
                     Ok(()) => self.signal_service.reconcile_devices_with_source(
                         &mut self.private_post_prekeys(), recipient_id, missing, extra, stale,
@@ -170,9 +182,8 @@ impl MessageService {
         client_request_id: &str,
         policy: AccessPolicy,
     ) -> Result<DepositOutcome, crate::error::NetworkError> {
-        // To our own user (self-sync, SKDM, SenderKeyRequest) the deposit is
-        // identified on the authenticated channel, never UAK on the anonymous
-        // one — see `sync_to_own_devices`. That is not a degradation.
+        // Ordinary self-sync uses the account path. Private sender-key
+        // fanout applies the same anonymous policy to the whole roster.
         let is_self = self
             .current_user_id()
             .is_ok_and(|me| me.to_string() == recipient_id);
@@ -196,7 +207,7 @@ impl MessageService {
             AccessPolicy::AnonymousGroup => self.signal_service
                 .encrypt_group_distribution(
                     &mut self.private_post_prekeys(), recipient_id, plaintext, group_id,
-                ).await,
+                ).await.map(|sealed| (sealed, false)),
         };
         let (sealed, unrestricted) = match encrypted {
             Ok(c) => c,
@@ -254,13 +265,7 @@ impl MessageService {
             .collect();
         messages.sort_by_key(|m| m.device_id);
 
-        // A private SKDM should not request prekeys just to read the access
-        // policy. With an unknown policy, try unrestricted sealed delivery
-        // and let the server reject it if the recipient requires their UAK.
-        let unrestricted = unrestricted
-            || (policy == AccessPolicy::AnonymousGroup
-                && self.signal_service.unrestricted_access(recipient_id).is_none());
-        let recipient_uak = if is_self {
+        let recipient_uak = if is_self || policy == AccessPolicy::AnonymousGroup {
             None
         } else {
             self.sealed_access_key(recipient_id, unrestricted)
@@ -288,15 +293,8 @@ impl MessageService {
                 recipient_uak.as_ref(), client_request_id,
             ).await,
             AccessPolicy::AnonymousGroup => {
-                // Only the group submit can check the sending account's full
-                // device set: an anonymous SKDM omits this device.
-                let delivery = if is_self { SealedDelivery::NamedDevices } else { SealedDelivery::AllDevices };
-                if is_self && messages.is_empty() {
-                    return Ok(DepositOutcome::default());
-                }
-                self.send_private_distribution(
-                    recipient_id, messages, delivery, recipient_uak.as_ref(), client_request_id,
-                ).await.map(|response| (response, false))
+                self.send_private_distribution(recipient_id, messages, client_request_id)
+                    .await.map(|response| (response, false))
             }
         };
         let (response, uak_rejected) = match sent {
@@ -444,14 +442,12 @@ impl MessageService {
         }
     }
 
-    /// A private-channel post can trigger this distribution after the server
-    /// names a missing device. Keep both delivery attempts anonymous.
+    /// A private SKDM always uses the same authentication and device-set
+    /// policy, including the posting account's own deposit.
     async fn send_private_distribution(
         &self,
         recipient_id: &str,
         messages: Vec<SealedDeviceMessage>,
-        delivery: SealedDelivery,
-        uak: Option<&[u8; 16]>,
         request_id: &str,
     ) -> Result<SendSealedMessageResponse, crate::error::NetworkError> {
         use crate::error::NetworkError;
@@ -459,19 +455,10 @@ impl MessageService {
         crate::state::send_session::check_send_session()
             .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
         let mut client = self.grpc_pool.anonymous_message_client();
-        if let Some(uak) = uak {
-            match client.send_sealed_messages_with_uak(
-                recipient_id, messages.clone(), delivery, request_id, uak,
-            ).await {
-                Err(error) if error.is_auth_error() => {}
-                result => return result,
-            }
-        }
-        crate::state::send_session::check_send_session()
-            .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
         let token = super::super::group_send::claim_private_post_credential(&self.token_manager)?;
         client.send_with_anonymous_credential(
-            request_id, recipient_id, messages, delivery, 0, &token.public_key, &token.signature,
+            request_id, recipient_id, messages, SealedDelivery::AllDevices, 0,
+            &token.public_key, &token.signature,
         ).await
     }
 

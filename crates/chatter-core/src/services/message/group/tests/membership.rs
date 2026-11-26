@@ -77,11 +77,11 @@
     async fn private_submit_fetches_bundles_anonymously_only_when_needed() {
         use chatter_proto::chat_v1 as pb;
         use crate::services::message::dm_bootstrap::tests::{
-            cache_device, cache_fixture_sender_certificate, seed_tokens,
+            cache_device, cache_fixture_sender_certificate, open_fixture_sealed, seed_tokens,
         };
         use rand::{SeedableRng, rngs::StdRng};
         use std::{
-            collections::VecDeque, convert::Infallible, future::Ready, pin::Pin,
+            collections::VecDeque, convert::Infallible, future::Future, pin::Pin,
             sync::{Arc, Mutex}, task::{Context, Poll},
         };
         use tokio::net::TcpListener;
@@ -118,7 +118,8 @@
         struct Probe {
             calls: Arc<Mutex<Vec<(String, bool, bool)>>>,
             mismatch: Arc<Mutex<Option<(String, Vec<u32>)>>>,
-            receipt_reply: Arc<Mutex<Option<Result<(), tonic::Status>>>>,
+            deposits: Arc<Mutex<Vec<pb::SendSealedMessageRequest>>>,
+            receipt_error: Arc<Mutex<Option<tonic::Status>>>,
         }
 
         #[derive(Clone)]
@@ -133,48 +134,63 @@
         impl<const SERVICE: u8> tower::Service<http::Request<Body>> for RpcProbe<SERVICE> {
             type Response = http::Response<Body>;
             type Error = Infallible;
-            type Future = Ready<Result<Self::Response, Self::Error>>;
+            type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
             fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
                 Poll::Ready(Ok(()))
             }
 
             fn call(&mut self, request: http::Request<Body>) -> Self::Future {
-                let path = request.uri().path();
-                self.0.calls.lock().unwrap().push((
-                    path.to_owned(),
-                    request.headers().contains_key(http::header::AUTHORIZATION),
-                    request.headers().contains_key("x-anonymous-credential"),
-                ));
-                if path.ends_with("/SendGroupMessage") {
-                    if let Some((user_id, missing_devices)) = self.0.mismatch.lock().unwrap().take() {
-                        let response = pb::SendGroupMessageResponse {
-                            mismatched: vec![pb::AccountMismatchedDevices {
-                                user_id,
-                                devices: Some(pb::MismatchedDevices {
-                                    missing_devices,
-                                    ..Default::default()
-                                }),
-                            }],
-                            ..Default::default()
-                        };
-                        return std::future::ready(Ok(grpc_reply(response)));
-                    }
-                }
-                if path.ends_with("/SendSealedMessage") {
-                    if let Some(result) = self.0.receipt_reply.lock().unwrap().take() {
-                        let response = match result {
-                            Ok(()) => grpc_reply(pb::SendSealedMessageResponse {
-                                success: true,
-                                delivered_to_devices: vec![2],
+                let probe = self.0.clone();
+                Box::pin(async move {
+                    use http_body::Body as _;
+                    use prost::Message as _;
+
+                    let path = request.uri().path().to_owned();
+                    probe.calls.lock().unwrap().push((
+                        path.clone(),
+                        request.headers().contains_key(http::header::AUTHORIZATION),
+                        request.headers().contains_key("x-anonymous-credential"),
+                    ));
+                    if path.ends_with("/SendGroupMessage") {
+                        if let Some((user_id, missing_devices)) = probe.mismatch.lock().unwrap().take() {
+                            return Ok(grpc_reply(pb::SendGroupMessageResponse {
+                                mismatched: vec![pb::AccountMismatchedDevices {
+                                    user_id,
+                                    devices: Some(pb::MismatchedDevices {
+                                        missing_devices,
+                                        ..Default::default()
+                                    }),
+                                }],
                                 ..Default::default()
-                            }),
-                            Err(status) => status.into_http(),
-                        };
-                        return std::future::ready(Ok(response));
+                            }));
+                        }
                     }
-                }
-                std::future::ready(Ok(tonic::Status::aborted("fixture reached").into_http()))
+                    if path.ends_with("/SendSealedMessage") {
+                        let is_receipt = request.headers().contains_key("unidentified-access-key");
+                        let mut body = request.into_body();
+                        let mut wire = Vec::new();
+                        while let Some(frame) = futures::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
+                            if let Ok(data) = frame.unwrap().into_data() {
+                                wire.extend_from_slice(&data);
+                            }
+                        }
+                        let deposit = pb::SendSealedMessageRequest::decode(&wire[5..]).unwrap();
+                        let delivered = deposit.messages.iter().map(|m| m.device_id).collect();
+                        probe.deposits.lock().unwrap().push(deposit);
+                        if is_receipt {
+                            if let Some(status) = probe.receipt_error.lock().unwrap().take() {
+                                return Ok(status.into_http());
+                            }
+                        }
+                        return Ok(grpc_reply(pb::SendSealedMessageResponse {
+                            success: true,
+                            delivered_to_devices: delivered,
+                            ..Default::default()
+                        }));
+                    }
+                    Ok(tonic::Status::aborted("fixture reached").into_http())
+                })
             }
         }
 
@@ -201,10 +217,15 @@
         // SSv2 includes Alice's sending device, which needs her own prekeys
         // to construct its ephemeral self-session.
         alice.signal_service.actor.rotate_signed_prekey().await.unwrap();
-        cache_device(alice, &t.bob_id, 1, &mut rng).await;
+        let mut bob_remote = cache_device(alice, &t.bob_id, 1, &mut rng).await;
+        let mut linked_remote = cache_device(alice, &t.alice_id, 2, &mut rng).await;
+        let protocol_address = |member: UserId, device| {
+            libsignal_protocol::ProtocolAddress::new(member.to_string(), libsignal_protocol::DeviceId::new(device).unwrap())
+        };
+        let original = protocol_address(t.alice_id, 1);
+        let linked = protocol_address(t.alice_id, 2);
         cache_fixture_sender_certificate(&t.alice, t.alice_id);
         let bob = t.bob_id.to_string();
-        let registration = alice.signal_service.session_registration_id(&bob, 1).unwrap();
         let gate = alice.group_gate().for_distribution(&t.channel_id).unwrap();
         let distribution = alice.create_sender_key_for_channel(&t.channel_id).await.unwrap();
         let (content, _) = alice.prepare_encrypted_content(
@@ -228,23 +249,44 @@
         ));
         assert!(probe.calls.lock().unwrap().is_empty());
 
-        // The recorder refuses every send. Repeated rejection leaves the
-        // cached token in place and cannot request identified endorsements.
+        // A new chain deposits to every account as AllDevices, including
+        // the sender's current device. Every envelope has the same wire size.
+        seed_tokens(alice, 9);
         alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
-        for path in ["SendSealedMessage", "SendGroupMessage", "SendGroupMessage"] {
+        let sealed_call = ("/chat.v1.MessageService/SendSealedMessage".to_owned(), false, true);
+        let group_call = ("/chat.v1.MessageService/SendGroupMessage".to_owned(), false, false);
+        for expected in [vec![sealed_call.clone(), sealed_call, group_call.clone()], vec![group_call]] {
             let result = alice.submit_group_request(&request, &distribution).await;
             assert!(matches!(
                 result,
                 Err(MessageError::Network(crate::error::NetworkError::ServerError(ref detail)))
                     if detail.contains("fixture reached")
             ), "{result:?}");
-            assert_eq!(
-                std::mem::take(&mut *probe.calls.lock().unwrap()),
-                [(format!("/chat.v1.MessageService/{path}"), false, false)]
-            );
-            // On the second submit Bob already holds our sender key.
-            alice.record_sender_key_holders(&t.channel_id, &bob, &reached(&[(1, registration)]));
+            assert_eq!(std::mem::take(&mut *probe.calls.lock().unwrap()), expected);
         }
+        let deposits = std::mem::take(&mut *probe.deposits.lock().unwrap());
+        assert_eq!(deposits.len(), 2);
+        let mut envelope_lengths = Vec::new();
+        for (recipient, devices) in [(t.alice_id, vec![1, 2]), (t.bob_id, vec![1])] {
+            let deposit = deposits.iter().find(|d| d.destination_user_id == recipient.to_string()).unwrap();
+            assert_eq!(deposit.delivery, pb::SealedDelivery::AllDevices as i32);
+            assert_eq!(deposit.messages.iter().map(|m| m.device_id).collect::<Vec<_>>(), devices);
+            envelope_lengths.extend(deposit.messages.iter().map(|m| m.sealed_message.as_ref().unwrap().sealed_body.len()));
+            let (remote, address, envelope) = if recipient == t.alice_id {
+                let echo = deposit.messages[0].sealed_message.as_ref().unwrap();
+                let local = crate::crypto::SignalStore::new(store.clone());
+                let usmc = libsignal_protocol::sealed_sender_decrypt_to_usmc(&echo.sealed_body, &local).await.unwrap();
+                assert_eq!(usmc.sender().unwrap().sender_uuid().unwrap(), t.alice_id.to_string());
+                assert_eq!(u32::from(usmc.sender().unwrap().sender_device_id().unwrap()), 1);
+                (&mut linked_remote, linked.clone(), deposit.messages[1].sealed_message.as_ref().unwrap())
+            } else {
+                (&mut bob_remote, protocol_address(t.bob_id, 1), deposit.messages[0].sealed_message.as_ref().unwrap())
+            };
+            let (plain, _) = open_fixture_sealed(remote, &original, &address, &envelope.sealed_body).await;
+            let content = chatter_proto::protovalidate::decode_inbound_content(&plain, "fixture SKDM").unwrap();
+            assert!(matches!(content.content, Some(chatter_proto::content_v1::content::Content::SenderKey(_))));
+        }
+        assert_eq!(envelope_lengths, vec![4190; 3]);
 
         alice.database.connection().unwrap().execute(
             "UPDATE peer_key_transparency SET state='unverified-inbound' WHERE account=?1",
@@ -261,7 +303,6 @@
             "UPDATE peer_key_transparency SET state='verified' WHERE account=?1",
             [&bob],
         ).unwrap();
-        seed_tokens(alice, 7);
         alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
         *probe.mismatch.lock().unwrap() = Some((bob.clone(), (7..=15).collect()));
         assert!(matches!(
@@ -304,64 +345,52 @@
         assert!(probe.calls.lock().unwrap().is_empty());
         assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
 
-        // A private post with linked devices saves its receipt transcript and
-        // can be flushed only after the independent delay.
-        cache_device(alice, &t.alice_id, 2, &mut rng).await;
+        // Empty and populated slots have the same observable RPC shape.
+        // An unconfirmed real slot keeps the row and creates no extra send.
+        alice.settings_repo.set_bytes(crate::storage::repositories::settings_repo::keys::PROFILE_KEY, &[3; 32]).unwrap();
+        alice.send_private_receipt_slot(t.alice_id).await.unwrap();
         let mut auth = alice.auth_client();
-        let before = chrono::Utc::now().timestamp();
         alice.sync_channel_receipt_targets(t.channel_id, 42, &mut auth, true).await;
-        let conn = alice.database.read_connection().unwrap();
-        let due: i64 = conn.query_row(
-            "SELECT json_extract(value,'$.due') FROM settings WHERE key LIKE 'private.receipt-sync:%'",
+        let row_count = || alice.database.read_connection().unwrap().query_row(
+            "SELECT count(*) FROM settings WHERE key LIKE 'private.receipt-sync:%'",
             [],
-            |row| row.get(0),
+            |row| row.get::<_, u32>(0),
         ).unwrap();
-        drop(conn);
-        assert!((before + 300..=chrono::Utc::now().timestamp() + 900).contains(&due));
-        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
-        assert!(probe.calls.lock().unwrap().is_empty());
-
-        let conn = alice.database.connection().unwrap();
-        conn.execute(
-            "UPDATE settings SET value=json_set(value,'$.due',0) WHERE key LIKE 'private.receipt-sync:%'",
-            [],
-        ).unwrap();
-        drop(conn);
-        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
-        assert!(probe.calls.lock().unwrap().is_empty(), "reserve must be kept");
-
-        let conn = alice.database.connection().unwrap();
-        conn.execute(
-            "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
-             VALUES ('receipt-1', x'fa', x'fb', x'fc', 'live', '0010'),
-                    ('receipt-2', x'fd', x'fe', x'ff', 'live', '0011')",
-            [],
-        ).unwrap();
-        drop(conn);
-        *probe.receipt_reply.lock().unwrap() = Some(Err(tonic::Status::deadline_exceeded("fixture timeout")));
+        assert_eq!(row_count(), 1);
+        *probe.receipt_error.lock().unwrap() = Some(tonic::Status::deadline_exceeded("fixture timeout"));
         assert!(matches!(
-            alice.flush_private_receipt_syncs(t.alice_id).await,
+            alice.send_private_receipt_slot(t.alice_id).await,
             Err(MessageError::Network(crate::error::NetworkError::Timeout))
         ));
-        let conn = alice.database.read_connection().unwrap();
-        let id: String = conn.query_row(
-            "SELECT json_extract(value,'$.request_id') FROM settings WHERE key LIKE 'private.receipt-sync:%'",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        assert!(uuid::Uuid::parse_str(&id).is_ok());
-        drop(conn);
-
-        *probe.receipt_reply.lock().unwrap() = Some(Ok(()));
-        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
+        assert_eq!(row_count(), 1);
+        alice.send_private_receipt_slot(t.alice_id).await.unwrap();
+        assert_eq!(row_count(), 0);
+        alice.send_private_receipt_slot(t.alice_id).await.unwrap();
         assert_eq!(
             std::mem::take(&mut *probe.calls.lock().unwrap()),
-            [("/chat.v1.MessageService/SendSealedMessage".into(), false, true),
-             ("/chat.v1.MessageService/SendSealedMessage".into(), false, true)],
+            vec![("/chat.v1.MessageService/SendSealedMessage".into(), false, false); 4],
         );
         assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
-        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
-        assert!(probe.calls.lock().unwrap().is_empty());
+
+        let receipts = std::mem::take(&mut *probe.deposits.lock().unwrap());
+        let ids: std::collections::HashSet<_> = receipts.iter().map(|d| d.client_request_id.as_str()).collect();
+        assert_eq!(ids.len(), 4);
+        for (index, receipt) in receipts.into_iter().enumerate() {
+            assert_eq!(receipt.destination_user_id, t.alice_id.to_string());
+            assert_eq!(receipt.delivery, pb::SealedDelivery::NamedDevices as i32);
+            assert_eq!(receipt.messages.len(), 1);
+            assert_eq!(receipt.messages[0].device_id, 2);
+            let body = &receipt.messages[0].sealed_message.as_ref().unwrap().sealed_body;
+            assert_eq!(body.len(), 8192);
+            let (plain, _) = open_fixture_sealed(&mut linked_remote, &original, &linked, body).await;
+            let content = chatter_proto::protovalidate::decode_inbound_content(&plain, "fixture receipt slot").unwrap();
+            use chatter_proto::content_v1::content::Content;
+            match (index, content.content) {
+                (0 | 3, Some(Content::NullMessage(_))) => {}
+                (1 | 2, Some(Content::SyncSent(sync))) => assert_eq!(sync.timestamp, 42),
+                other => panic!("unexpected receipt slot: {other:?}"),
+            }
+        }
         server.abort();
     }
 

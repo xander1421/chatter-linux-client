@@ -345,8 +345,7 @@ impl CoreServices {
             return Ok(0);
         }
         self.token_manager.request_tokens(
-            &mut self.grpc_pool.mailbox_client(),
-            &mut self.grpc_pool.anonymous_kt_client(),
+            &self.grpc_pool,
             count,
         ).await
     }
@@ -367,10 +366,8 @@ impl CoreServices {
                 if state.current_user_id.is_none() || state.session_ended {
                     continue;
                 }
-                let mut client = grpc_pool.mailbox_client();
-                let mut kt = grpc_pool.anonymous_kt_client();
                 match token_manager.request_tokens(
-                    &mut client, &mut kt, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
+                    &grpc_pool, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
                 ).await {
                     Ok(granted) => tracing::debug!(granted, "Scheduled credential batch received"),
                     Err(error) => trace_token_refill_failure(&error),
@@ -924,7 +921,7 @@ pub(crate) async fn initial_token_refill_sleep() {
 }
 
 fn credential_refill_clock() -> tokio::time::Interval {
-    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(2 * 60));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticks
 }
@@ -972,10 +969,10 @@ mod initial_token_refill_tests {
         use std::time::Duration;
         let mut ticks = super::credential_refill_clock();
         let first = ticks.tick().await;
-        tokio::time::advance(Duration::from_secs(25 * 60)).await;
-        assert_eq!(ticks.tick().await, first + Duration::from_secs(10 * 60));
+        tokio::time::advance(Duration::from_secs(5 * 60)).await;
+        assert_eq!(ticks.tick().await, first + Duration::from_secs(2 * 60));
         let mut next = std::pin::pin!(ticks.tick());
         assert!(futures::poll!(&mut next).is_pending());
-        assert_eq!(next.await, first + Duration::from_secs(30 * 60));
+        assert_eq!(next.await, first + Duration::from_secs(6 * 60));
     }
 }

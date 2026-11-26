@@ -344,7 +344,7 @@ impl MessageService {
     }
 
     /// Private channel transcripts leave on the background schedule, sealed
-    /// to our linked devices and authorized by a blind credential.
+    /// to our linked devices inside fixed-rate cover traffic.
     pub(super) async fn sync_channel_receipt_targets(
         &self,
         channel: ChannelId,
@@ -379,8 +379,7 @@ impl MessageService {
             let payload = serde_json::to_string(&sync.encode_to_vec())
                 .map_err(|error| MessageError::InvalidContent(error.to_string()))?;
             let key = format!("{PRIVATE_RECEIPT_SYNC}{owner}:{channel}:{sent_at}");
-            let at = chrono::Utc::now().timestamp();
-            let due = at + crate::app::core_services::jittered_delay().as_secs() as i64;
+            let due = chrono::Utc::now().timestamp();
             self.database.connection()?.execute(
                 "INSERT OR IGNORE INTO settings (key,value,updated_at)
                  VALUES (?1,json_object('payload',json(?2),'due',?3),?4)",
@@ -390,23 +389,13 @@ impl MessageService {
         Ok(())
     }
 
-    pub(super) async fn flush_private_receipt_syncs(&self, owner: UserId) -> Result<(), MessageError> {
-        let rows = {
-            let conn = self.database.read_connection()?;
-            let mut stmt = conn.prepare(
-                "SELECT key,json_extract(value,'$.payload')
-                 FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.due')<=?2
-                 ORDER BY json_extract(value,'$.due') LIMIT 32",
-            )?;
-            let rows = stmt.query_map(
-                rusqlite::params![format!("{PRIVATE_RECEIPT_SYNC}{owner}:%"), chrono::Utc::now().timestamp()],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )?;
-            rows.collect::<Result<Vec<_>, _>>()?
-        };
-        if rows.is_empty() {
-            return Ok(());
-        }
+    /// One slot on the linked-device cover clock. The destination, device
+    /// set, credential and sealed size are identical for transcripts and
+    /// dummy traffic. A failed slot never schedules an extra request.
+    pub(super) async fn send_private_receipt_slot(&self, owner: UserId) -> Result<(), MessageError> {
+        use chatter_proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage};
+        use crate::crypto::signal::sealed_sender::SealedBatchShape;
+
         let recipient = owner.to_string();
         let current_device = self.current_device_id_or_zero();
         let mut devices = self.signal_service.session_devices(&recipient).await
@@ -418,67 +407,50 @@ impl MessageService {
         {
             return Ok(());
         }
-        for (key, payload) in rows {
-            crate::state::send_session::check_send_session()?;
+        let Some(profile_key) = crate::services::profile_visibility::own_profile_key(&self.settings_repo) else {
+            return Ok(());
+        };
+        let access_key = crate::crypto::derive_uak(&profile_key);
+        let row = self.due_private_receipt(owner)?;
+        let mut completed = None;
+        let mut sealed = None;
+        if let Some((key, payload)) = row {
             let sync = serde_json::from_str::<Vec<u8>>(&payload).ok()
                 .and_then(|bytes| chatter_proto::content_v1::Content::decode(bytes.as_slice()).ok());
             if let Some(sync) = sync {
-                // A timeout can occur after delivery. Reuse the same server
-                // deduplication key with a fresh blind credential on retry.
-                let request_id: String = self.database.connection()?.query_row(
-                    "UPDATE settings SET value=json_set(value,'$.request_id',
-                         COALESCE(json_extract(value,'$.request_id'),?1)) WHERE key=?2
-                     RETURNING json_extract(value,'$.request_id')",
-                    rusqlite::params![uuid::Uuid::new_v4().to_string(), key],
-                    |row| row.get(0),
-                )?;
-                match self.send_private_receipt_sync(&recipient, &devices, &request_id, sync).await {
-                    Ok(()) => {}
-                    Err(MessageError::Network(NetworkError::AnonymousCredentialsUnavailable)) => break,
-                    Err(error @ MessageError::Network(NetworkError::NotFound(_))) => {
-                        tracing::warn!(%error, "Discarding permanently rejected private receipt sync");
-                    }
-                    Err(MessageError::Network(error))
-                        if error.is_retryable() || error.is_transport_error() || error.is_auth_error() =>
-                    {
-                        // Wait for the next maintenance tick and preserve the
-                        // remaining credentials if the route or issuer failed.
-                        return Err(error.into());
+                match self.signal_service.encrypt_cached_devices_bounded(
+                    &recipient, &devices, &sync.encode_to_vec(), None, SealedBatchShape::PrivateReceipt,
+                ).await {
+                    Ok(messages) => {
+                        sealed = Some(messages);
+                        completed = Some(key);
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "Private-channel receipt delivery deferred");
-                        continue;
+                        // An unencodable transcript must not cancel the
+                        // cover slot or keep later transcripts from sending.
+                        tracing::warn!(%error, "Private receipt transcript preparation deferred");
+                        let due = chrono::Utc::now().timestamp() + 15 * 60;
+                        self.database.connection()?.execute(
+                            "UPDATE settings SET value=json_set(value,'$.due',?1) WHERE key=?2",
+                            rusqlite::params![due, key],
+                        )?;
                     }
                 }
             } else {
                 tracing::warn!("Discarding unreadable private receipt sync");
+                self.database.connection()?.execute("DELETE FROM settings WHERE key=?1", [key])?;
             }
-            self.database.connection()?.execute("DELETE FROM settings WHERE key=?1", [key])?;
         }
-        Ok(())
-    }
-
-    async fn send_private_receipt_sync(
-        &self,
-        recipient: &str,
-        devices: &[u32],
-        request_id: &str,
-        mut sync: chatter_proto::content_v1::Content,
-    ) -> Result<(), MessageError> {
-        use chatter_proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage};
-
-        let token = self.token_manager.claim_budgeted_credential(
-            super::group_send::RESERVED_MAILBOX_CREDENTIALS,
-            |_| Ok(()),
-        )?;
-        Self::pad_content_to_bucket(&mut sync);
-        let sealed = self.signal_service
-            .encrypt_cached_devices_bounded(recipient, devices, &sync.encode_to_vec(), None)
-            .await
-            .map_err(|error| MessageError::from_signal_send(error, "Linked-device receipt sync"))?;
+        let sealed = match sealed {
+            Some(messages) => messages,
+            None => self.signal_service.encrypt_cached_devices_bounded(
+                &recipient, &devices, &super::dm::null_message_content().encode_to_vec(),
+                None, SealedBatchShape::PrivateReceipt,
+            ).await.map_err(|error| MessageError::from_signal_send(error, "Private receipt cover"))?,
+        };
         let server_key_id = self.signal_service.get_server_key_id();
         let timestamp = crate::util::time::TimestampNanos::now_anonymized().as_u64();
-        let messages = sealed.into_iter().map(|(device_id, message)| SealedDeviceMessage {
+        let mut messages: Vec<_> = sealed.into_iter().map(|(device_id, message)| SealedDeviceMessage {
             device_id,
             registration_id: message.registration_id,
             sealed_message: Some(SealedSenderMessage {
@@ -487,15 +459,33 @@ impl MessageService {
                 timestamp,
             }),
         }).collect();
+        messages.sort_unstable_by_key(|m| m.device_id);
         crate::state::send_session::check_send_session()?;
-        let response = self.grpc_pool.anonymous_message_client().send_with_anonymous_credential(
-            request_id, recipient, messages, SealedDelivery::NamedDevices,
-            0, &token.public_key, &token.signature,
+        // A fresh GUID in every slot keeps retries indistinguishable from
+        // dummy traffic. SyncSent applies idempotently by channel and original
+        // send timestamp even if an earlier slot arrived without its reply.
+        let response = self.grpc_pool.private_receipt_client().send_sealed_messages_with_uak(
+            &recipient, messages, SealedDelivery::NamedDevices,
+            &uuid::Uuid::new_v4().to_string(), &access_key,
         ).await?;
         if !response.success {
-            return Err(NetworkError::ServerError("Private receipt delivery was not acknowledged".into()).into());
+            return Err(NetworkError::ServerError("Private receipt slot was not acknowledged".into()).into());
+        }
+        if let Some(key) = completed {
+            self.database.connection()?.execute("DELETE FROM settings WHERE key=?1", [key])?;
         }
         Ok(())
+    }
+
+    fn due_private_receipt(&self, owner: UserId) -> Result<Option<(String, String)>, MessageError> {
+        use rusqlite::OptionalExtension as _;
+        Ok(self.database.read_connection()?.query_row(
+            "SELECT key,json_extract(value,'$.payload')
+             FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.due')<=?2
+             ORDER BY json_extract(value,'$.due'), key LIMIT 1",
+            rusqlite::params![format!("{PRIVATE_RECEIPT_SYNC}{owner}:%"), chrono::Utc::now().timestamp()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?)
     }
 
     pub fn message_receipts(

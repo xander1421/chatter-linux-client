@@ -316,15 +316,19 @@ impl MessageService {
             Default::default()
         };
         let own_device = self.current_device_id_or_zero();
+        let (own_registration, _) = self.signal_service.key_store.get_local_identity()?
+            .ok_or(NetworkError::Unavailable)?;
         let mut message_client = self.message_client();
         let mut distributed = std::collections::HashSet::new();
         for round in 0..=MAX_RECONCILE_ROUNDS {
             for member in &members {
-                let devices = self.signal_service.session_device_registrations(member).await
+                let mut devices = self.signal_service.session_device_registrations(member).await
                     .map_err(|e| MessageError::from_signal_send(e, "group sessions"))?;
+                if member == &me {
+                    devices.push((own_device, Some(own_registration)));
+                }
                 let missing: Vec<_> = devices.into_iter().filter(|(device, registration)| {
-                    (member != &me || *device != own_device)
-                        && !distributed.contains(&(member.clone(), *device))
+                    !distributed.contains(&(member.clone(), *device))
                         && !registration.is_some_and(|r| holders.contains(&(member.clone(), *device, r)))
                 }).collect();
                 if missing.is_empty() {
@@ -421,7 +425,8 @@ pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
     client: &std::sync::Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = std::sync::Arc::downgrade(client);
-    tokio::spawn(async move {
+    let receipt_client = weak.clone();
+    let endorsements = async move {
         crate::app::core_services::initial_token_refill_sleep().await;
         loop {
             {
@@ -436,15 +441,54 @@ pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
                         if let Err(error) = messages.refresh_private_endorsements(owner).await {
                             tracing::warn!(%error, "Private-channel endorsement refresh failed");
                         }
-                        if let Err(error) = messages.flush_private_receipt_syncs(owner).await {
-                            tracing::warn!(%error, "Private-channel receipt sync failed");
-                        }
                     }).await;
                 }
             }
             crate::app::core_services::jittered_sleep().await;
         }
+    };
+    let receipt_cover = async move {
+        crate::app::core_services::initial_token_refill_sleep().await;
+        let mut ticks = receipt_cover_clock();
+        loop {
+            ticks.tick().await;
+            let Some(client) = receipt_client.upgrade() else { break };
+            let state = client.auth_state().get();
+            if let Some(owner) = state.current_user_id.filter(|_| {
+                !state.session_ended && client.offline_state().connection_state().is_connected()
+            }) {
+                let session = crate::state::send_session::SendSession::capture(client.auth_state());
+                let messages = client.messages();
+                if let Err(error) = crate::state::send_session::SEND_SESSION
+                    .scope(session, messages.send_private_receipt_slot(owner)).await
+                {
+                    tracing::debug!(%error, "Private-channel receipt slot deferred");
+                }
+            }
+        }
+    };
+    tokio::spawn(async move {
+        tokio::join!(endorsements, receipt_cover);
     })
+}
+
+fn receipt_cover_clock() -> tokio::time::Interval {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(60));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticks
+}
+
+#[cfg(test)]
+#[tokio::test(start_paused = true)]
+async fn receipt_cover_clock_skips_missed_slots() {
+    use std::time::Duration;
+    let mut ticks = receipt_cover_clock();
+    let first = ticks.tick().await;
+    tokio::time::advance(Duration::from_secs(150)).await;
+    assert_eq!(ticks.tick().await, first + Duration::from_secs(60));
+    let mut next = std::pin::pin!(ticks.tick());
+    assert!(futures::poll!(&mut next).is_pending());
+    assert_eq!(next.await, first + Duration::from_secs(180));
 }
 
 fn distribution_position(
