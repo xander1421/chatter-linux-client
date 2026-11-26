@@ -451,6 +451,7 @@ async fn test_server_rejects_wrong_credentials() {
     tracing::info!("=== Starting test: server rejection of wrong credentials ===");
 
     let ctx = assert_ok(MailboxTestContext::new().await);
+    let mut mailbox_client = ctx.mailbox_client();
 
     // Request tokens and create a real mailbox
     let _ = ctx
