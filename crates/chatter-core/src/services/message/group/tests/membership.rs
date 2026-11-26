@@ -80,7 +80,6 @@
             cache_device, cache_fixture_sender_certificate, seed_tokens,
         };
         use rand::{SeedableRng, rngs::StdRng};
-        use prost::Message as _;
         use std::{
             collections::VecDeque, convert::Infallible, future::Ready, pin::Pin,
             sync::{Arc, Mutex}, task::{Context, Poll},
@@ -100,10 +99,26 @@
             }
         }
 
+        fn grpc_reply(response: impl prost::Message) -> http::Response<Body> {
+            let mut body = vec![0];
+            body.extend_from_slice(&(response.encoded_len() as u32).to_be_bytes());
+            response.encode(&mut body).unwrap();
+            let mut trailers = http::HeaderMap::new();
+            trailers.insert("grpc-status", "0".parse().unwrap());
+            http::Response::builder()
+                .header("content-type", "application/grpc")
+                .body(Body::new(GrpcFrames(VecDeque::from([
+                    http_body::Frame::data(body.into()),
+                    http_body::Frame::trailers(trailers),
+                ]))))
+                .unwrap()
+        }
+
         #[derive(Clone, Default)]
         struct Probe {
             calls: Arc<Mutex<Vec<(String, bool, bool)>>>,
             mismatch: Arc<Mutex<Option<(String, Vec<u32>)>>>,
+            receipt_reply: Arc<Mutex<Option<Result<(), tonic::Status>>>>,
         }
 
         #[derive(Clone)]
@@ -143,18 +158,20 @@
                             }],
                             ..Default::default()
                         };
-                        let mut body = vec![0];
-                        body.extend_from_slice(&(response.encoded_len() as u32).to_be_bytes());
-                        response.encode(&mut body).unwrap();
-                        let mut trailers = http::HeaderMap::new();
-                        trailers.insert("grpc-status", "0".parse().unwrap());
-                        return std::future::ready(Ok(http::Response::builder()
-                            .header("content-type", "application/grpc")
-                            .body(Body::new(GrpcFrames(VecDeque::from([
-                                http_body::Frame::data(body.into()),
-                                http_body::Frame::trailers(trailers),
-                            ]))))
-                            .unwrap()));
+                        return std::future::ready(Ok(grpc_reply(response)));
+                    }
+                }
+                if path.ends_with("/SendSealedMessage") {
+                    if let Some(result) = self.0.receipt_reply.lock().unwrap().take() {
+                        let response = match result {
+                            Ok(()) => grpc_reply(pb::SendSealedMessageResponse {
+                                success: true,
+                                delivered_to_devices: vec![2],
+                                ..Default::default()
+                            }),
+                            Err(status) => status.into_http(),
+                        };
+                        return std::future::ready(Ok(response));
                     }
                 }
                 std::future::ready(Ok(tonic::Status::aborted("fixture reached").into_http()))
@@ -316,14 +333,31 @@
         let conn = alice.database.connection().unwrap();
         conn.execute(
             "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
-             VALUES ('receipt', x'fa', x'fb', x'fc', 'live', '0010')",
+             VALUES ('receipt-1', x'fa', x'fb', x'fc', 'live', '0010'),
+                    ('receipt-2', x'fd', x'fe', x'ff', 'live', '0011')",
             [],
         ).unwrap();
         drop(conn);
+        *probe.receipt_reply.lock().unwrap() = Some(Err(tonic::Status::deadline_exceeded("fixture timeout")));
+        assert!(matches!(
+            alice.flush_private_receipt_syncs(t.alice_id).await,
+            Err(MessageError::Network(crate::error::NetworkError::Timeout))
+        ));
+        let conn = alice.database.read_connection().unwrap();
+        let id: String = conn.query_row(
+            "SELECT json_extract(value,'$.request_id') FROM settings WHERE key LIKE 'private.receipt-sync:%'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        drop(conn);
+
+        *probe.receipt_reply.lock().unwrap() = Some(Ok(()));
         alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
         assert_eq!(
             std::mem::take(&mut *probe.calls.lock().unwrap()),
-            [("/chat.v1.MessageService/SendSealedMessage".into(), false, true)],
+            [("/chat.v1.MessageService/SendSealedMessage".into(), false, true),
+             ("/chat.v1.MessageService/SendSealedMessage".into(), false, true)],
         );
         assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
         alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();

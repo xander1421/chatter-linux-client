@@ -412,7 +412,7 @@ impl MessageService {
         let mut devices = self.signal_service.session_devices(&recipient).await
             .map_err(|error| MessageError::from_signal_send(error, "Linked-device receipt sync"))?;
         devices.retain(|&device| device != current_device);
-        if !devices.is_empty() && self.signal_service.get_cached_sender_certificate()
+        if devices.is_empty() || self.signal_service.get_cached_sender_certificate()
             .map_err(|error| MessageError::from_signal_send(error, "Sender certificate"))?
             .is_none()
         {
@@ -422,15 +422,37 @@ impl MessageService {
             crate::state::send_session::check_send_session()?;
             let sync = serde_json::from_str::<Vec<u8>>(&payload).ok()
                 .and_then(|bytes| chatter_proto::content_v1::Content::decode(bytes.as_slice()).ok());
-            if let Some(sync) = sync.filter(|_| !devices.is_empty()) {
-                match self.send_private_receipt_sync(&recipient, &devices, sync).await {
+            if let Some(sync) = sync {
+                // A timeout can occur after delivery. Reuse the same server
+                // deduplication key with a fresh blind credential on retry.
+                let request_id: String = self.database.connection()?.query_row(
+                    "UPDATE settings SET value=json_set(value,'$.request_id',
+                         COALESCE(json_extract(value,'$.request_id'),?1)) WHERE key=?2
+                     RETURNING json_extract(value,'$.request_id')",
+                    rusqlite::params![uuid::Uuid::new_v4().to_string(), key],
+                    |row| row.get(0),
+                )?;
+                match self.send_private_receipt_sync(&recipient, &devices, &request_id, sync).await {
                     Ok(()) => {}
                     Err(MessageError::Network(NetworkError::AnonymousCredentialsUnavailable)) => break,
-                    Err(error) => tracing::warn!(%error, "Private-channel receipt delivery failed"),
+                    Err(error @ MessageError::Network(NetworkError::NotFound(_))) => {
+                        tracing::warn!(%error, "Discarding permanently rejected private receipt sync");
+                    }
+                    Err(MessageError::Network(error))
+                        if error.is_retryable() || error.is_transport_error() || error.is_auth_error() =>
+                    {
+                        // Wait for the next maintenance tick and preserve the
+                        // remaining credentials if the route or issuer failed.
+                        return Err(error.into());
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "Private-channel receipt delivery deferred");
+                        continue;
+                    }
                 }
+            } else {
+                tracing::warn!("Discarding unreadable private receipt sync");
             }
-            // Receipt transcripts use the same best-effort delivery as the
-            // immediate sync. The obligation survives restart and a dry pool.
             self.database.connection()?.execute("DELETE FROM settings WHERE key=?1", [key])?;
         }
         Ok(())
@@ -440,6 +462,7 @@ impl MessageService {
         &self,
         recipient: &str,
         devices: &[u32],
+        request_id: &str,
         mut sync: chatter_proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         use chatter_proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage};
@@ -465,10 +488,13 @@ impl MessageService {
             }),
         }).collect();
         crate::state::send_session::check_send_session()?;
-        self.grpc_pool.anonymous_message_client().send_with_anonymous_credential(
-            &uuid::Uuid::new_v4().to_string(), recipient, messages, SealedDelivery::NamedDevices,
+        let response = self.grpc_pool.anonymous_message_client().send_with_anonymous_credential(
+            request_id, recipient, messages, SealedDelivery::NamedDevices,
             0, &token.public_key, &token.signature,
         ).await?;
+        if !response.success {
+            return Err(NetworkError::ServerError("Private receipt delivery was not acknowledged".into()).into());
+        }
         Ok(())
     }
 
