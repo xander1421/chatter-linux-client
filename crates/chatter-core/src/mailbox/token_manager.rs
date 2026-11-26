@@ -69,6 +69,35 @@ fn grant_error(e: crate::error::NetworkError) -> MailboxError {
     }
 }
 
+// Hold the cached manifest stable across fetch, verification and replacement.
+static MANIFEST_REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+// The current RPC supplies a single manifest. An unknown, later current key
+// must pass the same inclusion and pinned-head checks as a first fetch.
+fn manifest_skipped_rotation(
+    cached: &GetBlindSignaturePublicKeyResponse,
+    offered: &GetBlindSignaturePublicKeyResponse,
+) -> Result<bool, MailboxError> {
+    if offered.key_id == cached.key_id && offered.public_key == cached.public_key {
+        return Ok(false);
+    }
+    if let Some(next) = &cached.next_key {
+        if offered.key_id == next.key_id && offered.public_key == next.public_key {
+            return Ok(false);
+        }
+        if offered.key_id != cached.key_id
+            && offered.key_id != next.key_id
+            && offered.valid_from > next.valid_from
+        {
+            return Ok(true);
+        }
+    }
+    tracing::warn!(target: "token_manifest::continuity", "manifest verification failed");
+    Err(MailboxError::InvalidServerKey(
+        "manifest current key contradicts the cached rotation schedule".into(),
+    ))
+}
+
 /// Token manager for blind-signed mailbox tokens.
 ///
 /// Handles the complete token lifecycle from server key retrieval through
@@ -104,6 +133,8 @@ impl TokenManager {
     ) -> Result<ServerPublicKey, MailboxError> {
         tracing::info!("TokenManager: refresh_server_key called");
 
+        let _refresh = MANIFEST_REFRESH.lock().await;
+
         // Check for cached valid key first
         tracing::info!("TokenManager: checking for cached server key...");
         if let Some(key) = self.get_cached_server_key()? {
@@ -116,6 +147,22 @@ impl TokenManager {
         } else {
             tracing::info!("TokenManager: no cached key found");
         }
+
+        let (cached, unreadable_cache) = match self.load_cached_manifest() {
+            Ok(Some(previous)) => {
+                // An expired manifest still commits to its successor.
+                if ServerPublicKey::authenticated_manifest_at(&previous, previous.valid_from)
+                    .is_ok()
+                {
+                    (Some(previous), false)
+                } else {
+                    (None, true)
+                }
+            }
+            Ok(None) => (None, false),
+            Err(MailboxError::InvalidServerKey(_)) => (None, true),
+            Err(err) => return Err(err),
+        };
 
         // Fetch new key from server with timeout to prevent hangs
         let settings = SettingsRepository::new(self.db.clone());
@@ -135,6 +182,9 @@ impl TokenManager {
                     tracing::error!("get_blind_signature_public_key failed: {}", e);
                     MailboxError::Network(e.to_string())
                 })?;
+                if let Some(previous) = &cached {
+                    manifest_skipped_rotation(previous, &response)?;
+                }
                 tracing::info!("Got blind signature public key from server");
                 Ok(response)
             },
@@ -142,24 +192,69 @@ impl TokenManager {
             |old, new| kt.get_consistency_proof(old, new),
         )
         .await?;
-        // Only authenticated keys populate the token-expiry join table.
-        self.store_server_key(&response.key_id, &response.public_key, response.valid_until)?;
-        if let Some(next) = &response.next_key {
-            self.store_server_key(&next.key_id, &next.public_key, next.valid_until)?;
-        }
-        let conn = self
+        let discontinuity = match cached.as_ref() {
+            Some(previous) if manifest_skipped_rotation(previous, &response)? => {
+                Some("skipped_rotation")
+            }
+            _ if unreadable_cache => Some("unreadable_cache"),
+            _ => None,
+        };
+        // Publish the authenticated key rows, manifest and recovery record together.
+        let mut conn = self
             .db
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', ?1, ?2)",
-            rusqlite::params![hex::encode(response.encode_to_vec()), Utc::now().to_rfc3339()])
+        let tx = conn
+            .transaction()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+        Self::store_server_key(
+            &tx,
+            &response.key_id,
+            &response.public_key,
+            response.valid_until,
+        )?;
+        if let Some(next) = &response.next_key {
+            Self::store_server_key(&tx, &next.key_id, &next.public_key, next.valid_until)?;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', ?1, ?2)",
+            rusqlite::params![hex::encode(response.encode_to_vec()), now],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        if let Some(reason) = discontinuity {
+            tx.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.manifest_discontinuity', ?1, ?2)",
+                rusqlite::params![reason, now],
+            )
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        }
+        tx.commit()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        if let Some(reason) = discontinuity {
+            tracing::warn!(target: "token_manifest::continuity", reason, "manifest recovered through pinned KT log");
+        }
         Ok(server_key)
     }
 
     /// Cached DER/expiry rows are never a source of trust; verify the signed
     /// manifest again on every load and use its authenticated activation times.
     pub fn get_cached_server_key(&self) -> Result<Option<ServerPublicKey>, MailboxError> {
+        let key = match self.load_cached_manifest() {
+            Ok(manifest) => manifest.as_ref().and_then(|m| ServerPublicKey::from_manifest(m).ok()),
+            Err(MailboxError::InvalidServerKey(_)) => None,
+            Err(error) => return Err(error),
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(u64::MAX);
+        Ok(key.filter(|k| k.valid_until.saturating_sub(now) > 3_600_000_000_000))
+    }
+
+    fn load_cached_manifest(
+        &self,
+    ) -> Result<Option<GetBlindSignaturePublicKeyResponse>, MailboxError> {
         let conn = self
             .db
             .connection()
@@ -175,30 +270,22 @@ impl TokenManager {
         let Some(encoded) = encoded else {
             return Ok(None);
         };
-        let manifest = hex::decode(encoded)
-            .ok()
-            .and_then(|b| GetBlindSignaturePublicKeyResponse::decode(b.as_slice()).ok());
-        let key = manifest
-            .as_ref()
-            .and_then(|m| ServerPublicKey::from_manifest(m).ok());
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(u64::MAX);
-        Ok(key.filter(|k| k.valid_until.saturating_sub(now) > 3_600_000_000_000))
+        let invalid = |e: &dyn std::fmt::Display| {
+            MailboxError::InvalidServerKey(format!("could not decode cached manifest: {e}"))
+        };
+        let bytes = hex::decode(encoded).map_err(|e| invalid(&e))?;
+        let manifest = GetBlindSignaturePublicKeyResponse::decode(bytes.as_slice())
+            .map_err(|e| invalid(&e))?;
+        Ok(Some(manifest))
     }
 
     /// Store a server public key in the database.
     fn store_server_key(
-        &self,
+        conn: &rusqlite::Connection,
         key_id: &str,
         public_key_der: &[u8],
         valid_until: u64,
     ) -> Result<(), MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
@@ -639,13 +726,29 @@ mod tests {
     #[test]
     fn unsigned_or_corrupted_cache_is_never_used_for_blinding() {
         let tm = TokenManager::new(test_db());
-        tm.store_server_key("unsigned", b"untrusted DER", i64::MAX as u64)
-            .unwrap();
+        TokenManager::store_server_key(
+            &tm.db.connection().unwrap(),
+            "unsigned",
+            b"untrusted DER",
+            i64::MAX as u64,
+        )
+        .unwrap();
         assert!(tm.get_cached_server_key().unwrap().is_none());
         let conn = tm.db.connection().unwrap();
         conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', 'corrupt', 'now')", []).unwrap();
         drop(conn);
         assert!(tm.get_cached_server_key().unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_manifest_propagates_storage_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("tokens.db"), "testpass").unwrap());
+        // An unmigrated database has no settings table.
+        assert!(matches!(
+            TokenManager::new(db).get_cached_server_key(),
+            Err(MailboxError::Storage(_))
+        ));
     }
 
     #[test]
@@ -670,6 +773,33 @@ mod tests {
         stripped.kt_proof = None;
         cache(&stripped);
         assert!(tm.get_cached_server_key().unwrap().is_none());
+    }
+
+    #[test]
+    fn manifest_continuity_distinguishes_skipped_rotations_from_contradictions() {
+        let mut cached = GetBlindSignaturePublicKeyResponse {
+            key_id: "current".into(),
+            public_key: vec![1],
+            next_key: Some(Default::default()),
+            ..Default::default()
+        };
+        let next = cached.next_key.as_mut().unwrap();
+        next.key_id = "next".into();
+        next.public_key = vec![2];
+        next.valid_from = 10;
+        let mut offered = cached.clone();
+        assert!(!manifest_skipped_rotation(&cached, &offered).unwrap());
+
+        offered.key_id = "next".into();
+        offered.public_key = vec![2];
+        assert!(!manifest_skipped_rotation(&cached, &offered).unwrap());
+
+        offered.public_key = vec![3];
+        assert!(manifest_skipped_rotation(&cached, &offered).is_err());
+        offered.key_id = "unannounced".into();
+        assert!(manifest_skipped_rotation(&cached, &offered).is_err());
+        offered.valid_from = 20;
+        assert!(manifest_skipped_rotation(&cached, &offered).unwrap());
     }
 
     #[test]
