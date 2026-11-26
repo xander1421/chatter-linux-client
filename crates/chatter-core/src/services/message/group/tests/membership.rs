@@ -290,6 +290,7 @@
         // can be flushed only after the independent delay.
         store_session(&t.alice, t.alice_id, 2, 1200).await;
         let mut auth = alice.auth_client();
+        let before = chrono::Utc::now().timestamp();
         alice.sync_channel_receipt_targets(t.channel_id, 42, &mut auth, true).await;
         let conn = alice.database.read_connection().unwrap();
         let due: i64 = conn.query_row(
@@ -298,7 +299,7 @@
             |row| row.get(0),
         ).unwrap();
         drop(conn);
-        assert!((299..=900).contains(&(due - chrono::Utc::now().timestamp())));
+        assert!((before + 300..=chrono::Utc::now().timestamp() + 900).contains(&due));
         alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
         assert!(probe.calls.lock().unwrap().is_empty());
         server.abort();

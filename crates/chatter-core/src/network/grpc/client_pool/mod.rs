@@ -386,14 +386,17 @@ mod tests {
         pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         pool.set_transport_mode(TransportMode::Onion).unwrap();
         let anonymous = pool.unidentified_channel();
+        let private_post = pool.private_post_channel();
         let secret = pool.secret_channel().unwrap();
         *pool.secret_health.write() = Some(std::time::Instant::now());
 
         pool.set_transport_mode(TransportMode::Direct).unwrap();
         assert!(!anonymous.is_current());
+        assert!(!private_post.is_current());
         assert!(!secret.is_current());
         assert!(pool.secret_health.read().is_none());
         assert!(pool.unidentified_channel().is_current());
+        assert!(pool.private_post_channel().is_current());
     }
 
     /// A direct-URL change while on onion (the sign-in form re-applies its
