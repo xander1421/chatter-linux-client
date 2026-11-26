@@ -1,4 +1,7 @@
 use super::*;
+use chatter_mesh_store::courier::CourierReceiptSupport;
+
+use super::super::chatter_hello::COURIER_RECEIPTS;
 
 impl BleRuntime {
     // ----------------------------------------------------------------- helpers
@@ -10,10 +13,20 @@ impl BleRuntime {
         now_s: u64,
         ingress: AnnounceIngress,
     ) {
-        let envelopes = self
-            .couriers
-            .take_envelopes(recipient_key, now_s, ingress)
-            .unwrap_or_default();
+        let support = self.state.with(|state| match state.chatter_hello.get(peer) {
+            Some(hello) if hello.capabilities & COURIER_RECEIPTS != 0 => {
+                CourierReceiptSupport::Supported
+            }
+            Some(_) => CourierReceiptSupport::Unsupported,
+            None => CourierReceiptSupport::Unknown,
+        });
+        let envelopes = match self.couriers.offer_envelopes(recipient_key, now_s, ingress) {
+            Ok(envelopes) => envelopes,
+            Err(error) => {
+                tracing::warn!(target: "mesh::ble", %error, "courier offers unavailable");
+                return;
+            }
+        };
         for envelope in envelopes {
             let Ok(payload) = envelope.encode() else {
                 continue;
@@ -24,7 +37,11 @@ impl BleRuntime {
                 payload,
                 chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
             );
-            self.transmit(&packet, Some(peer), None).await;
+            if self.transmit(&packet, Some(peer), None).await
+                && let Err(error) = self.couriers.record_offer(&envelope, support, now_s)
+            {
+                tracing::warn!(target: "mesh::ble", %error, "courier offer could not be recorded");
+            }
         }
     }
 
@@ -55,30 +72,26 @@ impl BleRuntime {
         message_id: &str,
         content: &str,
         timestamp_ms: u64,
-    ) {
-        let nickname = self
-            .state
-            .with(|state| state.peers.nickname(peer, false).map(str::to_string))
-            .unwrap_or_else(|| peer.as_str().to_string());
-        let verified = self
+    ) -> bool {
+        let mut message = self.signal_dm_message(peer, message_id, content, timestamp_ms);
+        message.sender_verified = self
             .state
             .with(|state| state.peers.info(peer).is_some_and(|p| p.verified_nickname));
-        let inbound = InboundMessage {
-            wire_id: message_id.to_string(),
-            conversation: MeshConversation::Dm(peer.clone()),
-            sender: peer.clone(),
-            nickname: nickname.clone(),
-            content: content.to_string(),
-            timestamp_ms,
-        };
-        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
-            message: inbound.to_domain(),
-            conversation: inbound.conversation,
-            sender: peer.clone(),
-            nickname,
-            is_local: false,
-            sender_verified: verified,
-        })));
+        match self.events.persist_received_dm(&message) {
+            Ok(inserted) => {
+                if inserted {
+                    self.events.publish_received_dm(message);
+                }
+                true
+            }
+            Err(error) => {
+                if !self.events.peer_blocked(peer) {
+                    tracing::error!(target: "mesh", %error, "a mesh DM could not be stored; it is live-only");
+                    self.events.publish_received_dm(message);
+                }
+                false
+            }
+        }
     }
 
     pub(super) fn signal_dm_message(

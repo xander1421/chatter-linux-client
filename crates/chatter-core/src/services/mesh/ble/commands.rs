@@ -7,9 +7,6 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
     ) {
-        let Ok(request) = RequestSyncPacket::decode(&packet.payload) else {
-            return;
-        };
         let (announced, authenticated) = self.state.with(|state| {
             let announced = (state.links.peer_for(link) == Some(claimed)
                 || state.links.discovery_peer_for(link) == Some(claimed))
@@ -22,6 +19,9 @@ impl BleRuntime {
         if !announced && !authenticated {
             return;
         }
+        let Ok(request) = RequestSyncPacket::decode(&packet.payload) else {
+            return;
+        };
 
         let sends = self
             .gossip

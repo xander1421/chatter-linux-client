@@ -1,6 +1,10 @@
 use super::*;
+use chatter_mesh::tlv::courier_envelope::courier_receipt_id;
 use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
 
+use super::super::chatter_hello::COURIER_RECEIPTS;
+
+pub(super) const COURIER_RECEIPT_MAGIC: &[u8; 8] = b"CHTRCRP1";
 const SIGNING_BINDING_MAGIC: &[u8; 8] = b"CHTRNSB1";
 pub(super) const SIGNING_BINDING_REQUEST: &[u8; 8] = b"CHTRNSR1";
 pub(super) const SIGNING_PIN_INTENT_MS: u64 = 300_000;
@@ -76,21 +80,32 @@ impl BleRuntime {
             }
         }
 
-        if step.established.is_some() {
+        if let Some(recipient_key) = step.established {
             self.state.with(|state| {
                 state.dm_handshake_at_ms.remove(claimed);
                 state.known_peer_reopen_attempts.remove(claimed);
                 state.chatter_hello.forget_live(claimed);
                 state.pending_bindings.remove(claimed);
             });
-            // The handshake authenticated `claimed`'s static key (the session
-            // manager refuses one that does not derive the ID), and it finished
-            // on this link: that is the per-link proof courier handover needs.
-            if self
-                .state
-                .with(|state| state.links.mark_noise_authenticated(link, claimed))
-            {
+            // Only a direct handshake can authenticate this physical link.
+            let direct = packet.ttl == chatter_mesh::relay::MESSAGE_TTL_DEFAULT
+                && self.state.with(|state| state.links.mark_noise_authenticated(link, claimed));
+            if direct {
                 self.prune_duplicate_links(claimed, now_millis()).await;
+                let announced_key_matches = self.state.with(|state| {
+                    state.peers.info(claimed).is_some_and(|peer| {
+                        peer.noise_public_key.as_deref() == Some(recipient_key.as_slice())
+                    })
+                });
+                if announced_key_matches {
+                    self.hand_over_courier_mail(
+                        claimed,
+                        &recipient_key,
+                        now_secs(),
+                        AnnounceIngress::verified_direct_on_authenticated_link(),
+                    )
+                    .await;
+                }
             }
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.
@@ -204,10 +219,22 @@ impl BleRuntime {
 
         // The link carried traffic only this peer's session key could produce.
         self.state.with(|state| {
-            if state.links.peer_for(link) == Some(claimed) {
+            if packet.ttl == chatter_mesh::relay::MESSAGE_TTL_DEFAULT
+                && state.links.peer_for(link) == Some(claimed)
+            {
                 state.links.mark_noise_authenticated(link, claimed);
             }
         });
+
+        if let Some(receipt) = plaintext.strip_prefix(COURIER_RECEIPT_MAGIC) {
+            let Ok(receipt) = <&[u8; 32]>::try_from(receipt) else { return };
+            if let Some(key) = self.state.with(|state| state.sessions.remote_static(claimed))
+                && let Err(error) = self.couriers.acknowledge_delivery(&key, receipt, now_secs())
+            {
+                tracing::warn!(target: "mesh::ble", %error, "courier receipt could not retire mail");
+            }
+            return;
+        }
 
         if let Some(hello) = ChatterHello::decode(&plaintext) {
             let can_bind = hello.compatible()
@@ -227,9 +254,19 @@ impl BleRuntime {
                     return;
                 }
             }
-            self.state.with(|state| {
-                state.chatter_hello.accept(claimed, hello);
+            let supports_receipts = hello.capabilities & COURIER_RECEIPTS != 0;
+            let recipient_key = self.state.with(|state| {
+                if state.chatter_hello.accept(claimed, hello) {
+                    state.sessions.remote_static(claimed)
+                } else {
+                    None
+                }
             });
+            if let Some(key) = recipient_key
+                && let Err(error) = self.couriers.resolve_receipt_support(&key, supports_receipts, now_secs())
+            {
+                tracing::warn!(target: "mesh::ble", %error, "courier receipt support could not be recorded");
+            }
             tracing::info!(target: "mesh::ble", peer = %claimed, signal_capable, "Chatter Hello accepted");
             if can_bind {
                 self.send_mesh_signing_binding(claimed).await;
@@ -477,14 +514,15 @@ impl BleRuntime {
                 let Ok(message) = PrivateMessagePacket::decode(body) else {
                     return;
                 };
-                self.emit_dm(
+                if self.emit_dm(
                     claimed,
                     &message.message_id,
                     &message.content,
                     packet.timestamp,
-                );
-                self.send_ack(claimed, &message.message_id, NoisePayloadType::Delivered)
-                    .await;
+                ) {
+                    self.send_ack(claimed, &message.message_id, NoisePayloadType::Delivered)
+                        .await;
+                }
             }
             NoisePayloadType::Delivered => self.forward_ack(claimed, body, AckKind::Delivered),
             NoisePayloadType::ReadReceipt => self.forward_ack(claimed, body, AckKind::Read),
@@ -710,7 +748,7 @@ impl BleRuntime {
             .then(|| self.signal_dm_message(claimed, &wire_id, &plain.text, timestamp));
         if signal_message
             .as_ref()
-            .is_some_and(|message| self.events.persist_signal_received(message).is_err())
+            .is_some_and(|message| self.events.persist_received_dm(message).is_err())
         {
             let _ = self
                 .binding_store
@@ -731,7 +769,7 @@ impl BleRuntime {
             return false;
         };
         if let Some(message) = signal_message {
-            self.events.publish_signal_received(message);
+            self.events.publish_received_dm(message);
         }
         let reply = match plain.kind {
             signal_mesh::PlainKind::Text => {
@@ -790,6 +828,9 @@ impl BleRuntime {
         let Ok(envelope) = CourierEnvelope::decode(&packet.payload) else {
             return;
         };
+        if envelope.is_expired(now_millis()) {
+            return;
+        }
 
         // Is it ours? Only the seal can answer that — the recipient tag rotates
         // and is a hint, not proof.
@@ -799,27 +840,32 @@ impl BleRuntime {
             &self.identity,
             now_millis(),
         ) {
-            if let Some(carrier) = plaintext.strip_prefix(b"CSM1") {
-                let sender = PeerId::from_noise_key(&sender_key);
+            let sender = PeerId::from_noise_key(&sender_key);
+            let delivered = if let Some(carrier) = plaintext.strip_prefix(b"CSM1") {
                 if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device()
                     && self.binding_store.verified_noise_key(&owner, &sender).ok()
                         == Some(Some(sender_key))
                 {
-                    self.process_signal_carrier(carrier, &sender, packet.timestamp, false)
-                        .await;
+                    self.process_signal_carrier(carrier, &sender, packet.timestamp, false).await
+                } else {
+                    false
                 }
-                return;
-            }
-            if let Some((NoisePayloadType::PrivateMessage, body)) = decode_noise_payload(&plaintext)
+            } else if let Some((NoisePayloadType::PrivateMessage, body)) = decode_noise_payload(&plaintext)
                 && let Ok(message) = PrivateMessagePacket::decode(body)
             {
-                let sender = PeerId::from_noise_key(&sender_key);
                 self.emit_dm(
                     &sender,
                     &message.message_id,
                     &message.content,
                     packet.timestamp,
-                );
+                )
+            } else {
+                false
+            };
+            if delivered {
+                let id = courier_receipt_id(&envelope.ciphertext);
+                let receipt = [COURIER_RECEIPT_MAGIC.as_slice(), &id].concat();
+                self.send_private_control(claimed, &receipt).await;
             }
             return;
         }

@@ -20,8 +20,8 @@
 //! - **The courier pool is bounded** per depositor and in total, and only
 //!   signature-verified peers may deposit. A full pool refuses new mail rather
 //!   than evicting what it already carries.
-//! - **Couriers never multiply mail.** The store is deposit and take only: no
-//!   spray to other couriers, no speculative relayed handover.
+//! - **Couriers retain mail through handover.** The intended recipient's Noise
+//!   receipt retires the durable copy. Until then it can be offered again or expire.
 //! - **Handover requires an authenticated ingress link**, not merely a session for
 //!   the claimed peer ID — a session outlives its link, and a replayed announce can
 //!   rebind that ID to someone else's link.

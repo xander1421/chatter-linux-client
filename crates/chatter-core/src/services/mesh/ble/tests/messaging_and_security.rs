@@ -316,11 +316,13 @@ async fn a_send_past_the_rekey_threshold_opens_one_renegotiation() {
     assert!(state.with(|inner| inner.sessions.is_handshaking(&peer)));
 }
 
-/// Courier mail is released only on a link that proved the recipient's key
-/// itself. A peer-level session used to suffice, which is exactly the state a
-/// replayed announce rebinding an attacker's link produces.
 #[tokio::test]
-async fn courier_mail_waits_for_a_handshake_on_the_announcing_link() {
+async fn courier_handover_requires_direct_link_and_authenticated_receipt() {
+    check_courier_handover(false).await;
+    check_courier_handover(true).await;
+}
+
+async fn check_courier_handover(direct: bool) {
     use chatter_mesh::tlv::courier_envelope::{epoch_day, recipient_tag};
 
     let (mut runtime, radio, state) = runtime();
@@ -431,18 +433,42 @@ async fn courier_mail_waits_for_a_handshake_on_the_announcing_link() {
         m2,
         chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
     );
-    runtime.on_handshake(&link, &reply, &peer).await;
-    assert!(state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)));
-
-    // The next announce on the proved link releases the mail.
-    assert!(
-        runtime
-            .on_announce(&link, &announce(now_millis() + 1), &peer)
-            .await
-    );
+    if direct {
+        runtime.on_packet(&link, reply).await;
+    } else {
+        for mut fragment in chatter_mesh::fragment::plan_fragments(&reply, 128, [1; 8]).unwrap() {
+            fragment.ttl -= 1;
+            runtime.on_packet(&link, fragment).await;
+        }
+    }
     runtime.drain_writes().await;
+    assert_eq!(state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)), direct);
+    assert_eq!(sent(&radio, MessageType::CourierEnvelope).len(), usize::from(direct));
+
+    let handshake = sent(&radio, MessageType::NoiseHandshake);
+    remote.on_handshake(&local_peer, &peer, &peer_identity, &handshake.last().unwrap().payload).unwrap();
+    if !direct {
+        // Even if a stale route hands the envelope to a relay, sending alone
+        // cannot remove the durable copy.
+        runtime.hand_over_courier_mail(&peer, &recipient, now_s, AnnounceIngress::verified_direct_on_authenticated_link()).await;
+        runtime.drain_writes().await;
+    }
     assert_eq!(sent(&radio, MessageType::CourierEnvelope).len(), 1);
+    assert!(runtime.couriers.carries_for(&recipient, now_s));
+
+    let receipt_id = chatter_mesh::tlv::courier_envelope::courier_receipt_id(&envelope.ciphertext);
+    let receipt = [super::secure_ingress::COURIER_RECEIPT_MAGIC.as_slice(), &receipt_id].concat();
+    let packet = BitchatPacket::new(
+        MessageType::NoiseEncrypted,
+        peer.to_routing_bytes().unwrap(),
+        local_peer.to_routing_bytes(),
+        now_millis(),
+        remote.encrypt(&local_peer, &receipt).unwrap(),
+        chatter_mesh::relay::MESSAGE_TTL_DEFAULT - 1,
+    );
+    runtime.on_packet(&link, packet).await;
     assert!(!runtime.couriers.carries_for(&recipient, now_s));
+    assert_eq!(state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)), direct);
 }
 
 #[tokio::test]
@@ -911,6 +937,8 @@ async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
         }
         other => panic!("expected the DM, got {other:?}"),
     }
+    runtime.on_courier_envelope(&packet, &sender.peer_id()).await;
+    assert!(events.try_recv().is_err(), "the second courier copy has the same message ID");
     // Consumed: the next refresh changes the set (so it is saved and
     // republished under a newer stamp) and the bundle no longer offers it.
     assert!(state.with(|inner| {

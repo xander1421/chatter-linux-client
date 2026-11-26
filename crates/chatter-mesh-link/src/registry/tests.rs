@@ -257,11 +257,11 @@ fn discovery_hints_do_not_bind_or_protect_a_peer_until_noise_proof() {
 #[test]
 fn noise_proof_requires_the_binding_to_agree() {
     let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
+    assert!(store.mark_noise_authenticated(&link("l1"), &peer(0xAA)));
     // A proof from a peer the link is not bound to (a relayed handshake)
     // authenticates nothing on it.
-    store.mark_noise_authenticated(&link("l1"), &peer(0xBB));
+    assert!(!store.mark_noise_authenticated(&link("l1"), &peer(0xBB)));
     assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xBB)));
-    store.mark_noise_authenticated(&link("l1"), &peer(0xAA));
     assert!(store.is_noise_authenticated(&link("l1"), &peer(0xAA)));
 
     let _ = store.link_down(&link("l1"));

@@ -320,9 +320,7 @@ async fn a_sync_request_from_a_peer_that_never_announced_is_not_answered() {
     );
 
     let before = radio.write_count();
-    runtime
-        .on_request_sync(&LinkId::new("/mock/stranger"), &packet, &stranger)
-        .await;
+    runtime.on_request_sync(&link, &packet, &stranger).await;
     runtime.drain_writes().await;
 
     assert_eq!(
@@ -333,7 +331,7 @@ async fn a_sync_request_from_a_peer_that_never_announced_is_not_answered() {
 }
 
 #[tokio::test]
-async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
+async fn sync_requests_require_the_claimed_peers_own_link() {
     // The gate must not break sync itself: an honest peer announces on
     // connect and then asks, and that request has to be served or two
     // devices in a room never exchange history at all.
@@ -366,6 +364,7 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
     });
     runtime.on_packet(&link, announce).await;
     runtime.drain_writes().await;
+    assert!(runtime.gossip.has_announcement(&subject_peer));
 
     let mut request = RequestSyncPacket::new(19, 4096, Vec::new());
     request.types = Some(u64::MAX);
@@ -444,15 +443,41 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
         runtime.matching_signing_key(&author_id, &history, None),
         Some(author.signing_public())
     );
+    let unbound = LinkId::new("/mock/unbound-sync");
+    let other_bound = LinkId::new("/mock/other-sync");
+    state.with(|inner| {
+        for ingress in [&unbound, &other_bound] {
+            inner.links.link_up(ingress.clone(), LinkRole::Central);
+            inner.links.set_writable(ingress, true);
+            inner.max_write.insert(ingress.clone(), 512);
+        }
+        inner.links.bind_if_unbound(&other_bound, &PeerId::from_str("cccccccccccccccc"));
+    });
+
     let before = radio.write_count();
-    runtime.on_request_sync(&link, &packet, &subject_peer).await;
+    // The refusals leave the real peer's eight-response budget untouched.
+    for index in 0..8u8 {
+        let mut request = packet.clone();
+        request.timestamp += u64::from(index) + 1;
+        runtime.on_packet(&unbound, request.clone()).await;
+        for fragment in chatter_mesh::fragment::plan_fragments(&request, 24, [index; 8]).unwrap() {
+            runtime.on_packet(&other_bound, fragment).await;
+        }
+    }
+    runtime.drain_writes().await;
+    assert_eq!(radio.write_count(), before);
+
+    runtime.on_packet(&link, packet.clone()).await;
     runtime.drain_writes().await;
 
     let replies: Vec<_> = radio
         .writes()
         .iter()
         .skip(before)
-        .map(|(_, bytes)| codec::decode(bytes).unwrap())
+        .map(|(destination, bytes)| {
+            assert_eq!(destination, &link);
+            codec::decode(bytes).unwrap()
+        })
         .collect();
     assert_eq!(replies.len(), 2, "only public history and its author's key");
     assert_eq!(replies[0].message_type(), Some(MessageType::Announce));
@@ -504,6 +529,25 @@ async fn rejected_announces_do_not_use_the_new_candidate_budget() {
     }
     packet.signature = signature;
     assert!(runtime.on_announce(&link, &packet, &peer).await);
+}
+
+#[tokio::test]
+async fn out_of_order_link_local_fragments_never_enter_the_gossip_store() {
+    let (mut runtime, _radio, state) = runtime();
+    let link = LinkId::new("/mock/out-of-order");
+    state.with(|inner| inner.links.link_up(link.clone(), LinkRole::Central));
+    let request = RequestSyncPacket::new(19, 4096, (0..160).collect());
+    let packet = BitchatPacket::new(
+        MessageType::RequestSync, [0xAC; 8], None, now_millis(),
+        request.encode().unwrap(), chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+    );
+    let fragments = chatter_mesh::fragment::plan_fragments(&packet, 48, [5; 8]).unwrap();
+    assert!(fragments.len() > 1);
+    for mut fragment in fragments.into_iter().rev() {
+        fragment.payload[12] = MessageType::Message.as_u8();
+        runtime.on_packet(&link, fragment).await;
+        assert_eq!(runtime.gossip.fragment_count(), 0);
+    }
 }
 
 #[tokio::test]

@@ -82,6 +82,14 @@ pub struct FragmentHeader {
 }
 
 impl FragmentHeader {
+    pub fn may_forward(packet: &BitchatPacket) -> bool {
+        Self::parse(packet).is_ok_and(|(header, chunk)| {
+            !matches!(MessageType::from_u8(header.original_type), Some(MessageType::RequestSync | MessageType::Fragment))
+                // The encoded inner packet begins with its version and type.
+                && (header.index != 0 || chunk.get(1) == Some(&header.original_type))
+        })
+    }
+
     /// Reads the header from a fragment packet, returning it with the chunk that
     /// follows.
     ///
@@ -195,20 +203,37 @@ pub fn pads_ble_frame(msg_type: u8) -> bool {
     )
 }
 
-/// A reassembly is identified by sender *and* stream ID: two peers picking the
-/// same random 8-byte ID must not collide into one buffer.
+/// Track conflicting counts and types in separate bounded reassemblies. An
+/// unverified fragment cannot reserve those fields for the rest of a stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct StreamKey {
     sender: [u8; SENDER_ID_LEN],
     id: [u8; 8],
+    total: u16,
+    original_type: u8,
+}
+
+impl StreamKey {
+    fn new(packet: &BitchatPacket, header: FragmentHeader) -> Self {
+        Self {
+            sender: packet.sender_id,
+            id: header.fragment_id,
+            total: header.total,
+            original_type: header.original_type,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-struct Assembly {
-    /// `total` from the fragment that opened the stream.
-    total: u16,
-    /// Type of the packet being reassembled, for loss attribution.
-    original_type: u8,
+struct HeldFragment<T> {
+    ingress: T,
+    packet: BitchatPacket,
+    bytes: usize,
+    authenticated_sender: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Assembly<T> {
     /// When the stream opened. Drives expiry.
     started_at: u64,
     /// Whether this stream reassembles a broadcast packet. Only broadcast
@@ -217,7 +242,9 @@ struct Assembly {
     is_broadcast: bool,
     /// When a *new* index last landed. Drives stall detection.
     last_fragment_at: u64,
-    chunks: BTreeMap<u16, Vec<u8>>,
+    chunks: BTreeMap<u16, HeldFragment<T>>,
+    framed_bytes: usize,
+    held_bytes: usize,
 }
 
 /// A reassembly dropped by [`FragmentAssembler::evict_expired`], and how close it
@@ -237,14 +264,26 @@ pub struct ExpiredStream {
 }
 
 /// Bounded inbound fragment reassembly.
-#[derive(Clone, Debug, Default)]
-pub struct FragmentAssembler {
-    streams: HashMap<StreamKey, Assembly>,
+#[derive(Clone, Debug)]
+pub struct FragmentAssembler<T = ()> {
+    streams: HashMap<StreamKey, Assembly<T>>,
     completed: HashMap<StreamKey, u64>,
     held_bytes: usize,
 }
 
-impl FragmentAssembler {
+pub struct FragmentReception<T> {
+    pub reassembled: Option<Vec<u8>>,
+    pub forwards: Vec<(T, BitchatPacket)>,
+    pub ttl: u8,
+}
+
+impl<T> Default for FragmentAssembler<T> {
+    fn default() -> Self {
+        Self { streams: HashMap::new(), completed: HashMap::new(), held_bytes: 0 }
+    }
+}
+
+impl<T: Clone> FragmentAssembler<T> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -271,23 +310,26 @@ impl FragmentAssembler {
     /// Errors: a malformed header, or a stream whose projected size exceeds its
     /// limit — in which case the whole stream is dropped, matching
     /// `AppendResult.oversized`.
-    pub fn accept(
+    /// Forwarding waits for index zero to establish the actual encoded type.
+    /// Each released fragment keeps the ingress of its original arrival.
+    pub fn receive(
         &mut self,
         packet: &BitchatPacket,
+        ingress: T,
+        ingress_heap_bytes: usize,
+        authenticated_sender: bool,
         now_unix_secs: u64,
-    ) -> Result<Option<Vec<u8>>, MeshError> {
+    ) -> Result<FragmentReception<T>, MeshError> {
+        let mut reception = FragmentReception { reassembled: None, forwards: Vec::new(), ttl: packet.ttl };
         let (header, chunk) = FragmentHeader::parse(packet)?;
-        let key = StreamKey {
-            sender: packet.sender_id,
-            id: header.fragment_id,
-        };
+        let key = StreamKey::new(packet, header);
         // Fragments bypass packet deduplication. Once a stream completes, a
         // delayed copy of any index must not start another partial assembly and
         // later report a packet loss that never occurred. The short retention
         // also allows a sender to retry the same packet after the window.
-        if let Some(completed_at) = self.completed.get(&key).copied() {
+        if let Some(&completed_at) = self.completed.get(&key) {
             if now_unix_secs.saturating_sub(completed_at) <= FRAGMENT_LIFETIME_SECS {
-                return Ok(None);
+                return Ok(reception);
             }
             self.completed.remove(&key);
         }
@@ -302,38 +344,38 @@ impl FragmentAssembler {
             self.streams.insert(
                 key,
                 Assembly {
-                    total: header.total,
-                    original_type: header.original_type,
                     started_at: now_unix_secs,
                     is_broadcast,
                     last_fragment_at: now_unix_secs,
                     chunks: BTreeMap::new(),
+                    framed_bytes: 0,
+                    held_bytes: 0,
                 },
             );
         }
 
+        let Some(assembly) = self.streams.get(&key) else {
+            return Ok(reception);
+        };
+        let previous = assembly.chunks.get(&header.index);
+        // A fragment arriving directly on its authenticated sender's link
+        // can correct a tentative fragment that arrived by relay.
+        if previous.is_some_and(|held| held.authenticated_sender || !authenticated_sender) {
+            return Ok(reception);
+        }
+        let same_payload = previous.is_some_and(|held| held.packet.payload == packet.payload);
+        let previous_size = previous.map_or(0, |held| held.bytes);
+        let previous_chunk_size =
+            previous.map_or(0, |held| held.packet.payload.len() - FRAGMENT_HEADER_LEN);
         let limit = assembly_limit(header.original_type);
-        let (held, replaced) = self
-            .streams
-            .get(&key)
-            .map(|assembly| {
-                (
-                    assembly.chunks.values().map(Vec::len).sum::<usize>(),
-                    assembly.chunks.get(&header.index).map_or(0, Vec::len),
-                )
-            })
-            .unwrap_or((0, 0));
-        let projected = held.saturating_sub(replaced).saturating_add(chunk.len());
+        let projected = assembly.framed_bytes - previous_chunk_size + chunk.len();
         if projected > limit {
             self.remove_stream(&key);
-            return Err(MeshError::LengthExceeded {
-                declared: projected,
-                max: limit,
-            });
+            return Err(MeshError::LengthExceeded { declared: projected, max: limit });
         }
 
-        let added = chunk.len().saturating_sub(replaced);
-        while self.held_bytes.saturating_add(added) > MAX_IN_FLIGHT_BYTES {
+        let bytes = Self::fragment_bytes(packet, ingress_heap_bytes);
+        while (self.held_bytes - previous_size).saturating_add(bytes) > MAX_IN_FLIGHT_BYTES {
             let oldest = self
                 .streams
                 .iter()
@@ -351,37 +393,40 @@ impl FragmentAssembler {
         }
 
         let Some(assembly) = self.streams.get_mut(&key) else {
-            // Unreachable: inserted above when absent. Handled as a drop rather
-            // than a panic, because this crate never panics on radio input.
-            return Ok(None);
+            return Ok(reception);
         };
-
-        // Only real progress resets the stall clock: fragments bypass the packet
-        // deduplicator, so a relayed duplicate of an index we already hold must
-        // not keep suppressing the targeted REQUEST_SYNC for a stalled stream.
-        let is_new_index = assembly
-            .chunks
-            .insert(header.index, chunk.to_vec())
-            .is_none();
-        self.held_bytes = self
-            .held_bytes
-            .saturating_sub(replaced)
-            .saturating_add(chunk.len());
-        if is_new_index {
+        assembly.chunks.insert(header.index, HeldFragment {
+            ingress,
+            packet: packet.clone(),
+            bytes,
+            authenticated_sender,
+        });
+        self.held_bytes = self.held_bytes - previous_size + bytes;
+        assembly.held_bytes = assembly.held_bytes - previous_size + bytes;
+        assembly.framed_bytes = projected;
+        if !same_payload {
             assembly.last_fragment_at = now_unix_secs;
         }
 
-        // Completion is judged against *this* fragment's `total`, as in the
-        // Swift, not against the total recorded when the stream opened.
+        if !same_payload && assembly.chunks.get(&0)
+            .is_some_and(|first| FragmentHeader::may_forward(&first.packet))
+        {
+            if header.index == 0 && previous_size == 0 {
+                reception.forwards.extend(assembly.chunks.values().map(|fragment| {
+                    (fragment.ingress.clone(), fragment.packet.clone())
+                }));
+            } else if let Some(fragment) = assembly.chunks.get(&header.index) {
+                reception.forwards.push((fragment.ingress.clone(), fragment.packet.clone()));
+            }
+        }
         if assembly.chunks.len() != header.total as usize {
-            return Ok(None);
+            return Ok(reception);
         }
 
         let mut reassembled = Vec::with_capacity(projected);
-        for index in 0..header.total {
-            if let Some(piece) = assembly.chunks.get(&index) {
-                reassembled.extend_from_slice(piece);
-            }
+        for fragment in assembly.chunks.values() {
+            reassembled.extend_from_slice(&fragment.packet.payload[FRAGMENT_HEADER_LEN..]);
+            reception.ttl = reception.ttl.min(fragment.packet.ttl);
         }
         self.remove_stream(&key);
         self.completed.insert(key, now_unix_secs);
@@ -394,7 +439,13 @@ impl FragmentAssembler {
         {
             self.completed.remove(&oldest);
         }
-        Ok(Some(reassembled))
+        reception.reassembled = Some(reassembled);
+        Ok(reception)
+    }
+
+    /// Permit retransmission when the completed frame fails local validation.
+    pub fn reject_completion(&mut self, packet: &BitchatPacket, header: FragmentHeader) {
+        self.completed.remove(&StreamKey::new(packet, header));
     }
 
     /// Drops reassemblies that have received nothing new for
@@ -436,26 +487,30 @@ impl FragmentAssembler {
             expired.push(ExpiredStream {
                 sender: key.sender,
                 received: assembly.chunks.len() as u16,
-                expected: assembly.total,
-                original_type: assembly.original_type,
+                expected: key.total,
+                original_type: key.original_type,
                 is_broadcast: assembly.is_broadcast,
             });
             false
         });
-        self.held_bytes = self
-            .streams
-            .values()
-            .flat_map(|assembly| assembly.chunks.values())
-            .map(Vec::len)
-            .sum();
+        self.held_bytes = self.streams.values().map(|assembly| assembly.held_bytes).sum();
         expired
     }
 
     fn remove_stream(&mut self, key: &StreamKey) {
         if let Some(assembly) = self.streams.remove(key) {
-            let removed: usize = assembly.chunks.values().map(Vec::len).sum();
-            self.held_bytes = self.held_bytes.saturating_sub(removed);
+            self.held_bytes -= assembly.held_bytes;
         }
+    }
+
+    fn fragment_bytes(packet: &BitchatPacket, ingress_heap_bytes: usize) -> usize {
+        // Charge the inline signature and buffer handles as part of the packet.
+        // A cloned Vec allocates for its elements. Reserve extra space for the
+        // tree's partially filled nodes, which contain the inline records.
+        (3 * std::mem::size_of::<(u16, HeldFragment<T>)>()
+            + packet.payload.len()
+            + packet.route.as_ref().map_or(0, |route| route.len() * SENDER_ID_LEN))
+            .saturating_add(ingress_heap_bytes)
     }
 
     /// Evicts the oldest reassembly when the in-flight cap is already reached.
@@ -471,6 +526,12 @@ impl FragmentAssembler {
         if let Some((_, key)) = oldest {
             self.remove_stream(&key);
         }
+    }
+}
+
+impl FragmentAssembler<()> {
+    pub fn accept(&mut self, packet: &BitchatPacket, now_unix_secs: u64) -> Result<Option<Vec<u8>>, MeshError> {
+        self.receive(packet, (), 0, false, now_unix_secs).map(|reception| reception.reassembled)
     }
 }
 
@@ -770,6 +831,37 @@ mod tests {
             assembler.accept(&make(1, b"bbb"), 12).expect("ok"),
             Some(b"aaabbbccc".to_vec())
         );
+    }
+
+    #[test]
+    fn forwarding_waits_for_the_encoded_type_and_preserves_ingress() {
+        for kind in [MessageType::Message, MessageType::RequestSync] {
+            let mut packet = original(160);
+            packet.msg_type = kind.as_u8();
+            let planned = plan_fragments(&packet, 48, [7; 8]).unwrap();
+            assert!(planned.len() > 1);
+            let mut assembler = FragmentAssembler::new();
+            let mut received = None;
+            for (index, fragment) in planned.iter().enumerate().rev() {
+                let (mut header, chunk) = FragmentHeader::parse(fragment).unwrap();
+                header.original_type = MessageType::Message.as_u8();
+                let fragment = fragment_of(&header, chunk, fragment.sender_id);
+                let result = assembler.receive(&fragment, index, 0, false, 1).unwrap();
+                if index != 0 {
+                    assert!(result.forwards.is_empty());
+                }
+                received = Some(result);
+            }
+            let result = received.unwrap();
+            let inner = crate::codec::decode(&result.reassembled.unwrap()).unwrap();
+            assert_eq!(inner.message_type(), Some(kind));
+            if kind == MessageType::RequestSync {
+                assert!(result.forwards.is_empty());
+            } else {
+                assert_eq!(result.forwards.iter().map(|(ingress, _)| *ingress).collect::<Vec<_>>(),
+                    (0..planned.len()).collect::<Vec<_>>());
+            }
+        }
     }
 
     #[test]

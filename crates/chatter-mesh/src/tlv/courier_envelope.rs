@@ -27,7 +27,7 @@
 //! and drops it quietly.
 
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::error::MeshError;
 use crate::tlv::{Reader, fixed, put_tlv_u16_len};
@@ -205,6 +205,11 @@ impl CourierEnvelope {
             prekey_id,
         ))
     }
+}
+
+/// A receipt identifies the sealed bytes independently of the relay's copy budget.
+pub fn courier_receipt_id(ciphertext: &[u8]) -> [u8; 32] {
+    Sha256::digest(ciphertext).into()
 }
 
 /// Swift: `min(max(copies, 1), maxCopies)`.

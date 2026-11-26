@@ -75,7 +75,7 @@ pub struct LinkStateInner {
     pub scheduler: ConnectionScheduler,
     pub duty: ScanDutyCycle,
     pub dedup: MessageDeduplicator,
-    pub fragments: FragmentAssembler,
+    pub fragments: FragmentAssembler<LinkId>,
     pub assembler: InboundAssembler,
     pub writes: OutboundWriteBuffer,
     pub self_broadcasts: SelfBroadcastTracker,

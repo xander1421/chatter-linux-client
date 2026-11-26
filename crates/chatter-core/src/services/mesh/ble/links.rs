@@ -540,8 +540,12 @@ impl BleRuntime {
             }
         });
 
+        if packet.message_type() == Some(MessageType::Fragment) {
+            self.on_fragment(link, &packet, &claimed, &local, now_s).await;
+            return;
+        }
         let retainable = self
-            .dispatch(link, &packet, &claimed, now_s, verified_stale_key)
+            .handle_typed_with_verdict(link, &packet, &claimed, verified_stale_key)
             .await;
 
         // Refused identity-control packets must not be propagated to peers.
@@ -613,43 +617,69 @@ impl BleRuntime {
         Some((peer.clone(), key))
     }
 
-    /// Unwrap a fragment, then handle whatever it turns out to be.
-    ///
-    /// Deliberately not recursive. The fragmenter never nests fragments, so one
-    /// level of unwrapping is the whole truth — and expressing it as one level
-    /// means a hostile peer cannot make us descend at all.
-    ///
-    /// Returns whether the packet may be retained and re-gossiped. Only an
-    /// announce or unverified Leave says no — see [`Self::handle_typed`].
-    async fn dispatch(
+    /// The assembler releases fragments for relay and gossip after index zero
+    /// establishes their encoded type. Local dispatch also checks the full frame.
+    async fn on_fragment(
         &mut self,
         link: &LinkId,
         packet: &BitchatPacket,
         claimed: &PeerId,
+        local: &PeerId,
         now_s: u64,
-        verified_key: Option<[u8; 32]>,
-    ) -> bool {
-        if packet.message_type() != Some(MessageType::Fragment) {
-            return self
-                .handle_typed_with_verdict(link, packet, claimed, verified_key)
-                .await;
-        }
-
-        let reassembled = self
-            .state
-            .with(|state| state.fragments.accept(packet, now_s));
-        let Ok(Some(bytes)) = reassembled else {
-            return true;
+    ) {
+        let Ok((header, chunk)) = chatter_mesh::fragment::FragmentHeader::parse(packet) else {
+            return;
         };
-        let Ok(inner) = codec::decode(&bytes) else {
-            return true;
-        };
-        if inner.message_type() == Some(MessageType::Fragment) {
-            // A fragment carrying a fragment is not something the fragmenter
-            // produces; it is someone trying to make us loop.
-            return true;
+        if header.index == 0 && chunk.get(1) != Some(&header.original_type) {
+            return;
         }
-        self.handle_typed(link, &inner, claimed).await
+        let received = self.state.with(|state| {
+            if header.original_type == MessageType::RequestSync.as_u8()
+                && state
+                    .links
+                    .peer_for(link)
+                    .or_else(|| state.links.discovery_peer_for(link))
+                    != Some(claimed)
+            {
+                return None;
+            }
+            let authenticated_sender = state.links.is_noise_authenticated(link, claimed);
+            state.fragments.receive(
+                packet,
+                link.clone(),
+                link.as_str().len(),
+                authenticated_sender,
+                now_s,
+            ).ok()
+        });
+        let Some(received) = received else { return };
+        if let Some(bytes) = received.reassembled {
+            let accepted = if let Ok(mut inner) = codec::decode(&bytes)
+                && inner.msg_type == header.original_type
+                && inner.sender_id == packet.sender_id
+                && inner.message_type() != Some(MessageType::Fragment)
+            {
+                if matches!(
+                    inner.message_type(),
+                    Some(MessageType::NoiseHandshake | MessageType::NoiseEncrypted)
+                ) {
+                    inner.ttl = inner.ttl.min(received.ttl);
+                }
+                self.handle_typed(link, &inner, claimed).await
+            } else {
+                false
+            };
+            if !accepted {
+                self.state.with(|state| state.fragments.reject_completion(packet, header));
+                return;
+            }
+        }
+        for (ingress, fragment) in received.forwards {
+            if fragment.is_broadcast() {
+                self.gossip.on_public_packet_seen(&fragment, now_s);
+            }
+            self.relay(&ingress, &fragment, local).await;
+        }
     }
 
     /// Handle one decoded packet, and say whether the gossip store may keep it.
