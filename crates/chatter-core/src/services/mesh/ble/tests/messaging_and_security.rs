@@ -802,6 +802,50 @@ async fn qr_join_requires_a_live_noise_session_and_the_pinned_signing_key() {
 }
 
 #[tokio::test]
+async fn courier_deposit_accepts_a_pinned_peer_after_its_record_expires() {
+    use chatter_mesh::tlv::courier_envelope::{epoch_day, recipient_tag};
+    use chatter_mesh_link::registry::REACHABILITY_RETENTION_VERIFIED_MS;
+    use chatter_mesh_noise::seal::seal_courier;
+
+    let (mut runtime, _radio, state) = runtime();
+    let sender = MeshIdentity::generate(&mut os_rng());
+    let peer = register_verified_peer(&state, &sender, "sender");
+    let now_ms = now_millis();
+    state.with(|inner| {
+        let presence = Default::default();
+        inner
+            .peers
+            .update_last_seen(&peer, now_ms - REACHABILITY_RETENTION_VERIFIED_MS - 1);
+        // The first sweep disconnects the stale peer and the second expires its record.
+        inner.peers.reconcile_connectivity(now_ms, &presence);
+        inner.peers.reconcile_connectivity(now_ms, &presence);
+        assert!(inner.peers.info(&peer).is_none());
+        assert!(inner.peers.pinned(&peer).is_some());
+    });
+
+    let recipient = MeshIdentity::generate(&mut os_rng()).static_public();
+    let now_s = now_ms / 1000;
+    let ciphertext = seal_courier(b"offline message", &recipient, &sender).expect("seal courier");
+    let envelope = CourierEnvelope::new(
+        recipient_tag(&recipient, epoch_day(now_s)),
+        (now_s + 3600) * 1000,
+        ciphertext,
+        1,
+        None,
+    );
+    let packet = BitchatPacket::new(
+        MessageType::CourierEnvelope,
+        peer.to_routing_bytes().expect("routing bytes"),
+        runtime.identity.peer_id().to_routing_bytes(),
+        now_ms,
+        envelope.encode().expect("encodes"),
+        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+    );
+    runtime.on_courier_envelope(&packet, &peer).await;
+    assert!(runtime.couriers.carries_for(&recipient, now_s));
+}
+
+#[tokio::test]
 async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
     let (mut runtime, _radio, state) = runtime();
     let mut events = runtime.events.subscribe();

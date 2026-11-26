@@ -824,9 +824,8 @@ impl BleRuntime {
             return;
         }
 
-        // Carry deposits only from a Noise-bound identity.
+        // The Noise pin survives expiry of the transient peer record.
         let depositor_key = self.state.with(|state| {
-            state.peers.info(claimed)?;
             state
                 .peers
                 .pinned(claimed)

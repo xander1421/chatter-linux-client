@@ -15,8 +15,8 @@ pub struct PeerSnapshot {
     /// Their Noise static key, when we know it. Required to seal courier mail —
     /// a peer whose key we do not have cannot be addressed offline at all.
     pub noise_public_key: Option<[u8; 32]>,
-    /// Whether their last announce was signature-verified. This is the courier
-    /// trust-tier gate: unverified peers may not carry mail.
+    /// Whether the transport has pinned this peer's Noise identity. Only peers
+    /// with a pin are eligible to carry mail.
     pub is_verified: bool,
 }
 
@@ -28,10 +28,8 @@ pub struct PeerSnapshot {
 /// decision tree is built on the differences, so collapsing any two of them changes
 /// delivery behaviour rather than simplifying code:
 ///
-/// - [`is_peer_connected`](RouterTransport::is_peer_connected) — a live link binding
-///   exists. **Forgeable**: link bindings heal on signature-verified "direct"
-///   announces, but directness rides on the unsigned TTL, so a replayed announce can
-///   bind an absent peer's ID to the replayer's link.
+/// - [`is_peer_connected`](RouterTransport::is_peer_connected) — a live,
+///   Noise-authenticated link binding exists.
 /// - [`is_peer_reachable`](RouterTransport::is_peer_reachable) — a freshness
 ///   heuristic. The mesh keeps a peer "reachable" for up to a minute after its radio
 ///   goes quiet, so a send here can silently go nowhere.
