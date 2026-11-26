@@ -7,9 +7,11 @@ impl BleRuntime {
         let now_ms = now_millis();
         let now_s = now_secs();
         self.refresh_pairing_beacons();
-        if self.config.expire_pairing(std::time::Instant::now()) {
+        let now = Instant::now();
+        if self.config.expire_pairing(now) {
             self.emit_peers();
         }
+        self.close_lapsed_admissions(now).await;
         let expired = self.state.with(|state| {
             state.declined_group_invites.retain(|_, (_, at)| {
                 now_s.saturating_sub(*at) < super::super::DIRECT_INVITE_LIFETIME_SECS
@@ -200,13 +202,8 @@ impl BleRuntime {
             let fresh = now_ms.saturating_sub(candidate.discovered_at_ms) <= 5_000;
             #[cfg(not(target_os = "linux"))]
             let fresh = true;
-            if fresh
-                && let Some(contact) = candidate
-                    .pairing_beacon
-                    .as_ref()
-                    .and_then(|beacon| self.state.paired_contact_for_beacon(beacon))
-            {
-                self.dial_paired(&candidate.address, &contact).await;
+            if fresh {
+                self.dial(&candidate.address).await;
             }
         }
 
@@ -273,7 +270,7 @@ impl BleRuntime {
         let public_chat_enabled = self.config.public_chat_enabled();
         let mut connected = self.state.public_sync_peers();
         if !public_chat_enabled {
-            connected.retain(|peer| self.paired_session(peer));
+            connected.retain(|peer| self.state.paired_session(peer));
         }
         self.gossip.set_public_chat_enabled(public_chat_enabled);
         match self.gossip.maintenance(&connected, now_s) {
@@ -485,6 +482,12 @@ impl BleRuntime {
             let kind = broadcasts::frame_kind(&write.bytes);
             if !self.allows_queued_frame(&write.bytes)
                 || (kind == Some(MessageType::GroupMessage) && !self.group_traffic_allowed(&link))
+                || !broadcasts::allows_traffic_on_link(
+                    &self.config,
+                    &self.state,
+                    &link,
+                    kind,
+                )
             {
                 continue;
             }

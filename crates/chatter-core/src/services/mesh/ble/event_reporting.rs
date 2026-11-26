@@ -48,7 +48,11 @@ impl BleRuntime {
     pub(super) async fn dispatch_sync(&self, send: chatter_mesh_store::sync::SyncSend) {
         let packet = self.maybe_sign(send.packet, send.sign_before_send);
         if !self.config.public_chat_enabled() {
-            let Some(peer) = send.to.as_ref().filter(|peer| self.paired_session(peer)) else {
+            let Some(peer) = send
+                .to
+                .as_ref()
+                .filter(|peer| self.state.paired_session(peer))
+            else {
                 return;
             };
             let links = self.state.with(|state| {

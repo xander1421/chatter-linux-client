@@ -254,6 +254,10 @@ impl BleRuntime {
 
         let (plan, frames) = {
             let mut links = self.state.link_candidates();
+            let kind = broadcasts::packet_kind(packet);
+            links.retain(|link| {
+                broadcasts::allows_traffic_on_link(&self.config, &self.state, &link.id, kind)
+            });
             if let (Some(link), Some(peer)) = (chosen_link, directed_peer) {
                 links.retain(|candidate| &candidate.id == link);
                 let Some(candidate) = links.first_mut() else {
@@ -360,7 +364,9 @@ impl BleRuntime {
                         PENDING_WRITE_BUFFER_CAP_BYTES,
                     ))
                 });
-                let Some(admitted) = admitted else { return false };
+                let Some(admitted) = admitted else {
+                    return false;
+                };
                 // Byte-capped, so this can refuse. A refusal is a dropped packet
                 // and has to be said out loud — which is what `#[must_use]` on
                 // `WriteEnqueue` is for.

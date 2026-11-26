@@ -66,6 +66,36 @@ async fn nothing_is_written_when_no_link_is_writable() {
 }
 
 #[tokio::test]
+async fn an_unpaired_default_link_carries_pairing_frames_only() {
+    let (runtime, _, state, _) = runtime_with_config(MeshConfig::default());
+    let link = LinkId::new("/mock/pairing");
+    for kind in [
+        MessageType::Announce,
+        MessageType::NoiseHandshake,
+        MessageType::NoiseEncrypted,
+    ] {
+        assert!(broadcasts::allows_traffic_on_link(
+            &runtime.config,
+            &state,
+            &link,
+            Some(kind)
+        ));
+    }
+    for kind in [
+        MessageType::RequestSync,
+        MessageType::GroupMessage,
+        MessageType::PrekeyBundle,
+    ] {
+        assert!(!broadcasts::allows_traffic_on_link(
+            &runtime.config,
+            &state,
+            &link,
+            Some(kind)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn hello_requires_pairing_even_when_public_chat_is_enabled() {
     let (mut runtime, _, state) = runtime();
     let target = PeerId::from_bytes(&[7; 8]);
@@ -221,7 +251,10 @@ async fn a_connected_link_is_treated_as_writable_immediately() {
             link: link.clone(),
             role: LinkRole::Peripheral,
             max_write: 244,
-            inbound: None,
+            inbound: Some(InboundLink {
+                address: "test-device".into(),
+                beacon: None,
+            }),
         })
         .await;
     assert!(state.with(|inner| inner.links.is_writable(&link)));
@@ -229,6 +262,88 @@ async fn a_connected_link_is_treated_as_writable_immediately() {
         state.with(|inner| inner.max_write.get(&link).copied()),
         Some(244)
     );
+}
+
+#[tokio::test]
+async fn default_mesh_does_not_dial_or_admit_a_stranger() {
+    let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    let beacon = [0; 13];
+    runtime.on_discovered("stranger", -45, beacon).await;
+    runtime.dial("stranger").await;
+    assert!(!runtime.dial_in_flight);
+    assert!(radio.connect_attempts().is_empty());
+
+    let link = LinkId::new("/mock/stranger");
+    let incoming = InboundLink {
+        address: "stranger".into(),
+        beacon: Some(beacon),
+    };
+    assert_eq!(
+        admission::inbound_admission(
+            &runtime.config,
+            &state,
+            &runtime.matched_scans,
+            &incoming,
+            Instant::now()
+        ),
+        None
+    );
+    runtime
+        .on_link_event(LinkEvent::Connected {
+            link: link.clone(),
+            role: LinkRole::Peripheral,
+            max_write: 244,
+            inbound: Some(incoming),
+        })
+        .await;
+    assert!(!state.with(|inner| inner.links.contains(&link)));
+    assert_eq!(radio.write_count(), 0);
+}
+
+#[tokio::test]
+async fn first_write_or_a_recent_matched_scan_admits_a_paired_link_for_proof() {
+    let (mut runtime, _, state, _) = runtime_with_config(MeshConfig::default());
+    let (contact, beacon) = paired_remote(&runtime, &state);
+    let now = Instant::now();
+    runtime.matched_scans.lock().remember("seen", beacon, now);
+    for incoming in [
+        InboundLink {
+            address: "seen".into(),
+            beacon: None,
+        },
+        InboundLink {
+            address: "unseen".into(),
+            beacon: Some(beacon),
+        },
+    ] {
+        assert_eq!(
+            admission::inbound_admission(
+                &runtime.config,
+                &state,
+                &runtime.matched_scans,
+                &incoming,
+                now
+            ),
+            Some(ConnectionAdmission::Paired(contact.clone()))
+        );
+    }
+    let link = LinkId::new("/mock/paired");
+    runtime
+        .on_link_event(LinkEvent::Connected {
+            link: link.clone(),
+            role: LinkRole::Peripheral,
+            max_write: 244,
+            inbound: Some(InboundLink {
+                address: "unseen".into(),
+                beacon: Some(beacon),
+            }),
+        })
+        .await;
+    assert!(state.with(|inner| inner.awaiting_pairing_proof.contains(&link)));
+    assert!(!state.is_paired_link(&link));
+    let deadline = runtime.link_admission[&link].proof_deadline;
+    runtime.close_lapsed_admissions(deadline).await;
+    assert!(!state.with(|inner| inner.links.contains(&link)));
 }
 
 #[tokio::test]
@@ -508,22 +623,46 @@ async fn check_courier_handover(direct: bool) {
         }
     }
     runtime.drain_writes().await;
-    assert_eq!(state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)), direct);
-    assert_eq!(sent(&radio, MessageType::CourierEnvelope).len(), usize::from(direct));
+    assert_eq!(
+        state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)),
+        direct
+    );
+    assert_eq!(
+        sent(&radio, MessageType::CourierEnvelope).len(),
+        usize::from(direct)
+    );
 
     let handshake = sent(&radio, MessageType::NoiseHandshake);
-    remote.on_handshake(&local_peer, &peer, &peer_identity, &handshake.last().unwrap().payload).unwrap();
+    remote
+        .on_handshake(
+            &local_peer,
+            &peer,
+            &peer_identity,
+            &handshake.last().unwrap().payload,
+        )
+        .unwrap();
     if !direct {
         // Even if a stale route hands the envelope to a relay, sending alone
         // cannot remove the durable copy.
-        runtime.hand_over_courier_mail(&peer, &recipient, now_s, AnnounceIngress::verified_direct_on_authenticated_link()).await;
+        runtime
+            .hand_over_courier_mail(
+                &peer,
+                &recipient,
+                now_s,
+                AnnounceIngress::verified_direct_on_authenticated_link(),
+            )
+            .await;
         runtime.drain_writes().await;
     }
     assert_eq!(sent(&radio, MessageType::CourierEnvelope).len(), 1);
     assert!(runtime.couriers.carries_for(&recipient, now_s));
 
     let receipt_id = chatter_mesh::tlv::courier_envelope::courier_receipt_id(&envelope.ciphertext);
-    let receipt = [super::secure_ingress::COURIER_RECEIPT_MAGIC.as_slice(), &receipt_id].concat();
+    let receipt = [
+        super::secure_ingress::COURIER_RECEIPT_MAGIC.as_slice(),
+        &receipt_id,
+    ]
+    .concat();
     let packet = BitchatPacket::new(
         MessageType::NoiseEncrypted,
         peer.to_routing_bytes().unwrap(),
@@ -534,7 +673,10 @@ async fn check_courier_handover(direct: bool) {
     );
     runtime.on_packet(&link, packet).await;
     assert!(!runtime.couriers.carries_for(&recipient, now_s));
-    assert_eq!(state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)), direct);
+    assert_eq!(
+        state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)),
+        direct
+    );
 }
 
 #[tokio::test]
@@ -627,7 +769,9 @@ async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_s
     state.with(|inner| inner.peers.remove(&owner.peer_id()));
     assert!(!runtime.on_prekey_bundle(&bundle_packet(&genuine)));
     state.with(|inner| {
-        inner.peers.upsert_verified_announce(&owner.peer_id(), &announcement, true, now_millis());
+        inner
+            .peers
+            .upsert_verified_announce(&owner.peer_id(), &announcement, true, now_millis());
     });
 
     // Signed by someone else over the owner's static key: refused.
@@ -650,7 +794,10 @@ async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_s
 
     let mut spoofed = bundle_packet(&genuine);
     spoofed.timestamp += 2 * 24 * 60 * 60 * 1000;
-    assert!(!runtime.on_prekey_bundle(&spoofed), "the outer timestamp must be signed");
+    assert!(
+        !runtime.on_prekey_bundle(&spoofed),
+        "the outer timestamp must be signed"
+    );
     spoofed.signature = Some(sign_packet(&owner, &spoofed).unwrap());
     assert!(!runtime.on_prekey_bundle(&spoofed));
     assert!(!runtime.gossip.has_prekey_bundle(&owner.peer_id()));
@@ -954,8 +1101,13 @@ async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
         }
         other => panic!("expected the DM, got {other:?}"),
     }
-    runtime.on_courier_envelope(&packet, &sender.peer_id()).await;
-    assert!(events.try_recv().is_err(), "the second courier copy has the same message ID");
+    runtime
+        .on_courier_envelope(&packet, &sender.peer_id())
+        .await;
+    assert!(
+        events.try_recv().is_err(),
+        "the second courier copy has the same message ID"
+    );
     // Consumed: the next refresh changes the set (so it is saved and
     // republished under a newer stamp) and the bundle no longer offers it.
     assert!(state.with(|inner| {

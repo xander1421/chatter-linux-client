@@ -105,6 +105,37 @@ fn register_verified_peer(state: &MeshState, identity: &MeshIdentity, nickname: 
     peer
 }
 
+fn paired_remote(runtime: &BleRuntime, state: &MeshState) -> (PeerId, PairingBeacon) {
+    use chatter_mesh_link::registry::PairingKey;
+
+    let remote = MeshIdentity::generate(&mut os_rng());
+    let peer = remote.peer_id();
+    let local = runtime.identity.peer_id();
+    state.with(|inner| {
+        assert!(inner.peers.pair_noise_identity(
+            &peer,
+            &remote.static_public(),
+            &remote.signing_public(),
+            now_millis(),
+            PairingKey::new([42; 32], false),
+        ));
+    });
+    let remote_state = MeshState::new();
+    remote_state.with(|inner| {
+        assert!(inner.peers.pair_noise_identity(
+            &local,
+            &runtime.identity.static_public(),
+            &runtime.identity.signing_public(),
+            now_millis(),
+            PairingKey::new([42; 32], true),
+        ));
+    });
+    let beacon = remote_state
+        .pairing_beacon_for_contact(&peer, &local)
+        .unwrap();
+    (peer, beacon)
+}
+
 #[tokio::test]
 async fn leave_requires_the_pinned_signature_and_preserves_the_pin() {
     let (mut runtime, _radio, state) = runtime();

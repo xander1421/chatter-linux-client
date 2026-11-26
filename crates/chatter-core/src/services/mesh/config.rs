@@ -17,12 +17,6 @@ struct PairingWindow {
     peer: Option<PeerId>,
 }
 
-pub(super) trait PairedAnnounceMatcher {
-    type Announce: ?Sized;
-
-    fn paired_contact_for_announce(&self, announce: &Self::Announce) -> Option<PeerId>;
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ConnectionAdmission {
     Paired(PeerId),
@@ -189,15 +183,12 @@ impl MeshConfig {
             .is_some_and(|window| now < window.deadline && window.peer.as_ref() == Some(peer))
     }
 
-    pub(super) fn connection_admission<M: PairedAnnounceMatcher>(
+    pub(super) fn connection_admission(
         &self,
-        matcher: &M,
-        announce: Option<&M::Announce>,
+        matched_contact: Option<PeerId>,
         now: Instant,
     ) -> Option<ConnectionAdmission> {
-        if let Some(contact) =
-            announce.and_then(|announce| matcher.paired_contact_for_announce(announce))
-        {
+        if let Some(contact) = matched_contact {
             Some(ConnectionAdmission::Paired(contact))
         } else if self.public_chat_enabled() {
             Some(ConnectionAdmission::PublicChat)
@@ -389,39 +380,27 @@ mod tests {
     }
 
     #[test]
-    fn new_links_require_a_paired_announcement_or_an_explicit_exception() {
-        struct Matcher;
-        impl PairedAnnounceMatcher for Matcher {
-            type Announce = [u8; 8];
-
-            fn paired_contact_for_announce(&self, announce: &Self::Announce) -> Option<PeerId> {
-                (announce == &[42; 8]).then(|| PeerId::from_bytes(&[1; 8]))
-            }
-        }
-
+    fn new_links_require_a_recognized_contact_or_an_explicit_exception() {
         let config = MeshConfig::default();
         let now = Instant::now();
-        assert_eq!(config.connection_admission(&Matcher, None, now), None);
+        let paired = PeerId::from_bytes(&[1; 8]);
+        assert_eq!(config.connection_admission(None, now), None);
         assert_eq!(
-            config.connection_admission(&Matcher, Some(&[7; 8]), now),
-            None
-        );
-        assert_eq!(
-            config.connection_admission(&Matcher, Some(&[42; 8]), now),
-            Some(ConnectionAdmission::Paired(PeerId::from_bytes(&[1; 8]))),
+            config.connection_admission(Some(paired.clone()), now),
+            Some(ConnectionAdmission::Paired(paired)),
         );
         config.set_pairing(true, now);
         assert_eq!(
-            config.connection_admission(&Matcher, None, now),
+            config.connection_admission(None, now),
             Some(ConnectionAdmission::Pairing)
         );
         assert_eq!(
-            config.connection_admission(&Matcher, None, now + PAIRING_WINDOW),
+            config.connection_admission(None, now + PAIRING_WINDOW),
             None
         );
         config.set_public_chat(true);
         assert_eq!(
-            config.connection_admission(&Matcher, None, now),
+            config.connection_admission(None, now),
             Some(ConnectionAdmission::PublicChat)
         );
     }

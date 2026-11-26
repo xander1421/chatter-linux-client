@@ -207,74 +207,28 @@ async fn a_radio_that_will_not_restart_when_nobody_can_see_us_is_reported() {
 }
 
 #[tokio::test]
-async fn an_unrecognized_pairing_beacon_is_not_dialled() {
-    let (mut runtime, radio, _state, _timeline) = runtime_parts();
+async fn an_address_for_a_pairing_already_proving_its_link_is_not_dialled() {
+    let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    let (_, beacon) = paired_remote(&runtime, &state);
+    let link = LinkId::new("/mock/paired");
     runtime
-        .on_discovered("70:E0:8F:D7:6B:84", -50, [7; 13])
+        .on_link_event(LinkEvent::Connected {
+            link: link.clone(),
+            role: LinkRole::Peripheral,
+            max_write: 244,
+            inbound: Some(InboundLink {
+                address: "old-address".into(),
+                beacon: Some(beacon),
+            }),
+        })
         .await;
+    assert!(state.with(|inner| inner.links.is_writable(&link)));
+
+    runtime
+        .on_discovered("70:E0:8F:D7:6B:84", -50, beacon)
+        .await;
+    assert!(!runtime.dial_in_flight);
     assert!(radio.connect_attempts().is_empty());
-}
-
-#[tokio::test]
-async fn paired_endpoints_recognise_an_advert_and_admit_its_first_write_without_binding_a_route() {
-    use chatter_mesh::tlv::pairing::PAIRING_BEACON_SLOTS;
-    use chatter_mesh_link::admission_preface;
-    use chatter_mesh_link::registry::PairingKey;
-
-    let (mut alice, alice_radio, alice_state) = runtime();
-    let (mut bob, bob_radio, bob_state) = runtime();
-    let alice_contact = alice.identity.peer_id();
-    let bob_contact = bob.identity.peer_id();
-    let decoy_slots = bob_state.pairing_beacons(&bob_contact);
-    assert_eq!(decoy_slots.len(), PAIRING_BEACON_SLOTS);
-    let root = [9; 32];
-    assert!(alice_state.with(|state| state.peers.pair_noise_identity(
-        &bob_contact,
-        &bob.identity.static_public(),
-        &bob.identity.signing_public(),
-        now_millis(),
-        PairingKey::new(root, true),
-    )));
-    assert!(bob_state.with(|state| state.peers.pair_noise_identity(
-        &alice_contact,
-        &alice.identity.static_public(),
-        &alice.identity.signing_public(),
-        now_millis(),
-        PairingKey::new(root, false),
-    )));
-    alice.identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
-    bob.identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
-    let alice_epoch = alice.broadcast_peer_id();
-    bob.install_inbound_admission();
-    let alice_advert = alice_state
-        .pairing_beacons(&alice_epoch)
-        .into_iter()
-        .find(|beacon| bob_state.paired_contact_for_beacon(beacon) == Some(alice_contact.clone()))
-        .expect("Alice's advertised slot is recognizable by Bob");
-    assert!(!bob_radio.admits_first_write(
-        "66:E0:8F:D7:6B:84",
-        &admission_preface(&alice_advert),
-    ));
-
-    let slots = bob_state.pairing_beacons(&bob.broadcast_peer_id());
-    assert_eq!(slots.len(), PAIRING_BEACON_SLOTS);
-    let recognized: Vec<_> = slots
-        .into_iter()
-        .filter(|beacon| alice_state.paired_contact_for_beacon(beacon) == Some(bob_contact.clone()))
-        .collect();
-    assert_eq!(recognized.len(), 1);
-    alice
-        .on_discovered("70:E0:8F:D7:6B:84", -50, recognized[0])
-        .await;
-    alice.settle_dial().await;
-    assert_eq!(alice_radio.connect_attempts(), ["70:E0:8F:D7:6B:84"]);
-    let prefaces = alice_radio.connect_prefaces();
-    assert_eq!(prefaces.len(), 1);
-    assert!(bob_radio.admits_first_write("66:E0:8F:D7:6B:84", &prefaces[0]));
-    assert!(!bob_radio.admits_first_write("66:E0:8F:D7:6B:84", &prefaces[0][1..]));
-    assert!(alice_radio.writes().is_empty());
-    assert_eq!(bob_state.route(&alice_contact), alice_contact);
-    assert_eq!(bob_state.contact(&alice_epoch), alice_epoch);
 }
 
 #[test]
@@ -703,7 +657,10 @@ async fn a_restart_resumes_a_transfer_instead_of_starting_it_again() {
         1,
         "the partial transfer is back"
     );
-    assert_eq!(register_verified_peer(&state2, &identity, "wanderer"), sender);
+    assert_eq!(
+        register_verified_peer(&state2, &identity, "wanderer"),
+        sender
+    );
     assert_eq!(
         restarted
             .files_in
@@ -788,7 +745,10 @@ async fn a_transfer_that_completed_but_was_never_stored_is_finished_on_the_next_
     let (mut restarted, _radio2, state2, timeline2) = runtime_parts();
     restarted.files_in = FileStreamSpool::new(spool);
     assert_eq!(restarted.files_in.restore(now_secs()), 1);
-    assert_eq!(register_verified_peer(&state2, &identity, "wanderer"), sender);
+    assert_eq!(
+        register_verified_peer(&state2, &identity, "wanderer"),
+        sender
+    );
     assert_eq!(restarted.files_in.completed(), vec![manifest.transfer_id]);
 
     restarted.cleanup(now_millis(), now_secs());

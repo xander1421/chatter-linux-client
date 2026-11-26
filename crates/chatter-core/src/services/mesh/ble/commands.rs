@@ -16,7 +16,9 @@ impl BleRuntime {
                     .is_some_and(|peer| peer.signing_public_key.is_some());
             (announced, state.links.is_noise_authenticated(link, claimed))
         });
-        if !self.config.public_chat_enabled() && (!authenticated || !self.paired_session(claimed)) {
+        if !self.config.public_chat_enabled()
+            && (!authenticated || !self.state.paired_session(claimed))
+        {
             return;
         }
         if !announced && !authenticated {

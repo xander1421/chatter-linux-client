@@ -135,9 +135,17 @@ impl BleRuntime {
         }
 
         let direct = accepted.direct_hint;
-        let paired_contact = direct
+        let mut paired_contact = direct
             .then(|| self.state.paired_contact_for_announce(announcement))
             .flatten();
+        if direct
+            && let Some(expected) = self.link_admission.get(link).and_then(|record| record.expected_contact.clone())
+        {
+            if paired_contact.as_ref().is_some_and(|contact| *contact != expected) {
+                return false;
+            }
+            paired_contact = Some(expected);
+        }
         if let Some(contact) = &paired_contact {
             self.note_pairing_candidate(claimed, contact, now_ms);
         }
@@ -213,7 +221,7 @@ impl BleRuntime {
         // handover. The courier retains each envelope until its recipient confirms it.
         let ingress = AnnounceIngress::new(direct, link_authenticated);
         let application_data_allowed =
-            self.config.public_chat_enabled() || self.paired_session(claimed);
+            self.config.public_chat_enabled() || self.state.is_paired_link_to(link, claimed);
         if application_data_allowed && ingress.permits_offer() {
             let claimed_keys = self
                 .courier_claims
@@ -245,7 +253,7 @@ impl BleRuntime {
         }
 
         self.retry_pending_dm_handshake(claimed).await;
-        if paired_contact.is_some() && self.state.has_session(claimed) {
+        if direct && paired_contact.is_some() && link_authenticated {
             self.send_pairing_proof(claimed).await;
         }
         // A known peer may return on a new link, where an old session alone
@@ -321,12 +329,7 @@ impl BleRuntime {
     }
 
     pub(super) async fn sync_new_peer(&mut self, link: &LinkId, peer: &PeerId, now_s: u64) {
-        if !self.config.public_chat_enabled()
-            && (!self.paired_session(peer)
-                || !self
-                    .state
-                    .with(|state| state.links.is_noise_authenticated(link, peer)))
-        {
+        if !self.config.public_chat_enabled() && !self.state.is_paired_link_to(link, peer) {
             return;
         }
         self.gossip

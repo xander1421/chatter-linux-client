@@ -14,7 +14,7 @@ fn public_chat_type(kind: Option<MessageType>) -> bool {
     )
 }
 
-fn packet_kind(packet: &BitchatPacket) -> Option<MessageType> {
+pub(super) fn packet_kind(packet: &BitchatPacket) -> Option<MessageType> {
     match packet.message_type() {
         Some(MessageType::Fragment) => {
             let (header, _) = fragment::FragmentHeader::parse(packet).ok()?;
@@ -53,6 +53,20 @@ pub(super) fn allows_transmission(config: &MeshConfig, packet: &BitchatPacket) -
 
 fn allows_public_packet(config: &MeshConfig, packet: &BitchatPacket) -> bool {
     config.public_chat_enabled() || !public_chat_type(packet_kind(packet))
+}
+
+pub(super) fn allows_traffic_on_link(
+    config: &MeshConfig,
+    state: &MeshState,
+    link: &LinkId,
+    kind: Option<MessageType>,
+) -> bool {
+    config.public_chat_enabled()
+        || matches!(
+            kind,
+            Some(MessageType::Announce | MessageType::NoiseHandshake | MessageType::NoiseEncrypted)
+        )
+        || state.is_paired_link(link)
 }
 
 impl BleRuntime {
@@ -156,6 +170,14 @@ impl BleRuntime {
     }
 
     pub(super) async fn send_private_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
+        if !self.config.public_chat_enabled()
+            && !self.state.paired_session(peer)
+            && !self.allows_pairing_control(peer, bytes)
+            && !bytes.starts_with(super::pairing::ROUTE_MAGIC)
+            && !bytes.starts_with(super::super::account_identity::PAIRING_RECEIPT_MAGIC)
+        {
+            return false;
+        }
         let Ok(ciphertext) = self.state.with(|s| s.sessions.encrypt(peer, bytes)) else {
             // A current member retries when this peer establishes Noise again.
             return false;
@@ -178,6 +200,9 @@ impl BleRuntime {
             return;
         };
         let peer = &wire;
+        if !self.config.public_chat_enabled() && !self.state.paired_session(peer) {
+            return;
+        }
         let kind = if invite {
             NoisePayloadType::GroupInvite
         } else {

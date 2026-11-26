@@ -1,35 +1,6 @@
 use super::*;
-use chatter_mesh_link::{InboundLink, PairingBeacon};
-use std::time::{Duration, Instant};
-
-const RECENT_PAIRING_ADVERT: Duration = Duration::from_secs(30);
-const MAX_RECENT_PAIRING_ADVERTS: usize = 128;
-pub(super) type RecentPairingAdverts = std::collections::HashMap<String, (PairingBeacon, Instant)>;
-
-fn permit_inbound(
-    state: &MeshState,
-    recent: &parking_lot::Mutex<RecentPairingAdverts>,
-    incoming: &InboundLink,
-) -> bool {
-    if let Some(preface) = &incoming.beacon {
-        return state.paired_contact_for_preface(preface).is_some();
-    }
-    let seen = recent.lock().get(&incoming.address).copied();
-    seen.is_some_and(|(beacon, seen_at)| {
-        seen_at.elapsed() < RECENT_PAIRING_ADVERT
-            && state.paired_contact_for_beacon(&beacon).is_some()
-    })
-}
 
 impl BleRuntime {
-    pub(super) fn install_inbound_admission(&self) {
-        let state = Arc::clone(&self.state);
-        let recent = Arc::clone(&self.recent_pairing_adverts);
-        self.radio.set_inbound_admission(Arc::new(move |incoming| {
-            permit_inbound(&state, &recent, incoming)
-        }));
-    }
-
     // ------------------------------------------------------------- link events
 
     pub(super) async fn on_link_event(&mut self, event: LinkEvent) {
@@ -43,8 +14,11 @@ impl BleRuntime {
                 link,
                 role,
                 max_write,
-                ..
-            } => self.on_connected(link, role, max_write).await,
+                inbound,
+            } => {
+                self.on_connected(link, role, max_write, inbound.as_ref())
+                    .await
+            }
             LinkEvent::Disconnected { link } => self.on_disconnected(&link).await,
             LinkEvent::Data { link, bytes } => self.on_data(&link, bytes).await,
             LinkEvent::PeripheralRoleEnded => {
@@ -59,17 +33,24 @@ impl BleRuntime {
                 );
                 self.degraded(
                     "Other devices can no longer connect to this one over Bluetooth. \
-                     Turn Mesh off and back on to restore it."
+                     Restarting the app should restore it."
                         .to_string(),
                 );
             }
             LinkEvent::AdapterPowerChanged { powered } => {
+                if !powered {
+                    self.matched_scans.lock().clear();
+                    self.link_admission.clear();
+                    self.pending_central_contact = None;
+                    self.central_contacts.clear();
+                }
                 self.state.with(|state| {
                     state.adapter_powered = powered;
                     if !powered {
                         // Every link dies with the adapter. Keeping the bindings
                         // would make the router believe it can still write.
                         state.links.clear();
+                        state.awaiting_pairing_proof.clear();
                         state.max_write.clear();
                         state.address_of.clear();
                         state.connecting.clear();
@@ -82,41 +63,20 @@ impl BleRuntime {
         }
     }
 
-    /// Consider dialing only after authenticating the beacon against a saved
-    /// pairing. The beacon cannot bind a link, identify its Noise key, or
-    /// authorize a route.
-    pub(super) async fn on_discovered(
-        &mut self,
-        address: &str,
-        rssi: i16,
-        beacon: chatter_mesh_link::PairingBeacon,
-    ) {
-        let Some(contact) = self.state.paired_contact_for_beacon(&beacon) else {
-            return;
-        };
-        let now = now_millis();
-        {
-            let mut recent = self.recent_pairing_adverts.lock();
-            recent.retain(|_, (_, at)| at.elapsed() < RECENT_PAIRING_ADVERT);
-            if recent.len() < MAX_RECENT_PAIRING_ADVERTS || recent.contains_key(address) {
-                recent.insert(address.to_string(), (beacon, Instant::now()));
-            }
+    /// Queue only recognized contacts or addresses permitted by an active opt-in.
+    pub(super) async fn on_discovered(&mut self, address: &str, rssi: i16, beacon: PairingBeacon) {
+        let instant = Instant::now();
+        if self.state.paired_contact_for_beacon(&beacon).is_some() {
+            self.matched_scans.lock().remember(address, beacon, instant);
         }
-        let route = self.state.route(&contact);
-        let held = self.state.with(|state| {
-            state
-                .links
-                .links()
-                .any(|(_, link)| link.peer.as_ref() == Some(&route))
-        });
-        if held {
+        if self.outbound_admission(address, instant).is_none() {
             return;
         }
 
+        let now = now_millis();
         let decision = self.state.with(|state| {
-            let mut candidate =
+            let candidate =
                 chatter_mesh_link::scheduler::ConnectionCandidate::new(address, rssi, now);
-            candidate.pairing_beacon = Some(beacon);
             let connected_or_connecting =
                 state.links.count_role(LinkRole::Central) + state.connecting.len();
             let existing = ExistingConnectionState {
@@ -142,7 +102,7 @@ impl BleRuntime {
         });
 
         match decision {
-            DiscoveryDecision::ConnectNow => self.dial_paired(address, &contact).await,
+            DiscoveryDecision::ConnectNow => self.dial(address).await,
             DiscoveryDecision::CancelStaleConnection => {
                 self.state.with(|state| {
                     state.connecting.remove(address);
@@ -155,25 +115,75 @@ impl BleRuntime {
         }
     }
 
-    pub(super) async fn dial_paired(&mut self, address: &str, contact: &PeerId) {
-        if let Some(beacon) = self
-            .state
-            .pairing_beacon_for_contact(&self.broadcast_peer_id(), contact)
-        {
-            self.dial_with_beacon(address, Some(beacon)).await;
+    fn outbound_admission(&self, address: &str, now: Instant) -> Option<ConnectionAdmission> {
+        let matched = admission::recent_contact(&self.state, &self.matched_scans, address, now);
+        let permission = self.config.connection_admission(matched, now)?;
+        match &permission {
+            ConnectionAdmission::Paired(contact)
+                if self.state.paired_session(contact)
+                    || self.link_admission.values().any(|record| {
+                        record.expected_contact.as_ref() == Some(contact)
+                            && record.permits_proof(&self.config, now)
+                    }) =>
+            {
+                None
+            }
+            ConnectionAdmission::Pairing if self.pairing_link_limit_reached() => None,
+            _ => Some(permission),
         }
     }
 
-    #[cfg(test)]
-    pub(super) async fn dial(&mut self, address: &str) {
-        self.dial_with_beacon(address, None).await;
+    fn pairing_link_limit_reached(&self) -> bool {
+        self.link_admission
+            .iter()
+            .filter(|(link, record)| {
+                record.expected_contact.is_none() && !self.state.is_paired_link(link)
+            })
+            .take(admission::PAIRING_LINK_LIMIT)
+            .count()
+            >= admission::PAIRING_LINK_LIMIT
     }
 
-    /// Start a connect without blocking the loop. `finish_dial` applies the result.
-    pub(super) async fn dial_with_beacon(&mut self, address: &str, beacon: Option<PairingBeacon>) {
+    pub(super) async fn close_lapsed_admissions(&mut self, now: Instant) {
+        if self.config.public_chat_enabled() {
+            return;
+        }
+        let expired: Vec<_> = self
+            .link_admission
+            .iter()
+            .filter(|(link, record)| {
+                !record.permits_proof(&self.config, now) && !self.state.is_paired_link(link)
+            })
+            .map(|(link, _)| link.clone())
+            .collect();
+        for link in expired {
+            self.state
+                .with(|state| state.links.set_writable(&link, false));
+            let _ = self.radio.disconnect(&link).await;
+            self.on_disconnected(&link).await;
+        }
+    }
+
+    /// Start a connect without blocking the loop; [`finish_dial`] applies it.
+    pub(super) async fn dial(&mut self, address: &str) {
         // Adverts repeat every few hundred ms, so a skipped dial is retried by
         // the next discovery or queue drain rather than lost.
         if self.dial_in_flight {
+            return;
+        }
+        let Some(permission) = self.outbound_admission(address, Instant::now()) else {
+            return;
+        };
+        self.pending_central_contact = match permission {
+            ConnectionAdmission::Paired(contact) => Some(contact),
+            _ => None,
+        };
+        let beacon = self.pending_central_contact.as_ref().and_then(|contact| {
+            self.state
+                .pairing_beacon_for_contact(&self.broadcast_peer_id(), contact)
+        });
+        if self.pending_central_contact.is_some() && beacon.is_none() {
+            self.pending_central_contact = None;
             return;
         }
         self.dial_in_flight = true;
@@ -194,6 +204,7 @@ impl BleRuntime {
 
     pub(super) fn finish_dial(&mut self, outcome: DialOutcome) {
         self.dial_in_flight = false;
+        let contact = self.pending_central_contact.take();
         // BlueZ pauses its own discovery session for a dial. Its scan duty
         // state must issue a fresh StartScanning on the next tick.
         #[cfg(target_os = "linux")]
@@ -202,6 +213,9 @@ impl BleRuntime {
         let address = address.as_str();
         match result {
             Ok(link) => {
+                if let Some(contact) = contact {
+                    self.central_contacts.insert(link.clone(), contact);
+                }
                 self.state.with(|state| {
                     // `Connected` can now be handled before this result: the
                     // link layer emits it from the connect itself.
@@ -261,10 +275,52 @@ impl BleRuntime {
         self.finish_dial(outcome);
     }
 
-    async fn on_connected(&mut self, link: LinkId, role: LinkRole, max_write: usize) {
+    async fn on_connected(
+        &mut self,
+        link: LinkId,
+        role: LinkRole,
+        max_write: usize,
+        inbound: Option<&InboundLink>,
+    ) {
+        let now = Instant::now();
+        let permission = match role {
+            LinkRole::Central => {
+                let contact = self
+                    .central_contacts
+                    .remove(&link)
+                    .or_else(|| self.pending_central_contact.take());
+                self.config.connection_admission(contact, now)
+            }
+            LinkRole::Peripheral => inbound.and_then(|inbound| {
+                admission::inbound_admission(
+                    &self.config,
+                    &self.state,
+                    &self.matched_scans,
+                    inbound,
+                    now,
+                )
+            }),
+        };
+        let expected_contact = match permission {
+            Some(ConnectionAdmission::Paired(contact)) => Some(contact),
+            Some(ConnectionAdmission::PublicChat) => None,
+            Some(ConnectionAdmission::Pairing) if !self.pairing_link_limit_reached() => None,
+            _ => {
+                let _ = self.radio.disconnect(&link).await;
+                return;
+            }
+        };
+        let needs_proof = expected_contact.is_some();
+        self.link_admission.insert(
+            link.clone(),
+            admission::LinkAdmission::new(expected_contact, now),
+        );
         self.link_last_inbound_ms.insert(link.clone(), now_millis());
         self.state.with(|state| {
             state.links.link_up(link.clone(), role);
+            if needs_proof {
+                state.awaiting_pairing_proof.insert(link.clone());
+            }
             // `Connected` means writable: the trait's contract is that an
             // implementation withholds this event until the link can carry a
             // write, so the flag is set here rather than waited for.
@@ -284,9 +340,12 @@ impl BleRuntime {
     async fn on_disconnected(&mut self, link: &LinkId) {
         let now = now_millis();
         self.link_last_inbound_ms.remove(link);
+        self.link_admission.remove(link);
+        self.central_contacts.remove(link);
         let peer = self.state.with(|state| {
             let (moved, discarded) = rescue_link_writes(state, link, None);
             let peer = state.links.link_down(link);
+            state.awaiting_pairing_proof.remove(link);
             state.max_write.remove(link);
             state.assembler.discard(link);
             if moved > 0 || !discarded.is_empty() {
@@ -315,6 +374,9 @@ impl BleRuntime {
     }
 
     pub(super) async fn on_data(&mut self, link: &LinkId, bytes: Vec<u8>) {
+        if !self.state.with(|state| state.links.is_writable(link)) {
+            return;
+        }
         let now = now_millis();
         self.link_last_inbound_ms.insert(link.clone(), now);
         let appended = self.state.with(|state| {
@@ -356,7 +418,15 @@ impl BleRuntime {
     // ----------------------------------------------------------------- inbound
 
     pub(super) async fn on_packet(&mut self, link: &LinkId, packet: BitchatPacket) {
-        if !self.allows_public_packet(&packet) {
+        let pairing_only = !self.config.public_chat_enabled() && !self.state.is_paired_link(link);
+        if !self.allows_public_packet(&packet)
+            || !broadcasts::allows_traffic_on_link(
+                &self.config,
+                &self.state,
+                link,
+                broadcasts::packet_kind(&packet),
+            )
+        {
             return;
         }
         let now_ms = now_millis();
@@ -440,6 +510,24 @@ impl BleRuntime {
                 .or_else(|| state.links.discovery_peer_for(link))
                 .cloned()
         });
+        if pairing_only {
+            if !self
+                .link_admission
+                .get(link)
+                .is_some_and(|record| record.permits_proof(&self.config, Instant::now()))
+                || packet.is_rsr
+                || bound.as_ref().is_some_and(|peer| *peer != claimed)
+            {
+                return;
+            }
+            let kind = broadcasts::packet_kind(&packet);
+            if kind == Some(MessageType::Announce) && packet.ttl != DIRECT_ANNOUNCE_TTL {
+                return;
+            }
+            if kind != Some(MessageType::Announce) && !self.addressed_to_us(&packet) {
+                return;
+            }
+        }
 
         // Which peer's outstanding request this could be answering.
         //
@@ -580,7 +668,7 @@ impl BleRuntime {
             .await;
 
         // Refused identity-control packets must not be propagated to peers.
-        if !retainable {
+        if !retainable || pairing_only {
             return;
         }
         if packet.is_broadcast() {
@@ -730,6 +818,9 @@ impl BleRuntime {
             return;
         }
         for (ingress, fragment) in received.forwards {
+            if !self.config.public_chat_enabled() && !self.state.is_paired_link(&ingress) {
+                continue;
+            }
             if fragment.is_broadcast() {
                 self.gossip.on_public_packet_seen(&fragment, now_s);
             }

@@ -16,22 +16,17 @@ fn signing_binding_bytes(noise: &[u8; 32], transcript: &[u8; 32], signing: &[u8;
 }
 
 impl BleRuntime {
-    /// Contact-only traffic requires a Noise session matching a paired pin.
-    pub(super) fn paired_session(&self, peer: &PeerId) -> bool {
-        self.state.with(|state| {
-            let Some(pin) = state.peers.pinned(peer).filter(|pin| pin.paired) else {
-                return false;
-            };
-            state
-                .sessions
-                .remote_static(peer)
-                .as_ref()
-                .is_some_and(|key| pin.noise_public_key.as_slice() == key.as_slice())
-        })
+    pub(super) fn allows_chatter_hello(&self, peer: &PeerId) -> bool {
+        self.state.paired_session(peer)
+            || self.config.is_pairing_peer(peer, std::time::Instant::now())
     }
 
-    pub(super) fn allows_chatter_hello(&self, peer: &PeerId) -> bool {
-        self.paired_session(peer) || self.config.is_pairing_peer(peer, std::time::Instant::now())
+    pub(super) fn allows_pairing_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
+        self.config.is_pairing_peer(peer, Instant::now())
+            && (ChatterHello::decode(bytes).is_some()
+                || BindingV1::decode(bytes).is_some()
+                || bytes.starts_with(SIGNING_BINDING_MAGIC)
+                || bytes.starts_with(SIGNING_BINDING_REQUEST))
     }
 
     fn on_pairing_receipt(&mut self, peer: &PeerId, receipt: &[u8]) {
@@ -201,8 +196,6 @@ impl BleRuntime {
 
         if let Some(recipient_key) = step.established {
             self.courier_claims.remove(claimed);
-            let paired = self.paired_session(claimed);
-            let application_data_allowed = paired || self.config.public_chat_enabled();
             self.state.with(|state| {
                 state.dm_handshake_at_ms.remove(claimed);
                 state.known_peer_reopen_attempts.remove(claimed);
@@ -215,6 +208,8 @@ impl BleRuntime {
                 && self
                     .state
                     .with(|state| state.links.mark_noise_authenticated(link, claimed));
+            let paired = self.state.is_paired_link_to(link, claimed);
+            let application_data_allowed = paired || self.config.public_chat_enabled();
             if direct {
                 self.prune_duplicate_links(claimed, now_millis()).await;
                 if !self.config.public_chat_enabled() && paired {
@@ -237,7 +232,9 @@ impl BleRuntime {
             }
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.
-            self.send_pairing_proof(claimed).await;
+            if direct {
+                self.send_pairing_proof(claimed).await;
+            }
             self.send_chatter_hello(claimed).await;
             if !application_data_allowed {
                 return;
@@ -375,18 +372,12 @@ impl BleRuntime {
             self.send_pairing_proof(claimed).await;
             return;
         }
-        if self.on_pairing_control(claimed, &plaintext).await {
+        if self.on_pairing_control(link, claimed, &plaintext).await {
             return;
         }
         if !self.config.public_chat_enabled()
-            && !self.paired_session(claimed)
-            && !(self
-                .config
-                .is_pairing_peer(claimed, std::time::Instant::now())
-                && (ChatterHello::decode(&plaintext).is_some()
-                    || BindingV1::decode(&plaintext).is_some()
-                    || plaintext.starts_with(SIGNING_BINDING_MAGIC)
-                    || plaintext.starts_with(SIGNING_BINDING_REQUEST)))
+            && !self.state.is_paired_link_to(link, claimed)
+            && !self.allows_pairing_control(claimed, &plaintext)
         {
             return;
         }
