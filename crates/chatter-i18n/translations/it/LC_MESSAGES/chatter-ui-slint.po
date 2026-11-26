@@ -4772,13 +4772,8 @@ msgstr ""
 "codice."
 
 #: ui/pages/link_device.slint:87
-msgid ""
-"This device still holds another account's keys. Linking a different account "
-"will fail. Sign in to that account instead, or clear this app's data first."
-msgstr ""
-"Questo dispositivo ha ancora le chiavi di un altro account. Collegare un "
-"account diverso non riuscirà. Accedi a quell'account, oppure cancella prima "
-"i dati dell'app."
+msgid "Linking a different account clears local data on this device."
+msgstr "Collegare un altro account cancella i dati locali su questo dispositivo."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"

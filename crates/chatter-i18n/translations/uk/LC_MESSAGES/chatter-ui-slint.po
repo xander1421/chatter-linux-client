@@ -4799,13 +4799,8 @@ msgstr ""
 "код."
 
 #: ui/pages/link_device.slint:87
-msgid ""
-"This device still holds another account's keys. Linking a different account "
-"will fail. Sign in to that account instead, or clear this app's data first."
-msgstr ""
-"На цьому пристрої досі є ключі іншого облікового запису. Прив’язати інший "
-"обліковий запис не вдасться. Увійдіть у той обліковий запис або спочатку "
-"очистьте дані застосунку."
+msgid "Linking a different account clears local data on this device."
+msgstr "Прив’язування іншого облікового запису видаляє локальні дані на цьому пристрої."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"
