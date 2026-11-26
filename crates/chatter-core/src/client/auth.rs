@@ -252,13 +252,7 @@ impl ChatterClient {
         // keys landed: without that, the next login sees a local identity,
         // skips the restore, and the account is left serving prekeys nobody
         // holds the private half of.
-        if result.keys_restored
-            || self.auth().key_republish_pending().map_err(AuthError::Storage)?
-        {
-            // Keep the intent durable through the proof exchange and RPC.
-            self.auth()
-                .set_key_republish_pending(true)
-                .map_err(AuthError::Storage)?;
+        if self.auth().key_republish_pending().map_err(AuthError::Storage)? {
             let mut auth_client = self
                 .auth()
                 .try_auth_client()
@@ -373,7 +367,7 @@ impl ChatterClient {
             .ok_or(ClientError::NotConnected)?;
         let proof = prove_password(&mut auth_client, password).await?;
         self.auth()
-            .set_key_republish_pending(true)
+            .begin_key_republish()
             .map_err(AuthError::Storage)?;
         self.auth()
             .generate_identity_for_recovery()
@@ -405,9 +399,7 @@ impl ChatterClient {
             .await
             .map_err(|e| ClientError::Validation(format!("failed to publish key material: {e}")))?;
 
-        self.auth()
-            .set_key_republish_pending(false)
-            .map_err(AuthError::Storage)?;
+        self.auth().finish_key_republish();
 
         tracing::info!(
             identity_key_changed = outcome.identity_key_changed,
@@ -953,7 +945,7 @@ impl ChatterClient {
             let registration_id = (rand::random::<u32>() % 0x3FFF) + 1;
 
             self.auth()
-                .set_key_republish_pending(true)
+                .begin_key_republish()
                 .map_err(|e| format!("failed to record pending identity republish: {e}"))?;
             self.signal()
                 .key_store

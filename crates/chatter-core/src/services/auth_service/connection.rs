@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use super::*;
 
 impl AuthService {
@@ -17,6 +19,7 @@ impl AuthService {
             user_repo,
             settings_repo,
             auth_interceptor,
+            republish_completed: AtomicBool::new(false),
             recovery_login_grant: parking_lot::Mutex::new(None),
         }
     }
@@ -110,14 +113,46 @@ impl AuthService {
     }
 
     pub(crate) fn key_republish_pending(&self) -> Result<bool, StorageError> {
-        Ok(self
-            .settings_repo
-            .get_bool(keys::KEY_REPUBLISH_PENDING)?
-            .unwrap_or(false))
+        if self.republish_completed.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        Ok(self.pending_key_republish()?.is_some())
     }
 
-    pub(crate) fn set_key_republish_pending(&self, pending: bool) -> Result<(), StorageError> {
-        self.settings_repo.set_bool(keys::KEY_REPUBLISH_PENDING, pending)
+    pub(super) fn pending_key_republish(&self) -> Result<Option<PendingKeyRepublish>, StorageError> {
+        self.settings_repo.get(keys::KEY_REPUBLISH_PENDING)
+    }
+
+    pub(crate) fn begin_key_republish(&self) -> Result<(), StorageError> {
+        let owner = self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)?
+            .and_then(|id| id.parse().ok())
+            .ok_or_else(|| StorageError::InvalidData("missing identity republish owner".into()))?;
+        let nickname = self
+            .settings_repo
+            .get_string(keys::SVR_SALT_USERNAME)?
+            .filter(|nickname| !nickname.trim().is_empty())
+            .ok_or_else(|| StorageError::InvalidData("missing identity republish login".into()))?;
+        self.republish_completed.store(false, Ordering::Release);
+        self.settings_repo.set(
+            keys::KEY_REPUBLISH_PENDING,
+            &PendingKeyRepublish {
+                owner,
+                login_identifier: login_identifier(&nickname),
+            },
+        )
+    }
+
+    pub(crate) fn finish_key_republish(&self) {
+        let cleanup = self.settings_repo.delete(keys::KEY_REPUBLISH_PENDING);
+        // The bundle and KT authorization already landed. Keep the live
+        // session usable even if a restart has to retry the publication.
+        self.republish_completed
+            .store(cleanup.is_err(), Ordering::Release);
+        if let Err(error) = cleanup {
+            tracing::warn!(%error, "Could not clear the completed identity republish");
+        }
     }
 
     /// Restore a password-based (Basic auth) session.

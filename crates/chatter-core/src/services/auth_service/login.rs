@@ -19,19 +19,17 @@ impl AuthService {
         pin: Option<&str>,
         on_verifying: &(dyn Fn() + Send + Sync),
     ) -> Result<LoginResult, AuthError> {
-        let republish_pending = self.key_republish_pending()?;
-        if self.is_logged_in() && !republish_pending {
+        let identifier = login_identifier(username);
+        let pending = self.pending_key_republish()?;
+        if let Some(pending) = &pending {
+            // LoginFinish can create or replace a device on the server. Reject
+            // a different login identifier before starting that exchange.
+            if pending.login_identifier != identifier {
+                return Err(wrong_republish_account());
+            }
+        } else if self.is_logged_in() {
             return Err(AuthError::AlreadyLoggedIn);
         }
-        let pending_owner = if republish_pending {
-            self.settings_repo.get_string(keys::CURRENT_USER_ID)?
-        } else {
-            None
-        };
-
-        // PRIVACY: the server sees only the nickname-derived identifier, and
-        // the password only through OPAQUE (`crypto::opaque`).
-        let identifier = login_identifier(username);
 
         // Profile key: existing-device login loads it from local settings; a
         // fresh device has none here and recovers it from SVR backup AFTER
@@ -181,14 +179,9 @@ impl AuthService {
             .user_id
             .parse()
             .map_err(|_| AuthError::LoginFailed("invalid user_id format".to_string()))?;
-        if pending_owner.is_some_and(|owner| owner != user_id.to_string()) {
+        if pending.is_some_and(|pending| pending.owner != user_id) {
             svr_secret.zeroize();
-            return Err(AuthError::LoginFailed(
-                chatter_i18n::tr(
-                    "Sign in to the same account to finish publishing your encryption keys.",
-                )
-                .into(),
-            ));
+            return Err(wrong_republish_account());
         }
         let device_id = session.device_id;
 
@@ -357,4 +350,10 @@ impl AuthService {
             recovery_codes: None, // Login never returns recovery codes
         })
     }
+}
+
+fn wrong_republish_account() -> AuthError {
+    AuthError::LoginFailed(chatter_i18n::tr(
+        "Sign in to the same account to finish publishing your encryption keys.",
+    ))
 }
