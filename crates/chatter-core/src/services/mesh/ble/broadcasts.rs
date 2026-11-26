@@ -41,7 +41,7 @@ pub(super) fn allows_transmission(config: &MeshConfig, packet: &BitchatPacket) -
     match (packet.message_type(), packet_kind(packet)) {
         (Some(MessageType::Announce), _) => {
             matches!(
-                AnnouncementPacket::carries_contact_metadata(&packet.payload),
+                AnnouncementPacket::carries_bridge_metadata(&packet.payload),
                 Ok(false)
             )
         }
@@ -49,6 +49,16 @@ pub(super) fn allows_transmission(config: &MeshConfig, packet: &BitchatPacket) -
         (Some(MessageType::Fragment), Some(MessageType::Announce)) => false,
         _ => true,
     }
+}
+
+pub(super) fn allows_forwarding(config: &MeshConfig, packet: &BitchatPacket) -> bool {
+    allows_transmission(config, packet)
+        && (packet_kind(packet) != Some(MessageType::Announce)
+            || (packet.message_type() == Some(MessageType::Announce)
+                && matches!(
+                    AnnouncementPacket::carries_pairing_beacon(&packet.payload),
+                    Ok(false)
+                )))
 }
 
 fn allows_public_packet(config: &MeshConfig, packet: &BitchatPacket) -> bool {

@@ -383,7 +383,7 @@ impl BleRuntime {
     }
 
     pub(super) async fn relay(&self, ingress: &LinkId, packet: &BitchatPacket, local: &PeerId) {
-        if !broadcasts::allows_transmission(&self.config, packet) {
+        if !broadcasts::allows_forwarding(&self.config, packet) {
             return;
         }
         let degree = self.state.with(|state| state.peers.connected_count());

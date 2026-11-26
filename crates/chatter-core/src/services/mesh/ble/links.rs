@@ -676,7 +676,7 @@ impl BleRuntime {
         if !retainable || pairing_only {
             return;
         }
-        if packet.is_broadcast() {
+        if packet.is_broadcast() && broadcasts::allows_forwarding(&self.config, &packet) {
             self.gossip.on_public_packet_seen(&packet, now_s);
         }
         // TTL 0 already stops the relay; this does not depend on that.
@@ -826,7 +826,7 @@ impl BleRuntime {
             if !self.config.public_chat_enabled() && !self.state.is_paired_link(&ingress) {
                 continue;
             }
-            if fragment.is_broadcast() {
+            if fragment.is_broadcast() && broadcasts::allows_forwarding(&self.config, &fragment) {
                 self.gossip.on_public_packet_seen(&fragment, now_s);
             }
             self.relay(&ingress, &fragment, local).await;

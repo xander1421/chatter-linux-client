@@ -1198,6 +1198,11 @@ async fn announces_only_share_neighbours_and_a_cell_in_bridge_mode() {
     config.bridge_geohash = Some("u4pruy".into());
     let (mut runtime, radio, state, _) = runtime_with_config(config);
     let link = LinkId::new("/mock/bridge");
+    let now = Instant::now();
+    runtime.config.set_pairing(true, now);
+    runtime
+        .link_admission
+        .insert(link.clone(), admission::LinkAdmission::new(None, now));
     let other = register_verified_peer(&state, &MeshIdentity::generate(&mut os_rng()), "other");
     state.with(|inner| {
         inner.links.link_up(link.clone(), LinkRole::Central);
@@ -1212,9 +1217,11 @@ async fn announces_only_share_neighbours_and_a_cell_in_bridge_mode() {
         let writes = radio.writes();
         let packet = codec::decode(&writes.last().unwrap().1).unwrap();
         assert_eq!(
-            AnnouncementPacket::carries_contact_metadata(&packet.payload).unwrap(),
+            AnnouncementPacket::carries_bridge_metadata(&packet.payload).unwrap(),
             enabled,
         );
+        assert!(AnnouncementPacket::carries_pairing_beacon(&packet.payload).unwrap());
+        assert!(!broadcasts::allows_forwarding(&runtime.config, &packet));
         let announce = AnnouncementPacket::decode(&packet.payload).unwrap();
         assert_eq!(
             announce.direct_neighbors,
@@ -1238,6 +1245,11 @@ async fn announces_only_share_neighbours_and_a_cell_in_bridge_mode() {
 async fn each_new_identity_announces_a_fresh_automatic_nickname() {
     let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
     let link = LinkId::new("/mock/nickname");
+    let now = Instant::now();
+    runtime.config.set_pairing(true, now);
+    runtime
+        .link_admission
+        .insert(link.clone(), admission::LinkAdmission::new(None, now));
     state.with(|inner| {
         inner.links.link_up(link.clone(), LinkRole::Central);
         inner.links.set_writable(&link, true);
@@ -1249,7 +1261,9 @@ async fn each_new_identity_announces_a_fresh_automatic_nickname() {
     let last_nickname = || {
         let writes = radio.writes();
         let packet = codec::decode(&writes.last().unwrap().1).unwrap();
-        AnnouncementPacket::decode(&packet.payload).unwrap().nickname
+        AnnouncementPacket::decode(&packet.payload)
+            .unwrap()
+            .nickname
     };
     let first = last_nickname();
     assert!(first.starts_with("anon-"));

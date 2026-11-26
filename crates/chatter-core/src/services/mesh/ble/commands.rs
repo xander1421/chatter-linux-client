@@ -46,6 +46,14 @@ impl BleRuntime {
         let requester = claimed.to_routing_bytes();
         for send in &sends {
             let kind = send.packet.message_type();
+            if kind == Some(MessageType::Announce)
+                && !matches!(
+                    AnnouncementPacket::carries_pairing_beacon(&send.packet.payload),
+                    Ok(false)
+                )
+            {
+                continue;
+            }
             if !authenticated && kind != Some(MessageType::Message) {
                 // An unproven requester gets a contact-free author key only
                 // when it verifies some history included in this response.

@@ -140,15 +140,29 @@ impl AnnouncementPacket {
     /// A malformed value can be ignored by the regular decoder, but still
     /// carries bytes that must stay out of a public history response.
     pub fn carries_contact_metadata(bytes: &[u8]) -> Result<bool, MeshError> {
+        Self::carries_fields(
+            bytes,
+            &[TLV_DIRECT_NEIGHBORS, TLV_BRIDGE_GEOHASH, TLV_PAIRING_BEACON],
+        )
+    }
+
+    /// Whether the encoded announce carries any metadata specific to bridge mode.
+    pub fn carries_bridge_metadata(bytes: &[u8]) -> Result<bool, MeshError> {
+        Self::carries_fields(bytes, &[TLV_DIRECT_NEIGHBORS, TLV_BRIDGE_GEOHASH])
+    }
+
+    /// Whether this announce carries a pairing hint for a direct link.
+    pub fn carries_pairing_beacon(bytes: &[u8]) -> Result<bool, MeshError> {
+        Self::carries_fields(bytes, &[TLV_PAIRING_BEACON])
+    }
+
+    fn carries_fields(bytes: &[u8], fields: &[u8]) -> Result<bool, MeshError> {
         let mut reader = Reader::new(bytes);
         // A lone trailing byte has no TLV header, just as in decode.
         while reader.remaining() >= 2 {
             let kind = reader.u8()?;
             let length = reader.u8()?;
-            if matches!(
-                kind,
-                TLV_DIRECT_NEIGHBORS | TLV_BRIDGE_GEOHASH | TLV_PAIRING_BEACON
-            ) {
+            if fields.contains(&kind) {
                 return Ok(true);
             }
             reader.take(usize::from(length))?;
@@ -244,6 +258,8 @@ mod tests {
         let encoded = packet.encode().unwrap();
         assert_eq!(AnnouncementPacket::decode(&encoded).unwrap(), packet);
         assert!(AnnouncementPacket::carries_contact_metadata(&encoded).unwrap());
+        assert!(AnnouncementPacket::carries_pairing_beacon(&encoded).unwrap());
+        assert!(!AnnouncementPacket::carries_bridge_metadata(&encoded).unwrap());
     }
 
     #[test]

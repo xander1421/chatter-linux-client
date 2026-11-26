@@ -928,7 +928,7 @@ async fn transmit_forwarded(
     ingress: &LinkId,
     group_links: Option<&[LinkId]>,
 ) {
-    if !broadcasts::allows_transmission(config, packet) {
+    if !broadcasts::allows_forwarding(config, packet) {
         return;
     }
     let padding = fragment::pads_ble_frame(packet.msg_type);
@@ -980,7 +980,7 @@ async fn transmit_forwarded(
     for link in plan.selected.iter() {
         for frame in &frames {
             let admitted = state.with(|inner| {
-                if !broadcasts::allows_transmission(config, packet) {
+                if !broadcasts::allows_forwarding(config, packet) {
                     return None;
                 }
                 Some(inner.writes.enqueue(
