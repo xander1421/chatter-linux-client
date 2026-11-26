@@ -82,10 +82,10 @@ impl BleRuntime {
         self.originate_broadcast(&packet).await;
     }
 
-    pub(super) async fn send_private_control(&mut self, peer: &PeerId, bytes: &[u8]) {
+    pub(super) async fn send_private_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
         let Ok(ciphertext) = self.state.with(|s| s.sessions.encrypt(peer, bytes)) else {
             // A current member retries when this peer establishes Noise again.
-            return;
+            return false;
         };
         let packet = self.build_packet(
             MessageType::NoiseEncrypted,
@@ -93,7 +93,7 @@ impl BleRuntime {
             ciphertext,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
-        self.transmit(&packet, Some(peer), None).await;
+        self.transmit(&packet, Some(peer), None).await
     }
 
     pub(super) async fn send_group_state(&mut self, peer: &PeerId, bytes: &[u8], invite: bool) {

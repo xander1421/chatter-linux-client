@@ -141,16 +141,7 @@ impl BleRuntime {
                 content,
             } => self.send_private(&peer, &message_id, &content).await,
             BleCommand::Courier { peer, envelope } => {
-                let Ok(payload) = envelope.encode() else {
-                    return;
-                };
-                let packet = self.build_packet(
-                    MessageType::CourierEnvelope,
-                    Some(&peer),
-                    payload,
-                    chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-                );
-                self.transmit(&packet, Some(&peer), None).await;
+                self.send_courier_frame(&peer, &envelope).await;
             }
             BleCommand::Ack {
                 peer,
@@ -168,7 +159,7 @@ impl BleRuntime {
             } => self.broadcast_channel(&message_id, &name, &content).await,
             BleCommand::ChannelPresence { name } => self.broadcast_channel_presence(&name).await,
             BleCommand::PrivateJoinRequest { creator, bytes } => {
-                self.send_private_control(&creator, &bytes).await
+                self.send_private_control(&creator, &bytes).await;
             }
             BleCommand::PrivateEpoch { peer, bytes } => {
                 self.send_group_state(&peer, &bytes, false).await
@@ -177,7 +168,7 @@ impl BleRuntime {
                 self.send_group_state(&peer, &bytes, true).await
             }
             BleCommand::PrivateDecline { peer, notice } => {
-                self.send_private_control(&peer, &notice).await
+                self.send_private_control(&peer, &notice).await;
             }
             BleCommand::PrivateEpochAck { peer, id } => {
                 if let Ok(Some(state)) = self.private_channels.load(&id) {

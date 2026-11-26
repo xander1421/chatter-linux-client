@@ -266,12 +266,7 @@ impl MeshService {
 
     /// Whether an in-person pairing authorizes this contact's current keys.
     pub fn is_paired(&self, peer: &PeerId) -> bool {
-        self.state.with(|state| {
-            state
-                .peers
-                .pinned(state.peers.route(peer))
-                .is_some_and(|pin| pin.pairing.is_some())
-        })
+        self.state.has_paired_pin(peer)
     }
 
     /// Every peer the mesh currently knows, shaped for display.

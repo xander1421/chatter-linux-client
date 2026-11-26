@@ -47,9 +47,10 @@ impl BleRuntime {
         if self.pairing_proofs_sent.get(peer) == Some(&transcript) {
             return;
         }
-        self.pairing_proofs_sent.insert(peer.clone(), transcript);
         let frame = sign_route(&self.identity, &key, &transcript);
-        self.send_private_control(peer, &frame).await;
+        if self.send_private_control(peer, &frame).await {
+            self.pairing_proofs_sent.insert(peer.clone(), transcript);
+        }
     }
 
     pub(super) async fn on_pairing_control(&mut self, peer: &PeerId, plaintext: &[u8]) -> bool {
@@ -166,7 +167,7 @@ impl BleRuntime {
     async fn on_courier_pull(&mut self, peer: &PeerId, pull: &[u8]) {
         if pull.len() != PULL_MAGIC.len() + 32 + chatter_mesh_noise::seal::SEAL_OVERHEAD
             || !self.state.is_connected(peer)
-            || self.state.pairing_key(peer).is_none()
+            || !self.state.has_paired_pin(peer)
         {
             return;
         }
@@ -360,10 +361,22 @@ mod tests {
         let pull = wrap_private_control(&b, &wire_a, &pull);
         a.on_encrypted(&link_a, &pull, &wire_b).await;
         a.drain_writes().await;
-        assert!(a_radio.writes().iter().any(|(_, bytes)| {
-            codec::decode(bytes)
-                .is_ok_and(|packet| packet.message_type() == Some(MessageType::CourierEnvelope))
-        }));
+        let mut delivered = None;
+        for (_, bytes) in a_radio.writes() {
+            let packet = codec::decode(&bytes).unwrap();
+            assert_ne!(packet.message_type(), Some(MessageType::CourierEnvelope));
+            if packet.message_type() == Some(MessageType::NoiseEncrypted) {
+                let plain = b_state
+                    .with(|state| state.sessions.decrypt(&wire_a, &packet.payload))
+                    .unwrap();
+                if let Some(bytes) =
+                    plain.strip_prefix(super::super::secure_ingress::PAIRED_COURIER_MAGIC)
+                {
+                    delivered = Some(CourierEnvelope::decode(bytes).unwrap());
+                }
+            }
+        }
+        assert_eq!(delivered, Some(envelope.clone()));
         let id = courier_receipt_id(&envelope.ciphertext);
         let ack = [
             super::super::secure_ingress::COURIER_RECEIPT_MAGIC.as_slice(),

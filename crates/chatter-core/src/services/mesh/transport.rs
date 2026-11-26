@@ -388,12 +388,14 @@ impl RouterTransport for BleTransport {
         let Some(envelope) = self.seal_envelope(content, message_id, recipient_key, now) else {
             return Vec::new();
         };
+        let paired = self.state.courier_sender(recipient_key).is_some();
 
         // Return only the couriers that actually took it. Crediting every
         // candidate would burn the message's courier slots against carriers that
         // never received it.
         via.iter()
             .filter(|peer| self.state.can_write_to(peer))
+            .filter(|peer| !paired || self.state.has_paired_pin(peer))
             .filter(|peer| {
                 self.commands
                     .send(BleCommand::Courier {

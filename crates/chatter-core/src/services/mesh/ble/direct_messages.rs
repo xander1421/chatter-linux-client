@@ -313,10 +313,8 @@ impl BleRuntime {
         let Some((wire_key, _)) = self.account_mesh_keys(&owner, recipient) else {
             return;
         };
-        let recipient_key = self
-            .state
-            .pairing_courier(recipient)
-            .map_or(wire_key, |pair| pair.remote);
+        let paired = self.state.pairing_courier(recipient);
+        let recipient_key = paired.as_ref().map_or(wire_key, |pair| pair.remote);
         let contact = self.state.contact(recipient);
         let mut payload = Vec::with_capacity(4 + bytes.len());
         payload.extend_from_slice(b"CSM1");
@@ -349,6 +347,7 @@ impl BleRuntime {
                     && p.is_verified
                     && p.is_connected
                     && self.state.can_write_to(&p.peer)
+                    && (paired.is_none() || self.state.has_paired_pin(&p.peer))
             })
             .take(usize::from(INITIAL_COPIES))
             .map(|p| p.peer)
@@ -363,16 +362,7 @@ impl BleRuntime {
             {
                 continue;
             }
-            let Ok(payload) = envelope.encode() else {
-                break;
-            };
-            let packet = self.build_packet(
-                MessageType::CourierEnvelope,
-                Some(&courier),
-                payload,
-                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-            );
-            if self.transmit(&packet, Some(&courier), None).await {
+            if self.send_courier_frame(&courier, &envelope).await {
                 handed = true;
             } else {
                 let _ = self

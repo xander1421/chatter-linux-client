@@ -208,6 +208,15 @@ impl MeshState {
         self.with(|state| state.peers.pinned(state.peers.route(peer))?.pairing.clone())
     }
 
+    pub(super) fn has_paired_pin(&self, peer: &PeerId) -> bool {
+        self.with(|state| {
+            state
+                .peers
+                .pinned(state.peers.route(peer))
+                .is_some_and(|pin| pin.pairing.is_some())
+        })
+    }
+
     pub(super) fn pairing_courier(&self, peer: &PeerId) -> Option<PairingCourier> {
         self.with(|state| {
             state

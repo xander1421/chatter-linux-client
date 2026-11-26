@@ -37,16 +37,7 @@ impl BleRuntime {
             }
         };
         for envelope in envelopes {
-            let Ok(payload) = envelope.encode() else {
-                continue;
-            };
-            let packet = self.build_packet(
-                MessageType::CourierEnvelope,
-                Some(peer),
-                payload,
-                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-            );
-            if self.transmit(&packet, Some(peer), None).await
+            if self.send_courier_frame(peer, &envelope).await
                 && let Err(error) = self.couriers.record_offer(&envelope, support, now_s)
             {
                 tracing::warn!(target: "mesh::ble", %error, "courier offer could not be recorded");

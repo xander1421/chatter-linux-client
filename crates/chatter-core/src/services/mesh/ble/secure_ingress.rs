@@ -6,6 +6,7 @@ use super::super::account_identity::{PAIRING_RECEIPT_MAGIC, store_paired_pin};
 use super::super::chatter_hello::COURIER_RECEIPTS;
 
 pub(super) const COURIER_RECEIPT_MAGIC: &[u8; 8] = b"CHTRCRP1";
+pub(super) const PAIRED_COURIER_MAGIC: &[u8; 8] = b"CHTRPCU1";
 const SIGNING_BINDING_MAGIC: &[u8; 8] = b"CHTRNSB1";
 pub(super) const SIGNING_BINDING_REQUEST: &[u8; 8] = b"CHTRNSR1";
 pub(super) const SIGNING_PIN_INTENT_MS: u64 = 300_000;
@@ -341,6 +342,13 @@ impl BleRuntime {
             return;
         }
         if self.on_pairing_control(claimed, &plaintext).await {
+            return;
+        }
+        if let Some(payload) = plaintext.strip_prefix(PAIRED_COURIER_MAGIC) {
+            if self.state.has_paired_pin(claimed) {
+                self.receive_courier(payload, packet.timestamp, claimed)
+                    .await;
+            }
             return;
         }
         if let Some(receipt) = plaintext.strip_prefix(COURIER_RECEIPT_MAGIC) {
@@ -962,8 +970,36 @@ impl BleRuntime {
         });
     }
 
+    pub(super) async fn send_courier_frame(
+        &self,
+        peer: &PeerId,
+        envelope: &CourierEnvelope,
+    ) -> bool {
+        let Ok(payload) = envelope.encode() else {
+            return false;
+        };
+        let peer = self.state.route(peer);
+        if self.state.has_paired_pin(&peer) {
+            // Stable recipient tags and repeated envelopes stay inside Noise.
+            let frame = [PAIRED_COURIER_MAGIC.as_slice(), &payload].concat();
+            return self.send_private_control(&peer, &frame).await;
+        }
+        let packet = self.build_packet(
+            MessageType::CourierEnvelope,
+            Some(&peer),
+            payload,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        self.transmit(&packet, Some(&peer), None).await
+    }
+
     pub(super) async fn on_courier_envelope(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
-        let Ok(envelope) = CourierEnvelope::decode(&packet.payload) else {
+        self.receive_courier(&packet.payload, packet.timestamp, claimed)
+            .await;
+    }
+
+    async fn receive_courier(&mut self, payload: &[u8], timestamp: u64, claimed: &PeerId) {
+        let Ok(envelope) = CourierEnvelope::decode(payload) else {
             return;
         };
         if envelope.is_expired(now_millis()) {
@@ -993,7 +1029,7 @@ impl BleRuntime {
                         .account_mesh_keys(&owner, &self.state.route(&sender))
                         .is_some_and(|(noise, _)| authenticated_pair || Some(noise) == sender_key)
                 {
-                    self.process_signal_carrier(carrier, &sender, packet.timestamp, false)
+                    self.process_signal_carrier(carrier, &sender, timestamp, false)
                         .await
                 } else {
                     false
@@ -1002,12 +1038,7 @@ impl BleRuntime {
                 decode_noise_payload(&plaintext)
                 && let Ok(message) = PrivateMessagePacket::decode(body)
             {
-                self.emit_dm(
-                    &sender,
-                    &message.message_id,
-                    &message.content,
-                    packet.timestamp,
-                )
+                self.emit_dm(&sender, &message.message_id, &message.content, timestamp)
             } else {
                 false
             };
