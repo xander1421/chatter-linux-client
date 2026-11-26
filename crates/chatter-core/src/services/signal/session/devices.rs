@@ -340,6 +340,45 @@ impl SignalService {
         Ok(())
     }
 
+    /// Reconcile the posting device too. It has no durable session with
+    /// itself. A valid refresh supplies only the echo's registration ID, and
+    /// an extra-device hint suppresses that echo for this submission.
+    pub(crate) async fn reconcile_private_post_devices(
+        &self,
+        source: &mut PreKeySource<'_>,
+        recipient: &str,
+        devices: &chatter_proto::chat_v1::MismatchedDevices,
+        mut echo_registration: Option<u32>,
+    ) -> Result<Option<u32>, ServiceError> {
+        let local = self.get_our_address()?;
+        let is_echo = |device| recipient == local.name() && device == u32::from(local.device_id());
+        // Each device has one disposition. In particular, repeated hints
+        // must not produce multiple echo lookups after a peer's session is ready.
+        let mut seen = std::collections::HashSet::new();
+        for &device in devices.extra_devices.iter().chain(&devices.stale_devices).chain(&devices.missing_devices) {
+            if DeviceId::try_from(device).is_err() || !seen.insert(device) {
+                return Err(crate::error::NetworkError::InvalidRequest("invalid private device mismatch".into()).into());
+            }
+        }
+        for &device in devices.extra_devices.iter().chain(&devices.stale_devices).chain(&devices.missing_devices) {
+            if !is_echo(device) {
+                self.actor.archive_session_for_resend(recipient.to_owned(), device, None).await?;
+            }
+        }
+        if devices.extra_devices.iter().copied().any(is_echo) {
+            echo_registration = None;
+        }
+        for &device in devices.missing_devices.iter().chain(&devices.stale_devices) {
+            if is_echo(device) {
+                let bundle = Self::fetch_device_bundle(source, recipient, device).await?;
+                echo_registration = Some(self.actor.validate_private_echo_bundle(local.clone(), bundle).await?);
+            } else {
+                self.ensure_session_with_source(source, recipient, device).await?;
+            }
+        }
+        Ok(echo_registration)
+    }
+
     /// Archive the current session state with every device of `recipient_id`
     /// we hold a session record for, through the same actor path as
     /// [`Self::reconcile_devices`]. The next all-devices send then finds no

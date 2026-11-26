@@ -495,6 +495,13 @@ impl MessageGateway {
             let channel: ChannelId = id.parse().map_err(|_| {
                 ServiceError::Validation("invalid channel receipt transcript scope".into())
             })?;
+            if self.channel_repo.get(&channel)?.is_some_and(|row| {
+                row.channel_type == crate::domain::channel::ChannelType::Private
+            }) {
+                return Err(ServiceError::Validation(
+                    "private channels do not accept linked-device receipt transcripts".into(),
+                ));
+            }
             let targets = sync
                 .receipt_targets
                 .iter()

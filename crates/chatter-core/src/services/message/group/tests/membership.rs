@@ -81,7 +81,7 @@
         };
         use rand::{SeedableRng, rngs::StdRng};
         use std::{
-            collections::VecDeque, convert::Infallible, future::Future, pin::Pin,
+            collections::{HashMap, VecDeque}, convert::Infallible, future::Future, pin::Pin,
             sync::{Arc, Mutex}, task::{Context, Poll},
         };
         use tokio::net::TcpListener;
@@ -114,12 +114,55 @@
                 .unwrap()
         }
 
+        async fn read_grpc_request<M: prost::Message + Default>(mut body: Body) -> M {
+            use http_body::Body as _;
+            let mut wire = Vec::new();
+            while let Some(frame) = futures::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
+                if let Ok(data) = frame.unwrap().into_data() {
+                    wire.extend_from_slice(&data);
+                }
+            }
+            M::decode(&wire[5..]).unwrap()
+        }
+
+        fn repair_bundle(owner: UserId, registration_id: u32, rng: &mut StdRng) -> pb::SignalPreKeyBundle {
+            use libsignal_protocol::{IdentityKeyPair, KeyPair, kem};
+            use pb::signal_pre_key_bundle::{KyberPreKeyRecord, SignedPreKeyRecord};
+
+            let identity = IdentityKeyPair::generate(
+                &mut StdRng::seed_from_u64(owner.as_uuid().as_u128() as u64),
+            );
+            let signed = KeyPair::generate(rng).public_key.serialize().to_vec();
+            let kyber = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng)
+                .public_key.serialize().to_vec();
+            pb::SignalPreKeyBundle {
+                identity_key: identity.identity_key().serialize().to_vec(),
+                registration_id,
+                device_id: 1,
+                signed_prekey: Some(SignedPreKeyRecord {
+                    id: 17,
+                    signature: identity.private_key().calculate_signature(&signed, rng).unwrap().to_vec(),
+                    public_key: signed,
+                    timestamp: 1,
+                }),
+                kyber_prekey: Some(KyberPreKeyRecord {
+                    id: 18,
+                    signature: identity.private_key().calculate_signature(&kyber, rng).unwrap().to_vec(),
+                    public_key: kyber,
+                    timestamp: 1,
+                }),
+                ..Default::default()
+            }
+        }
+
         #[derive(Clone, Default)]
         struct Probe {
             calls: Arc<Mutex<Vec<(String, bool, bool)>>>,
             mismatch: Arc<Mutex<Option<(String, Vec<u32>)>>>,
             deposits: Arc<Mutex<Vec<pb::SendSealedMessageRequest>>>,
-            receipt_error: Arc<Mutex<Option<tonic::Status>>>,
+            repair: Arc<Mutex<HashMap<String, pb::SignalPreKeyBundle>>>,
+            stale_deposits: Arc<Mutex<HashMap<String, Vec<u32>>>>,
+            group_success: Arc<Mutex<bool>>,
         }
 
         #[derive(Clone)]
@@ -143,9 +186,6 @@
             fn call(&mut self, request: http::Request<Body>) -> Self::Future {
                 let probe = self.0.clone();
                 Box::pin(async move {
-                    use http_body::Body as _;
-                    use prost::Message as _;
-
                     let path = request.uri().path().to_owned();
                     probe.calls.lock().unwrap().push((
                         path.clone(),
@@ -165,29 +205,43 @@
                                 ..Default::default()
                             }));
                         }
+                        if *probe.group_success.lock().unwrap() {
+                            return Ok(grpc_reply(pb::SendGroupMessageResponse {
+                                success: true,
+                                server_timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                                ..Default::default()
+                            }));
+                        }
                     }
                     if path.ends_with("/SendSealedMessage") {
-                        let is_receipt = request.headers().contains_key("unidentified-access-key");
-                        let mut body = request.into_body();
-                        let mut wire = Vec::new();
-                        while let Some(frame) = futures::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
-                            if let Ok(data) = frame.unwrap().into_data() {
-                                wire.extend_from_slice(&data);
-                            }
-                        }
-                        let deposit = pb::SendSealedMessageRequest::decode(&wire[5..]).unwrap();
+                        let deposit: pb::SendSealedMessageRequest = read_grpc_request(request.into_body()).await;
+                        let stale_devices = probe.stale_deposits.lock().unwrap().remove(&deposit.destination_user_id);
                         let delivered = deposit.messages.iter().map(|m| m.device_id).collect();
                         probe.deposits.lock().unwrap().push(deposit);
-                        if is_receipt {
-                            if let Some(status) = probe.receipt_error.lock().unwrap().take() {
-                                return Ok(status.into_http());
-                            }
+                        if let Some(stale_devices) = stale_devices {
+                            return Ok(grpc_reply(pb::SendSealedMessageResponse {
+                                mismatched_devices: Some(pb::MismatchedDevices {
+                                    stale_devices,
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            }));
                         }
                         return Ok(grpc_reply(pb::SendSealedMessageResponse {
                             success: true,
                             delivered_to_devices: delivered,
                             ..Default::default()
                         }));
+                    }
+                    if path.ends_with("/GetPreKeyBundle") {
+                        let lookup: pb::GetPreKeyBundleRequest = read_grpc_request(request.into_body()).await;
+                        if let Some(bundle) = probe.repair.lock().unwrap().get(&lookup.user_id) {
+                            if lookup.device_id == bundle.device_id.to_string() {
+                                return Ok(grpc_reply(pb::GetPreKeyBundleResponse {
+                                    result: Some(pb::get_pre_key_bundle_response::Result::Bundle(bundle.clone())),
+                                }));
+                            }
+                        }
                     }
                     Ok(tonic::Status::aborted("fixture reached").into_http())
                 })
@@ -251,8 +305,15 @@
 
         // A new chain deposits to every account as AllDevices, including
         // the sender's current device. Every envelope has the same wire size.
-        seed_tokens(alice, 9);
+        seed_tokens(alice, 29);
         alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
+        assert!(matches!(
+            alice.submit_group_request(&request, &distribution).await,
+            Err(MessageError::Network(crate::error::NetworkError::AnonymousCredentialsUnavailable))
+        ));
+        assert!(probe.calls.lock().unwrap().is_empty(), "no partial SKDM fan-out");
+        alice.database.connection().unwrap().execute("DELETE FROM mailbox_tokens", []).unwrap();
+        seed_tokens(alice, 50);
         let sealed_call = ("/chat.v1.MessageService/SendSealedMessage".to_owned(), false, true);
         let group_call = ("/chat.v1.MessageService/SendGroupMessage".to_owned(), false, false);
         for expected in [vec![sealed_call.clone(), sealed_call, group_call.clone()], vec![group_call]] {
@@ -288,6 +349,61 @@
         }
         assert_eq!(envelope_lengths, vec![4190; 3]);
 
+        // The same named-device repair makes the same RPC sequence for
+        // the posting device and for another member, then reaches submit.
+        // Use a new chain to make both deposits necessary.
+        alice.signal_service.rotate_sender_key(&t.channel_id).await.unwrap();
+        let distribution = alice.create_sender_key_for_channel(&t.channel_id).await.unwrap();
+        let (content, _) = alice.prepare_encrypted_content(
+            &t.channel_id,
+            &chatter_proto::protovalidate::test_plaintext("next private post"),
+            pb::message::Content::default(),
+            true,
+            2,
+        ).await.unwrap();
+        let request = pb::SendMessageRequest {
+            content: Some(content),
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            ..request
+        };
+        let own_registration = store.get_local_identity().unwrap().unwrap().0;
+        let bob_registration = alice.signal_service.session_registration_id(&bob, 1).unwrap();
+        for (member, registration) in [(t.alice_id, own_registration), (t.bob_id, bob_registration)] {
+            probe.repair.lock().unwrap().insert(
+                member.to_string(), repair_bundle(member, registration, &mut rng),
+            );
+            probe.stale_deposits.lock().unwrap().insert(member.to_string(), vec![1]);
+        }
+        *probe.group_success.lock().unwrap() = true;
+        alice.submit_group_request(&request, &distribution).await.unwrap();
+        *probe.group_success.lock().unwrap() = false;
+        let sealed_call = ("/chat.v1.MessageService/SendSealedMessage".to_owned(), false, true);
+        let prekey_call = ("/chat.v1.AuthService/GetPreKeyBundle".to_owned(), false, true);
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [sealed_call.clone(), prekey_call.clone(), sealed_call.clone(),
+             sealed_call.clone(), prekey_call, sealed_call,
+             ("/chat.v1.MessageService/SendGroupMessage".into(), false, false)],
+        );
+        let repaired = std::mem::take(&mut *probe.deposits.lock().unwrap());
+        assert_eq!(repaired.len(), 4);
+        for pair in repaired.chunks_exact(2) {
+            assert_eq!(pair[0].destination_user_id, pair[1].destination_user_id);
+            assert_eq!(pair[0].delivery, pair[1].delivery);
+            assert_eq!(pair[0].messages.len(), pair[1].messages.len());
+            assert_eq!(pair[0].messages[0].registration_id, pair[1].messages[0].registration_id);
+        }
+        assert!(store.load_session(&format!("{}:1", t.alice_id)).unwrap().is_none());
+
+        let mut auth = alice.auth_client();
+        alice.sync_channel_receipt_targets(t.channel_id, 2, &mut auth, true).await;
+        assert!(probe.calls.lock().unwrap().is_empty(), "private posts must not self-sync");
+        let row_count: u32 = alice.database.read_connection().unwrap().query_row(
+            "SELECT count(*) FROM settings WHERE key LIKE 'private.receipt-sync:%'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(row_count, 0);
+
         alice.database.connection().unwrap().execute(
             "UPDATE peer_key_transparency SET state='unverified-inbound' WHERE account=?1",
             [&bob],
@@ -309,7 +425,7 @@
             alice.submit_group_request(&request, &distribution).await,
             Err(MessageError::Network(crate::error::NetworkError::InvalidRequest(_)))
         ));
-        assert_eq!(alice.token_manager.available_token_count().unwrap(), 7);
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 42);
         assert_eq!(
             std::mem::take(&mut *probe.calls.lock().unwrap()),
             [("/chat.v1.MessageService/SendGroupMessage".into(), false, false)]
@@ -337,60 +453,18 @@
             ]
         );
 
-        // Exhaustion waits for an independent refill and sends no RPC.
+        // Exhaustion waits for an independent refill and makes no RPC.
+        alice.database.connection().unwrap().execute(
+            "UPDATE mailbox_tokens SET used_at='test'
+             WHERE id IN (SELECT id FROM mailbox_tokens WHERE used_at IS NULL ORDER BY id LIMIT -1 OFFSET 4)",
+            [],
+        ).unwrap();
         assert!(matches!(
             alice.submit_group_request(&request, &distribution).await,
             Err(MessageError::Network(crate::error::NetworkError::AnonymousCredentialsUnavailable))
         ));
         assert!(probe.calls.lock().unwrap().is_empty());
         assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
-
-        // Empty and populated slots have the same observable RPC shape.
-        // An unconfirmed real slot keeps the row and creates no extra send.
-        alice.settings_repo.set_bytes(crate::storage::repositories::settings_repo::keys::PROFILE_KEY, &[3; 32]).unwrap();
-        alice.send_private_receipt_slot(t.alice_id).await.unwrap();
-        let mut auth = alice.auth_client();
-        alice.sync_channel_receipt_targets(t.channel_id, 42, &mut auth, true).await;
-        let row_count = || alice.database.read_connection().unwrap().query_row(
-            "SELECT count(*) FROM settings WHERE key LIKE 'private.receipt-sync:%'",
-            [],
-            |row| row.get::<_, u32>(0),
-        ).unwrap();
-        assert_eq!(row_count(), 1);
-        *probe.receipt_error.lock().unwrap() = Some(tonic::Status::deadline_exceeded("fixture timeout"));
-        assert!(matches!(
-            alice.send_private_receipt_slot(t.alice_id).await,
-            Err(MessageError::Network(crate::error::NetworkError::Timeout))
-        ));
-        assert_eq!(row_count(), 1);
-        alice.send_private_receipt_slot(t.alice_id).await.unwrap();
-        assert_eq!(row_count(), 0);
-        alice.send_private_receipt_slot(t.alice_id).await.unwrap();
-        assert_eq!(
-            std::mem::take(&mut *probe.calls.lock().unwrap()),
-            vec![("/chat.v1.MessageService/SendSealedMessage".into(), false, false); 4],
-        );
-        assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
-
-        let receipts = std::mem::take(&mut *probe.deposits.lock().unwrap());
-        let ids: std::collections::HashSet<_> = receipts.iter().map(|d| d.client_request_id.as_str()).collect();
-        assert_eq!(ids.len(), 4);
-        for (index, receipt) in receipts.into_iter().enumerate() {
-            assert_eq!(receipt.destination_user_id, t.alice_id.to_string());
-            assert_eq!(receipt.delivery, pb::SealedDelivery::NamedDevices as i32);
-            assert_eq!(receipt.messages.len(), 1);
-            assert_eq!(receipt.messages[0].device_id, 2);
-            let body = &receipt.messages[0].sealed_message.as_ref().unwrap().sealed_body;
-            assert_eq!(body.len(), 8192);
-            let (plain, _) = open_fixture_sealed(&mut linked_remote, &original, &linked, body).await;
-            let content = chatter_proto::protovalidate::decode_inbound_content(&plain, "fixture receipt slot").unwrap();
-            use chatter_proto::content_v1::content::Content;
-            match (index, content.content) {
-                (0 | 3, Some(Content::NullMessage(_))) => {}
-                (1 | 2, Some(Content::SyncSent(sync))) => assert_eq!(sync.timestamp, 42),
-                other => panic!("unexpected receipt slot: {other:?}"),
-            }
-        }
         server.abort();
     }
 

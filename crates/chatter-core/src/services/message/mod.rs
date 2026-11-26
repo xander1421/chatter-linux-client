@@ -204,7 +204,7 @@ pub enum MessageError {
 impl MessageService {
     fn anonymous_prekey_source(&self) -> super::signal::PreKeySource<'_> {
         super::signal::PreKeySource::Anonymous {
-            pool: &self.grpc_pool,
+            client: self.grpc_pool.anonymous_auth_client(),
             tokens: &self.token_manager,
             claim: TokenManager::claim_send_credential,
         }

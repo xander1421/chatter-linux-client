@@ -351,25 +351,39 @@ impl CoreServices {
     }
 
     /// Run credential issuance on its own clock. Every signed-in tick sends
-    /// one fixed batch regardless of the local balance or last grant, including
-    /// quota refusals. A separate jittered loop retries parked anonymous sends.
+    /// one fixed batch regardless of the local balance. After a quota refusal,
+    /// probe once an hour so a larger same-day grant can still take effect.
     pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
         let auth = self.auth_state.clone();
         let refill = async move {
+            const QUOTA_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
             initial_token_refill_sleep().await;
             let mut ticks = credential_refill_clock();
+            let mut quota_retry = None;
             loop {
-                ticks.tick().await;
+                let tick = ticks.tick().await;
                 let state = auth.get();
                 if state.current_user_id.is_none() || state.session_ended {
+                    continue;
+                }
+                if quota_retry.is_some_and(|(revision, next)| {
+                    revision == state.session_revision && tick < next
+                }) {
                     continue;
                 }
                 match token_manager.request_tokens(
                     &grpc_pool, crate::mailbox::token_manager::MAX_TOKENS_PER_REQUEST,
                 ).await {
-                    Ok(granted) => tracing::debug!(granted, "Scheduled credential batch received"),
+                    Ok(granted) => {
+                        quota_retry = None;
+                        tracing::debug!(granted, "Scheduled credential batch received");
+                    }
+                    Err(error @ crate::error::MailboxError::QuotaExhausted) => {
+                        quota_retry = Some((state.session_revision, tick + QUOTA_PROBE_INTERVAL));
+                        trace_token_refill_failure(&error);
+                    }
                     Err(error) => trace_token_refill_failure(&error),
                 }
                 if let Err(error) = token_manager.prune_expired_unused_tokens() {

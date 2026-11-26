@@ -171,12 +171,18 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::ValidatePrivateEchoBundle { local, bundle, response } => {
+                            let result = SealedSenderManager::validate_private_echo_bundle(&store, &local, bundle)
+                                .await.map_err(ServiceError::Crypto);
+                            let _ = response.send(result);
+                        }
+
                         SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, shape, permit, response } => {
                             let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), shape, &store, &permit).await;
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::EncryptMultiRecipient { contents, sender_cert, destinations, group_id, response } => {
+                        SignalCommand::EncryptMultiRecipient { contents, sender_cert, destinations, group_id, echo_registration, response } => {
                             let local_address = match local_protocol_address(&settings_repo) {
                                 Ok(a) => a,
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
@@ -192,7 +198,9 @@ impl SignalActorHandle {
                                     libsignal_protocol::ContentHint::Resendable,
                                     Some(group_id),
                                 )?;
-                                SealedSenderManager::encrypt_multi_recipient(&usmc, &destinations, &local_address, &store).await
+                                SealedSenderManager::encrypt_multi_recipient(
+                                    &usmc, &destinations, &local_address, &store, echo_registration,
+                                ).await
                             }
                             .await
                             .map_err(ServiceError::Crypto);

@@ -134,7 +134,6 @@ mod v141_user_block_intervals;
 mod v142_channel_delivery_outbox;
 mod v143_verified_member_mutes;
 mod v144_peer_key_transparency;
-mod v145_drop_pending_blinds;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -496,5 +495,4 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v142_channel_delivery_outbox::V142ChannelDeliveryOutbox)
         .register(v143_verified_member_mutes::V143VerifiedMemberMutes)
         .register(v144_peer_key_transparency::V144PeerKeyTransparency)
-        .register(v145_drop_pending_blinds::V145DropPendingBlinds)
 }

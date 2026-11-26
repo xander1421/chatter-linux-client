@@ -43,6 +43,7 @@ struct PostBudget {
     token_limit: usize,
     tokens: Cell<usize>,
     repairs: Cell<usize>,
+    echo_registration: Cell<Option<u32>>,
 }
 tokio::task_local! { static PRIVATE_POST_BUDGET: PostBudget; }
 
@@ -132,6 +133,37 @@ fn active_members(verified: &VerifiedChannel) -> Vec<String> {
 }
 
 impl MessageService {
+    pub(super) fn private_echo_registration(&self) -> Result<Option<u32>, NetworkError> {
+        PRIVATE_POST_BUDGET.try_with(|post| post.echo_registration.get())
+            .map_err(|_| budget_exhausted())
+    }
+
+    pub(super) async fn reconcile_private_post_devices(
+        &self,
+        member: &str,
+        devices: &chat_v1::MismatchedDevices,
+    ) -> Result<(), crate::error::ServiceError> {
+        let repaired = self.signal_service.reconcile_private_post_devices(
+            &mut self.private_post_prekeys(), member, devices, self.private_echo_registration()?,
+        ).await?;
+        PRIVATE_POST_BUDGET.try_with(|post| post.echo_registration.set(repaired))
+            .map_err(|_| budget_exhausted())?;
+        Ok(())
+    }
+
+    async fn private_post_devices(&self, member: &str, owner: &str) -> Result<Vec<(u32, Option<u32>)>, MessageError> {
+        let mut devices = self.signal_service.session_device_registrations(member).await
+            .map_err(|e| MessageError::from_signal_send(e, "group sessions"))?;
+        if member == owner {
+            let local = self.current_device_id_or_zero();
+            devices.retain(|(device, _)| *device != local);
+            if let Some(registration) = self.private_echo_registration()? {
+                devices.push((local, Some(registration)));
+            }
+        }
+        Ok(devices)
+    }
+
     /// Whether `channel_id` is a private channel, whose messages have no
     /// server copy: they reach members anonymously (this file), so there is
     /// nothing on the server to fetch, delete or pin.
@@ -222,7 +254,7 @@ impl MessageService {
 
     pub(super) fn private_post_prekeys(&self) -> PreKeySource<'_> {
         PreKeySource::Anonymous {
-            pool: &self.grpc_pool,
+            client: self.grpc_pool.private_post_auth_client(),
             tokens: &self.token_manager,
             claim: claim_private_post_credential,
         }
@@ -263,12 +295,15 @@ impl MessageService {
         self.signal_service.get_cached_sender_certificate()
             .map_err(|error| MessageError::from_signal_send(error, "Sender certificate"))?
             .ok_or(NetworkError::Unavailable)?;
+        let (local_registration, _) = self.signal_service.key_store.get_local_identity()?
+            .ok_or(NetworkError::Unavailable)?;
         let budget = PostBudget {
             // A cold member may need two lookups (before and after KT) and
             // one sender-key deposit. Repairs have their own cumulative cap.
             token_limit: 3 * members.len() + 2 * MAX_REPAIRS_PER_POST,
             tokens: Cell::new(0),
             repairs: Cell::new(0),
+            echo_registration: Cell::new(Some(local_registration)),
         };
         PRIVATE_POST_BUDGET.scope(budget, self.submit_verified_group(
             request, distribution, channel_id, verified, me, members, contents, token,
@@ -315,25 +350,30 @@ impl MessageService {
         } else {
             Default::default()
         };
-        let own_device = self.current_device_id_or_zero();
-        let (own_registration, _) = self.signal_service.key_store.get_local_identity()?
-            .ok_or(NetworkError::Unavailable)?;
         let mut message_client = self.message_client();
         let mut distributed = std::collections::HashSet::new();
         for round in 0..=MAX_RECONCILE_ROUNDS {
+            let mut fanout = Vec::new();
             for member in &members {
-                let mut devices = self.signal_service.session_device_registrations(member).await
-                    .map_err(|e| MessageError::from_signal_send(e, "group sessions"))?;
-                if member == &me {
-                    devices.push((own_device, Some(own_registration)));
+                let devices = self.private_post_devices(member, &me).await?;
+                if devices.into_iter().any(|(device, registration)| {
+                    !distributed.contains(&(member.clone(), device))
+                        && !registration.is_some_and(|r| holders.contains(&(member.clone(), device, r)))
+                }) {
+                    fanout.push(member);
                 }
-                let missing: Vec<_> = devices.into_iter().filter(|(device, registration)| {
-                    !distributed.contains(&(member.clone(), *device))
-                        && !registration.is_some_and(|r| holders.contains(&(member.clone(), *device, r)))
-                }).collect();
-                if missing.is_empty() {
-                    continue;
+            }
+            if !fanout.is_empty() {
+                let repair_headroom = PRIVATE_POST_BUDGET.with(|post| {
+                    2 * (MAX_REPAIRS_PER_POST - post.repairs.get())
+                });
+                let available = self.token_manager.available_token_count()
+                    .map_err(|error| NetworkError::ServerError(error.to_string()))? as usize;
+                if available < fanout.len() + repair_headroom + RESERVED_MAILBOX_CREDENTIALS {
+                    return Err(NetworkError::AnonymousCredentialsUnavailable.into());
                 }
+            }
+            for member in fanout {
                 let plaintext = self.skdm_plaintext(&channel_id, &verified, distribution, member);
                 let outcome = self.deposit_private_channel_key(
                     &mut auth_client, &mut message_client, member, &plaintext, &channel_id,
@@ -347,13 +387,15 @@ impl MessageService {
                 for (device, _) in outcome.deposits {
                     distributed.insert((member.clone(), device));
                 }
-                if missing.iter().any(|(device, _)| !distributed.contains(&(member.clone(), *device))) {
+                if self.private_post_devices(member, &me).await?.iter()
+                    .any(|(device, _)| !distributed.contains(&(member.clone(), *device)))
+                {
                     return Err(MessageError::Network(NetworkError::Unavailable));
                 }
             }
             let (sealed, destinations) = self
                 .signal_service
-                .seal_group_message(&channel_id, contents.clone(), &members)
+                .seal_group_message(&channel_id, contents.clone(), &members, self.private_echo_registration()?)
                 .await
                 .map_err(|e| MessageError::from_signal_send(e, "group seal"))?;
             crate::services::gateway::submission::mark_submission_started()?;
@@ -381,18 +423,8 @@ impl MessageService {
                     return Err(invalid("device mismatch for an account outside the verified channel"));
                 }
                 let d = account.devices.clone().unwrap_or_default();
-                if account.user_id == me
-                    && d.missing_devices.iter().chain(&d.extra_devices).chain(&d.stale_devices)
-                        .any(|device| *device == own_device)
-                {
-                    return Err(invalid("device mismatch for the sending device"));
-                }
                 distributed.retain(|(member, _)| member != &account.user_id);
-                self.signal_service
-                    .reconcile_devices_with_source(
-                        &mut prekeys, &account.user_id, &d.missing_devices,
-                        &d.extra_devices, &d.stale_devices,
-                    )
+                self.reconcile_private_post_devices(&account.user_id, &d)
                     .await
                     .map_err(|e| MessageError::from_signal_send(e, "device reconciliation"))?;
             }
@@ -425,8 +457,7 @@ pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
     client: &std::sync::Arc<C>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = std::sync::Arc::downgrade(client);
-    let receipt_client = weak.clone();
-    let endorsements = async move {
+    tokio::spawn(async move {
         crate::app::core_services::initial_token_refill_sleep().await;
         loop {
             {
@@ -446,49 +477,7 @@ pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
             }
             crate::app::core_services::jittered_sleep().await;
         }
-    };
-    let receipt_cover = async move {
-        crate::app::core_services::initial_token_refill_sleep().await;
-        let mut ticks = receipt_cover_clock();
-        loop {
-            ticks.tick().await;
-            let Some(client) = receipt_client.upgrade() else { break };
-            let state = client.auth_state().get();
-            if let Some(owner) = state.current_user_id.filter(|_| {
-                !state.session_ended && client.offline_state().connection_state().is_connected()
-            }) {
-                let session = crate::state::send_session::SendSession::capture(client.auth_state());
-                let messages = client.messages();
-                if let Err(error) = crate::state::send_session::SEND_SESSION
-                    .scope(session, messages.send_private_receipt_slot(owner)).await
-                {
-                    tracing::debug!(%error, "Private-channel receipt slot deferred");
-                }
-            }
-        }
-    };
-    tokio::spawn(async move {
-        tokio::join!(endorsements, receipt_cover);
     })
-}
-
-fn receipt_cover_clock() -> tokio::time::Interval {
-    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(60));
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    ticks
-}
-
-#[cfg(test)]
-#[tokio::test(start_paused = true)]
-async fn receipt_cover_clock_skips_missed_slots() {
-    use std::time::Duration;
-    let mut ticks = receipt_cover_clock();
-    let first = ticks.tick().await;
-    tokio::time::advance(Duration::from_secs(150)).await;
-    assert_eq!(ticks.tick().await, first + Duration::from_secs(60));
-    let mut next = std::pin::pin!(ticks.tick());
-    assert!(futures::poll!(&mut next).is_pending());
-    assert_eq!(next.await, first + Duration::from_secs(180));
 }
 
 fn distribution_position(

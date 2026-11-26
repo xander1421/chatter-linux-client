@@ -100,7 +100,9 @@ impl SealedSenderManager {
                         destination, group_id, &identities, size,
                     ).await?;
                     validate_sealed_body_size(ciphertext.len(), MAX_SEALED_BODY_BYTES)?;
-                    let registration_id = base.get_local_registration_id().await.map_err(encryption_error)?;
+                    let SealedBatchShape::PrivateChannelKey { echo_registration: Some(registration_id) } = shape else {
+                        return Err(crate::error::ServiceError::Validation("missing private echo registration".into()));
+                    };
                     envelopes.push((destination.clone(), ciphertext, registration_id));
                     continue;
                 }

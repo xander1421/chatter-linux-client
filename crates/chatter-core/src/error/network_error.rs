@@ -56,6 +56,10 @@ pub enum NetworkError {
     #[error("rate limited")]
     RateLimited,
 
+    /// Mailbox issuance answered with its daily quota refusal.
+    #[error("daily mailbox token quota exhausted")]
+    MailboxQuotaExceeded,
+
     /// Server-side error.
     #[error("server error: {0}")]
     ServerError(String),
@@ -199,6 +203,7 @@ impl NetworkError {
                 | NetworkError::AnonymousCredentialsUnavailable
                 | NetworkError::TransportChanged
                 | NetworkError::RateLimited
+                | NetworkError::MailboxQuotaExceeded
                 | NetworkError::ServerError(_)
                 | NetworkError::Timeout
         )
@@ -224,6 +229,7 @@ impl NetworkError {
                 | NetworkError::Unauthenticated
                 | NetworkError::NotFound(_)
                 | NetworkError::RateLimited
+                | NetworkError::MailboxQuotaExceeded
                 | NetworkError::MismatchedDevices { .. }
         )
     }

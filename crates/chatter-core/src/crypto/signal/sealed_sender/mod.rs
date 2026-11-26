@@ -71,17 +71,14 @@ pub(crate) const MAX_SEALED_BODY_BYTES: usize = 8192;
 #[derive(Clone, Copy)]
 pub(crate) enum SealedBatchShape {
     Standard,
-    PrivateChannelKey,
-    PrivateReceipt,
+    PrivateChannelKey { echo_registration: Option<u32> },
 }
 
 impl SealedBatchShape {
     fn padded_usmc_size(self) -> Option<usize> {
         match self {
             Self::Standard => None,
-            Self::PrivateChannelKey => Some(4096),
-            // V1 framing adds 94 bytes at this length, including its MACs.
-            Self::PrivateReceipt => Some(MAX_SEALED_BODY_BYTES - 94),
+            Self::PrivateChannelKey { .. } => Some(4096),
         }
     }
 }

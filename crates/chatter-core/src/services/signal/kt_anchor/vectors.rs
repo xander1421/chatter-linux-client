@@ -268,7 +268,7 @@ async fn checkpoint_survives_unsigned_not_found_and_is_reused_after_refresh() {
     let refreshed_at = now + CHECKPOINT_REFRESH;
     for at in [now, refreshed_at, refreshed_at + Duration::from_secs(10)] {
         assert_eq!(
-            search_contact(&mut client, &settings, MISSING, &verifier, at)
+            search_contact(&mut client, &settings, PinScope::Account, MISSING, &verifier, at)
                 .await
                 .unwrap(),
             None
@@ -301,7 +301,7 @@ async fn rejects_wrong_expected_value_tampering_rollback_and_invalid_reloaded_ob
         .into(),
         ..Default::default()
     };
-    let pin = Pin::load_at(&mut client, &settings, &verifier, now)
+    let pin = Pin::load_at(&mut client, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     let first = search_proof(&vectors, "first peer");
@@ -321,13 +321,13 @@ async fn rejects_wrong_expected_value_tampering_rollback_and_invalid_reloaded_ob
     assert!(load_head(&settings, HEAD).unwrap().is_none());
     assert!(
         settings
-            .get_string(&label_state_key(PEER))
+            .get_string(&PinScope::Account.label_key("label", PEER))
             .unwrap()
             .is_none()
     );
     pin.verify(PEER, first.clone(), &key).unwrap();
 
-    let pin = Pin::load_at(&mut client, &settings, &verifier, now)
+    let pin = Pin::load_at(&mut client, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     assert_eq!(
@@ -363,7 +363,7 @@ async fn rejects_wrong_expected_value_tampering_rollback_and_invalid_reloaded_ob
             .unwrap_err(),
     );
     pin.verify(OTHER, next, &other_key).unwrap();
-    let pin = Pin::load_at(&mut client, &settings, &verifier, now)
+    let pin = Pin::load_at(&mut client, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     assert_history_unverified(pin.verify(PEER, first, &key).unwrap_err());
@@ -377,7 +377,7 @@ async fn rejects_wrong_expected_value_tampering_rollback_and_invalid_reloaded_ob
         3
     );
 
-    let storage_key = label_state_key(PEER);
+    let storage_key = PinScope::Account.label_key("label", PEER);
     let encoded = settings.get_string(&storage_key).unwrap().unwrap();
     let mut stored =
         super::StoredMonitoringData::decode(hex::decode(encoded).unwrap().as_slice()).unwrap();
@@ -402,7 +402,7 @@ async fn stalled_route_cannot_block_or_overwrite_a_faster_pin() {
         .into(),
         ..Default::default()
     };
-    Pin::load_at(&mut bootstrap, &settings, &verifier, now)
+    Pin::load_at(&mut bootstrap, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     let (release, halt) = tokio::sync::oneshot::channel();
@@ -417,11 +417,11 @@ async fn stalled_route_cannot_block_or_overwrite_a_faster_pin() {
         ..Default::default()
     };
     let (slow, ()) = tokio::join!(
-        search_contact(&mut slow, &settings, PEER, &verifier, now),
+        search_contact(&mut slow, &settings, PinScope::Account, PEER, &verifier, now),
         async {
             let value = tokio::time::timeout(
                 Duration::from_secs(2),
-                search_contact(&mut fast, &settings, PEER, &verifier, now),
+                search_contact(&mut fast, &settings, PinScope::Account, PEER, &verifier, now),
             )
             .await
             .unwrap()
@@ -470,16 +470,16 @@ async fn monitors_contacts_and_rejects_previously_listed_not_found() {
         .into(),
         ..Default::default()
     };
-    let first = search_contact(&mut client, &settings, PEER, &verifier, now)
+    let first = search_contact(&mut client, &settings, PinScope::Account, PEER, &verifier, now)
         .await
         .unwrap();
     assert!(first.is_some());
-    let unchanged = search_contact(&mut client, &settings, PEER, &verifier, now)
+    let unchanged = search_contact(&mut client, &settings, PinScope::Account, PEER, &verifier, now)
         .await
         .unwrap();
     assert_eq!(unchanged, first);
     assert!(matches!(
-        search_contact(&mut client, &settings, PEER, &verifier, now).await,
+        search_contact(&mut client, &settings, PinScope::Account, PEER, &verifier, now).await,
         Err(KtError::Invalid("previously verified label is missing"))
     ));
 }
@@ -524,7 +524,7 @@ async fn owner_monitor_persists_an_alert_when_the_server_restores_the_original_k
             .await
             .unwrap()
     );
-    let pin = Pin::load_at(&mut client, &settings, &verifier, now)
+    let pin = Pin::load_at(&mut client, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     assert!(pin.observations(PEER).unwrap().data.unwrap().owned);
@@ -556,7 +556,7 @@ async fn owner_monitor_persists_an_alert_when_the_server_restores_the_original_k
             .tree_size,
         4
     );
-    let pin = Pin::load_at(&mut client, &settings, &verifier, now)
+    let pin = Pin::load_at(&mut client, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     let data = pin.observations(PEER).unwrap().data.unwrap();
@@ -641,12 +641,12 @@ async fn contact_researches_an_advanced_version_even_if_the_key_is_restored() {
         monitors: [(request, Ok(proof))].into(),
         ..Default::default()
     };
-    let initial = search_contact(&mut client, &settings, PEER, &verifier, now)
+    let initial = search_contact(&mut client, &settings, PinScope::Account, PEER, &verifier, now)
         .await
         .unwrap();
     assert!(initial.is_some());
     assert_eq!(
-        search_contact(&mut client, &settings, PEER, &verifier, now)
+        search_contact(&mut client, &settings, PinScope::Account, PEER, &verifier, now)
             .await
             .unwrap(),
         initial
@@ -655,7 +655,7 @@ async fn contact_researches_an_advanced_version_even_if_the_key_is_restored() {
         client.searches.is_empty(),
         "an advanced version must cause a search"
     );
-    let pin = Pin::load_at(&mut client, &settings, &verifier, now)
+    let pin = Pin::load_at(&mut client, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     assert_eq!(
@@ -865,7 +865,7 @@ async fn concurrent_proofs_at_the_same_head_commit_distinct_labels_without_retry
         .into(),
         ..Default::default()
     };
-    Pin::load_at(&mut bootstrap, &settings, &verifier, now)
+    Pin::load_at(&mut bootstrap, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     let (release, halt) = tokio::sync::oneshot::channel();
@@ -888,10 +888,10 @@ async fn concurrent_proofs_at_the_same_head_commit_distinct_labels_without_retry
     };
 
     let (slow, ()) = tokio::join!(
-        search_contact(&mut slow, &settings, OTHER, &verifier, now),
+        search_contact(&mut slow, &settings, PinScope::Account, OTHER, &verifier, now),
         async {
             assert!(
-                search_contact(&mut fast, &settings, PEER, &verifier, now)
+                search_contact(&mut fast, &settings, PinScope::Account, PEER, &verifier, now)
                     .await
                     .unwrap()
                     .is_some()
@@ -900,7 +900,7 @@ async fn concurrent_proofs_at_the_same_head_commit_distinct_labels_without_retry
         },
     );
     assert!(slow.unwrap().is_some());
-    let pin = Pin::load_at(&mut bootstrap, &settings, &verifier, now)
+    let pin = Pin::load_at(&mut bootstrap, &settings, PinScope::Account, &verifier, now)
         .await
         .unwrap();
     for label in [PEER, OTHER] {

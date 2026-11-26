@@ -9,7 +9,6 @@ impl GrpcClientPool {
         *self.channel.write() = None;
         *self.unidentified_channel.write() = None;
         *self.private_post_channel.write() = None;
-        *self.private_receipt_channel.write() = None;
         *self.secret_channel.write() = None;
         #[cfg(feature = "onion")]
         {

@@ -45,6 +45,7 @@ impl SignalService {
         channel_id: &crate::domain::ids::ChannelId,
         contents: Vec<u8>,
         members: &[String],
+        echo_registration: Option<u32>,
     ) -> Result<(Vec<u8>, Vec<ProtocolAddress>), ServiceError> {
         let sender_cert = self.get_cached_sender_certificate()?.ok_or(crate::error::NetworkError::Unavailable)?;
         let ours = self.get_our_address()?;
@@ -53,14 +54,20 @@ impl SignalService {
             for device in self.session_devices(member).await? {
                 let device = libsignal_protocol::DeviceId::try_from(device)
                     .map_err(|e| ServiceError::Validation(format!("device id: {e}")))?;
-                destinations.push(ProtocolAddress::new(member.clone(), device));
+                let address = ProtocolAddress::new(member.clone(), device);
+                if address != ours {
+                    destinations.push(address);
+                }
             }
-            if *member == ours.name() {
+            if *member == ours.name() && echo_registration.is_some() {
                 destinations.push(ours.clone());
             }
         }
         let sealed = self.actor
-            .encrypt_multi_recipient(contents, sender_cert, destinations.clone(), channel_id.as_bytes().to_vec())
+            .encrypt_multi_recipient(
+                contents, sender_cert, destinations.clone(), channel_id.as_bytes().to_vec(),
+                echo_registration,
+            )
             .await?;
         Ok((sealed, destinations))
     }

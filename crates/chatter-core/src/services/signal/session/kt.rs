@@ -176,7 +176,7 @@ async fn settle_peer_verification(
 
 fn job_client(pool: &GrpcClientPool, route: KtRoute) -> Result<AnonymousKtClient, NetworkError> {
     match route {
-        KtRoute::Normal => Ok(pool.anonymous_kt_client()),
+        KtRoute::Normal => Ok(pool.account_kt_client()),
         KtRoute::AnonymousTor => pool.secret_kt_client(),
     }
 }
@@ -194,11 +194,11 @@ impl SignalService {
             return Err(NetworkError::Unavailable.into());
         }
         let mut client = job_client(pool, route)?;
-        let deadline = match route {
-            KtRoute::Normal => kt_anchor::PIN_RPC_DEADLINE,
-            KtRoute::AnonymousTor => kt_anchor::TOR_RPC_DEADLINE,
+        let (scope, deadline) = match route {
+            KtRoute::Normal => (kt_anchor::PinScope::Account, kt_anchor::PIN_RPC_DEADLINE),
+            KtRoute::AnonymousTor => (kt_anchor::PinScope::Anonymous, kt_anchor::TOR_RPC_DEADLINE),
         };
-        match self.lookup_identity(&mut client, peer, deadline).await? {
+        match self.lookup_identity(&mut client, scope, peer, deadline).await? {
             Some(actual) if actual == key => Ok(KtVerdict::Verified),
             Some(actual) => Ok(KtVerdict::Mismatch(actual)),
             None => Ok(KtVerdict::NotInLog),
@@ -231,6 +231,7 @@ impl SignalService {
     ) -> Result<Vec<u8>, ServiceError> {
         self.lookup_identity(
             auth_client.key_transparency_client(),
+            kt_anchor::PinScope::Account,
             recipient_id,
             kt_anchor::PIN_RPC_DEADLINE,
         )
@@ -246,10 +247,11 @@ impl SignalService {
     async fn lookup_identity(
         &self,
         client: &mut AnonymousKtClient,
+        scope: kt_anchor::PinScope,
         label: &str,
         deadline: Duration,
     ) -> Result<Option<Vec<u8>>, ServiceError> {
-        let value = kt_anchor::search(client, &self.settings_repo, label, deadline).await?;
+        let value = kt_anchor::search(client, &self.settings_repo, scope, label, deadline).await?;
         if let Some(value) = value.as_deref() {
             libsignal_protocol::IdentityKey::try_from(value)
                 .map_err(|_| CryptoError::InvalidKeyFormat)?;

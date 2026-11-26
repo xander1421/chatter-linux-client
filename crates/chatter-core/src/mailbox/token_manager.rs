@@ -64,7 +64,7 @@ fn credential_error(error: MailboxError) -> crate::error::NetworkError {
 /// (OPEN-ITEMS §120).
 fn grant_error(e: crate::error::NetworkError) -> MailboxError {
     match e {
-        crate::error::NetworkError::RateLimited => {
+        crate::error::NetworkError::MailboxQuotaExceeded => {
             tracing::debug!("TokenManager: server reports daily token quota exhausted");
             MailboxError::QuotaExhausted
         }
@@ -314,7 +314,7 @@ impl TokenManager {
         count: u32,
     ) -> Result<u32, MailboxError> {
         let mut client = pool.mailbox_client();
-        let mut kt = pool.credential_manifest_kt_client();
+        let mut kt = pool.account_kt_client();
         tracing::info!("TokenManager: request_tokens called, count={}", count);
 
         // No local quota gate: the server owns the daily budget (it clamps the
@@ -660,11 +660,11 @@ mod tests {
     #[test]
     fn test_grant_error_maps_exhaustion() {
         assert!(matches!(
-            grant_error(crate::error::NetworkError::RateLimited),
+            grant_error(crate::error::NetworkError::MailboxQuotaExceeded),
             MailboxError::QuotaExhausted
         ));
         assert!(matches!(
-            grant_error(crate::error::NetworkError::Unavailable),
+            grant_error(crate::error::NetworkError::RateLimited),
             MailboxError::Network(_)
         ));
     }

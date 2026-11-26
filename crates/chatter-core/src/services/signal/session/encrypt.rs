@@ -303,18 +303,21 @@ impl SignalService {
 
     pub(crate) async fn encrypt_group_distribution(
         &self,
-        source: &mut PreKeySource<'_>,
         recipient_id: &str,
         plaintext: &[u8],
         group_id: Option<&[u8]>,
+        echo_registration: Option<u32>,
     ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
-        let mut devices = self.require_group_device_sessions(source, recipient_id).await?;
+        let mut devices = self.session_devices(recipient_id).await?;
         let own = self.get_our_address()?;
         if recipient_id == own.name() {
-            devices.push(u32::from(own.device_id()));
+            let local = u32::from(own.device_id());
+            devices.retain(|device| *device != local);
+            devices.extend(echo_registration.map(|_| local));
         }
         self.encrypt_cached_devices_bounded(
-            recipient_id, &devices, plaintext, group_id, SealedBatchShape::PrivateChannelKey,
+            recipient_id, &devices, plaintext, group_id,
+            SealedBatchShape::PrivateChannelKey { echo_registration },
         ).await
     }
 

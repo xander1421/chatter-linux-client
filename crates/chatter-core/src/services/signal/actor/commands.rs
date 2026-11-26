@@ -62,6 +62,11 @@ pub(crate) enum SignalCommand {
         bundle: PreKeyBundle,
         response: oneshot::Sender<Result<(), ServiceError>>,
     },
+    ValidatePrivateEchoBundle {
+        local: ProtocolAddress,
+        bundle: PreKeyBundle,
+        response: oneshot::Sender<Result<u32, ServiceError>>,
+    },
     EncryptSealed {
         plaintext: Vec<u8>,
         sender_cert: SenderCertificate,
@@ -85,6 +90,7 @@ pub(crate) enum SignalCommand {
         sender_cert: SenderCertificate,
         destinations: Vec<ProtocolAddress>,
         group_id: Vec<u8>,
+        echo_registration: Option<u32>,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
     EncryptIdentified {

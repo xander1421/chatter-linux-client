@@ -105,21 +105,14 @@ impl MessageService {
             AccessPolicy::FetchIfNeeded => self.signal_service
                 .reconcile_devices(auth_client, recipient_id, missing, extra, stale).await,
             AccessPolicy::AnonymousGroup => {
-                let local_device_named = self.current_user_id()
-                    .is_ok_and(|me| me.to_string() == recipient_id)
-                    && missing.iter().chain(extra).chain(stale)
-                        .any(|device| *device == self.current_device_id_or_zero());
-                if local_device_named {
-                    return DepositOutcome {
-                        error: Some(MessageError::Network(crate::error::NetworkError::InvalidRequest(
-                            "device mismatch for the sending device".into(),
-                        ))),
-                        ..Default::default()
-                    };
-                }
                 match super::super::group_send::charge_private_repairs(missing.len() + extra.len() + stale.len()) {
-                    Ok(()) => self.signal_service.reconcile_devices_with_source(
-                        &mut self.private_post_prekeys(), recipient_id, missing, extra, stale,
+                    Ok(()) => self.reconcile_private_post_devices(
+                        recipient_id,
+                        &chatter_proto::chat_v1::MismatchedDevices {
+                            missing_devices: missing.clone(),
+                            extra_devices: extra.clone(),
+                            stale_devices: stale.clone(),
+                        },
                     ).await,
                     Err(error) => Err(error.into()),
                 }
@@ -206,7 +199,7 @@ impl MessageService {
                 ).await,
             AccessPolicy::AnonymousGroup => self.signal_service
                 .encrypt_group_distribution(
-                    &mut self.private_post_prekeys(), recipient_id, plaintext, group_id,
+                    recipient_id, plaintext, group_id, self.private_echo_registration()?,
                 ).await.map(|sealed| (sealed, false)),
         };
         let (sealed, unrestricted) = match encrypted {
@@ -454,7 +447,7 @@ impl MessageService {
 
         crate::state::send_session::check_send_session()
             .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
-        let mut client = self.grpc_pool.anonymous_message_client();
+        let mut client = self.grpc_pool.private_post_client();
         let token = super::super::group_send::claim_private_post_credential(&self.token_manager)?;
         client.send_with_anonymous_credential(
             request_id, recipient_id, messages, SealedDelivery::AllDevices, 0,

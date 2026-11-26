@@ -25,6 +25,38 @@ use crate::storage::repositories::SettingsRepository;
 
 const HEAD: &str = "kt.libsignal.head";
 const DISTINGUISHED_HEAD: &str = "kt.libsignal.distinguished";
+/// Keep the last head, checkpoint, and per-label observations on the route
+/// that fetched them. Each value can appear in a subsequent proof request.
+#[derive(Clone, Copy)]
+pub(crate) enum PinScope {
+    Account,
+    Anonymous,
+}
+
+impl PinScope {
+    fn head(self) -> &'static str {
+        match self {
+            Self::Account => HEAD,
+            Self::Anonymous => "kt.libsignal.anonymous.head",
+        }
+    }
+
+    fn distinguished(self) -> &'static str {
+        match self {
+            Self::Account => DISTINGUISHED_HEAD,
+            Self::Anonymous => "kt.libsignal.anonymous.distinguished",
+        }
+    }
+
+    fn label_key(self, field: &str, label: &[u8]) -> String {
+        let prefix = match self {
+            Self::Account => "kt.libsignal",
+            Self::Anonymous => "kt.libsignal.anonymous",
+        };
+        format!("{prefix}.{field}.{}", hex::encode(label))
+    }
+}
+
 const DISTINGUISHED: &[u8] = b"distinguished";
 const CHECKPOINT_REFRESH: Duration = Duration::from_secs(6 * 60 * 60);
 pub(crate) const PIN_RPC_DEADLINE: Duration = Duration::from_secs(10);
@@ -146,6 +178,7 @@ struct Observations {
 /// retry with a consistency proof from the current pin.
 pub(crate) struct Pin<'a> {
     settings: &'a SettingsRepository,
+    scope: PinScope,
     verifier: &'a KeyTransparency,
     now: SystemTime,
     last: Option<PinnedHead>,
@@ -157,16 +190,17 @@ impl<'a> Pin<'a> {
         client: &mut impl KtTransport,
         settings: &'a SettingsRepository,
     ) -> Result<Self, KtError> {
-        Self::load_at(client, settings, verifier()?, SystemTime::now()).await
+        Self::load_at(client, settings, PinScope::Account, verifier()?, SystemTime::now()).await
     }
 
     async fn load_at(
         client: &mut impl KtTransport,
         settings: &'a SettingsRepository,
+        scope: PinScope,
         verifier: &'a KeyTransparency,
         now: SystemTime,
     ) -> Result<Self, KtError> {
-        let checkpoint = load_head(settings, DISTINGUISHED_HEAD)?;
+        let checkpoint = load_head(settings, scope.distinguished())?;
         let refresh = checkpoint.as_ref().is_none_or(|head| {
             let now_ms = now
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -200,8 +234,8 @@ impl<'a> Pin<'a> {
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(StorageError::from)?;
-            check_setting(&tx, DISTINGUISHED_HEAD, encoded_head(checkpoint.as_ref()))?;
-            SettingsRepository::set_with_connection(&tx, DISTINGUISHED_HEAD, &encoded)?;
+            check_setting(&tx, scope.distinguished(), encoded_head(checkpoint.as_ref()))?;
+            SettingsRepository::set_with_connection(&tx, scope.distinguished(), &encoded)?;
             tx.commit().map_err(StorageError::from)?;
             decode_head(encoded)?
         } else {
@@ -209,9 +243,10 @@ impl<'a> Pin<'a> {
         };
         Ok(Self {
             settings,
+            scope,
             verifier,
             now,
-            last: load_head(settings, HEAD)?,
+            last: load_head(settings, scope.head())?,
             distinguished,
         })
     }
@@ -225,11 +260,11 @@ impl<'a> Pin<'a> {
     }
 
     fn observations(&self, label: &[u8]) -> Result<Observations, KtError> {
-        let key = label_state_key(label);
+        let key = self.scope.label_key("label", label);
         let conn = self.settings.database().read_connection()?;
         let tx = conn.unchecked_transaction().map_err(StorageError::from)?;
-        check_setting(&tx, HEAD, encoded_head(self.last.as_ref()))?;
-        check_setting(&tx, DISTINGUISHED_HEAD, Some(&self.distinguished.encoded))?;
+        check_setting(&tx, self.scope.head(), encoded_head(self.last.as_ref()))?;
+        check_setting(&tx, self.scope.distinguished(), Some(&self.distinguished.encoded))?;
         let encoded: Option<String> = SettingsRepository::get_with_connection(&tx, &key)?;
         let data = encoded
             .as_deref()
@@ -375,7 +410,7 @@ impl<'a> Pin<'a> {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StorageError::from)?;
-        let current: Option<String> = SettingsRepository::get_with_connection(&tx, HEAD)?;
+        let current: Option<String> = SettingsRepository::get_with_connection(&tx, self.scope.head())?;
         let head_advanced = current.as_deref() != encoded_head(self.last.as_ref());
         // A concurrent request may already have pinned this exact verified
         // head. Its proof and ours authenticated the same root. Merge only
@@ -388,7 +423,7 @@ impl<'a> Pin<'a> {
         {
             return Err(KtError::PinChanged);
         }
-        check_setting(&tx, DISTINGUISHED_HEAD, Some(&self.distinguished.encoded))?;
+        check_setting(&tx, self.scope.distinguished(), Some(&self.distinguished.encoded))?;
         check_setting(&tx, &observations.key, observations.encoded.as_deref())?;
 
         if !head_advanced
@@ -396,7 +431,7 @@ impl<'a> Pin<'a> {
                 .last_head()
                 .is_none_or(|last| last.0.tree_size != head.0.tree_size)
         {
-            SettingsRepository::set_with_connection(&tx, HEAD, &encode_head(head, self.now))?;
+            SettingsRepository::set_with_connection(&tx, self.scope.head(), &encode_head(head, self.now))?;
         }
         if let Some(data) = data.filter(|data| Some(data) != observations.data.as_ref()) {
             let stored = StoredMonitoringData {
@@ -436,6 +471,7 @@ fn check_setting(
 pub(crate) async fn search(
     client: &mut AnonymousKtClient,
     settings: &SettingsRepository,
+    scope: PinScope,
     label: &str,
     deadline: Duration,
 ) -> Result<Option<Vec<u8>>, KtError> {
@@ -445,6 +481,7 @@ pub(crate) async fn search(
             match search_contact(
                 client,
                 settings,
+                scope,
                 label.as_bytes(),
                 verifier,
                 SystemTime::now(),
@@ -462,13 +499,14 @@ pub(crate) async fn search(
 async fn search_contact(
     client: &mut impl KtTransport,
     settings: &SettingsRepository,
+    scope: PinScope,
     label: &[u8],
     verifier: &KeyTransparency,
     now: SystemTime,
 ) -> Result<Option<Vec<u8>>, KtError> {
-    let mut pin = Pin::load_at(client, settings, verifier, now).await?;
+    let mut pin = Pin::load_at(client, settings, scope, verifier, now).await?;
     let mut observations = pin.observations(label)?;
-    let value_key = format!("kt.libsignal.value.{}", hex::encode(label));
+    let value_key = scope.label_key("value", label);
     if let Some(data) = observations.data.as_ref() {
         let previous = data.greatest_version();
         let (head, data) = pin.monitor_label(client, label, data).await?;
@@ -479,7 +517,7 @@ async fn search_contact(
                 return Ok(Some(value));
             }
         }
-        pin = Pin::load_at(client, settings, verifier, now).await?;
+        pin = Pin::load_at(client, settings, scope, verifier, now).await?;
         observations = pin.observations(label)?;
     }
     let Some(response) = pin.search_label(client, label).await? else {
@@ -654,7 +692,7 @@ async fn check_own(
             "local owner key changed during transparency verification",
         ));
     }
-    let pin = Pin::load_at(client, settings, verifier, now).await?;
+    let pin = Pin::load_at(client, settings, PinScope::Account, verifier, now).await?;
     let observations = pin.observations(label)?;
     let save_owner = |conn: &rusqlite::Connection, state: &OwnerState| -> Result<(), KtError> {
         if OwnerState::load(conn, label)? != previous {
@@ -844,10 +882,6 @@ fn encode_head(head: LastTreeHead, now: SystemTime) -> String {
 
 fn encoded_head(head: Option<&PinnedHead>) -> Option<&str> {
     head.map(|head| head.encoded.as_str())
-}
-
-fn label_state_key(label: &[u8]) -> String {
-    format!("kt.libsignal.label.{}", hex::encode(label))
 }
 
 fn decode_setting(encoded: &str) -> Result<Vec<u8>, KtError> {

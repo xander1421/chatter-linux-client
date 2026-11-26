@@ -1,6 +1,14 @@
 use super::*;
 
 impl SignalActorHandle {
+    pub(crate) async fn validate_private_echo_bundle(
+        &self,
+        local: ProtocolAddress,
+        bundle: PreKeyBundle,
+    ) -> Result<u32, ServiceError> {
+        self.send(|response| SignalCommand::ValidatePrivateEchoBundle { local, bundle, response }).await?
+    }
+
     pub(crate) fn shield_mode(&self) -> Arc<std::sync::atomic::AtomicBool> {
         self.shield_mode.clone()
     }
@@ -181,12 +189,14 @@ impl SignalActorHandle {
         sender_cert: SenderCertificate,
         destinations: Vec<ProtocolAddress>,
         group_id: Vec<u8>,
+        echo_registration: Option<u32>,
     ) -> Result<Vec<u8>, ServiceError> {
         self.send(|tx| SignalCommand::EncryptMultiRecipient {
             contents,
             sender_cert,
             destinations,
             group_id,
+            echo_registration,
             response: tx,
         })
         .await?

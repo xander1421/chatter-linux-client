@@ -12,8 +12,7 @@ impl Migration for V109DropMailboxRandomizer {
         "Drop the always-empty mailbox token randomizer columns"
     }
     fn up(&self) -> &'static str {
-        "ALTER TABLE mailbox_pending_blinds DROP COLUMN message_randomizer;
-         ALTER TABLE mailbox_tokens DROP COLUMN message_randomizer;
+        "ALTER TABLE mailbox_tokens DROP COLUMN message_randomizer;
          ALTER TABLE dm_mailboxes DROP COLUMN randomizer;
          ALTER TABLE group_mailboxes DROP COLUMN randomizer;"
     }
