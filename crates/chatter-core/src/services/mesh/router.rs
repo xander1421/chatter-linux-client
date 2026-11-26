@@ -61,7 +61,7 @@ type SharedBridge = Rc<RefCell<BridgeCourier<NostrDropRelay, MeshDropSink>>>;
 pub struct RouterDeps {
     pub state: Arc<MeshState>,
     pub nostr_state: Arc<NostrState>,
-    pub identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
+    pub identity: super::identity::ActiveMeshIdentity,
     pub storage: Arc<dyn Storage>,
     pub sealer: Arc<dyn Sealer>,
     pub ble: Arc<super::CommandBus<BleCommand>>,
@@ -231,7 +231,7 @@ impl DropRelay for NostrDropRelay {
 
 /// Where an inbound drop goes once it has been recognised.
 struct MeshDropSink {
-    identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
+    identity: super::identity::ActiveMeshIdentity,
     state: Arc<MeshState>,
     events: MeshEvents,
 }
@@ -242,7 +242,7 @@ impl MeshDropSink {
         let (plaintext, sender_key) = super::prekeys::open_envelope(
             &self.state,
             envelope,
-            &self.identity.read(),
+            self.identity.read().as_deref()?,
             now_secs().saturating_mul(1_000),
         )?;
         let (payload_type, body) = decode_noise_payload(&plaintext)?;
@@ -354,7 +354,7 @@ struct Actor {
     /// Drops evicted from the bridge's pending queue while the router held its
     /// own borrow. Drained after every command.
     abandoned: Rc<RefCell<Vec<AbandonedDrop>>>,
-    identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
+    identity: super::identity::ActiveMeshIdentity,
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     events: MeshEvents,
@@ -414,9 +414,13 @@ impl Actor {
         let deposit_abandoned = Rc::clone(&abandoned);
         router.set_bridge_deposit(Box::new(move |content, message_id, recipient_key| {
             let now = now_secs();
+            let identity = deposit_identity.read().clone();
+            let Some(identity) = identity.as_deref() else {
+                return false;
+            };
             let Some(envelope) = seal_for_drop(
                 &deposit_state,
-                &deposit_identity.read(),
+                identity,
                 content,
                 message_id,
                 recipient_key,
@@ -543,9 +547,10 @@ impl Actor {
                 let mut bridge = self.bridge.borrow_mut();
                 let flushed = bridge.flush_pending(now);
                 self.abandoned.borrow_mut().extend(flushed);
-                if now >= bridge.next_refresh_due() {
-                    let key = self.identity.read().static_public();
-                    let evicted = bridge.refresh(Some(key), now);
+                if now >= bridge.next_refresh_due()
+                    && let Some(identity) = self.identity.read().as_ref()
+                {
+                    let evicted = bridge.refresh(Some(identity.static_public()), now);
                     self.abandoned.borrow_mut().extend(evicted);
                 }
                 drop(bridge);

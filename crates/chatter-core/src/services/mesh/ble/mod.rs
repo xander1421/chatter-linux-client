@@ -510,7 +510,7 @@ impl BleRuntime {
         // Before `start`, because an advertiser already running will not pick it
         // up. This is what lets peers recognise us across a private address
         // rotation instead of spending a connection to find out who we are.
-        if let Some(peer) = self.identity.peer_id().to_routing_bytes() {
+        if let Some(peer) = self.broadcast_peer_id().to_routing_bytes() {
             self.radio.set_local_peer(peer);
         }
         if let Err(error) = self.radio.start().await {
@@ -721,6 +721,19 @@ fn rescue_link_writes(
     )
 }
 
+fn encode_fragment_stream(packet: &BitchatPacket, chunk: usize) -> Option<Vec<Vec<u8>>> {
+    let mut stream_id = [0; 8];
+    if let Err(error) = getrandom::fill(&mut stream_id) {
+        tracing::warn!(target: "mesh::ble", %error, "could not generate a fragment stream ID");
+        return None;
+    }
+    fragment::plan_fragments(packet, chunk, stream_id)
+        .ok()?
+        .iter()
+        .map(|frame| codec::encode(frame, fragment::pads_ble_frame(frame.msg_type)).ok())
+        .collect()
+}
+
 /// Every *other* link bound to the peer `ingress` is bound to.
 ///
 /// Split horizon has to be by peer, not only by link. Two devices can hold two
@@ -880,15 +893,10 @@ async fn transmit_forwarded(state: &Arc<MeshState>, packet: &BitchatPacket, ingr
 
     let frames: Vec<Vec<u8>> = match plan.fragment_chunk_size {
         Some(chunk) => {
-            let mut id = [0u8; 8];
-            id.copy_from_slice(&packet.packet_id()[..8]);
-            match fragment::plan_fragments(packet, chunk, id) {
-                Ok(fragments) => fragments
-                    .iter()
-                    .filter_map(|f| codec::encode(f, fragment::pads_ble_frame(f.msg_type)).ok())
-                    .collect(),
-                Err(_) => return,
-            }
+            let Some(frames) = encode_fragment_stream(packet, chunk) else {
+                return;
+            };
+            frames
         }
         None => vec![encoded],
     };

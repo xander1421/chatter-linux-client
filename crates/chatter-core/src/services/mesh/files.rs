@@ -108,20 +108,10 @@ impl MeshService {
     /// thing that will tell the receiver its assembled file is the right one — and
     /// then the *path* is handed to the runtime, which reads one chunk at a time.
     ///
-    /// # Why the transfer id is derived rather than random
-    ///
-    /// `SHA-256(local peer ‖ file digest)[..8]`. Deterministic, which buys two
-    /// things a random id would not:
-    ///
-    /// - **Resume across a re-send.** A transfer interrupted at 80%, re-sent an
-    ///   hour later, keys onto the same spool entry on the receiver and finishes
-    ///   the remaining 20% instead of starting over.
-    /// - **No cross-sender collision.** Two peers sending the same file get
-    ///   different ids, so neither can write into the other's transfer — which the
-    ///   per-chunk sender check would refuse, but only after wasting the airtime.
+    /// A fresh transfer ID identifies this transfer and its retries. Sending
+    /// the file again creates an independent transfer.
     fn send_file_streamed(&self, path: &Path, declared: u64) -> Result<String, MeshError> {
         use chatter_mesh::tlv::file_stream::{CHUNK_BYTES, FileManifest};
-        use sha2::{Digest, Sha256};
 
         if declared == 0 {
             return Err(MeshError::EmptyContent);
@@ -130,15 +120,8 @@ impl MeshService {
         // O(256 KiB) regardless of the file, like everything else on this path.
         let digest = file_stream::digest_file(path)?;
 
-        let transfer_id: [u8; 8] = {
-            let mut hasher = Sha256::new();
-            hasher.update(self.local_peer().as_str().as_bytes());
-            hasher.update(digest);
-            let full: [u8; 32] = hasher.finalize().into();
-            let mut id = [0u8; 8];
-            id.copy_from_slice(&full[..8]);
-            id
-        };
+        let mut transfer_id = [0; 8];
+        getrandom::fill(&mut transfer_id).map_err(MeshError::TransferIdUnavailable)?;
 
         // The leaf name only: the rest is this device's directory layout.
         let file_name = path

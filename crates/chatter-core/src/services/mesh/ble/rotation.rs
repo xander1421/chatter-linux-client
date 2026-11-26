@@ -8,7 +8,7 @@ use crate::storage::mesh_identity_store::{MeshIdentityStore, OVERLAP_SECS, ROTAT
 
 pub(in crate::services::mesh) struct RadioRotation {
     pub store: Arc<MeshIdentityStore>,
-    pub active: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
+    pub active: super::super::identity::ActiveMeshIdentity,
     pub build_radio: Arc<dyn Fn() -> Option<Arc<dyn MeshLink>> + Send + Sync>,
     pub wiped: Arc<AtomicBool>,
     pub running: Arc<AtomicBool>,
@@ -227,9 +227,16 @@ impl BleRuntime {
             self.degraded("No Bluetooth radio was available after mesh identity rotation".into());
             return false;
         };
+        let _signal_guard = self.signal_lock.lock();
+        if rotation.wiped.load(Ordering::SeqCst) || !rotation.running.load(Ordering::SeqCst) {
+            return false;
+        }
         self.radio = radio;
         self.identity = next.identity;
-        *rotation.active.write() = self.identity.clone();
+        super::super::identity::activate_broadcast_epoch(&rotation.active, self.identity.clone());
+        // A manifest or chunk under the next sender would link both epochs
+        // through the transfer ID. Transfers may retry within their own epoch.
+        self.files_out.clear();
         rotation.started_at = next.started_at;
         let (dial_tx, dial_rx) = tokio::sync::mpsc::unbounded_channel();
         self.dial_tx = dial_tx;
@@ -582,6 +589,17 @@ mod tests {
         runtime.finish_pending_rotation(&next_peer, &next.static_public());
         assert_eq!(state.route(&old_peer), next_peer);
         assert_eq!(state.contact(&next_peer), old_peer);
+        let outbound = runtime.build_packet(
+            MessageType::NoiseEncrypted,
+            Some(&old_peer),
+            Vec::new(),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        assert_eq!(outbound.recipient_id, next_peer.to_routing_bytes());
+        assert_eq!(
+            Some(outbound.sender_id),
+            runtime.broadcast_peer_id().to_routing_bytes()
+        );
         let key = directory.noise_key(&old_peer).unwrap();
         assert_eq!(key, next.static_public());
         let sealed = seal_courier(b"courier", &key, &runtime.identity).unwrap();
@@ -657,6 +675,35 @@ mod tests {
         runtime.on_encrypted(&link, &valid, &chosen.peer_id()).await;
         assert!(state.with(|state| state.peers.pinned(&chosen.peer_id()).unwrap().paired));
         assert!(state.with(|state| state.pairing_offers.is_empty()));
+    }
+
+    #[test]
+    fn fragment_stream_ids_are_shared_within_a_stream_and_fresh_on_retry() {
+        let packet = BitchatPacket::new(
+            MessageType::NoiseEncrypted,
+            [1; 8],
+            Some([2; 8]),
+            1,
+            vec![0xff; 850],
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        let stream = || {
+            let frames = encode_fragment_stream(&packet, 96).unwrap();
+            assert!(frames.len() > 1);
+            let ids = frames
+                .iter()
+                .map(|bytes| {
+                    let packet = codec::decode(bytes).unwrap();
+                    fragment::FragmentHeader::parse(&packet)
+                        .unwrap()
+                        .0
+                        .fragment_id
+                })
+                .collect::<Vec<_>>();
+            assert!(ids.iter().all(|id| *id == ids[0]));
+            ids[0]
+        };
+        assert_ne!(stream(), stream());
     }
 
     #[tokio::test]

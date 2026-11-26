@@ -38,6 +38,7 @@ impl MeshService {
         if !self.can_route_to(peer) {
             return Err(MeshError::Unroutable(peer.as_str().to_string()));
         }
+        let local_peer = self.identity()?.peer_id();
         let message_id = new_message_id();
         let nickname = self.nickname_for(peer);
 
@@ -52,14 +53,14 @@ impl MeshService {
         let message = mapping::outbound_message(
             &conversation,
             &message_id,
-            &self.local_peer(),
+            &local_peer,
             &content,
             now_millis(),
         );
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation,
-            sender: self.local_peer(),
+            sender: local_peer,
             nickname: self.config.nickname(),
             is_local: true,
             sender_verified: true,
@@ -111,6 +112,7 @@ impl MeshService {
         if !self.has_radio {
             return Err(MeshError::NoRadio);
         }
+        let local_peer = self.identity()?.peer_id();
         let _guard = self.signal_lock.lock();
         if !self
             .binding_store
@@ -192,14 +194,14 @@ impl MeshService {
         let message = mapping::outbound_message(
             &conversation,
             &message_id,
-            &self.local_peer(),
+            &local_peer,
             &content,
             now_millis(),
         );
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation,
-            sender: self.local_peer(),
+            sender: local_peer,
             nickname: self.config.nickname(),
             is_local: true,
             sender_verified: true,
@@ -229,7 +231,7 @@ impl MeshService {
         if self.state.is_connected(peer) || self.state.is_reachable(peer) {
             self.ble
                 .send(BleCommand::Ack {
-                    peer: peer.clone(),
+                    peer: self.state.route(peer),
                     message_id: message_id.to_string(),
                     payload_type: NoisePayloadType::ReadReceipt,
                 })

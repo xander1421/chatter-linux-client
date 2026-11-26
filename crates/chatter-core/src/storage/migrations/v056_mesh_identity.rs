@@ -19,7 +19,7 @@ impl Migration for V056MeshIdentity {
             id INTEGER PRIMARY KEY,
             static_secret BLOB NOT NULL CHECK (length(static_secret) = 32),
             signing_secret BLOB NOT NULL CHECK (length(signing_secret) = 32),
-            started_at INTEGER,
+            started_at INTEGER NOT NULL,
             retired_at INTEGER
         );
         CREATE UNIQUE INDEX mesh_current_identity ON mesh_identity_epochs ((1))

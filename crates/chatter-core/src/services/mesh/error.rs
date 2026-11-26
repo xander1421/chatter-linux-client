@@ -74,6 +74,9 @@ pub enum MeshError {
     #[error("that file is {size} bytes; a mesh file transfer carries at most {max}")]
     FileTooLarge { size: u64, max: usize },
 
+    #[error("could not generate a mesh file transfer ID: {0}")]
+    TransferIdUnavailable(getrandom::Error),
+
     /// A file could not be read from, or written to, the local disk.
     ///
     /// Carries the path because the two sides fail for opposite reasons — a send

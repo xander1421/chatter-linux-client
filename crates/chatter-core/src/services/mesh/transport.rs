@@ -267,7 +267,7 @@ impl CourierDirectory for MeshDirectory {
 /// The mesh radio, as the router sees it.
 pub struct BleTransport {
     state: Arc<MeshState>,
-    identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
+    identity: super::identity::ActiveMeshIdentity,
     commands: Arc<super::CommandBus<BleCommand>>,
 }
 
@@ -275,7 +275,7 @@ impl BleTransport {
     #[must_use]
     pub fn new(
         state: Arc<MeshState>,
-        identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
+        identity: super::identity::ActiveMeshIdentity,
         commands: Arc<super::CommandBus<BleCommand>>,
     ) -> Self {
         Self {
@@ -306,7 +306,7 @@ impl BleTransport {
             &self.state,
             &payload,
             recipient_key,
-            &self.identity.read(),
+            self.identity.read().as_deref()?,
             now_unix_secs.saturating_mul(1_000),
         )?;
         let expiry_ms = now_unix_secs
@@ -509,7 +509,7 @@ mod tests {
         (
             BleTransport::new(
                 Arc::clone(&state),
-                Arc::new(parking_lot::RwLock::new(identity)),
+                Arc::new(parking_lot::RwLock::new(Some(identity))),
                 bus,
             ),
             state,

@@ -31,7 +31,7 @@ fn runtime_parts() -> (
     let router = Arc::new(RouterHandle::spawn(super::super::router::RouterDeps {
         state: Arc::clone(&state),
         nostr_state: Arc::clone(&nostr_state),
-        identity: Arc::new(parking_lot::RwLock::new(Arc::clone(&identity))),
+        identity: Arc::new(parking_lot::RwLock::new(Some(Arc::clone(&identity)))),
         storage: Arc::new(MemoryStorage::new()),
         sealer: Arc::new(NoopSealer),
         ble: crate::services::mesh::CommandBus::new().0,

@@ -31,6 +31,18 @@ use chatter_mesh_nostr::identity::{NostrIdentity, derive_for_geohash};
 use hkdf::Hkdf;
 use sha2::Sha256;
 
+pub(super) type ActiveMeshIdentity =
+    std::sync::Arc<parking_lot::RwLock<Option<std::sync::Arc<MeshIdentity>>>>;
+
+pub(super) fn activate_broadcast_epoch(
+    active: &ActiveMeshIdentity,
+    identity: std::sync::Arc<MeshIdentity>,
+) {
+    // Announce-policy integration: refresh the generated nickname here with
+    // MeshConfig::rotate_nickname(&identity.peer_id()) before publishing the epoch.
+    *active.write() = Some(identity);
+}
+
 /// Domain separator for the Nostr device seed.
 const NOSTR_SEED_INFO: &[u8] = b"chatter-mesh/nostr-device-seed/v1";
 

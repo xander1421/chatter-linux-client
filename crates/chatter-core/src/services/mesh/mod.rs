@@ -232,7 +232,7 @@ pub struct MeshService {
     binding_store: Arc<MeshBindingStore>,
     private_channels: Arc<PrivateChannelStore>,
     signal_lock: Arc<Mutex<()>>,
-    identity: Arc<parking_lot::RwLock<Arc<MeshIdentity>>>,
+    identity: identity::ActiveMeshIdentity,
     /// Retained so a panic wipe can destroy the keypair, not merely the mail.
     identity_store: Arc<MeshIdentityStore>,
     config: Arc<MeshConfig>,

@@ -99,6 +99,11 @@ impl BleRuntime {
         packet
     }
 
+    /// Address advertised by the current radio epoch and written into its packets.
+    pub(super) fn broadcast_peer_id(&self) -> PeerId {
+        self.identity.peer_id()
+    }
+
     pub(super) fn build_packet(
         &self,
         msg_type: MessageType,
@@ -107,15 +112,14 @@ impl BleRuntime {
         ttl: u8,
     ) -> BitchatPacket {
         let sender_id = self
-            .identity
-            .peer_id()
+            .broadcast_peer_id()
             .to_routing_bytes()
             .unwrap_or([0u8; SENDER_ID_LEN]);
         // Broadcast is encoded by *omitting* the recipient, which is what
         // bitchat sends (`recipientID: nil`). The explicit all-`0xFF` form is
         // also accepted by them, but the omitted form is what their own packets
         // carry, so sending it keeps our traffic byte-comparable with theirs.
-        let recipient_id = recipient.and_then(PeerId::to_routing_bytes);
+        let recipient_id = recipient.and_then(|peer| self.state.route(peer).to_routing_bytes());
         BitchatPacket::new(
             msg_type,
             sender_id,
@@ -176,6 +180,8 @@ impl BleRuntime {
         ingress_link: Option<&LinkId>,
         chosen_link: Option<&LinkId>,
     ) -> bool {
+        let directed_peer = directed_peer.map(|peer| self.state.route(peer));
+        let directed_peer = directed_peer.as_ref();
         let padding = fragment::pads_ble_frame(packet.msg_type);
         let Ok(encoded) = codec::encode(packet, padding) else {
             return false;
@@ -215,17 +221,10 @@ impl BleRuntime {
 
             let frames = match plan.fragment_chunk_size {
                 Some(chunk) => {
-                    let mut id = [0u8; 8];
-                    id.copy_from_slice(&packet.packet_id()[..8]);
-                    match fragment::plan_fragments(packet, chunk, id) {
-                        Ok(fragments) => fragments
-                            .iter()
-                            .filter_map(|f| {
-                                codec::encode(f, fragment::pads_ble_frame(f.msg_type)).ok()
-                            })
-                            .collect(),
-                        Err(_) => Vec::new(),
-                    }
+                    let Some(frames) = encode_fragment_stream(packet, chunk) else {
+                        return false;
+                    };
+                    frames
                 }
                 None => vec![encoded],
             };

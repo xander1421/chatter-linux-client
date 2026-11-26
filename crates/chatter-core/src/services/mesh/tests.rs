@@ -41,9 +41,9 @@ fn service_with_radio_factory(
     let nostr_state = Arc::new(NostrState::new());
     let timeline = timeline::temp_timeline();
     let identity_store = timeline::temp_identity_store();
-    let identity = Arc::new(parking_lot::RwLock::new(Arc::new(
-        identity_store.get_or_create().expect("test identity"),
-    )));
+    let identity = Arc::new(parking_lot::RwLock::new(Some(Arc::new(
+        MeshIdentity::generate(&mut crate::crypto::os_rng()),
+    ))));
     let dir = tempfile::tempdir().expect("mesh stores temp dir");
     let db = Arc::new(
         crate::storage::Database::open(&dir.path().join("mesh_stores.db"), "testpass")
@@ -106,6 +106,75 @@ fn service_with_radio_factory(
 }
 
 #[tokio::test]
+async fn the_disabled_mesh_has_no_identity_until_it_is_enabled() {
+    use crate::storage::{
+        Database,
+        repositories::{AttachmentRepository, MeshConversationRepository, MeshDeliveryRepository},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open(&dir.path().join("mesh.db"), "testpass").unwrap());
+    db.run_migrations().unwrap();
+    let store = Arc::new(MeshIdentityStore::new(db.clone()));
+    let radio = MockLink::shared();
+    let mock = radio.clone();
+    let service = MeshService::new(
+        MeshDeps {
+            key_store: Arc::new(KeyStore::new(db.clone())),
+            binding_store: Arc::new(MeshBindingStore::new(db.clone())),
+            private_channels: Arc::new(PrivateChannelStore::new(db.clone())),
+            identity_store: store.clone(),
+            storage: Arc::new(MemoryStorage::new()),
+            messages: Arc::new(MessageRepository::new(db.clone())),
+            conversations: Arc::new(MeshConversationRepository::new(db.clone())),
+            deliveries: Arc::new(MeshDeliveryRepository::new(db.clone())),
+            attachments: Arc::new(AttachmentRepository::new(db)),
+            sealer: Arc::new(NoopSealer),
+            relay_connector: None,
+            radio_factory: Some(Arc::new(move || mock.clone() as Arc<dyn MeshLink>)),
+        },
+        MeshConfig::default(),
+    )
+    .unwrap();
+
+    assert!(store.get().unwrap().is_none());
+    assert!(service.local_peer().is_empty());
+    assert!(service.fingerprint().is_empty());
+    assert!(!radio.is_started());
+
+    service.start().await.unwrap();
+    assert_eq!(
+        store.get().unwrap().unwrap().peer_id(),
+        service.local_peer()
+    );
+    service.shutdown().await;
+    assert!(service.local_peer().is_empty());
+    assert!(!radio.is_started());
+}
+
+#[test]
+fn sending_the_same_file_twice_allocates_different_stream_ids() {
+    let service = service(Some(MockLink::shared()), None);
+    let mut commands = service.ble.rebind();
+    let file = tempfile::NamedTempFile::new().unwrap();
+    file.as_file()
+        .set_len(MAX_SINGLE_PACKET_FILE_BYTES as u64 + 1)
+        .unwrap();
+
+    let mut send = || {
+        service.send_file(file.path()).unwrap();
+        let BleCommand::StreamedFile { manifest, .. } = commands.try_recv().unwrap() else {
+            panic!("expected a streamed file command");
+        };
+        manifest
+    };
+    let first = send();
+    let second = send();
+    assert_eq!(first.sha256, second.sha256);
+    assert_ne!(first.transfer_id, second.transfer_id);
+}
+
+#[tokio::test]
 async fn the_mesh_can_be_stopped_and_started_again() {
     // What the user's switch needs, and what neither half of this used to do.
     //
@@ -138,7 +207,7 @@ async fn the_mesh_can_be_stopped_and_started_again() {
     }
 
     service.start().await.expect("start");
-    let first = service.identity();
+    let first = service.identity().unwrap();
     settle().await;
     assert!(service.is_running());
     assert_eq!(built.lock().len(), 1, "one radio built for the first start");
@@ -148,7 +217,7 @@ async fn the_mesh_can_be_stopped_and_started_again() {
     assert!(!service.is_running());
 
     service.start().await.expect("restart");
-    let second = service.identity();
+    let second = service.identity().unwrap();
     assert_ne!(first.peer_id(), second.peer_id());
     assert_ne!(first.static_public(), second.static_public());
     assert_ne!(first.signing_public(), second.signing_public());

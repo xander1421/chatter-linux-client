@@ -71,7 +71,7 @@ impl MeshService {
     ) -> Result<(), MeshError> {
         use libsignal_protocol::IdentityKeyPair;
         let peer = &self.state.route(peer);
-        let identity = self.identity();
+        let identity = self.identity()?;
         let (mesh_static, transcript, sender_nonce, recipient_nonce) = self.state.with(|s| {
             (
                 s.sessions.remote_static(peer),
@@ -142,7 +142,7 @@ impl MeshService {
     ) -> Result<String, MeshError> {
         use libsignal_protocol::IdentityKeyPair;
         let peer = &self.state.route(peer);
-        let identity = self.identity();
+        let identity = self.identity()?;
         if device_id == 0 {
             return Err(MeshError::Binding("no account device is active".into()));
         }
@@ -225,7 +225,7 @@ impl MeshService {
         let (Some(remote), Some(transcript)) = (remote, transcript) else {
             return None;
         };
-        let own = self.identity().static_public();
+        let own = self.identity().ok()?.static_public();
         let (first, second) = if own <= remote {
             (own, remote)
         } else {
@@ -418,6 +418,7 @@ impl MeshService {
         peer: &PeerId,
         scanned_qr: Option<&str>,
     ) -> Result<PeerBinding, MeshError> {
+        let identity = self.identity()?;
         if scanned_qr.is_none() && !self.is_paired(peer) {
             return Err(MeshError::Binding(
                 "scan this contact's QR code to pair".into(),
@@ -502,7 +503,7 @@ impl MeshService {
             if let Some(qr) = qr {
                 let _ = self.ble.send(BleCommand::BindingProof {
                     peer: peer.clone(),
-                    bytes: pairing_receipt(&self.identity(), &qr, &hash),
+                    bytes: pairing_receipt(&identity, &qr, &hash),
                 });
             }
             match signal_mesh::bundle_for_peer(
