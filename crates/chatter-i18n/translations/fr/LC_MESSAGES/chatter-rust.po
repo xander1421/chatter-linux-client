@@ -4007,3 +4007,6 @@ msgstr "Reconnectez-vous pour terminer la publication de vos clés de chiffremen
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr "Le serveur a publié une clé de chiffrement inattendue pour votre compte."
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr "Cet appareil a été remplacé. Les données locales ont été effacées. Reconnectez-vous pour continuer."

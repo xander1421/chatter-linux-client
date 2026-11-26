@@ -3974,3 +3974,6 @@ msgstr "Войдите снова, чтобы завершить публика�
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr "Сервер опубликовал неожиданный ключ шифрования для вашей учётной записи."
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr "Это устройство было заменено. Локальные данные удалены. Войдите снова, чтобы продолжить."

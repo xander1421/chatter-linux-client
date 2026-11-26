@@ -342,6 +342,13 @@ pub enum ClientError {
     Auth(#[from] AuthError),
     #[error("{0}")]
     Validation(String),
+    #[error(
+        "{}",
+        chatter_i18n::tr(
+            "This device was replaced. Local data was cleared. Sign in again to continue."
+        )
+    )]
+    DeviceReplaced,
     /// Preserve restore failures so callers can identify a newer backup.
     #[error("backup restore failed: {0}")]
     BackupRestore(crate::services::message_backup_service::MessageBackupError),

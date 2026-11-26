@@ -4010,3 +4010,6 @@ msgstr "Autentifică-te din nou pentru a finaliza publicarea cheilor tale de cri
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr "Serverul a publicat o cheie de criptare neașteptată pentru contul tău."
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr "Acest dispozitiv a fost înlocuit. Datele locale au fost șterse. Autentifică-te din nou pentru a continua."

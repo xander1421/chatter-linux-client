@@ -3980,3 +3980,6 @@ msgstr "Entre de novo para terminar de publicar suas chaves de criptografia."
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr "O servidor publicou uma chave de criptografia inesperada para a sua conta."
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr "Este dispositivo foi substituído. Os dados locais foram apagados. Entre novamente para continuar."

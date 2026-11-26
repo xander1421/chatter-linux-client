@@ -42,9 +42,11 @@ impl SharedMesh {
     ) -> Result<(), StorageError> {
         let _lifecycle = self.lock_lifecycle().await;
         let old = self.get();
-        old.identity_wiped.store(true, Ordering::SeqCst);
+        // shutdown retains its join handles if this future is cancelled. Mark
+        // the old identity retired only once we've joined the transports and
+        // can finish the wipe without another await.
         old.shutdown().await;
-        let mut current = self.current.write();
+        old.identity_wiped.store(true, Ordering::SeqCst);
         old.retire_for_account_switch();
         let result = wipe();
         // Rebuild even on a storage error. The old runtime is retired and
@@ -53,7 +55,7 @@ impl SharedMesh {
             .map_err(|error| StorageError::InvalidData(format!("could not rebuild mesh: {error}")));
         match replacement {
             Ok(replacement) => {
-                *current = Arc::new(replacement);
+                *self.current.write() = Arc::new(replacement);
                 let _ = self.events.send(MeshEvent::Status(MeshStatus::default()));
                 let _ = self.events.send(MeshEvent::Peers(Vec::new()));
                 let _ = self.events.send(MeshEvent::PrivateChannelChanged);

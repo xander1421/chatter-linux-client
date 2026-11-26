@@ -117,6 +117,8 @@ async fn logout_cancels_active_and_queued_work_and_drains_crypto_before_retireme
                     let _a = Dropped(events.clone(), "anonymous_dropped");
                     let _b = Dropped(events.clone(), "identified_dropped");
                     std::future::pending::<()>().await;
+                } else if presence == PresenceStatus::Offline {
+                    events.lock().unwrap().push("offline");
                 } else {
                     panic!("queued publication ran after retirement");
                 }
@@ -138,7 +140,10 @@ async fn logout_cancels_active_and_queued_work_and_drains_crypto_before_retireme
         .test_pause(entered_tx, release_rx)
         .await;
     entered_rx.await.unwrap();
-    let mut logout = Box::pin(client.test_logout_after_retirement());
+    let mut logout = Box::pin(client.logout_with_retirement(async {
+        events.lock().unwrap().push("retired");
+        Ok(())
+    }));
     assert!(futures::poll!(&mut logout).is_pending());
     active.await;
     queued.await;
@@ -152,9 +157,10 @@ async fn logout_cancels_active_and_queued_work_and_drains_crypto_before_retireme
         .await
         .unwrap()
         .unwrap();
-    let mut events = events.lock().unwrap().clone();
-    events.sort_unstable();
-    assert_eq!(events, ["anonymous_dropped", "identified_dropped"]);
+    let events = events.lock().unwrap().clone();
+    assert!(events[..2].contains(&"anonymous_dropped"));
+    assert!(events[..2].contains(&"identified_dropped"));
+    assert_eq!(events[2..], ["offline", "retired"]);
     assert!(client.auth_state().get().current_user_id.is_none());
     assert_eq!(
         client.presence_controller.state.lock().await.manual,
@@ -164,14 +170,24 @@ async fn logout_cancels_active_and_queued_work_and_drains_crypto_before_retireme
 }
 
 #[tokio::test]
-async fn failed_retirement_keeps_the_session_and_does_not_publish_offline() {
+async fn failed_retirement_keeps_the_session_and_republishes_previous_presence() {
     let (client, _dir, revision) = fixture();
+    client.presence_controller.state.lock().await.current = PresenceStatus::Online;
+    let sent = Arc::new(SyncMutex::new(Vec::new()));
+    let observed = sent.clone();
     hook(
         &client,
-        Arc::new(|_, _| Box::pin(async { panic!("logout must await server acknowledgement") })),
+        Arc::new(move |status, _| {
+            let observed = observed.clone();
+            Box::pin(async move { observed.lock().unwrap().push(status) })
+        }),
     );
     assert!(client.logout().await.is_err());
     assert!(client.auth_state().session_is_current(revision));
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [PresenceStatus::Offline, PresenceStatus::Online]
+    );
 }
 
 #[tokio::test]

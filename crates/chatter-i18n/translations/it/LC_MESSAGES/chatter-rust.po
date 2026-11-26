@@ -3979,3 +3979,6 @@ msgstr "Accedi di nuovo per completare la pubblicazione delle chiavi di crittogr
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr "Il server ha pubblicato una chiave di cifratura inattesa per il tuo account."
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr "Questo dispositivo è stato sostituito. I dati locali sono stati cancellati. Accedi di nuovo per continuare."

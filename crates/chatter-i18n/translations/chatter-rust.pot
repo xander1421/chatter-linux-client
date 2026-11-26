@@ -3451,3 +3451,6 @@ msgstr ""
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr ""
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr ""

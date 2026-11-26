@@ -674,13 +674,15 @@ pub(crate) fn authorize_linked_owner_identity(
 pub(crate) enum OwnIdentityAtSignIn {
     Current,
     Republish,
+    RestoreKey(libsignal_protocol::IdentityKey),
+    Replaced,
     UnexpectedKey,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum OwnIdentityCheck<'a> {
     Local(&'a [u8]),
-    Restored(&'a [u8]),
+    BeforeRestore,
     BeforeReset,
 }
 
@@ -723,7 +725,7 @@ async fn search_own_at_sign_in(
     verifier: &KeyTransparency,
     now: SystemTime,
 ) -> Result<OwnIdentityAtSignIn, KtError> {
-    use OwnIdentityAtSignIn::{Current, Republish, UnexpectedKey};
+    use OwnIdentityAtSignIn::{Current, Replaced, Republish, RestoreKey, UnexpectedKey};
 
     let previous = {
         let conn = settings.database().read_connection()?;
@@ -733,6 +735,8 @@ async fn search_own_at_sign_in(
     let pin = Pin::load_at(client, settings, PinScope::Account, verifier, now).await?;
     let observations = pin.observations(label)?;
     let (verified, version) = search_own(client, &pin, label, &observations).await?;
+    let published_identity = libsignal_protocol::IdentityKey::decode(&verified.value)
+        .map_err(|_| KtError::Invalid("invalid published own identity key"))?;
     let published = OwnerBaseline {
         key: hex::encode(&verified.value),
         version,
@@ -740,9 +744,31 @@ async fn search_own_at_sign_in(
     state.observed_version = Some(version);
 
     let action = match check {
+        OwnIdentityCheck::BeforeRestore
+            if state
+                .baseline
+                .as_ref()
+                .is_some_and(|old| old.key != published.key && version > old.version) =>
+        {
+            // A device that already received the unlink notice may have
+            // discarded its private keys while keeping the old KT baseline.
+            state.mismatch = true;
+            Replaced
+        }
+        OwnIdentityCheck::BeforeRestore
+            if state
+                .baseline
+                .as_ref()
+                .is_none_or(|old| old.key == published.key) =>
+        {
+            // The backup must match this verified key before it can be installed.
+            state.mismatch |= state.baseline.as_ref().is_some_and(|old| *old != published);
+            state.baseline = Some(published);
+            state.authorized = None;
+            RestoreKey(published_identity)
+        }
         OwnIdentityCheck::BeforeReset => {
-            // An explicit reset has to start from the last verified account
-            // key. On a fresh install this proof is the first baseline.
+            // An explicit reset starts from the verified account key.
             if state.mismatch || state.baseline.as_ref().is_some_and(|old| *old != published) {
                 state.mismatch = true;
                 UnexpectedKey
@@ -752,9 +778,7 @@ async fn search_own_at_sign_in(
                 Current
             }
         }
-        OwnIdentityCheck::Local(expected) | OwnIdentityCheck::Restored(expected)
-            if verified.value == expected =>
-        {
+        OwnIdentityCheck::Local(expected) if verified.value == expected => {
             // A reset that committed before the client died is exactly one
             // version after the predecessor pinned before the key was minted.
             // Preserve any alarm and detect a write that changed back to our
@@ -765,13 +789,8 @@ async fn search_own_at_sign_in(
                 }
                 _ => match state.baseline.as_ref() {
                     Some(old) if old.key == published.key => old.version != version,
-                    Some(old) => {
-                        matches!(check, OwnIdentityCheck::Restored(_))
-                            || old.version.checked_add(1) != Some(version)
-                    }
-                    // The backup authenticates the key independently of the
-                    // server. A fresh install has no previously pinned version.
-                    None => matches!(check, OwnIdentityCheck::Local(_)) && version != 0,
+                    Some(old) => old.version.checked_add(1) != Some(version),
+                    None => version != 0,
                 },
             };
             state.baseline = Some(published);
@@ -783,6 +802,16 @@ async fn search_own_at_sign_in(
                 && state.baseline.as_ref() == Some(&published) =>
         {
             Republish
+        }
+        OwnIdentityCheck::Local(expected)
+            if state.baseline.as_ref().is_some_and(|old| {
+                old.key == hex::encode(expected) && version > old.version
+            }) =>
+        {
+            // The append-only log proves a replacement of the identity this
+            // installation held. A failed proof never reaches this decision.
+            state.mismatch = true;
+            Replaced
         }
         _ => {
             state.mismatch = true;

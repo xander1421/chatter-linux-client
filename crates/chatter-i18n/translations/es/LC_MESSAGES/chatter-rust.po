@@ -3993,3 +3993,6 @@ msgstr "Vuelve a iniciar sesión para terminar de publicar tus claves de cifrado
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr "El servidor publicó una clave de cifrado inesperada para tu cuenta."
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr "Se reemplazó este dispositivo. Se borraron los datos locales. Vuelve a iniciar sesión para continuar."

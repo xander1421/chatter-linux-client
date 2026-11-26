@@ -167,13 +167,7 @@ impl AuthService {
             tx.commit().map_err(StorageError::from)?;
             super::unlink::restore_staged_attachments(db)?;
         } else {
-            self.auth_interceptor.clear();
-            let wipe = || super::wipe_switched_account(db, save_device);
-            #[cfg(feature = "mesh")]
-            self.mesh.wipe_for_account_switch(wipe).await?;
-            #[cfg(not(feature = "mesh"))]
-            wipe()?;
-            self.recovery_login_grant.lock().take();
+            self.wipe_local_account(save_device).await?;
         }
         self.settings_repo.delete(keys::UNLINKED_ACCOUNT_ID)?;
         super::cache_saved_messages_channel(&self.settings_repo, user_id)?;

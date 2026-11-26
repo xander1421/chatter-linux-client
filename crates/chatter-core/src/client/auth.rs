@@ -17,7 +17,9 @@ impl ClientError {
         match self {
             Self::Auth(e) => e.user_message(),
             Self::CallEnded => chatter_i18n::tr("Call ended"),
-            Self::Validation(_) | Self::IdentityRecoveryRequired(_) => self.to_string(),
+            Self::Validation(_) | Self::IdentityRecoveryRequired(_) | Self::DeviceReplaced => {
+                self.to_string()
+            }
             Self::Connection(crate::error::NetworkError::Unauthenticated) => {
                 chatter_i18n::tr("Wrong password.")
             }
@@ -225,8 +227,8 @@ impl ChatterClient {
             match pin {
                 Some(p) => {
                     if let Err(error) = self.attempt_svr_restore(p, username, &mut result).await {
-                        self.auth().end_session()?;
-                        self.auth_state().set_logged_out();
+                        self.cleanup_failed_sign_in(result.device_id, &error)
+                            .await?;
                         return Err(error);
                     }
                 }
@@ -264,9 +266,7 @@ impl ChatterClient {
                 .signal()
                 .get_identity_public_key()
                 .await
-                .map_err(|error| {
-                    ClientError::Validation(format!("failed to read local identity key: {error}"))
-                })?;
+                .map_err(read_identity_error)?;
             let owner = result.user_id.to_string();
             let needs_republish = !result.keys_restored
                 && self
@@ -292,8 +292,8 @@ impl ChatterClient {
             Ok::<(), ClientError>(())
         }.await;
         if let Err(error) = publish {
-            self.auth().end_session()?;
-            self.auth_state().set_logged_out();
+            self.cleanup_failed_sign_in(result.device_id, &error)
+                .await?;
             return Err(error);
         }
         self.auth_state().set_logged_in(
@@ -322,6 +322,46 @@ impl ChatterClient {
         self.name_this_device(device_name).await;
         self.start().await?;
         Ok(result)
+    }
+
+    async fn cleanup_failed_sign_in(
+        &self,
+        device_id: u32,
+        error: &ClientError,
+    ) -> Result<(), ClientError> {
+        if matches!(error, ClientError::DeviceReplaced) {
+            return self.wipe_replaced_device(device_id).await;
+        }
+        self.auth().end_session()?;
+        self.auth_state().set_logged_out();
+        Ok(())
+    }
+
+    async fn wipe_replaced_device(&self, device_id: u32) -> Result<(), ClientError> {
+        // Password auth may have created a provisional device even though
+        // this installation has stale keys. Retire that device if reachable.
+        if let Some(mut auth) = self.auth().try_auth_client() {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                auth.logout(device_id, None),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "Could not retire the provisional device"),
+                Err(_) => tracing::warn!("Timed out retiring the provisional device"),
+            }
+        }
+        self.clear_composer_session();
+        self.auth_state().set_logged_out();
+        self.auth()
+            .wipe_local_account(|_| Ok(()))
+            .await
+            .map_err(AuthError::Storage)?;
+        self.messages().reload_session_state().await;
+        self.signal().clear_account_state();
+        self.anon_groups().held_posts.clear();
+        Ok(())
     }
 
     /// Give this device its name on the server, encrypted to the account
@@ -405,9 +445,7 @@ impl ChatterClient {
             .signal()
             .get_identity_public_key()
             .await
-            .map_err(|error| {
-                ClientError::Validation(format!("failed to read local identity key: {error}"))
-            })?;
+            .map_err(read_identity_error)?;
         self.verify_republished_identity(&mut auth_client, &owner, &expected)
             .await?;
         self.auth().end_session()?;
@@ -443,15 +481,11 @@ impl ChatterClient {
                 chatter_i18n::tr("Could not verify the Key Transparency log history.").into(),
             )
         })?;
-        if status == OwnIdentityAtSignIn::UnexpectedKey {
-            return Err(ClientError::Validation(
-                chatter_i18n::tr(
-                    "The server published an unexpected encryption key for your account.",
-                )
-                .into(),
-            ));
+        match status {
+            OwnIdentityAtSignIn::Replaced => Err(ClientError::DeviceReplaced),
+            OwnIdentityAtSignIn::UnexpectedKey => Err(unexpected_own_identity()),
+            status => Ok(status),
         }
-        Ok(status)
     }
 
     async fn verify_republished_identity(
@@ -956,7 +990,7 @@ impl ChatterClient {
         result: &mut LoginResult,
     ) -> Result<(), ClientError> {
         use crate::crypto::svr::derive_svr_secret;
-        use zeroize::{Zeroize, Zeroizing};
+        use zeroize::Zeroizing;
 
         // 1. Never overwrite an identity this device already holds.
         match self.signal().key_store.has_local_identity() {
@@ -976,8 +1010,8 @@ impl ChatterClient {
         tracing::info!("New device detected (no local identity keys) — attempting SVR restore");
 
         // 2. Derive svr_secret transiently from PIN + username
-        let mut svr_secret = match derive_svr_secret(pin, username) {
-            Ok(s) => s,
+        let svr_secret = match derive_svr_secret(pin, username) {
+            Ok(s) => Zeroizing::new(s),
             Err(e) => {
                 tracing::warn!("SVR restore failed: could not derive svr_secret: {}", e);
                 result.key_recovery = Some(KeyRecoveryNeed::Unavailable);
@@ -985,15 +1019,33 @@ impl ChatterClient {
             }
         };
 
-        // 3. Fetch and decrypt backup from server
-        let restore_result = match self
-            .svr_backup()
-            .fetch_and_restore_backup(&svr_secret)
-            .await
-        {
+        // A backup fetch spends a PIN attempt, even when the PIN is correct.
+        // Finish the signed-log check before touching that attempt counter.
+        let mut auth_client = self
+            .auth()
+            .try_auth_client()
+            .ok_or(ClientError::NotConnected)?;
+        let owner = result.user_id.to_string();
+        let (published_key, restored) = fetch_after_own_key_verification(
+            async {
+                match self
+                    .own_identity_at_sign_in(
+                        &mut auth_client,
+                        &owner,
+                        OwnIdentityCheck::BeforeRestore,
+                    )
+                    .await?
+                {
+                    OwnIdentityAtSignIn::RestoreKey(key) => Ok(key),
+                    _ => Err(unexpected_own_identity()),
+                }
+            },
+            self.svr_backup().fetch_and_restore_backup(&svr_secret),
+        )
+        .await?;
+        let restore_result = match restored {
             Ok(r) => r,
             Err(crate::services::svr_backup_service::SvrBackupError::BackupDestroyed) => {
-                svr_secret.zeroize();
                 tracing::error!(
                     "SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN."
                 );
@@ -1001,7 +1053,6 @@ impl ChatterClient {
                 return Ok(());
             }
             Err(e) => {
-                svr_secret.zeroize();
                 // Classify rather than collapse. Which failure this was decides
                 // whether the user retypes a PIN, waits, or accepts losing
                 // their conversations — see `key_recovery::classify_restore_failure`.
@@ -1012,37 +1063,21 @@ impl ChatterClient {
             }
         };
 
-        svr_secret.zeroize();
-
         let restored_keypair = Zeroizing::new(restore_result.identity_keypair);
         let restored_profile_key = Zeroizing::new(restore_result.profile_key);
-        // Verify the backup's account key before storing it. A stale backup
-        // must never be mistaken for a locally authorized identity reset.
-        let mut public_with_prefix = [0u8; 33];
-        public_with_prefix[0] = 0x05;
-        public_with_prefix[1..].copy_from_slice(&restored_keypair[32..]);
-        let mut auth_client = self
-            .auth()
-            .try_auth_client()
-            .ok_or(ClientError::NotConnected)?;
-        self.own_identity_at_sign_in(
-            &mut auth_client,
-            &result.user_id.to_string(),
-            OwnIdentityCheck::Restored(&public_with_prefix),
-        )
-        .await?;
+        // The comparison uses the already-verified key and needs no network.
+        if published_key.public_key().public_key_bytes() != &restored_keypair[32..] {
+            return Err(unexpected_own_identity());
+        }
 
         // 4. Reconstruct and save the libsignal identity keypair.
         let hydrate_ok = (|| -> std::result::Result<(), String> {
-            use libsignal_protocol::{IdentityKey, IdentityKeyPair, PrivateKey};
+            use libsignal_protocol::{IdentityKeyPair, PrivateKey};
 
             let private_key = PrivateKey::deserialize(&restored_keypair[..32])
                 .map_err(|e| format!("invalid private key: {}", e))?;
 
-            let identity_key = IdentityKey::try_from(public_with_prefix.as_slice())
-                .map_err(|e| format!("invalid public key: {}", e))?;
-
-            let key_pair = IdentityKeyPair::new(identity_key, private_key);
+            let key_pair = IdentityKeyPair::new(published_key, private_key);
             let serialized = key_pair.serialize();
 
             // Generate a registration ID for this new device (14-bit, 1-16383)
@@ -1113,7 +1148,7 @@ impl ChatterClient {
         self.logout_with_retirement(std::future::ready(Ok(()))).await
     }
 
-    async fn logout_with_retirement(
+    pub(super) async fn logout_with_retirement(
         &self,
         retire_device: impl std::future::Future<Output = Result<(), AuthError>>,
     ) -> Result<(), ClientError> {
@@ -1123,9 +1158,17 @@ impl ChatterClient {
             return Ok(());
         }
         let presence = self.suspend_presence(expected).await;
-        // A retirement failure keeps this session and its presence policy.
-        // Sending Offline here would publish a transition that never happened.
-        retire_device.await?;
+        let previous = self.current_presence_for_publication().await;
+        self.send_presence_updates(crate::domain::user::PresenceStatus::Offline)
+            .await;
+        if let Err(error) = retire_device.await {
+            if self.auth().auth_interceptor.generation() == presence.generation
+                && previous != crate::domain::user::PresenceStatus::Offline
+            {
+                self.send_presence_updates(previous).await;
+            }
+            return Err(error.into());
+        }
         presence.commit();
         crate::system::messaging_background::set_signed_in(false);
         // Invalidate queued UI work immediately, then retire the old call owner
@@ -1175,4 +1218,89 @@ fn publish_key_material_error(error: crate::error::ServiceError) -> ClientError 
     ClientError::Validation(
         chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
     )
+}
+
+fn read_identity_error(error: crate::error::ServiceError) -> ClientError {
+    tracing::warn!(%error, "Could not read the local encryption identity");
+    ClientError::Validation(chatter_i18n::tr("Something went wrong. Try again.").into())
+}
+
+fn unexpected_own_identity() -> ClientError {
+    ClientError::Validation(
+        chatter_i18n::tr("The server published an unexpected encryption key for your account.")
+            .into(),
+    )
+}
+
+async fn fetch_after_own_key_verification<T>(
+    verify: impl std::future::Future<Output = Result<libsignal_protocol::IdentityKey, ClientError>>,
+    fetch: impl std::future::Future<Output = T>,
+) -> Result<(libsignal_protocol::IdentityKey, T), ClientError> {
+    let key = verify.await?;
+    Ok((key, fetch.await))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::device_credentials::DeviceToken;
+    use crate::domain::ids::UserId;
+
+    #[tokio::test]
+    async fn failed_kt_verification_never_polls_the_pin_backup_fetch() {
+        for error in [unexpected_own_identity(), ClientError::NotConnected] {
+            let outcome = fetch_after_own_key_verification(async { Err(error) }, async {
+                panic!("an unverified sign-in must never spend a backup attempt");
+            })
+            .await;
+            assert!(outcome.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_replaced_device_signs_out_and_wipes_its_local_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let owner = UserId::new();
+        let settings = &client.auth().settings_repo;
+        crate::services::auth_service::cache_saved_messages_channel(settings, owner).unwrap();
+        settings
+            .set_string(keys::CURRENT_USER_ID, &owner.to_string())
+            .unwrap();
+        settings.set(keys::CURRENT_DEVICE_ID, &3u32).unwrap();
+        client
+            .auth()
+            .auth_interceptor
+            .set_basic(format!("{owner}.3"), DeviceToken::generate().to_base64());
+        client.auth().generate_identity_for_recovery().unwrap();
+        let files = settings.database().path().with_file_name("attachments");
+        std::fs::create_dir_all(&files).unwrap();
+        let attachment = files.join("old-account.enc");
+        std::fs::write(&attachment, b"fixture").unwrap();
+
+        client
+            .cleanup_failed_sign_in(3, &unexpected_own_identity())
+            .await
+            .unwrap();
+        assert!(client.signal().key_store.has_local_identity().unwrap());
+        assert!(attachment.exists());
+
+        client
+            .cleanup_failed_sign_in(3, &ClientError::DeviceReplaced)
+            .await
+            .unwrap();
+
+        assert_eq!(client.current_user(), None);
+        assert!(client.auth().auth_interceptor.get_auth_info().is_none());
+        assert!(!client.signal().key_store.has_local_identity().unwrap());
+        assert_eq!(
+            crate::storage::unlink::local_account_owner(settings.database()).unwrap(),
+            None
+        );
+        assert!(!attachment.exists());
+    }
 }

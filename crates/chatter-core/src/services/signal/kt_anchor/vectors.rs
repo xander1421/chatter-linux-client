@@ -777,6 +777,66 @@ async fn password_sign_in_reconciles_a_reset_interrupted_before_or_after_publish
 }
 
 #[tokio::test]
+async fn pin_restore_checks_the_signed_key_and_detects_a_replaced_install() {
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let mut client = Script {
+        searches: [
+            (
+                DISTINGUISHED,
+                None,
+                None,
+                Some(search_proof(&vectors, "owner checkpoint")),
+            ),
+            (
+                PEER,
+                None,
+                Some(1),
+                Some(search_proof(&vectors, "owner identity")),
+            ),
+            (
+                PEER,
+                Some(2),
+                Some(1),
+                Some(search_proof(&vectors, "owner replacement")),
+            ),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let verified = search_own_at_sign_in(
+        &mut client,
+        &settings,
+        PEER,
+        OwnIdentityCheck::BeforeRestore,
+        &verifier,
+        now,
+    )
+    .await
+    .unwrap();
+    let OwnIdentityAtSignIn::RestoreKey(key) = verified else {
+        panic!("restore must receive the signed identity key");
+    };
+    assert_eq!(
+        key.serialize().as_ref(),
+        bytes(vector(&vectors, "owner identity").value.as_deref().unwrap())
+    );
+    assert_eq!(
+        search_own_at_sign_in(
+            &mut client,
+            &settings,
+            PEER,
+            OwnIdentityCheck::BeforeRestore,
+            &verifier,
+            now
+        )
+        .await
+        .unwrap(),
+        OwnIdentityAtSignIn::Replaced
+    );
+}
+
+#[tokio::test]
 async fn password_sign_in_preserves_the_alarm_after_an_unexpected_server_write() {
     let (verifier, vectors, now) = fixtures();
     let (_dir, settings) = database();
@@ -839,7 +899,7 @@ async fn password_sign_in_preserves_the_alarm_after_an_unexpected_server_write()
         )
         .await
         .unwrap(),
-        OwnIdentityAtSignIn::UnexpectedKey
+        OwnIdentityAtSignIn::Replaced
     );
     assert!(super::own_mismatch(&settings, PEER).unwrap());
     assert!(

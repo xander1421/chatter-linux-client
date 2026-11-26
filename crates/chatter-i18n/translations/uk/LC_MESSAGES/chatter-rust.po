@@ -3996,3 +3996,6 @@ msgstr "Увійдіть знову, щоб завершити публікац�
 
 msgid "The server published an unexpected encryption key for your account."
 msgstr "Сервер опублікував неочікуваний ключ шифрування для вашого облікового запису."
+
+msgid "This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr "Цей пристрій було замінено. Локальні дані видалено. Увійдіть знову, щоб продовжити."

@@ -153,6 +153,37 @@ async fn account_switch_stops_mesh_transports_and_replaces_the_runtime() {
 }
 
 #[tokio::test]
+async fn a_cancelled_account_switch_can_resume_its_original_mesh() {
+    let mesh = SharedMesh::new(|events| {
+        Ok(service_with_events(
+            Some(Arc::new(|| Arc::new(MockLink::new()))),
+            None,
+            events,
+        ))
+    })
+    .unwrap();
+    let old = mesh.get();
+    old.start().await.unwrap();
+    let old_peer = old.local_peer();
+    let (release, hold) = tokio::sync::oneshot::channel();
+    old.tasks.lock().await.push(tokio::spawn(async move {
+        hold.await.unwrap();
+    }));
+
+    let mut switch = Box::pin(mesh.wipe_for_account_switch(|| {
+        panic!("a cancelled switch must not start wiping");
+    }));
+    assert!(futures::poll!(&mut switch).is_pending());
+    drop(switch);
+    release.send(()).unwrap();
+
+    old.start().await.unwrap();
+    assert!(old.is_running());
+    assert_eq!(old_peer, mesh.get().local_peer());
+    old.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_mesh_can_be_stopped_and_started_again() {
     // What the user's switch needs, and what neither half of this used to do.
     //

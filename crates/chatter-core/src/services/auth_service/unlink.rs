@@ -6,6 +6,19 @@ use super::*;
 use crate::storage::Database;
 
 impl AuthService {
+    pub(crate) async fn wipe_local_account(
+        &self,
+        finish: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.auth_interceptor.clear();
+        self.recovery_login_grant.lock().take();
+        let wipe = || wipe_switched_account(self.settings_repo.database(), finish);
+        #[cfg(feature = "mesh")]
+        return self.mesh.wipe_for_account_switch(wipe).await;
+        #[cfg(not(feature = "mesh"))]
+        wipe()
+    }
+
     /// Signal-Desktop `unlinkAndDisconnect`: stop authenticating, and delete
     /// this device's credentials, keys and sessions while keeping its history,
     /// remembering `former_owner` for the next link or sign-in.
