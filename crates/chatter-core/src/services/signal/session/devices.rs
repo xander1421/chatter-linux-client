@@ -512,6 +512,12 @@ impl SignalService {
             .and_then(|record| record.remote_registration_id().ok())
             .filter(|&id| id != 0)
     }
+
+    /// Whether this peer has a stored session, including archived ratchets.
+    pub(crate) fn has_session_history(&self, recipient_id: &str) -> Result<bool, ServiceError> {
+        Ok(!self.key_store.list_sessions_for_user(recipient_id)?.is_empty())
+    }
+
     /// Devices of `recipient_id` we hold a usable session with, ascending.
     /// Local only — no RPC. The session store doubles as our cache of a
     /// peer's device list: the normal-mode all-devices bundle fetch

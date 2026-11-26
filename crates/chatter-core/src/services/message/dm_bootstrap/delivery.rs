@@ -153,7 +153,11 @@ impl MessageService {
                         if let Err(e) = self
                             .signal_service
                             .reconcile_devices_with_source(
-                                &mut self.anonymous_prekey_source(), &peer_id_str, &missing, &[], &stale,
+                                &mut self.anonymous_prekey_source(false),
+                                &peer_id_str,
+                                &missing,
+                                &[],
+                                &stale,
                             )
                             .await
                         {

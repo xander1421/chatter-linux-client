@@ -21,28 +21,25 @@ pub struct RepublishOutcome {
 }
 
 impl SignalService {
-    /// An explicit sign-in replaces our device address, even when the account
-    /// identity is retained. Old ratchets belong to the old local address:
-    /// sealing them with the new device certificate makes the receiver select
-    /// a different session. Archive first, then warm the known peers during
-    /// onboarding so Shield can use the cache without an identified fetch.
-    /// A failed warm-up leaves no usable old sender chain (fail closed).
-    pub async fn rebind_device_sessions(
-        &self,
-        auth_client: &mut AuthClient,
-    ) -> Result<(), ServiceError> {
-        let peers = self
-            .key_store
-            .session_peer_ids()
-            .map_err(ServiceError::Storage)?;
-        // Invalidate ALL peers before any network operation can fail.
-        for peer in &peers {
-            self.actor.invalidate_peer_sessions(peer.clone()).await?;
+    pub(crate) fn clear_account_state(&self) {
+        if let Ok(mut policies) = self.unrestricted_access.lock() {
+            policies.clear();
         }
+        if let Ok(mut retries) = self.skdm_retry.lock() {
+            retries.clear();
+        }
+        if let Ok(mut certificate) = self.sender_cert_cache.lock() {
+            *certificate = None;
+        }
+    }
+
+    /// Archive the old local device's ratchets before publishing its replacement.
+    /// The next send establishes only the sessions it needs, using that
+    /// send path's discovery policy. Rebinding requires no peer RPC.
+    pub async fn rebind_device_sessions(&self) -> Result<(), ServiceError> {
+        let peers = self.key_store.session_peer_ids()?;
         for peer in peers {
-            if let Err(error) = self.ensure_sessions_all_devices(auth_client, &peer).await {
-                tracing::warn!(peer_id = %peer, %error, "new device session warm-up failed; old ratchets remain archived");
-            }
+            self.actor.invalidate_peer_sessions(peer).await?;
         }
         Ok(())
     }
@@ -233,6 +230,7 @@ impl SignalService {
         &self,
         auth_client: &mut AuthClient,
     ) -> Result<(), ServiceError> {
+        self.rebind_device_sessions().await?;
         let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
             self.build_device_key_material().await?;
         let device_id = bundle.device_id;
@@ -245,7 +243,6 @@ impl SignalService {
             .await
             .map_err(ServiceError::Network)?;
         tracing::info!(device_id, "published this device's Signal bundle");
-        self.rebind_device_sessions(auth_client).await?;
         Ok(())
     }
 
@@ -289,6 +286,7 @@ impl SignalService {
 
         let owner = self.settings_repo.get_string(keys::CURRENT_USER_ID)?
             .ok_or_else(|| ServiceError::Validation("missing owner for identity republish".into()))?;
+        self.rebind_device_sessions().await?;
         let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
             self.build_device_key_material().await?;
         let published_key = bundle.identity_key.clone();
@@ -309,8 +307,6 @@ impl SignalService {
             devices_reset = response.devices_reset,
             "republished this device's Signal key material"
         );
-
-        self.rebind_device_sessions(auth_client).await?;
 
         Ok(RepublishOutcome {
             identity_key_changed: response.identity_key_changed,

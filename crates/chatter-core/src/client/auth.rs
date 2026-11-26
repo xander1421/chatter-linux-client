@@ -210,6 +210,8 @@ impl ChatterClient {
             .await;
         self.auth_state().set_login_verifying(false);
         let mut result = login?;
+        self.messages().reload_session_state().await;
+        self.signal().clear_account_state();
         self.auth_state().set_logged_in(
             result.user_id,
             result.device_id,
@@ -240,6 +242,12 @@ impl ChatterClient {
         // the result. That is what made total, permanent key loss look like a
         // successful login. An Err cannot be discarded.
         if let Some(need) = result.key_recovery {
+            if need.is_retryable() {
+                // Keep the server-assigned device id so the next attempt can
+                // reclaim it, but require a fresh password login for a new PIN.
+                self.auth().end_session()?;
+                self.auth_state().set_logged_out();
+            }
             return Err(ClientError::IdentityRecoveryRequired(need));
         }
 

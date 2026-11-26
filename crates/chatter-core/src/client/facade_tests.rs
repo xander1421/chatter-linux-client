@@ -197,9 +197,9 @@ mod transport_switch_tests {
     }
 
     #[tokio::test]
-    async fn pending_identity_republish_rejects_other_accounts_after_logout() {
+    async fn pending_identity_republish_rejects_other_accounts_while_signed_in() {
         use crate::network::grpc::{AuthClient, interceptors::AuthInterceptor};
-        use crate::storage::{repositories::settings_repo::keys, unlink::wipe_account_data};
+        use crate::storage::repositories::settings_repo::keys;
 
         let (client, _dir) = build_test_client();
         let settings = &client.signal().settings_repo;
@@ -216,9 +216,6 @@ mod transport_switch_tests {
 
         let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
         let mut rpc = AuthClient::new(channel.into(), AuthInterceptor::new());
-        client.auth().logout(&mut rpc).await.unwrap();
-        assert!(settings.get_string(keys::CURRENT_USER_ID).unwrap().is_none());
-
         let refused = client
             .auth()
             .login(&mut rpc, "other_account", "unused", "test", None, &|| {})
@@ -241,9 +238,6 @@ mod transport_switch_tests {
             AuthError::LoginFailed(message) if message == "PIN is required for account recovery"
         ));
         assert!(client.auth().key_republish_pending().unwrap());
-
-        wipe_account_data(settings.database()).unwrap();
-        assert!(!client.auth().key_republish_pending().unwrap());
     }
 
     #[tokio::test]

@@ -3443,3 +3443,15 @@ msgstr ""
 
 msgid "Not now"
 msgstr ""
+
+#: crates/chatter-core/src/services/auth_service/login.rs
+msgid "Sign in to the same account to finish publishing your encryption keys."
+msgstr ""
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr ""
+
+#: crates/chatter-core/src/services/auth_service/login.rs
+msgid "Could not verify which account owns the local data on this device."
+msgstr ""

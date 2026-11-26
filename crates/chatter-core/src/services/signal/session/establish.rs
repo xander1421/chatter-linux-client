@@ -84,7 +84,7 @@ impl SignalService {
         ).await
     }
 
-    pub(super) async fn ensure_session_with_source(
+    pub(crate) async fn ensure_session_with_source(
         &self,
         source: &mut PreKeySource<'_>,
         recipient_id: &str,

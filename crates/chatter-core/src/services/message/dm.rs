@@ -367,15 +367,16 @@ impl MessageService {
         plaintext: &[u8],
     ) -> Result<(), MessageError> {
         let device_id = mailbox.device_id;
-        let peer_ciphertexts = self
-            .signal_service
-            .for_anonymous_route()
-            .encrypt_message_session_devices(
-                auth_client,
-                &peer_id.to_string(),
-                vec![device_id],
-                plaintext,
-            )
+        let peer = peer_id.to_string();
+        let signal = self.signal_service.for_anonymous_route();
+        // A mailbox already names the device to reach. Rebuild its ratchet
+        // on demand over Tor if our sign-in replaced the local device.
+        signal
+            .ensure_session_with_source(&mut self.anonymous_prekey_source(true), &peer, device_id)
+            .await
+            .map_err(|error| MessageError::from_signal_send(error, "Mailbox device discovery"))?;
+        let peer_ciphertexts = signal
+            .encrypt_message_session_devices(auth_client, &peer, vec![device_id], plaintext)
             .await
             .map_err(|e| MessageError::from_signal_send(e, "Mailbox DM encrypt"))?;
         for signal_ciphertext in peer_ciphertexts.into_values() {

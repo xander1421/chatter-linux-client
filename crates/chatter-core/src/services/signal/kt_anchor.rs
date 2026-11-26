@@ -654,6 +654,8 @@ pub(crate) fn authorize_own_identity(
         // An observed version accounts for earlier unexpected writes too.
         // On a fresh installation the authenticated local key is the only
         // baseline available, so its exact value anchors the initial version.
+        // After SVR restore or device link there is no prior local version to
+        // detect a temporary substitution reverted before the first monitor.
         let next_version = state
             .observed_version
             .map(|version| {

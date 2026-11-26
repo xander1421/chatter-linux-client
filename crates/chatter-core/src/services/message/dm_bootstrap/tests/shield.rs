@@ -33,6 +33,24 @@ async fn shield_bootstrap_without_cached_devices_is_not_reachable_privately() {
     );
 }
 
+#[tokio::test]
+async fn shield_rebind_needs_a_tor_route_before_spending_discovery_credentials() {
+    let me = UserId::new();
+    let peer = UserId::new();
+    let (client, _dir) = shield_client(me);
+    let ms = client.messages();
+    cache_device(ms, &peer, 1, &mut StdRng::seed_from_u64(20)).await;
+    seed_tokens(ms, 2);
+    ms.signal_service.rebind_device_sessions().await.unwrap();
+
+    assert!(matches!(
+        ms.bootstrap_devices(&peer).await,
+        Err(MessageError::Network(crate::error::NetworkError::SecretChatNeedsTor(_)))
+    ));
+    assert!(ms.live_session_devices(&peer).await.unwrap().is_empty());
+    assert_eq!(ms.token_manager.available_token_count().unwrap(), 2);
+}
+
 /// Through the public core: a Shield send to a peer with no cached device
 /// is refused and releases admission. Once a device is cached the later
 /// send gets past device preparation, but with no pinned server `.onion` it

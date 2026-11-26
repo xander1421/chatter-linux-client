@@ -202,9 +202,26 @@ pub enum MessageError {
 }
 
 impl MessageService {
-    fn anonymous_prekey_source(&self) -> super::signal::PreKeySource<'_> {
+    pub(crate) async fn reload_session_state(&self) {
+        self.pending_group_decrypts.lock().clear();
+        self.sender_key_requests.lock().clear();
+        self.channel_decrypt_failures.lock().clear();
+        self.group_retry_requests.lock().clear();
+        self.solicited_resends.reload();
+        self.unreached_peer_devices.lock().clear();
+        self.retired_peer_devices.lock().clear();
+        self.eviction_resends.lock().clear();
+        self.group_send_tokens.clear();
+        *self.own_devices.lock().await = None;
+    }
+
+    fn anonymous_prekey_source(&self, require_tor: bool) -> super::signal::PreKeySource<'_> {
         super::signal::PreKeySource::Anonymous {
-            client: self.grpc_pool.anonymous_auth_client(),
+            route: if require_tor {
+                super::signal::AnonymousPreKeyRoute::Secret(&self.grpc_pool)
+            } else {
+                super::signal::AnonymousPreKeyRoute::Client(self.grpc_pool.anonymous_auth_client())
+            },
             tokens: &self.token_manager,
             claim: TokenManager::claim_send_credential,
         }
@@ -464,19 +481,26 @@ const SOLICITED_RESEND_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
 impl SolicitedResends {
     pub(crate) fn load(settings: Arc<SettingsRepository>) -> Self {
+        let this = Self {
+            set: Arc::default(),
+            settings,
+        };
+        this.reload();
+        this.persist(&mut this.set.lock());
+        this
+    }
+
+    fn reload(&self) {
         use crate::storage::repositories::settings_repo::keys;
-        let stored: Vec<SolicitedResend> = settings
+
+        let mut set = self.set.lock();
+        let stored: Vec<SolicitedResend> = self.settings
             .get(keys::SOLICITED_RESENDS)
-            .inspect_err(|e| tracing::warn!(error = %e, "Could not load solicited resends"))
+            .inspect_err(|error| tracing::warn!(%error, "Could not load solicited resends"))
             .ok()
             .flatten()
             .unwrap_or_default();
-        let this = Self {
-            set: Arc::new(parking_lot::Mutex::new(stored.into_iter().collect())),
-            settings,
-        };
-        this.persist(&mut this.set.lock());
-        this
+        *set = stored.into_iter().collect();
     }
 
     /// Record a request for `(channel, sender, sent_at ms)`.

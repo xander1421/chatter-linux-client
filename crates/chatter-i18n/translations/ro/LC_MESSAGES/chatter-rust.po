@@ -4002,3 +4002,15 @@ msgstr "Permite afișarea apelurilor primite pe ecranul de blocare."
 
 msgid "Not now"
 msgstr "Nu acum"
+
+#: crates/chatter-core/src/services/auth_service/login.rs
+msgid "Sign in to the same account to finish publishing your encryption keys."
+msgstr "Autentifică-te în același cont pentru a finaliza publicarea cheilor tale de criptare."
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr "Autentifică-te din nou pentru a finaliza publicarea cheilor tale de criptare."
+
+#: crates/chatter-core/src/services/auth_service/login.rs
+msgid "Could not verify which account owns the local data on this device."
+msgstr "Nu s-a putut verifica cărui cont îi aparțin datele locale de pe acest dispozitiv."

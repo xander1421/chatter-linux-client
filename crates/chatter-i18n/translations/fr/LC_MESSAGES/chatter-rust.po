@@ -3999,3 +3999,15 @@ msgstr "Autorisez l’affichage des appels entrants sur l’écran de verrouilla
 
 msgid "Not now"
 msgstr "Pas maintenant"
+
+#: crates/chatter-core/src/services/auth_service/login.rs
+msgid "Sign in to the same account to finish publishing your encryption keys."
+msgstr "Connectez-vous au même compte pour terminer la publication de vos clés de chiffrement."
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr "Reconnectez-vous pour terminer la publication de vos clés de chiffrement."
+
+#: crates/chatter-core/src/services/auth_service/login.rs
+msgid "Could not verify which account owns the local data on this device."
+msgstr "Impossible de vérifier à quel compte appartiennent les données locales de cet appareil."
