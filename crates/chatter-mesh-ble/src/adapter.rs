@@ -14,12 +14,17 @@
 //! once, and the layer above has to learn that from one event instead of from a
 //! dozen simultaneous write failures.
 
-use futures::StreamExt;
+use std::io::ErrorKind;
+use std::time::Duration;
 
 use bluer::{Adapter, AdapterEvent, AdapterProperty, Session};
 use chatter_mesh_link::LinkError;
+use futures::{Stream, StreamExt};
+use tokio::{process::Command, time::timeout};
 
 use crate::error;
+
+const CONTROLLER_INFO_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A BlueZ session together with the adapter we run the mesh on.
 pub struct BleAdapter {
@@ -84,30 +89,78 @@ impl BleAdapter {
             .map_err(|err| error::classify_adapter(&err))
     }
 
-    /// Bring the controller up if it is not already.
+    /// Check that mesh can use the controller without changing its settings.
     ///
-    /// This does change system state the user can see, which is deliberate: BlueZ
-    /// refuses to advertise, scan or connect on an unpowered adapter, so the only
-    /// alternative is to fail to start at all. `Powered` is also advisory — an
-    /// `rfkill` block accepts the write and leaves the property false — so the
-    /// result is read back rather than assumed.
-    pub async fn power_on(&self) -> Result<(), LinkError> {
-        if self.is_powered().await? {
-            return Ok(());
+    /// BlueZ's D-Bus `AddressType` describes the controller's identity address.
+    /// A public identity can still advertise from a private address, and a
+    /// random identity can be static. Read the kernel's live Privacy setting.
+    pub(crate) async fn require_private_radio(&self) -> Result<(), LinkError> {
+        if !self.is_powered().await? {
+            return Err(self.bluetooth_off());
         }
-        self.adapter
-            .set_powered(true)
-            .await
-            .map_err(|err| error::classify_adapter(&err))?;
-        if self.is_powered().await? {
-            Ok(())
-        } else {
-            Err(LinkError::AdapterUnavailable(format!(
-                "{} stayed powered off after being switched on; it is probably rfkill-blocked",
-                self.name()
-            )))
+
+        // Read Controller Information is an unprivileged management command.
+        let mut command = Command::new("btmgmt");
+        command
+            .args(["--index", self.name(), "info"])
+            .env("LC_ALL", "C")
+            .kill_on_drop(true);
+        let settings = match timeout(CONTROLLER_INFO_TIMEOUT, command.output()).await {
+            Ok(Ok(output)) if output.status.success() => std::str::from_utf8(&output.stdout)
+                .ok()
+                .and_then(current_settings)
+                .ok_or("could not read the controller's current LE address privacy setting"),
+            Ok(Err(error)) if error.kind() == ErrorKind::NotFound => {
+                Err("install the BlueZ btmgmt tool to verify LE address privacy")
+            }
+            _ => Err("could not verify LE address privacy with btmgmt"),
         }
+        .map_err(|reason| self.private_radio_unavailable(reason))?;
+        if !settings.powered {
+            return Err(self.bluetooth_off());
+        }
+        if !settings.privacy {
+            return Err(self.private_radio_unavailable(
+                "LE address privacy is off. Enable Privacy=device in the BlueZ configuration",
+            ));
+        }
+        Ok(())
     }
+
+    fn private_radio_unavailable(&self, reason: &str) -> LinkError {
+        LinkError::PeripheralSetup(format!(
+            "{}: {reason}. Mesh requires a private Bluetooth address",
+            self.name()
+        ))
+    }
+
+    fn bluetooth_off(&self) -> LinkError {
+        LinkError::AdapterUnavailable(format!(
+            "Bluetooth is off on {}. Turn it on in system settings, then turn Mesh off and back on",
+            self.name()
+        ))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ControllerSettings {
+    powered: bool,
+    privacy: bool,
+}
+
+fn current_settings(info: &str) -> Option<ControllerSettings> {
+    let mut lines = info
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("current settings:"));
+    let settings = lines.next()?.trim();
+    if settings.is_empty() || lines.next().is_some() {
+        return None;
+    }
+    let mut settings = settings.split_ascii_whitespace();
+    Some(ControllerSettings {
+        powered: settings.clone().any(|setting| setting == "powered"),
+        privacy: settings.any(|setting| setting == "privacy"),
+    })
 }
 
 impl core::fmt::Debug for BleAdapter {
@@ -118,48 +171,47 @@ impl core::fmt::Debug for BleAdapter {
     }
 }
 
-/// Report every power transition of `adapter` to `on_change` until the adapter
-/// object disappears from D-Bus.
-///
-/// Takes the adapter by value so the whole thing can be spawned as a detached
-/// task: `Adapter::events` borrows its receiver, so a caller cannot hold the
-/// stream and the adapter in different places.
-///
-/// The adapter object vanishing (`hci0` unbound, the dongle unplugged) is
-/// reported as a final `false`. From the mesh's point of view that is
-/// indistinguishable from a power-off — the radio is gone and every link with
-/// it — and reporting nothing would leave the layer above believing its links
-/// were still alive.
-///
-/// Cancelling the returned future (dropping the task) reports nothing, because a
-/// deliberate shutdown is not a power event.
-pub async fn watch_power<F>(adapter: Adapter, mut on_change: F)
-where
-    F: FnMut(bool) + Send,
-{
-    let events = match adapter.events().await {
-        Ok(events) => events,
-        // We could not subscribe at all, so we will never see a transition.
-        // Saying "powered off" here would be a lie: the adapter may be perfectly
-        // healthy and start() has already verified it is powered.
-        Err(_) => return,
-    };
-    // `Box::pin` rather than `futures::pin_mut!`, which expands to an `unsafe`
-    // block this crate forbids.
-    let mut events = Box::pin(events);
-
+/// Wait for the controller to power off or disappear from D-Bus.
+pub(crate) async fn wait_for_power_loss(events: impl Stream<Item = AdapterEvent>) {
+    let mut events = std::pin::pin!(events);
     while let Some(event) = events.next().await {
-        if let AdapterEvent::PropertyChanged(AdapterProperty::Powered(powered)) = event {
-            on_change(powered);
+        if let AdapterEvent::PropertyChanged(AdapterProperty::Powered(false)) = event {
+            break;
         }
     }
-
-    on_change(false);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_current_settings_instead_of_capabilities() {
+        let info = "hci0: Primary controller\n\tsupported settings: powered le privacy\n\tcurrent settings: powered le";
+        assert_eq!(
+            current_settings(info),
+            Some(ControllerSettings {
+                powered: true,
+                privacy: false,
+            })
+        );
+        assert_eq!(
+            current_settings("current settings: le privacy"),
+            Some(ControllerSettings {
+                powered: false,
+                privacy: true,
+            })
+        );
+        assert_eq!(
+            current_settings("supported settings: powered le privacy"),
+            None
+        );
+        assert_eq!(current_settings("current settings:"), None);
+        assert_eq!(
+            current_settings("current settings: powered le\ncurrent settings: powered le privacy"),
+            None
+        );
+    }
 
     /// Requires a real controller. Run with:
     ///
@@ -171,7 +223,6 @@ mod tests {
     async fn acquires_the_default_adapter() {
         let ble = BleAdapter::acquire().await.expect("no adapter");
         assert!(!ble.name().is_empty());
-        ble.power_on().await.expect("could not power on");
-        assert!(ble.is_powered().await.expect("power read failed"));
+        let _ = ble.is_powered().await.expect("power read failed");
     }
 }

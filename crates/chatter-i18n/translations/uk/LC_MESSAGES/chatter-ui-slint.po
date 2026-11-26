@@ -3017,6 +3017,10 @@ msgstr[0] "Увімкнено · {n} поруч"
 msgstr[1] "Увімкнено · {n} поруч"
 msgstr[2] "Увімкнено · {n} поруч"
 
+#: ui/mesh/mesh_setup_sheet.slint:114
+msgid "While Mesh is on, nearby devices that connect over Bluetooth may see your device name. You can change it in system settings."
+msgstr "Коли Mesh увімкнено, пристрої поблизу, які підключаться через Bluetooth, можуть побачити назву вашого пристрою. Її можна змінити в налаштуваннях системи."
+
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
 msgstr "Тут з’являться пристрої поруч, щойно їх буде знайдено."

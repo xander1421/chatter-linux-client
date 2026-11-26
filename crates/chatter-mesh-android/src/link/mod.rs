@@ -73,7 +73,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use chatter_mesh_link::{BoxFuture, LinkError, LinkEvent, LinkId, LinkRole, MeshLink};
+use chatter_mesh_link::{
+    BoxFuture, InboundAdmission, InboundLink, LinkError, LinkEvent, LinkId, LinkRole, MeshLink,
+};
 use tokio::sync::Notify;
 
 use crate::bridge;
@@ -102,10 +104,10 @@ mod tests;
 
 pub use android::AndroidLink;
 pub use mtu::{
-    max_write_for_mtu, sanitise_max_write, ATT_WRITE_OVERHEAD, DEFAULT_MAX_WRITE,
-    LARGEST_MAX_WRITE, MAX_ATT_MTU, MIN_ATT_MTU,
+    ATT_WRITE_OVERHEAD, DEFAULT_MAX_WRITE, LARGEST_MAX_WRITE, MAX_ATT_MTU, MIN_ATT_MTU,
+    max_write_for_mtu, sanitise_max_write,
 };
-pub(crate) use registration::{dispatch, on_connected, on_data, on_disconnected};
+pub(crate) use registration::{check_inbound, dispatch, on_connected, on_data, on_disconnected};
 
 /// Short, stable text for a role, used in link ids.
 fn role_tag(role: LinkRole) -> &'static str {
@@ -128,6 +130,7 @@ fn describe(event: &LinkEvent) -> String {
             link,
             role,
             max_write,
+            ..
         } => {
             format!(
                 "Connected({link}, {}, max_write {max_write})",
@@ -368,6 +371,7 @@ impl Connections {
 
 /// State shared between the link object and the JNI callbacks.
 struct Shared {
+    inbound_admission: Mutex<Option<InboundAdmission>>,
     conns: Mutex<Connections>,
     queue: Mutex<(std::collections::VecDeque<LinkEvent>, bool)>,
     available: Notify,
@@ -377,6 +381,7 @@ struct Shared {
 impl Shared {
     fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
+            inbound_admission: Mutex::new(None),
             conns: Mutex::new(Connections::default()),
             queue: Mutex::new((std::collections::VecDeque::new(), false)),
             available: Notify::new(),
@@ -431,7 +436,18 @@ impl Shared {
     }
 
     /// Kotlin says this connection is writable now.
+    #[cfg(test)]
     fn establish(&self, role: LinkRole, handle: &str, max_write: usize) {
+        self.establish_with_inbound(role, handle, max_write, None);
+    }
+
+    fn establish_with_inbound(
+        &self,
+        role: LinkRole,
+        handle: &str,
+        max_write: usize,
+        inbound: Option<InboundLink>,
+    ) {
         let Established {
             id,
             displaced,
@@ -445,6 +461,7 @@ impl Shared {
             link: id.clone(),
             role,
             max_write,
+            inbound,
         });
         // Only now may inbound data be released. Doing it in this order is what
         // guarantees `Data` never precedes `Connected` for a link.

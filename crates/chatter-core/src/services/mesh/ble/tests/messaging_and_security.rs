@@ -158,6 +158,7 @@ async fn a_connected_link_is_treated_as_writable_immediately() {
             link: link.clone(),
             role: LinkRole::Peripheral,
             max_write: 244,
+            inbound: None,
         })
         .await;
     assert!(state.with(|inner| inner.links.is_writable(&link)));
@@ -176,6 +177,7 @@ async fn a_disconnect_drops_every_piece_of_link_state() {
             link: link.clone(),
             role: LinkRole::Central,
             max_write: 244,
+            inbound: None,
         })
         .await;
     runtime
@@ -195,6 +197,7 @@ async fn losing_the_adapter_clears_every_link() {
             link,
             role: LinkRole::Central,
             max_write: 244,
+            inbound: None,
         })
         .await;
     runtime

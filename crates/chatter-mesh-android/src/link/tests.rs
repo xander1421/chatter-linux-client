@@ -262,10 +262,12 @@ fn buffered_data_is_discarded_when_the_connection_goes_away() {
     let mut conns = table();
     conns.accept_inbound(INBOUND, b"orphan".to_vec());
     conns.close(INBOUND);
-    assert!(conns
-        .establish(LinkRole::Peripheral, INBOUND, 244)
-        .flushed
-        .is_empty());
+    assert!(
+        conns
+            .establish(LinkRole::Peripheral, INBOUND, 244)
+            .flushed
+            .is_empty()
+    );
 }
 
 #[test]
@@ -312,10 +314,12 @@ fn removing_by_id_also_forgets_what_was_buffered_for_it() {
     let id = conns.open(LinkRole::Peripheral, INBOUND, 244, true).id;
     conns.accept_inbound(INBOUND, b"orphan".to_vec());
     conns.remove(&id);
-    assert!(conns
-        .establish(LinkRole::Peripheral, INBOUND, 244)
-        .flushed
-        .is_empty());
+    assert!(
+        conns
+            .establish(LinkRole::Peripheral, INBOUND, 244)
+            .flushed
+            .is_empty()
+    );
 }
 
 #[test]
@@ -342,11 +346,14 @@ fn establishing_a_link_announces_it_with_the_negotiated_size() {
     shared.establish(LinkRole::Peripheral, INBOUND, 185);
     let events = drain_events(&shared);
     let link = match &events[..] {
-        [LinkEvent::Connected {
-            link,
-            role,
-            max_write,
-        }] => {
+        [
+            LinkEvent::Connected {
+                link,
+                role,
+                max_write,
+                ..
+            },
+        ] => {
             assert_eq!(*role, LinkRole::Peripheral);
             assert_eq!(*max_write, 185);
             link.clone()
@@ -374,7 +381,10 @@ fn data_never_arrives_before_the_link_it_belongs_to() {
     shared.establish(LinkRole::Peripheral, INBOUND, 185);
     let events = drain_events(&shared);
     match &events[..] {
-        [LinkEvent::Connected { link, .. }, LinkEvent::Data { link: on, bytes }] => {
+        [
+            LinkEvent::Connected { link, .. },
+            LinkEvent::Data { link: on, bytes },
+        ] => {
             assert_eq!(link, on);
             assert_eq!(bytes, b"early");
         }
@@ -403,7 +413,8 @@ fn an_outbound_attempt_emits_nothing_until_it_is_writable() {
         vec![LinkEvent::Connected {
             link: id,
             role: LinkRole::Central,
-            max_write: 244
+            max_write: 244,
+            inbound: None,
         }]
     );
 }
@@ -421,9 +432,11 @@ fn losing_the_adapter_disconnects_every_link() {
     let events = drain_events(&shared);
     assert_eq!(events.len(), 3);
     assert_eq!(events[0], LinkEvent::AdapterPowerChanged { powered: false });
-    assert!(events[1..]
-        .iter()
-        .all(|event| matches!(event, LinkEvent::Disconnected { .. })));
+    assert!(
+        events[1..]
+            .iter()
+            .all(|event| matches!(event, LinkEvent::Disconnected { .. }))
+    );
     assert_eq!(shared.conns().len(), 0);
 }
 
@@ -437,6 +450,7 @@ fn queue_pressure_keeps_every_lifecycle_transition_in_order() {
         link: link.clone(),
         role: LinkRole::Central,
         max_write: 244,
+        inbound: None,
     };
     let disconnected = LinkEvent::Disconnected { link: link.clone() };
     shared.emit(connected.clone());
@@ -468,7 +482,7 @@ fn a_full_queue_drops_rather_than_blocking_the_binder_thread() {
         shared.emit(LinkEvent::Discovered {
             address: PEER.to_string(),
             rssi,
-            peer: None,
+            beacon: [0; 13],
         });
     }
 
@@ -480,7 +494,7 @@ fn a_full_queue_drops_rather_than_blocking_the_binder_thread() {
         LinkEvent::Discovered {
             address: PEER.to_string(),
             rssi: -60,
-            peer: None
+            beacon: [0; 13]
         }
     );
     assert_eq!(
@@ -488,7 +502,7 @@ fn a_full_queue_drops_rather_than_blocking_the_binder_thread() {
         LinkEvent::Discovered {
             address: PEER.to_string(),
             rssi: -70,
-            peer: None
+            beacon: [0; 13]
         }
     );
 }
@@ -521,12 +535,13 @@ fn every_event_describes_itself_by_name() {
         LinkEvent::Discovered {
             address: PEER.to_string(),
             rssi: -70,
-            peer: None,
+            beacon: [0; 13],
         },
         LinkEvent::Connected {
             link: link.clone(),
             role: LinkRole::Central,
             max_write: 244,
+            inbound: None,
         },
         LinkEvent::Disconnected { link: link.clone() },
         LinkEvent::Data {
@@ -547,7 +562,7 @@ fn events_come_back_in_order() {
     link.inner.emit(LinkEvent::Discovered {
         address: PEER.to_string(),
         rssi: -70,
-        peer: None,
+        beacon: [0; 13],
     });
     link.inner
         .emit(LinkEvent::AdapterPowerChanged { powered: true });
@@ -558,7 +573,7 @@ fn events_come_back_in_order() {
             Some(LinkEvent::Discovered {
                 address: PEER.to_string(),
                 rssi: -70,
-                peer: None
+                beacon: [0; 13]
             })
         );
         assert_eq!(

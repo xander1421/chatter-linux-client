@@ -29,6 +29,8 @@
 #[cfg(target_os = "linux")]
 pub mod adapter;
 #[cfg(target_os = "linux")]
+mod alias;
+#[cfg(target_os = "linux")]
 pub mod central;
 #[cfg(target_os = "linux")]
 pub mod error;
@@ -37,5 +39,7 @@ pub mod link;
 #[cfg(target_os = "linux")]
 pub mod peripheral;
 
+#[cfg(target_os = "linux")]
+pub use alias::recover_desktop_aliases;
 #[cfg(target_os = "linux")]
 pub use link::BlueZLink;

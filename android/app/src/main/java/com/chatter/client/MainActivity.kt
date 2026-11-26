@@ -772,6 +772,7 @@ class MainActivity : GameActivity() {
         // Start while the Activity still has foreground-start eligibility.
         activityResumed = false
         messagingBackground = true
+        meshBleAppVisible = false
         nativeSetAppVisible(false)
         updateMessagingService()
         super.onPause()
@@ -801,6 +802,7 @@ class MainActivity : GameActivity() {
     private fun updateAppVisibility(hasFocus: Boolean) {
         val visible = activityResumed && (hasFocus || fullScreenCallDialog?.isShowing == true)
         messagingBackground = !visible
+        meshBleAppVisible = visible
         nativeSetAppVisible(visible)
         updateMessagingService()
     }

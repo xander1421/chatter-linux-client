@@ -116,11 +116,23 @@ internal fun MeshBleBridge.createGattClientCallback(): BluetoothGattCallback = o
             return
         }
         if (link.announced) return
-        // Discovered, subscribed, MTU known: the link can carry a write now.
+        val firstWrite = link.firstWrite
+        if (firstWrite == null) {
+            announceCentral(link)
+            return
+        }
+        val characteristic = link.characteristic ?: return failCentral(link, "mesh characteristic missing")
+        if (!link.admissionPending.compareAndSet(false, true)) return
+        if (!writeCharacteristic(gatt, characteristic, firstWrite)) {
+            failCentral(link, "pairing preface write refused")
+        }
+    }
+
+    private fun announceCentral(link: CentralLink) {
+        if (centralLinks[link.id] !== link || link.announced) return
         link.announced = true
         cancelWatchdog(link)
         emitConnected(link.id, false, link.maxWrite)
-        Log.i(TAG, "central link ${link.id} writable, maxWrite=${link.maxWrite}")
     }
 
     // Pre-33 stacks only ever call this overload; 33+ never do, because the
@@ -152,6 +164,14 @@ internal fun MeshBleBridge.createGattClientCallback(): BluetoothGattCallback = o
         status: Int,
     ) {
         val link = centralLinks[centralId(gatt.device.address)] ?: return
+        if (link.admissionPending.compareAndSet(true, false)) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                announceCentral(link)
+            } else {
+                failCentral(link, "pairing preface write failed: status=$status")
+            }
+            return
+        }
         link.gate.release()
         if (status != BluetoothGatt.GATT_SUCCESS) {
             Log.w(TAG, "${link.id}: write failed status=$status")

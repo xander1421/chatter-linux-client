@@ -4,9 +4,9 @@
 //! cargo run -p chatter-mesh-ble --example smoke
 //! ```
 //!
-//! **This transmits.** It powers on the adapter and advertises the mesh service
-//! UUID for the duration of the run, so the machine is discoverable to anything in
-//! Bluetooth range. It advertises no name and no personal data, and stops on exit.
+//! **This transmits.** With Bluetooth already on and LE privacy enabled, it
+//! advertises the mesh service UUID until exit. It omits the device name from
+//! the advertisement.
 //!
 //! While it runs, verify from another terminal:
 //!
@@ -39,7 +39,7 @@ async fn main() {
 
     let link = BlueZLink::new();
 
-    println!("starting: powering the adapter, advertising, and scanning…");
+    println!("starting: checking adapter power and privacy, then advertising and scanning…");
     if let Err(error) = link.start().await {
         eprintln!("start failed: {error}");
         eprintln!("if this is a permissions error, check that bluetoothd is running");
@@ -77,7 +77,7 @@ async fn main() {
                     discovered += 1;
                     println!("  discovered {address} at {rssi} dBm");
                 }
-                Some(LinkEvent::Connected { link: id, role, max_write }) => {
+                Some(LinkEvent::Connected { link: id, role, max_write, .. }) => {
                     connected += 1;
                     // max_write is the negotiated payload ceiling, reported verbatim.
                     // If this does not change when a peer renegotiates its MTU, the

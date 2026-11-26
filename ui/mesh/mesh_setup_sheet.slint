@@ -109,6 +109,11 @@ export component MeshSetupSheet inherits Rectangle {
                         spacing: Spacing.sm;
                         Text { text: "RADIO"; color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Text {
+                            width: parent.width;
+                            text: @tr("While Mesh is on, nearby devices that connect over Bluetooth may see your device name. You can change it in system settings.");
+                            color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
+                        }
                         Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {

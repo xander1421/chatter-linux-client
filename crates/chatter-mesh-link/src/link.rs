@@ -11,6 +11,9 @@
 
 use core::future::Future;
 use core::pin::Pin;
+use std::sync::Arc;
+
+pub use chatter_mesh::tlv::pairing::PairingBeacon;
 
 use crate::error::LinkError;
 
@@ -55,23 +58,45 @@ pub enum LinkRole {
     Peripheral,
 }
 
+/// Admission details from the first write of an inbound connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InboundLink {
+    pub address: String,
+    pub beacon: Option<PairingBeacon>,
+}
+
+/// Called once before forwarding inbound application writes or enabling sends.
+/// The hook runs on a radio callback and should perform only in-memory checks.
+pub type InboundAdmission = Arc<dyn Fn(&InboundLink) -> bool + Send + Sync>;
+
+/// First-write preface. It fits in the default 20-byte ATT payload.
+pub const ADMISSION_BEACON_PREFIX: [u8; 4] = *b"CHPB";
+
+/// Encode the admission preface for a paired outbound connection.
+pub fn admission_preface(beacon: &PairingBeacon) -> [u8; 17] {
+    let mut frame = [0; 17];
+    frame[..4].copy_from_slice(&ADMISSION_BEACON_PREFIX);
+    frame[4..].copy_from_slice(beacon);
+    frame
+}
+
+/// Extract a beacon only from a dedicated first write.
+pub fn admission_beacon(frame: &[u8]) -> Option<PairingBeacon> {
+    frame
+        .strip_prefix(&ADMISSION_BEACON_PREFIX)?
+        .try_into()
+        .ok()
+}
+
 /// Something the radio noticed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkEvent {
-    /// A device advertising our service UUID came into range.
-    ///
-    /// Not a connection — the scheduler decides whether this is worth spending one
-    /// of the scarce central slots on, using `rssi` among other things.
-    ///
-    /// `peer` is the advertised identity, when the advert carried one. It is the
-    /// only thing about a device that survives a private-address rotation, and
-    /// therefore the only way to recognise an address as a peer already held
-    /// *before* spending a connection to find out. `None` from a peer whose scan
-    /// response was not received — treat that as unknown, never as unfamiliar.
+    /// A device sent pairing service data. The beacon is untrusted until the
+    /// policy layer recognises it, and recognition by itself does not authenticate a link.
     Discovered {
         address: String,
         rssi: i16,
-        peer: Option<[u8; 8]>,
+        beacon: PairingBeacon,
     },
 
     /// A link is up **and writable right now**.
@@ -95,6 +120,7 @@ pub enum LinkEvent {
         link: LinkId,
         role: LinkRole,
         max_write: usize,
+        inbound: Option<InboundLink>,
     },
 
     /// A link is gone. Any state keyed on it should be dropped, not retried.
@@ -148,6 +174,15 @@ pub trait MeshLink: Send + Sync {
     /// Connect outward to a discovered address, taking the central role.
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>>;
 
+    /// Dial and send the pairing preface before making the link writable.
+    fn connect_with_beacon(
+        &self,
+        address: &str,
+        _beacon: Option<PairingBeacon>,
+    ) -> BoxFuture<'_, Result<LinkId, LinkError>> {
+        self.connect(address)
+    }
+
     /// Drop a link we no longer want.
     fn disconnect(&self, link: &LinkId) -> BoxFuture<'_, Result<(), LinkError>>;
 
@@ -165,22 +200,15 @@ pub trait MeshLink: Send + Sync {
     /// Next event, or `None` once the link layer has shut down for good.
     fn next_event(&self) -> BoxFuture<'_, Option<LinkEvent>>;
 
-    /// Publish this device's identity in the advertisement, so peers can recognise
-    /// it across a private-address rotation.
-    ///
-    /// Defaulted to a no-op: a link with no radio behind it has nothing to
-    /// advertise, and a test double should not have to care. Call it before
-    /// [`start`](Self::start) — an advertiser already running will not pick it up.
-    fn set_local_peer(&self, _peer: [u8; 8]) {}
+    /// Install the policy for an inbound connection before the radio starts.
+    fn set_inbound_admission(&self, _admission: InboundAdmission) {}
 
-    /// Install the current window's rendezvous slots, including while running.
+    /// Install the current window's padded beacon slots, including while running.
+    ///
     /// A changed batch marks an advertising window boundary. Backends with a
     /// long-lived advertising set should replace that set before publishing
     /// the new slots. The controller remains responsible for BLE address selection.
-    fn set_pairing_beacons(
-        &self,
-        _beacons: &[chatter_mesh::tlv::pairing::PairingBeacon],
-    ) -> Result<(), LinkError> {
+    fn set_pairing_beacons(&self, _beacons: &[PairingBeacon]) -> Result<(), LinkError> {
         Ok(())
     }
 }

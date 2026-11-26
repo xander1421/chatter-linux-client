@@ -137,6 +137,11 @@ pub type RelayConnection = (Box<dyn RelaySink>, Box<dyn RelayStream>);
 /// Dials relays. Supplied by the integration layer — see the module docs.
 pub trait RelayConnector: Send + Sync {
     fn connect<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<RelayConnection, NostrError>>;
+
+    /// Stateful transports can supply independent isolation for each pool.
+    fn isolated_for_pool(&self) -> Option<Arc<dyn RelayConnector>> {
+        None
+    }
 }
 
 // --- Client configuration --------------------------------------------------

@@ -34,8 +34,8 @@ impl MeshService {
 
     /// Tell the duty cycle whether the app is in the foreground.
     ///
-    /// Scanning is the expensive half of BLE. In the foreground it runs
-    /// continuously; in the background it duty-cycles.
+    /// BLE scanning duty-cycles in the background and when there are no peers.
+    /// In the foreground, a few connected peers or recent traffic can keep it on.
     pub fn set_app_active(&self, active: bool) {
         self.state.with(|state| state.app_is_active = active);
     }

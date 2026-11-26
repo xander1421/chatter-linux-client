@@ -65,10 +65,10 @@ export component MeshContextBar inherits Rectangle {
                     mouse-cursor: pointer;
                     accessible-role: button;
                     accessible-label: @tr("Turn on mesh");
-                    accessible-action-default => { MeshGlobal.set-mesh-on(true); }
+                    accessible-action-default => { MeshGlobal.open-setup(); }
                     y: -Spacing.xs;
                     height: Spacing.button-height;
-                    clicked => { MeshGlobal.set-mesh-on(true); }
+                    clicked => { MeshGlobal.open-setup(); }
                 }
             }
             if MeshGlobal.notice != "" && !root.can-turn-on: Rectangle {

@@ -61,7 +61,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use bluer::gatt::CharacteristicWriter;
 use bluer::{Adapter, Uuid};
 use chatter_mesh_link::{
-    BoxFuture, CHARACTERISTIC_UUID, LinkError, LinkEvent, LinkId, LinkRole, MeshLink, SERVICE_UUID,
+    BoxFuture, CHARACTERISTIC_UUID, InboundAdmission, InboundLink, LinkError, LinkEvent, LinkId,
+    LinkRole, MeshLink, PairingBeacon, SERVICE_UUID,
 };
 use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -312,6 +313,7 @@ struct EventQueue {
 struct Roles {
     adapter: Option<BleAdapter>,
     peripheral: Option<PeripheralRole>,
+    alias: Option<crate::alias::MeshAlias>,
     scan: Option<Scan>,
     power: Option<JoinHandle<()>>,
 }
@@ -325,6 +327,7 @@ struct Roles {
 /// whole link layer, still advertising. They live in [`BlueZLink`] instead, and
 /// dropping it aborts them.
 pub(crate) struct Shared {
+    inbound_admission: Mutex<Option<InboundAdmission>>,
     /// The live adapter, kept here rather than beside the role handles so
     /// `connect` and `send` can take a clone without waiting behind a
     /// `start`/`stop`/scan toggle.
@@ -352,6 +355,18 @@ impl Shared {
         let _ = self.events_tx.send(event);
     }
 
+    pub(crate) fn admit_inbound(&self, incoming: &InboundLink) -> bool {
+        if *self.shutdown_tx.borrow() {
+            return false;
+        }
+        let hook = self
+            .inbound_admission
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        hook.is_some_and(|admit| admit(incoming))
+    }
+
     /// Register a writable link and announce it.
     ///
     /// `max_write` must be the size BlueZ reported for the socket in `writer`,
@@ -368,6 +383,7 @@ impl Shared {
         address: &str,
         max_write: usize,
         writer: Option<Arc<CharacteristicWriter>>,
+        inbound: Option<InboundLink>,
     ) -> LinkId {
         let (id, displaced) = {
             self.conns()
@@ -381,6 +397,7 @@ impl Shared {
             link: id.clone(),
             role,
             max_write,
+            inbound,
         });
 
         // Only now can inbound data be released: announcing sets the flag that
@@ -454,6 +471,7 @@ impl Shared {
 /// bridge the rest of the mesh may be depending on.
 pub struct BlueZLink {
     inner: Arc<Shared>,
+    beacons: watch::Sender<Vec<PairingBeacon>>,
     /// Adapter to use, or `None` for the default one.
     adapter_name: Option<String>,
     /// Handles for the running roles.
@@ -478,6 +496,7 @@ impl BlueZLink {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             inner: Arc::new(Shared {
+                inbound_admission: Mutex::new(None),
                 adapter: Mutex::new(None),
                 conns: Mutex::new(Connections::default()),
                 events_tx,
@@ -488,6 +507,7 @@ impl BlueZLink {
                 shutdown_tx,
             }),
             adapter_name,
+            beacons: watch::Sender::new(Vec::new()),
             roles: AsyncMutex::new(Roles::default()),
         }
     }
@@ -514,6 +534,26 @@ impl core::fmt::Debug for BlueZLink {
 }
 
 impl MeshLink for BlueZLink {
+    fn set_inbound_admission(&self, admission: InboundAdmission) {
+        *self
+            .inner
+            .inbound_admission
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(admission);
+    }
+
+    fn set_pairing_beacons(&self, beacons: &[PairingBeacon]) -> Result<(), LinkError> {
+        self.beacons.send_if_modified(|current| {
+            if current == beacons {
+                return false;
+            }
+            current.clear();
+            current.extend_from_slice(beacons);
+            true
+        });
+        Ok(())
+    }
+
     fn start(&self) -> BoxFuture<'_, Result<(), LinkError>> {
         Box::pin(async move {
             let stopped = { *self.inner.shutdown_tx.borrow() };
@@ -536,30 +576,50 @@ impl MeshLink for BlueZLink {
                 Some(name) => BleAdapter::acquire_named(name).await?,
                 None => BleAdapter::acquire().await?,
             };
-            ble.power_on().await?;
+            let adapter = ble.adapter();
+            let alias = crate::alias::MeshAlias::acquire(&adapter).await?;
+            let power_events = ble
+                .adapter()
+                .events()
+                .await
+                .map_err(|err| error::classify_adapter(&err))?;
+            ble.require_private_radio().await?;
 
             // Set the discovery filter once, up front: BlueZ refuses to change it
             // while a discovery session is running, and the duty cycle starts and
             // stops discovery constantly.
             central::configure_discovery(ble.adapter(), service).await?;
 
-            let peripheral =
-                PeripheralRole::start(ble.adapter(), service, characteristic, self.inner.clone())
-                    .await?;
-
-            let watcher = self.inner.clone();
-            let power = tokio::spawn(adapter::watch_power(
-                ble.adapter().clone(),
-                move |powered| {
-                    watcher.emit(LinkEvent::AdapterPowerChanged { powered });
-                    if !powered {
-                        // Every ACL died with the controller. Say so once per link
-                        // rather than leaving the layer above to discover it one
-                        // failed write at a time.
-                        watcher.drop_all();
+            alias.install().await?;
+            let peripheral = match PeripheralRole::start(
+                &adapter,
+                service,
+                characteristic,
+                self.inner.clone(),
+                self.beacons.subscribe(),
+            )
+            .await
+            {
+                Ok(peripheral) => peripheral,
+                Err(error) => {
+                    if let Err(restore_error) = alias.restore().await {
+                        tracing::warn!(%restore_error, "could not restore the Bluetooth adapter alias");
                     }
-                },
-            ));
+                    return Err(error);
+                }
+            };
+
+            self.inner
+                .emit(LinkEvent::AdapterPowerChanged { powered: true });
+            let watcher = self.inner.clone();
+            let power = tokio::spawn(async move {
+                adapter::wait_for_power_loss(power_events).await;
+                watcher.emit(LinkEvent::AdapterPowerChanged { powered: false });
+                // End this session so the next start checks privacy again
+                // before registering another advertisement.
+                watcher.drop_all();
+                let _ = watcher.shutdown_tx.send(true);
+            });
 
             {
                 let mut handle = self
@@ -571,6 +631,7 @@ impl MeshLink for BlueZLink {
             }
             roles.adapter = Some(ble);
             roles.peripheral = Some(peripheral);
+            roles.alias = Some(alias);
             roles.power = Some(power);
             Ok(())
         })
@@ -580,25 +641,30 @@ impl MeshLink for BlueZLink {
         Box::pin(async move {
             {
                 let mut roles = self.roles.lock().await;
-                // Dropping these stops discovery, unregisters the advertisement
-                // and the GATT application, and aborts their tasks.
-                roles.scan = None;
-                roles.peripheral = None;
-                if let Some(power) = roles.power.take() {
-                    power.abort();
-                }
-                roles.adapter = None;
-            }
-            {
-                let mut handle = self
+                let _ = self
                     .inner
                     .adapter
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                *handle = None;
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take();
+                // Dropping these stops discovery, unregisters the advertisement
+                // and the GATT application, and aborts their tasks.
+                roles.scan = None;
+                if let Some(peripheral) = roles.peripheral.take() {
+                    peripheral.stop().await;
+                }
+                if let Some(power) = roles.power.take() {
+                    power.abort();
+                }
+                self.inner.drop_all();
+                if let Some(alias) = roles.alias.take()
+                    && let Err(error) = alias.restore().await
+                {
+                    tracing::warn!(%error, "could not restore the Bluetooth adapter alias");
+                }
+                roles.adapter = None;
             }
 
-            self.inner.drop_all();
             // Ends `next_event` once the queue has drained.
             let _ = self.inner.shutdown_tx.send(true);
             Ok(())
@@ -618,21 +684,17 @@ impl MeshLink for BlueZLink {
                 let adapter = roles.adapter.as_ref().map(|ble| ble.adapter().clone());
                 drop(roles);
                 if was_scanning && let Some(adapter) = adapter {
-                    let _ = tokio::time::timeout(
-                        std::time::Duration::from_secs(2),
-                        async {
-                            loop {
-                                match adapter.is_discovering().await {
-                                    Ok(false) => return true,
-                                    Err(_) => return false,
-                                    Ok(true) => tokio::time::sleep(
-                                        std::time::Duration::from_millis(50),
-                                    )
-                                    .await,
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        loop {
+                            match adapter.is_discovering().await {
+                                Ok(false) => return true,
+                                Err(_) => return false,
+                                Ok(true) => {
+                                    tokio::time::sleep(std::time::Duration::from_millis(50)).await
                                 }
                             }
-                        },
-                    )
+                        }
+                    })
                     .await;
                 }
                 return Ok(());
@@ -655,18 +717,33 @@ impl MeshLink for BlueZLink {
     }
 
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
+        self.connect_with_beacon(address, None)
+    }
+
+    fn connect_with_beacon(
+        &self,
+        address: &str,
+        beacon: Option<PairingBeacon>,
+    ) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         let address = address.to_string();
         Box::pin(async move {
-            // The mesh runs a continuous scan while sparse. BlueZ can keep an
-            // outbound LE connect pending for that whole discovery session, so
-            // settle StopDiscovery before opening the ACL.
+            // BlueZ can keep an outbound LE connect pending while scanning,
+            // so settle StopDiscovery before opening the ACL.
             self.set_scanning(false).await?;
             let service = service_uuid()?;
             let characteristic = characteristic_uuid()?;
             let adapter = self.inner.adapter_handle().ok_or_else(|| {
                 LinkError::AdapterUnavailable("link layer has not been started".to_string())
             })?;
-            central::connect(&adapter, &self.inner, &address, service, characteristic).await
+            central::connect(
+                &adapter,
+                &self.inner,
+                &address,
+                service,
+                characteristic,
+                beacon,
+            )
+            .await
         })
     }
 
@@ -997,7 +1074,7 @@ mod tests {
         link.inner.emit(LinkEvent::Discovered {
             address: PEER.to_string(),
             rssi: -70,
-            peer: None,
+            beacon: [0; 13],
         });
         link.inner
             .emit(LinkEvent::AdapterPowerChanged { powered: true });
@@ -1007,7 +1084,7 @@ mod tests {
             Some(LinkEvent::Discovered {
                 address: PEER.to_string(),
                 rssi: -70,
-                peer: None
+                beacon: [0; 13]
             })
         );
         assert_eq!(
@@ -1021,13 +1098,14 @@ mod tests {
         let link = BlueZLink::new();
         let id = link
             .inner
-            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None);
+            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None, None);
         assert_eq!(
             link.next_event().await,
             Some(LinkEvent::Connected {
                 link: id.clone(),
                 role: LinkRole::Peripheral,
-                max_write: 185
+                max_write: 185,
+                inbound: None,
             })
         );
         assert_eq!(link.max_write(&id), Some(185));
@@ -1048,13 +1126,14 @@ mod tests {
 
         let id = link
             .inner
-            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None);
+            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 185, None, None);
         assert_eq!(
             link.next_event().await,
             Some(LinkEvent::Connected {
                 link: id.clone(),
                 role: LinkRole::Peripheral,
-                max_write: 185
+                max_write: 185,
+                inbound: None,
             })
         );
         assert_eq!(
@@ -1081,10 +1160,10 @@ mod tests {
         let link = BlueZLink::new();
         let a = link
             .inner
-            .open_link(LinkRole::Central, ADAPTER, PEER, 244, None);
+            .open_link(LinkRole::Central, ADAPTER, PEER, 244, None, None);
         let b = link
             .inner
-            .open_link(LinkRole::Peripheral, ADAPTER, OTHER, 244, None);
+            .open_link(LinkRole::Peripheral, ADAPTER, OTHER, 244, None, None);
 
         // Drain the two Connected events.
         link.next_event().await;
@@ -1184,7 +1263,7 @@ mod tests {
         let link = BlueZLink::new();
         let id = link
             .inner
-            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 20, None);
+            .open_link(LinkRole::Peripheral, ADAPTER, PEER, 20, None, None);
         assert_eq!(
             link.send(&id, &[0u8; 21]).await,
             Err(LinkError::PayloadTooLarge {
@@ -1204,7 +1283,7 @@ mod tests {
         let link = BlueZLink::new();
         let id = link
             .inner
-            .open_link(LinkRole::Central, ADAPTER, PEER, 244, None);
+            .open_link(LinkRole::Central, ADAPTER, PEER, 244, None, None);
         link.next_event().await; // Connected
 
         // With no adapter acquired this takes the "nothing to tear down" path,

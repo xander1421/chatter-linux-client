@@ -3021,6 +3021,10 @@ msgstr[0] "Pornit · {n} în apropiere"
 msgstr[1] "Pornit · {n} în apropiere"
 msgstr[2] "Pornit · {n} în apropiere"
 
+#: ui/mesh/mesh_setup_sheet.slint:114
+msgid "While Mesh is on, nearby devices that connect over Bluetooth may see your device name. You can change it in system settings."
+msgstr "Când Mesh este activ, dispozitivele din apropiere care se conectează prin Bluetooth pot vedea numele dispozitivului tău. Îl poți schimba în setările sistemului."
+
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
 msgstr "Dispozitivele din apropiere apar aici când sunt descoperite."

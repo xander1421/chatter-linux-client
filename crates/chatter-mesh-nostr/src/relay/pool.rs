@@ -262,6 +262,7 @@ impl RelayPool {
         connector: Arc<dyn RelayConnector>,
         config: RelayPoolConfig,
     ) -> (Arc<Self>, mpsc::UnboundedReceiver<RelayEvent>) {
+        let connector = connector.isolated_for_pool().unwrap_or(connector);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         let (out_tx, out_rx) = mpsc::unbounded_channel();
@@ -285,6 +286,11 @@ impl RelayPool {
             epochs: AtomicU64::new(0),
         });
         (pool, out_rx)
+    }
+
+    /// Build a pool with the same configuration and fresh transport state.
+    pub fn fresh_pool(&self) -> (Arc<Self>, mpsc::UnboundedReceiver<RelayEvent>) {
+        Self::with_config(self.connector.clone(), self.config.clone())
     }
 
     /// Adds any of `urls` we are not already handling and starts connecting.
@@ -493,6 +499,7 @@ impl RelayPool {
         for entry in entries {
             entry.client.shutdown().await;
             entry.handle.abort();
+            let _ = entry.handle.await;
         }
         let _ = self.ctl.send(Ctl::Stop);
         if let Some(handle) = self.dispatcher.lock().await.take() {
