@@ -3985,3 +3985,15 @@ msgstr "Permite que las llamadas entrantes se muestren en la pantalla de bloqueo
 
 msgid "Not now"
 msgstr "Ahora no"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:557
+msgid "Mesh nickname updated."
+msgstr "Apodo de Mesh actualizado."
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:576
+msgid "Could not change bridge mode: {}"
+msgstr "No se pudo cambiar el modo puente: {}"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
+msgid "Could not change nearby public chat: {}"
+msgstr "No se pudo cambiar el chat público cercano: {}"

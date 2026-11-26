@@ -330,6 +330,9 @@ impl BleRuntime {
     // ----------------------------------------------------------------- inbound
 
     pub(super) async fn on_packet(&mut self, link: &LinkId, packet: BitchatPacket) {
+        if !self.allows_public_packet(&packet) {
+            return;
+        }
         let now_ms = now_millis();
         let channel_fragment = if packet.message_type() == Some(MessageType::Fragment) {
             chatter_mesh::fragment::FragmentHeader::parse(&packet)
@@ -702,6 +705,9 @@ impl BleRuntime {
         claimed: &PeerId,
         verified_key: Option<[u8; 32]>,
     ) -> bool {
+        if !self.allows_public_packet(packet) {
+            return false;
+        }
         match packet.message_type() {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => {

@@ -9,6 +9,7 @@ impl MeshService {
     /// stream as a [`MeshEvent::Message`] with `is_local` set — one path for
     /// local and remote messages, so a row cannot be built two different ways.
     pub fn send_room(&self, text: &str) -> Result<String, MeshError> {
+        self.require_public_chat()?;
         let content = Self::require_content(text)?;
         if !self.has_radio {
             return Err(MeshError::NoRadio);
@@ -29,6 +30,7 @@ impl MeshService {
     }
 
     pub fn join_channel(&self, name: &str) -> Result<String, MeshError> {
+        self.require_public_chat()?;
         let name = chatter_mesh::channel::canonical_name(name).ok_or(MeshError::OutOfRange(
             "channel name must be 1-32 ASCII letters, digits or hyphens",
         ))?;
@@ -530,7 +532,11 @@ impl MeshService {
     }
 
     pub fn nearby_channels(&self) -> Vec<String> {
-        self.timeline.nearby_channels()
+        if self.public_chat_enabled() {
+            self.timeline.nearby_channels()
+        } else {
+            Vec::new()
+        }
     }
 
     pub fn set_channel_muted(&self, name: &str, muted: bool) -> Result<(), MeshError> {
@@ -568,6 +574,7 @@ impl MeshService {
     }
 
     pub fn send_channel(&self, name: &str, text: &str) -> Result<String, MeshError> {
+        self.require_public_chat()?;
         let name = chatter_mesh::channel::canonical_name(name)
             .ok_or(MeshError::OutOfRange("invalid channel name"))?;
         if !self.timeline.has_channel(&name) {

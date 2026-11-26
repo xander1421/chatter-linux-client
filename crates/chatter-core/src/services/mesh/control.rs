@@ -86,7 +86,9 @@ impl MeshService {
         let _signal_guard = self.signal_lock.lock();
         self.identity_wiped
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.config.set_nickname("anon".to_owned());
+        self.config.set_nickname(String::new());
+        self.config.set_bridge_mode(false);
+        self.config.set_public_chat(false);
         self.events.clear_moderation();
         let mut first_error: Option<MeshError> = None;
         let fail = |error: MeshError, slot: &mut Option<MeshError>| {

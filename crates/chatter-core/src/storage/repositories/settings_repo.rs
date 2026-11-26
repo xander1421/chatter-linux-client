@@ -143,8 +143,12 @@ pub mod keys {
 
     /// Whether the user enabled the BLE mesh. Absent means off; radio use is opt-in.
     pub const MESH_ENABLED: &str = "mesh.enabled";
-    /// Self-asserted display name sent in mesh announces.
+    /// User-selected mesh nickname. Absent means a rotating anonymous nickname.
     pub const MESH_NICKNAME: &str = "mesh.nickname";
+    /// Whether mesh announces may share direct neighbours and a bridge cell.
+    pub const MESH_BRIDGE_MODE: &str = "mesh.bridge_mode";
+    /// Whether the user opted into nearby public mesh chat.
+    pub const MESH_PUBLIC_CHAT: &str = "mesh.public_chat";
     pub const MESH_MUTED_CHANNELS: &str = "mesh.muted_channels";
     pub const MESH_BLOCKED_PEERS: &str = "mesh.blocked_peers";
     pub const MESH_MUTED_PEERS: &str = "mesh.muted_peers";

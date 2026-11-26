@@ -54,8 +54,17 @@ export component MeshSetupSheet inherits Rectangle {
     in property <bool> show-modal: false;
     in property <bool> touch: false;
     callback close();
-    property <string> name-draft: MeshGlobal.nickname;
+    property <string> name-draft: MeshGlobal.custom-nickname;
     property <bool> confirming-wipe: false;
+    property <bool> pairing: false;
+
+    changed show-modal => {
+        if !root.show-modal {
+            root.pairing = false;
+        } else {
+            root.name-draft = MeshGlobal.custom-nickname;
+        }
+    }
 
     ModalContainer {
         show: root.show-modal;
@@ -121,27 +130,64 @@ export component MeshSetupSheet inherits Rectangle {
                                         font-weight: Typography.semibold; }
                                     Text { text: !MeshGlobal.mesh-on ? @tr("Off") : !MeshGlobal.radio-running
                                         ? (MeshGlobal.radio-down == "bluetooth-off" ? @tr("Bluetooth is off") : @tr("Radio unavailable"))
-                                        : MeshGlobal.peer-count == 0 ? @tr("On · nobody nearby")
-                                        : @tr("On · {n} nearby" | "On · {n} nearby" % MeshGlobal.peer-count);
+                                        : @tr("Mesh on");
                                         color: Colors.text-secondary; font-size: Typography.sm; }
                                     toggled(value) => { MeshGlobal.set-mesh-on(value); }
                                 }
-                                if MeshGlobal.nearby-peers.length > 0: Rectangle { height: 1px; background: Colors.divider; }
-                                for peer in MeshGlobal.nearby-peers: NearbyPeerRow {
-                                    name: peer.name; detail: peer.binding-label;
-                                    touch: root.touch; clicked => { MeshGlobal.open-peer(peer.id); }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                SettingsRow {
+                                    icon: Icons.link;
+                                    title: @tr("Pair a nearby contact");
+                                    touch: root.touch;
+                                    clickable: MeshGlobal.radio-running;
+                                    show-chevron: false;
+                                    clicked => { root.pairing = !root.pairing; }
+                                }
+                                if root.pairing && MeshGlobal.radio-running: VerticalLayout {
+                                    for peer in MeshGlobal.nearby-peers: NearbyPeerRow {
+                                        name: peer.name; detail: peer.binding-label;
+                                        touch: root.touch; clicked => { MeshGlobal.open-peer(peer.id); }
+                                    }
                                 }
                             }
                         }
-                        if MeshGlobal.nearby-peers.length == 0: Text {
+                        if root.pairing && MeshGlobal.radio-running: Text {
                             width: parent.width;
-                            text: @tr("Nearby devices will appear here when discovered.");
+                            text: @tr("You appear as {} nearby. Choose your contact’s device and verify it in person.", MeshGlobal.nickname);
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
+                        }
+                    }
+                    Rectangle {
+                        background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                        VerticalLayout {
+                            public-chat-row := ToggleRow {
+                                checked <=> MeshGlobal.public-chat;
+                                accessible-text: @tr("Nearby public chat");
+                                row-padding: Spacing.md;
+                                label-spacing: Spacing.xs;
+                                Text { width: public-chat-row.label-width; text: @tr("Nearby public chat"); color: Colors.text-primary;
+                                    font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
+                                Text { width: public-chat-row.label-width; text: @tr("Send and receive public messages and files over Bluetooth. Anyone nearby can read them.");
+                                    color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                                toggled(value) => { MeshGlobal.set-public-chat(value); }
+                            }
+                            Rectangle { height: 1px; background: Colors.divider; }
+                            bridge-row := ToggleRow {
+                                checked <=> MeshGlobal.bridge-mode;
+                                accessible-text: @tr("Bridge mode");
+                                row-padding: Spacing.md;
+                                label-spacing: Spacing.xs;
+                                Text { width: bridge-row.label-width; text: @tr("Bridge mode"); color: Colors.text-primary;
+                                    font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
+                                Text { width: bridge-row.label-width; text: @tr("Share connected device IDs and any configured location cell in Bluetooth announcements.");
+                                    color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                                toggled(value) => { MeshGlobal.set-bridge-mode(value); }
+                            }
                         }
                     }
                     VerticalLayout {
                         spacing: Spacing.sm;
-                        Text { text: "PROFILE"; color: Colors.text-muted; font-size: Typography.xs;
+                        Text { text: @tr("Mesh nickname"); color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
@@ -155,7 +201,7 @@ export component MeshSetupSheet inherits Rectangle {
                         }
                         Text {
                             width: parent.width;
-                            text: @tr("Visible to anyone nearby. Names are self-asserted.");
+                            text: @tr("Anyone nearby can see your mesh nickname. Leave it blank to use a random name that changes with your mesh identity.");
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     }
                     if MeshGlobal.notice != "": Text {

@@ -1192,6 +1192,82 @@ async fn an_announce_is_signed_and_carries_both_public_keys() {
 }
 
 #[tokio::test]
+async fn announces_only_share_neighbours_and_a_cell_in_bridge_mode() {
+    let mut config = MeshConfig::default();
+    config.bridge_geohash = Some("u4pruy".into());
+    let (mut runtime, radio, state, _) = runtime_with_config(config);
+    let link = LinkId::new("/mock/bridge");
+    let other = register_verified_peer(&state, &MeshIdentity::generate(&mut os_rng()), "other");
+    state.with(|inner| {
+        inner.links.link_up(link.clone(), LinkRole::Central);
+        inner.links.set_writable(&link, true);
+        inner.max_write.insert(link, 512);
+    });
+    for enabled in [false, true, false] {
+        runtime.config.set_bridge_mode(enabled);
+        state.with(|inner| inner.last_announce_ms = 0);
+        runtime.announce().await;
+        runtime.drain_writes().await;
+        let writes = radio.writes();
+        let packet = codec::decode(&writes.last().unwrap().1).unwrap();
+        assert_eq!(
+            AnnouncementPacket::carries_contact_metadata(&packet.payload).unwrap(),
+            enabled,
+        );
+        let announce = AnnouncementPacket::decode(&packet.payload).unwrap();
+        assert_eq!(
+            announce.direct_neighbors,
+            enabled.then(|| vec![other.to_routing_bytes().unwrap()])
+        );
+        assert_eq!(
+            announce.bridge_geohash.as_deref(),
+            enabled.then_some("u4pruy")
+        );
+        assert_eq!(
+            announce
+                .capabilities
+                .unwrap()
+                .contains(PeerCapabilities::BRIDGE),
+            enabled
+        );
+    }
+}
+
+#[tokio::test]
+async fn each_new_identity_announces_a_fresh_automatic_nickname() {
+    let (mut runtime, radio, state, _) = runtime_with_config(MeshConfig::default());
+    let link = LinkId::new("/mock/nickname");
+    state.with(|inner| {
+        inner.links.link_up(link.clone(), LinkRole::Central);
+        inner.links.set_writable(&link, true);
+        inner.max_write.insert(link, 512);
+    });
+
+    runtime.announce().await;
+    runtime.drain_writes().await;
+    let last_nickname = || {
+        let writes = radio.writes();
+        let packet = codec::decode(&writes.last().unwrap().1).unwrap();
+        AnnouncementPacket::decode(&packet.payload).unwrap().nickname
+    };
+    let first = last_nickname();
+    assert!(first.starts_with("anon-"));
+
+    runtime.identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
+    state.with(|inner| inner.last_announce_ms = 0);
+    runtime.announce().await;
+    runtime.drain_writes().await;
+    assert_ne!(last_nickname(), first);
+
+    runtime.config.set_nickname("mesh-only".into());
+    runtime.identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
+    state.with(|inner| inner.last_announce_ms = 0);
+    runtime.announce().await;
+    runtime.drain_writes().await;
+    assert_eq!(last_nickname(), "mesh-only");
+}
+
+#[tokio::test]
 async fn public_broadcast_from_a_blocked_peer_is_archived_without_display() {
     let (mut runtime, _radio, state) = runtime();
     let identity = MeshIdentity::generate(&mut os_rng());

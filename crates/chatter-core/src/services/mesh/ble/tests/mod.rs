@@ -21,6 +21,19 @@ fn runtime_parts() -> (
     Arc<MeshState>,
     Arc<crate::services::mesh::timeline::MeshTimeline>,
 ) {
+    let config = MeshConfig::default();
+    config.set_public_chat(true);
+    runtime_with_config(config)
+}
+
+fn runtime_with_config(
+    config: MeshConfig,
+) -> (
+    BleRuntime,
+    Arc<MockLink>,
+    Arc<MeshState>,
+    Arc<crate::services::mesh::timeline::MeshTimeline>,
+) {
     let radio = MockLink::shared();
     let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
     let state = Arc::new(MeshState::new());
@@ -53,7 +66,7 @@ fn runtime_parts() -> (
         Arc::clone(&state),
         nostr_state,
         identity,
-        Arc::new(MeshConfig::default()),
+        Arc::new(config),
         events,
         router,
         storage,

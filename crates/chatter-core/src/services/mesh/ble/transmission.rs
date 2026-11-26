@@ -2,6 +2,7 @@ use super::*;
 
 impl BleRuntime {
     pub(super) async fn announce(&mut self) {
+        self.config.rotate_nickname(&self.identity.peer_id());
         let now_ms = now_millis();
         let passed = self.state.with(|state| {
             let passed = duty::announce_floor_passed(state.last_announce_ms, now_ms);
@@ -16,23 +17,45 @@ impl BleRuntime {
             return;
         }
         let nickname = self.config.nickname();
+        let bridge_mode = self.config.bridge_mode_enabled();
+        let bridge_geohash = self
+            .config
+            .bridge_geohash
+            .as_ref()
+            .filter(|cell| bridge_mode && chatter_mesh_nostr::geohash::is_valid(cell));
         let mut capabilities = PeerCapabilities::from_bits(0);
-        if self.config.bridge_geohash.is_some() {
+        if bridge_geohash.is_some() {
             capabilities.insert(PeerCapabilities::BRIDGE);
         }
         // We serve one-time prekeys only while our store is loaded.
         if self.state.with(|state| state.prekeys.local.is_some()) {
             capabilities.insert(PeerCapabilities::PREKEYS);
         }
+        let direct_neighbors = bridge_mode.then(|| {
+            self.state.with(|state| {
+                state
+                    .peers
+                    .connected_peer_ids()
+                    .iter()
+                    .filter_map(PeerId::to_routing_bytes)
+                    .take(chatter_mesh::tlv::announce::MAX_DIRECT_NEIGHBORS)
+                    .collect()
+            })
+        });
         let announcement = AnnouncementPacket::new(
             nickname.clone(),
             self.identity.static_public().to_vec(),
             self.identity.signing_public().to_vec(),
-            None,
+            direct_neighbors,
             Some(capabilities),
-            self.config.bridge_geohash.clone(),
+            bridge_geohash.cloned(),
         );
-        let payload = match announcement.encode() {
+        let encoded = if bridge_mode {
+            announcement.encode_for_bridge()
+        } else {
+            announcement.encode()
+        };
+        let payload = match encoded {
             Ok(payload) => payload,
             Err(error) => {
                 // Silent before. An announce that cannot be encoded means this
@@ -142,6 +165,9 @@ impl BleRuntime {
     /// peer whose announce has aged past `STALE_PEER_TIMEOUT_SECS`, and filing
     /// ours would aim that sweep at our own messages between announces.
     pub(super) async fn originate_broadcast(&mut self, packet: &BitchatPacket) {
+        if !self.allows_public_packet(packet) {
+            return;
+        }
         if packet.message_type() != Some(MessageType::Announce) {
             self.gossip.on_public_packet_seen(packet, now_secs());
         }
@@ -176,6 +202,9 @@ impl BleRuntime {
         ingress_link: Option<&LinkId>,
         chosen_link: Option<&LinkId>,
     ) -> bool {
+        if !broadcasts::allows_transmission(&self.config, packet) {
+            return false;
+        }
         let padding = fragment::pads_ble_frame(packet.msg_type);
         let Ok(encoded) = codec::encode(packet, padding) else {
             return false;
@@ -299,13 +328,17 @@ impl BleRuntime {
         for link in plan.selected.iter() {
             for frame in &frames {
                 let admitted = self.state.with(|state| {
-                    state.writes.enqueue(
+                    if !broadcasts::allows_transmission(&self.config, packet) {
+                        return None;
+                    }
+                    Some(state.writes.enqueue(
                         link,
                         frame.clone(),
                         write_priority,
                         PENDING_WRITE_BUFFER_CAP_BYTES,
-                    )
+                    ))
                 });
+                let Some(admitted) = admitted else { return false };
                 // Byte-capped, so this can refuse. A refusal is a dropped packet
                 // and has to be said out loud — which is what `#[must_use]` on
                 // `WriteEnqueue` is for.
@@ -324,6 +357,9 @@ impl BleRuntime {
     }
 
     pub(super) async fn relay(&self, ingress: &LinkId, packet: &BitchatPacket, local: &PeerId) {
+        if !broadcasts::allows_transmission(&self.config, packet) {
+            return;
+        }
         let degree = self.state.with(|state| state.peers.connected_count());
         let sender_is_self = PeerId::from_bytes(&packet.sender_id) == *local;
         let recipient_is_self = self.addressed_to_us(packet);
@@ -351,13 +387,14 @@ impl BleRuntime {
         // a real wait rather than a hint. Spawned so the loop keeps servicing the
         // radio while it elapses.
         let state = Arc::clone(&self.state);
+        let config = Arc::clone(&self.config);
         let ingress = ingress.clone();
         let delay = u64::from(decision.delay_ms);
         tokio::spawn(async move {
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            transmit_forwarded(&state, &forwarded, &ingress).await;
+            transmit_forwarded(&state, &config, &forwarded, &ingress).await;
         });
     }
 }
