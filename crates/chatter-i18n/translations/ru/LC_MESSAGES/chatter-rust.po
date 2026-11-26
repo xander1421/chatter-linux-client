@@ -3957,3 +3957,12 @@ msgstr "Shield недоступен"
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "End the active call before enabling Shield."
 msgstr "Завершите текущий звонок, прежде чем включить Shield."
+
+msgid "Allow"
+msgstr "Разрешить"
+
+msgid "Allow incoming calls to show on the lock screen."
+msgstr "Разрешите показывать входящие вызовы на экране блокировки."
+
+msgid "Not now"
+msgstr "Не сейчас"

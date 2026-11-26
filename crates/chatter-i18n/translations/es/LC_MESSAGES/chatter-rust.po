@@ -3976,3 +3976,12 @@ msgstr "Shield no está disponible"
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "End the active call before enabling Shield."
 msgstr "Finaliza la llamada activa antes de activar Shield."
+
+msgid "Allow"
+msgstr "Permitir"
+
+msgid "Allow incoming calls to show on the lock screen."
+msgstr "Permite que las llamadas entrantes se muestren en la pantalla de bloqueo."
+
+msgid "Not now"
+msgstr "Ahora no"

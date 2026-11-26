@@ -6022,3 +6022,15 @@ msgstr "Der Server konnte über Tor nicht erreicht werden. Shield ist weiterhin 
 
 msgid "Waiting for anonymous credentials"
 msgstr "Warten auf anonyme Zugangsdaten"
+
+msgid "Incoming calls on the lock screen"
+msgstr "Eingehende Anrufe auf dem Sperrbildschirm"
+
+msgid "Allowed"
+msgstr "Erlaubt"
+
+msgid "Not allowed"
+msgstr "Nicht erlaubt"
+
+msgid "Allow"
+msgstr "Erlauben"

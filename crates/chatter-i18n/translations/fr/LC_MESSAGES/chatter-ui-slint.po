@@ -6025,3 +6025,15 @@ msgstr "Impossible de joindre le serveur via Tor. Shield reste activé."
 
 msgid "Waiting for anonymous credentials"
 msgstr "En attente d’identifiants anonymes"
+
+msgid "Incoming calls on the lock screen"
+msgstr "Appels entrants sur l’écran de verrouillage"
+
+msgid "Allowed"
+msgstr "Autorisé"
+
+msgid "Not allowed"
+msgstr "Non autorisé"
+
+msgid "Allow"
+msgstr "Autoriser"

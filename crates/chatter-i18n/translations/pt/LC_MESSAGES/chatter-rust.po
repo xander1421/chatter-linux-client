@@ -3963,3 +3963,12 @@ msgstr "Shield indisponível"
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "End the active call before enabling Shield."
 msgstr "Termine a chamada em curso antes de ativar o Shield."
+
+msgid "Allow"
+msgstr "Permitir"
+
+msgid "Allow incoming calls to show on the lock screen."
+msgstr "Permita que as chamadas recebidas apareçam na tela de bloqueio."
+
+msgid "Not now"
+msgstr "Agora não"

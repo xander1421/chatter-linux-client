@@ -6014,3 +6014,15 @@ msgstr "Не удалось подключиться к серверу чере�
 
 msgid "Waiting for anonymous credentials"
 msgstr "Ожидание анонимных учётных данных"
+
+msgid "Incoming calls on the lock screen"
+msgstr "Входящие вызовы на экране блокировки"
+
+msgid "Allowed"
+msgstr "Разрешено"
+
+msgid "Not allowed"
+msgstr "Не разрешено"
+
+msgid "Allow"
+msgstr "Разрешить"

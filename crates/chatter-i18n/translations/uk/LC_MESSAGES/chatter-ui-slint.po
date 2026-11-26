@@ -6024,3 +6024,15 @@ msgstr "Не вдалося з’єднатися із сервером чере
 
 msgid "Waiting for anonymous credentials"
 msgstr "Очікування анонімних облікових даних"
+
+msgid "Incoming calls on the lock screen"
+msgstr "Вхідні виклики на екрані блокування"
+
+msgid "Allowed"
+msgstr "Дозволено"
+
+msgid "Not allowed"
+msgstr "Не дозволено"
+
+msgid "Allow"
+msgstr "Дозволити"
