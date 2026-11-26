@@ -904,17 +904,25 @@ fn link_seq(link: &LinkId) -> u64 {
 /// A free function so the relay path can be spawned: it needs the shared state and
 /// nothing else from the runtime. It no longer needs the radio — everything goes
 /// through the paced queue now, the same as `transmit`.
-async fn transmit_forwarded(state: &Arc<MeshState>, packet: &BitchatPacket, ingress: &LinkId) {
+async fn transmit_forwarded(
+    state: &Arc<MeshState>,
+    packet: &BitchatPacket,
+    ingress: &LinkId,
+    group_links: Option<&[LinkId]>,
+) {
     let padding = fragment::pads_ble_frame(packet.msg_type);
     let Ok(encoded) = codec::encode(packet, padding) else {
         return;
     };
-    let (links, siblings) = state.with(|inner| {
+    let (mut links, siblings) = state.with(|inner| {
         (
             link_candidates_locked(inner),
             sibling_links_locked(inner, ingress),
         )
     });
+    if let Some(allowed) = group_links {
+        links.retain(|candidate| allowed.contains(&candidate.id));
+    }
     let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
         // Split horizon: never send a packet back down the link it arrived on —
         // nor down any other link to the same peer, which is what `siblings` adds.

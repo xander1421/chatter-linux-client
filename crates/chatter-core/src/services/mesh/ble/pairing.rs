@@ -701,7 +701,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn private_group_frames_stay_on_proven_links() {
         let (mut runtime, radio, state) = super::super::tests::runtime();
         let paired = MeshIdentity::generate(&mut crate::crypto::os_rng());
@@ -773,13 +773,15 @@ mod tests {
         legacy.payload.splice(19..19, [2, 0, 4, 0, 0, 0, 1]);
         for fragment in fragment::plan_fragments(&legacy, 100, [7; 8]).unwrap() {
             runtime.on_packet(&paired_link, fragment).await;
-            runtime.drain_writes().await;
         }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        runtime.drain_writes().await;
         assert_eq!(radio.writes().len(), before);
 
         for fragment in fragment::plan_fragments(&packet, 100, [8; 8]).unwrap() {
             runtime.on_packet(&paired_link, fragment).await;
         }
+        tokio::time::sleep(Duration::from_secs(1)).await;
         runtime.drain_writes().await;
         let writes = radio.writes();
         assert!(writes.len() > before);

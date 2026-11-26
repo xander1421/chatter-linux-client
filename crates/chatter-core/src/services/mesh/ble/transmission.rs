@@ -367,11 +367,19 @@ impl BleRuntime {
         let state = Arc::clone(&self.state);
         let ingress = ingress.clone();
         let delay = u64::from(decision.delay_ms);
+        let group_links = is_private_group_packet(packet).then(|| {
+            self.state
+                .link_candidates()
+                .into_iter()
+                .map(|candidate| candidate.id)
+                .filter(|link| self.group_traffic_allowed(link))
+                .collect::<Vec<_>>()
+        });
         tokio::spawn(async move {
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            transmit_forwarded(&state, &forwarded, &ingress).await;
+            transmit_forwarded(&state, &forwarded, &ingress, group_links.as_deref()).await;
         });
     }
 }
