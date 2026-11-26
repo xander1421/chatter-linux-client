@@ -418,6 +418,11 @@ impl MeshService {
         peer: &PeerId,
         scanned_qr: Option<&str>,
     ) -> Result<PeerBinding, MeshError> {
+        if scanned_qr.is_none() && !self.is_paired(peer) {
+            return Err(MeshError::Binding(
+                "scan this contact's QR code to pair".into(),
+            ));
+        }
         let peer = &self.state.route(peer);
         let contact = self.state.contact(peer);
         let proof = self

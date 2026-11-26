@@ -206,7 +206,16 @@ impl BleRuntime {
             );
             self.send_private_control(&peer, &notice.encode()).await;
         }
-        self.flush_buffered_writes().await;
+        // Rotation proofs can span several ATT writes. Give the old session
+        // time to send those fragments before closing its links.
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        while tokio::time::Instant::now() < deadline
+            && !self.rotation_stopped()
+            && !self.state.with(|state| state.writes.is_empty())
+        {
+            self.flush_buffered_writes().await;
+            tokio::time::sleep(WRITE_PACING_DELAY).await;
+        }
         if !self.stop_epoch().await || self.rotation_stopped() {
             return false;
         }
@@ -583,6 +592,71 @@ mod tests {
         runtime.restore_pins().unwrap();
         assert_eq!(state.route(&old_peer), next_peer);
         assert_eq!(directory.noise_key(&old_peer), Some(next.static_public()));
+    }
+
+    #[tokio::test]
+    async fn only_the_selected_noise_peer_can_confirm_an_in_person_pairing() {
+        use crate::domain::mesh::account_binding::BindingQr;
+        use crate::services::mesh::account_identity::{
+            PairingOffer, pairing_receipt, pairing_token,
+        };
+
+        let (mut runtime, _, state) = super::super::tests::runtime();
+        let chosen = MeshIdentity::generate(&mut os_rng());
+        let stranger = MeshIdentity::generate(&mut os_rng());
+        let local = runtime.identity.peer_id();
+        let mut selected_session = establish(&runtime, &chosen);
+        let mut stranger_session = establish(&runtime, &stranger);
+        let transcript = selected_session.handshake_hash(&local).unwrap();
+        let qr = BindingQr {
+            account_id: [1; 16],
+            device_id: 1,
+            signal_identity: [0; 33],
+            mesh_static: runtime.identity.static_public(),
+            mesh_signing: runtime.identity.signing_public(),
+            nonce: [2; 16],
+            expires_at: now_secs() + 60,
+            signature: [3; 64],
+        };
+        state.with(|state| {
+            state.pairing_offers.insert(
+                chosen.peer_id(),
+                PairingOffer {
+                    token: pairing_token(&qr),
+                    transcript,
+                    expires_at: qr.expires_at,
+                },
+            );
+        });
+        let packet = |peer: &PeerId, ciphertext| {
+            BitchatPacket::new(
+                MessageType::NoiseEncrypted,
+                peer.to_routing_bytes().unwrap(),
+                local.to_routing_bytes(),
+                now_millis(),
+                ciphertext,
+                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            )
+        };
+        let link = LinkId::new("scanner");
+        let invalid = pairing_receipt(&stranger, &qr, &transcript);
+        let invalid = packet(
+            &stranger.peer_id(),
+            stranger_session.encrypt(&local, &invalid).unwrap(),
+        );
+        runtime
+            .on_encrypted(&link, &invalid, &stranger.peer_id())
+            .await;
+        assert!(state.with(|state| state.peers.pinned(&stranger.peer_id()).is_none()));
+
+        let valid = pairing_receipt(&chosen, &qr, &transcript);
+        let valid = packet(
+            &chosen.peer_id(),
+            selected_session.encrypt(&local, &valid).unwrap(),
+        );
+        runtime.on_encrypted(&link, &valid, &chosen.peer_id()).await;
+        assert!(state.with(|state| state.peers.pinned(&chosen.peer_id()).unwrap().paired));
+        assert!(state.with(|state| state.pairing_offers.is_empty()));
     }
 
     #[tokio::test]

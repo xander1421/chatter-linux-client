@@ -655,6 +655,7 @@ impl BleRuntime {
             state.connecting.clear();
             state.max_write.clear();
             state.writes = Default::default();
+            state.spool = chatter_mesh_link::planner::DirectedRelaySpool::new();
             state.fragments = chatter_mesh::fragment::FragmentAssembler::new();
             state.assembler = chatter_mesh_link::backpressure::InboundAssembler::new();
             state.last_announce_ms = 0;
