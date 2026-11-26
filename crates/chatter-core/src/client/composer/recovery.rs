@@ -41,14 +41,19 @@ impl ChatterClient {
     /// TempDir's destructor, so remove any leftovers before a client can send.
     pub(in crate::client) fn cleanup_staged_upload_temps(&self) -> std::io::Result<()> {
         let root = self.staged_upload_temp_root();
-        if root.exists() {
-            std::fs::remove_dir_all(&root)?;
+        match std::fs::remove_dir_all(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
         Self::ensure_staged_upload_temp_root(root)?;
         Ok(())
     }
 
     fn ensure_staged_upload_temp_root(root: PathBuf) -> std::io::Result<PathBuf> {
+        if let Some(attachments) = root.parent() {
+            crate::services::attachment::ensure_attachments_dir_at(attachments)?;
+        }
         std::fs::create_dir_all(&root)?;
         #[cfg(unix)]
         {
