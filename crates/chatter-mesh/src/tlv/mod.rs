@@ -32,6 +32,7 @@ pub mod capabilities;
 pub mod courier_envelope;
 pub mod file;
 pub mod file_stream;
+pub mod pairing;
 pub mod private_message;
 pub mod request_sync;
 

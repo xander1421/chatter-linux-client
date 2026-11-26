@@ -310,9 +310,13 @@ impl BleRuntime {
         let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() else {
             return;
         };
-        let Some((recipient_key, _)) = self.account_mesh_keys(&owner, recipient) else {
+        let Some((wire_key, _)) = self.account_mesh_keys(&owner, recipient) else {
             return;
         };
+        let recipient_key = self
+            .state
+            .pairing_courier(recipient)
+            .map_or(wire_key, |pair| pair.remote);
         let contact = self.state.contact(recipient);
         let mut payload = Vec::with_capacity(4 + bytes.len());
         payload.extend_from_slice(b"CSM1");

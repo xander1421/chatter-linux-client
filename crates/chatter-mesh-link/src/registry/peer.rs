@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use zeroize::{Zeroize, Zeroizing};
+
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::tlv::announce::AnnouncementPacket;
 use chatter_mesh::tlv::capabilities::PeerCapabilities;
@@ -61,6 +63,40 @@ pub struct AnnounceUpdate {
     pub previous_nickname: Option<String>,
 }
 
+/// A secret established by the explicit QR pairing and scoped to its two peers.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PairingKey {
+    root: [u8; 32],
+    issuer: bool,
+}
+
+impl PairingKey {
+    pub fn new(root: [u8; 32], issuer: bool) -> Self {
+        Self { root, issuer }
+    }
+
+    pub fn root(&self) -> &[u8; 32] {
+        &self.root
+    }
+
+    /// A distinct direction for the issuer and the scanner.
+    pub fn local_direction(&self) -> u8 {
+        u8::from(self.issuer)
+    }
+}
+
+impl std::fmt::Debug for PairingKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairingKey").finish_non_exhaustive()
+    }
+}
+
+impl Drop for PairingKey {
+    fn drop(&mut self) {
+        self.root.zeroize();
+    }
+}
+
 /// The keys proven for a peer ID inside an authenticated session.
 ///
 /// Held apart from [`PeerRecord`] because the two have opposite lifetimes. A
@@ -72,7 +108,7 @@ pub struct AnnounceUpdate {
 pub struct PinnedIdentity {
     /// Local contact handle, retained when the radio routing ID changes.
     pub contact: PeerId,
-    pub paired: bool,
+    pub pairing: Option<PairingKey>,
     pub noise_public_key: Vec<u8>,
     pub signing_public_key: Vec<u8>,
     /// The nickname at first sight. Display only, for naming the peer in a
@@ -91,7 +127,7 @@ pub struct PinnedIdentity {
 pub const MAX_PINNED_IDENTITIES: usize = 4096;
 
 /// First byte of the persisted pin set.
-pub(super) const PIN_BLOB_VERSION: u8 = 3;
+pub(super) const PIN_BLOB_VERSION: u8 = 4;
 const MAX_UNPROVEN_PEERS: usize = 512;
 
 /// The persisted pin set could not be read. Carries nothing: the only thing a
@@ -257,9 +293,8 @@ impl PeerRegistry {
         self.pins.iter()
     }
 
-    /// The caller verified the transition under the prior pin and the new
-    /// identity in Noise. An unverified announce cannot use this entry point.
-    pub fn advance_pin(
+    /// The caller verified the pairing key and the new identity in Noise.
+    pub fn bind_paired_route(
         &mut self,
         prior: &PeerId,
         noise: &[u8; 32],
@@ -270,7 +305,7 @@ impl PeerRegistry {
         let Some(old_pin) = self.pins.get(prior) else {
             return false;
         };
-        if !old_pin.paired
+        if old_pin.pairing.is_none()
             || prior == &next
             || self.routes.contains_key(&next)
             || self.pins.contains_key(&next)
@@ -289,7 +324,7 @@ impl PeerRegistry {
         self.routes.remove(&next);
         if let Some(next_pin) = self.pins.get_mut(&next) {
             next_pin.contact = contact.clone();
-            next_pin.paired = true;
+            next_pin.pairing = old_pin.pairing;
         }
         self.routes.insert(contact, next);
         self.peers.remove(prior);
@@ -300,14 +335,14 @@ impl PeerRegistry {
     ///
     /// Every field is length-prefixed with one byte, so a nickname is cut at
     /// 255 bytes — it is display text, and the announce TLV cannot carry more.
-    pub fn pins_to_bytes(&self) -> Vec<u8> {
+    pub fn pins_to_bytes(&self) -> Zeroizing<Vec<u8>> {
         fn field(out: &mut Vec<u8>, bytes: &[u8]) {
             let bytes = &bytes[..bytes.len().min(usize::from(u8::MAX))];
             out.push(bytes.len() as u8);
             out.extend_from_slice(bytes);
         }
 
-        let mut out = vec![PIN_BLOB_VERSION];
+        let mut out = Zeroizing::new(vec![PIN_BLOB_VERSION]);
         for (peer, pin) in &self.pins {
             field(&mut out, peer.as_str().as_bytes());
             field(&mut out, pin.contact.as_str().as_bytes());
@@ -315,7 +350,12 @@ impl PeerRegistry {
             field(&mut out, &pin.signing_public_key);
             field(&mut out, pin.nickname.as_bytes());
             out.extend_from_slice(&pin.pinned_at_ms.to_be_bytes());
-            out.push(u8::from(pin.paired));
+            if let Some(pairing) = &pin.pairing {
+                out.push(pairing.local_direction() + 1);
+                out.extend_from_slice(pairing.root());
+            } else {
+                out.push(0);
+            }
         }
         out
     }
@@ -348,11 +388,19 @@ impl PeerRegistry {
             let signing_public_key = field(&mut rest)?.to_vec();
             let nickname = String::from_utf8_lossy(field(&mut rest)?).into_owned();
             let (stamp, tail) = rest.split_first_chunk::<8>().ok_or(MalformedPins)?;
-            let (&paired, tail) = tail.split_first().ok_or(MalformedPins)?;
-            if paired > 1 {
-                return Err(MalformedPins);
-            }
-            rest = tail;
+            let (&role, tail) = tail.split_first().ok_or(MalformedPins)?;
+            let pairing = match role {
+                0 => {
+                    rest = tail;
+                    None
+                }
+                1 | 2 => {
+                    let (root, tail) = tail.split_first_chunk::<32>().ok_or(MalformedPins)?;
+                    rest = tail;
+                    Some(PairingKey::new(*root, role == 2))
+                }
+                _ => return Err(MalformedPins),
+            };
             // A pin filed under an ID its own key does not derive to could
             // never have been recorded by `on_announce`, so the blob is not
             // one we wrote.
@@ -367,7 +415,7 @@ impl PeerRegistry {
                 PeerId::from_str(peer),
                 PinnedIdentity {
                     contact,
-                    paired: paired == 1,
+                    pairing,
                     noise_public_key,
                     signing_public_key,
                     nickname,
@@ -404,12 +452,13 @@ impl PeerRegistry {
         noise: &[u8; 32],
         signing: &[u8; 32],
         now_ms: u64,
+        pairing: PairingKey,
     ) -> bool {
         if !self.pin_noise_identity(peer, noise, signing, now_ms) {
             return false;
         }
         if let Some(pin) = self.pins.get_mut(peer) {
-            pin.paired = true;
+            pin.pairing = Some(pairing);
         }
         true
     }
@@ -465,7 +514,7 @@ impl PeerRegistry {
             .entry(peer.clone())
             .or_insert_with(|| PinnedIdentity {
                 contact: peer.clone(),
-                paired: false,
+                pairing: None,
                 noise_public_key: noise.to_vec(),
                 signing_public_key: signing.to_vec(),
                 nickname,

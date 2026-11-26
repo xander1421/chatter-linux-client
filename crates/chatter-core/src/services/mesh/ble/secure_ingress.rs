@@ -45,13 +45,27 @@ impl BleRuntime {
             {
                 return false;
             }
+            let (Some(local), Some(remote)) = (
+                state.chatter_hello.local_nonce(peer),
+                state.chatter_hello.get(peer).map(|hello| hello.nonce),
+            ) else {
+                return false;
+            };
+            let pairing = super::super::pairing::establish_key(
+                &offer.token,
+                &offer.transcript,
+                &local,
+                &remote,
+                true,
+            );
             if !store_paired_pin(
-                &mut state.peers,
+                state,
                 self.storage.as_ref(),
                 self.sealer.as_ref(),
                 peer,
                 &static_key,
                 key,
+                pairing,
             ) {
                 return false;
             }
@@ -167,7 +181,7 @@ impl BleRuntime {
         }
 
         if let Some(recipient_key) = step.established {
-            self.finish_pending_rotation(claimed, &recipient_key);
+            self.courier_claims.remove(claimed);
             self.state.with(|state| {
                 state.dm_handshake_at_ms.remove(claimed);
                 state.known_peer_reopen_attempts.remove(claimed);
@@ -199,7 +213,7 @@ impl BleRuntime {
             }
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.
-            self.send_rotation_recovery(claimed, direct).await;
+            self.send_pairing_proof(claimed).await;
             self.send_chatter_hello(claimed).await;
             // A session is the only signal strong enough for the router to send
             // without retaining, so this is the moment retained mail can go.
@@ -326,21 +340,34 @@ impl BleRuntime {
             self.on_pairing_receipt(claimed, receipt);
             return;
         }
-        if self.on_rotation_control(claimed, &plaintext) {
+        if self.on_pairing_control(claimed, &plaintext).await {
             return;
         }
         if let Some(receipt) = plaintext.strip_prefix(COURIER_RECEIPT_MAGIC) {
             let Ok(receipt) = <&[u8; 32]>::try_from(receipt) else {
                 return;
             };
-            if let Some(key) = self
-                .state
-                .with(|state| state.sessions.remote_static(claimed))
-                && let Err(error) = self
-                    .couriers
-                    .acknowledge_delivery(&key, receipt, now_secs())
-            {
-                tracing::warn!(target: "mesh::ble", %error, "courier receipt could not retire mail");
+            let now = now_secs();
+            let mut keys = self
+                .courier_claims
+                .get(claimed)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            keys.extend(
+                self.state
+                    .with(|state| state.sessions.remote_static(claimed)),
+            );
+            for key in keys {
+                match self.couriers.acknowledge_delivery(&key, receipt, now) {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(target: "mesh::ble", %error, "courier receipt could not retire mail");
+                        break;
+                    }
+                }
             }
             return;
         }
@@ -945,32 +972,26 @@ impl BleRuntime {
 
         // Is it ours? Only the seal can answer that — the recipient tag rotates
         // and is a hint, not proof.
-        let opened = super::super::prekeys::open_envelope(
-            &self.state,
-            &envelope,
-            &self.identity,
-            now_millis(),
-        )
-        .or_else(|| {
-            let now = now_secs();
-            if envelope.prekey_id.is_some() {
-                return None;
-            }
-            self.retired_identities
-                .iter()
-                .filter(|epoch| now < epoch.expires_at)
-                .find_map(|epoch| {
-                    chatter_mesh_noise::seal::open_courier(&envelope.ciphertext, &epoch.identity)
-                        .ok()
-                })
-        });
-        if let Some((plaintext, sender_key)) = opened {
-            let sender = PeerId::from_noise_key(&sender_key);
+        let paired = self.state.open_paired_mail(&envelope, now_secs());
+        let authenticated_pair = paired.is_some();
+        let opened = paired
+            .map(|(plaintext, contact)| (plaintext, contact, None))
+            .or_else(|| {
+                let (plaintext, sender_key) = super::super::prekeys::open_envelope(
+                    &self.state,
+                    &envelope,
+                    &self.identity,
+                    now_millis(),
+                )?;
+                let sender = PeerId::from_noise_key(&sender_key);
+                Some((plaintext, sender, Some(sender_key)))
+            });
+        if let Some((plaintext, sender, sender_key)) = opened {
             let delivered = if let Some(carrier) = plaintext.strip_prefix(b"CSM1") {
                 if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device()
                     && self
-                        .account_mesh_keys(&owner, &sender)
-                        .is_some_and(|(noise, _)| noise == sender_key)
+                        .account_mesh_keys(&owner, &self.state.route(&sender))
+                        .is_some_and(|(noise, _)| authenticated_pair || Some(noise) == sender_key)
                 {
                     self.process_signal_carrier(carrier, &sender, packet.timestamp, false)
                         .await

@@ -282,6 +282,7 @@ mod conversations;
 mod files;
 mod lifecycle;
 mod messaging;
+mod pairing;
 
 /// A fresh wire message ID.
 ///

@@ -1,6 +1,6 @@
 //! The mesh identity, and the Nostr identities derived from it.
 //!
-//! [`MeshIdentityStore`] owns the long-term keypair. This module owns the one
+//! [`MeshIdentityStore`] owns the current broadcast keypair. This module owns the one
 //! derivation on top of it: the device seed that `chatter_mesh_nostr` hashes
 //! into a per-geohash secp256k1 identity.
 //!
@@ -39,7 +39,7 @@ pub(super) fn activate_broadcast_epoch(
     identity: std::sync::Arc<MeshIdentity>,
 ) {
     // Announce-policy integration: refresh the generated nickname here with
-    // MeshConfig::rotate_nickname(&identity.peer_id()) before publishing the epoch.
+    // MeshConfig::on_identity_rotated(&identity.peer_id()) before publishing the epoch.
     *active.write() = Some(identity);
 }
 

@@ -13,15 +13,22 @@ impl BleRuntime {
         now_s: u64,
         ingress: AnnounceIngress,
     ) {
-        let support = self
-            .state
-            .with(|state| match state.chatter_hello.get(peer) {
-                Some(hello) if hello.capabilities & COURIER_RECEIPTS != 0 => {
-                    CourierReceiptSupport::Supported
-                }
-                Some(_) => CourierReceiptSupport::Unsupported,
-                None => CourierReceiptSupport::Unknown,
-            });
+        let has_claim = self
+            .courier_claims
+            .get(peer)
+            .is_some_and(|keys| keys.contains(recipient_key));
+        let support = if has_claim {
+            CourierReceiptSupport::Supported
+        } else {
+            self.state
+                .with(|state| match state.chatter_hello.get(peer) {
+                    Some(hello) if hello.capabilities & COURIER_RECEIPTS != 0 => {
+                        CourierReceiptSupport::Supported
+                    }
+                    Some(_) => CourierReceiptSupport::Unsupported,
+                    None => CourierReceiptSupport::Unknown,
+                })
+        };
         let envelopes = match self.couriers.offer_envelopes(recipient_key, now_s, ingress) {
             Ok(envelopes) => envelopes,
             Err(error) => {

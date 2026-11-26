@@ -129,7 +129,6 @@ impl MeshService {
             identity::activate_broadcast_epoch(&self.identity, Arc::clone(&epoch.identity));
             epoch
         };
-        self.identity_store.schedule_cleanup(epoch.started_at);
         let peer = epoch.identity.peer_id();
         for channel in channels {
             if channel.member_key(&peer).is_some()
@@ -271,7 +270,7 @@ impl MeshService {
             state
                 .peers
                 .pinned(state.peers.route(peer))
-                .is_some_and(|pin| pin.paired)
+                .is_some_and(|pin| pin.pairing.is_some())
         })
     }
 

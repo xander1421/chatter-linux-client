@@ -27,7 +27,7 @@ use super::state::MeshState;
 
 /// Leading bytes of the persisted blob, so a blob of another shape is refused
 /// rather than misread as key material.
-const MAGIC: &[u8; 4] = b"LPK2";
+const MAGIC: &[u8; 4] = b"LPK3";
 
 /// One of our prekeys. The secret is wiped on drop.
 struct LocalPrekey {
@@ -35,7 +35,6 @@ struct LocalPrekey {
     secret: [u8; 32],
     created_at_ms: u64,
     consumed_at_ms: Option<u64>,
-    expires_at_ms: Option<u64>,
 }
 
 impl Drop for LocalPrekey {
@@ -61,36 +60,19 @@ impl LocalPrekeys {
     /// Returns whether the set changed and must be persisted, then republished
     /// — in that order, because a published prekey whose secret was never saved
     /// is mail that can never be opened.
-    pub fn rebind(
-        &mut self,
-        identity: &MeshIdentity,
-        retired: &[crate::storage::mesh_identity_store::RetiredMeshEpoch],
-    ) {
+    pub fn rebind(&mut self, identity: &MeshIdentity) {
         let owner = identity.static_public();
-        if self.owner == Some(owner) {
-            return;
+        if self.owner != Some(owner) {
+            self.keys.clear();
+            self.owner = Some(owner);
+            self.dirty = true;
         }
-        let expires_at = retired
-            .iter()
-            .find(|epoch| Some(epoch.identity.static_public()) == self.owner)
-            .map(|epoch| epoch.expires_at.saturating_mul(1_000));
-        self.keys.retain_mut(|key| {
-            if key.expires_at_ms.is_none() {
-                key.expires_at_ms = expires_at;
-                return expires_at.is_some();
-            }
-            true
-        });
-        self.owner = Some(owner);
-        self.dirty = true;
     }
 
     pub fn refresh(&mut self, now_ms: u64, rng: &mut impl rand_core_10::CryptoRng) -> bool {
         let before = self.keys.len();
-        self.keys.retain(|key| {
-            key.expires_at_ms.is_none_or(|expiry| now_ms < expiry)
-                && !prekey_is_expired(key.created_at_ms, key.consumed_at_ms, now_ms)
-        });
+        self.keys
+            .retain(|key| !prekey_is_expired(key.created_at_ms, key.consumed_at_ms, now_ms));
         let mut changed = self.dirty || self.keys.len() != before;
 
         let mut unconsumed = self.unconsumed().count();
@@ -108,7 +90,6 @@ impl LocalPrekeys {
                     secret,
                     created_at_ms: now_ms,
                     consumed_at_ms: None,
-                    expires_at_ms: None,
                 });
                 unconsumed += 1;
             }
@@ -167,9 +148,7 @@ impl LocalPrekeys {
         now_ms: u64,
     ) -> Option<(Vec<u8>, [u8; 32])> {
         let key = self.keys.iter_mut().find(|key| key.id == prekey_id)?;
-        if key.expires_at_ms.is_some_and(|expiry| now_ms >= expiry)
-            || !prekey_can_open(key.consumed_at_ms, now_ms)
-        {
+        if !prekey_can_open(key.consumed_at_ms, now_ms) {
             return None;
         }
         let opened = open_prekey(ciphertext, prekey_id, &key.secret, identity).ok()?;
@@ -181,14 +160,12 @@ impl LocalPrekeys {
     }
 
     fn unconsumed(&self) -> impl Iterator<Item = &LocalPrekey> {
-        self.keys
-            .iter()
-            .filter(|key| key.consumed_at_ms.is_none() && key.expires_at_ms.is_none())
+        self.keys.iter().filter(|key| key.consumed_at_ms.is_none())
     }
 
-    /// Store the epoch owner with its active and overlapping one-time keys.
+    /// Store the current epoch owner and its one-time keys.
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
-        let mut out = Zeroizing::new(Vec::with_capacity(46 + self.keys.len() * 61));
+        let mut out = Zeroizing::new(Vec::with_capacity(46 + self.keys.len() * 53));
         out.extend_from_slice(MAGIC);
         out.extend_from_slice(&self.owner.unwrap_or([0; 32]));
         out.extend_from_slice(&self.generated_at_ms.to_be_bytes());
@@ -200,7 +177,6 @@ impl LocalPrekeys {
             out.extend_from_slice(&key.created_at_ms.to_be_bytes());
             out.push(u8::from(key.consumed_at_ms.is_some()));
             out.extend_from_slice(&key.consumed_at_ms.unwrap_or(0).to_be_bytes());
-            out.extend_from_slice(&key.expires_at_ms.unwrap_or(0).to_be_bytes());
         }
         out
     }
@@ -229,13 +205,11 @@ impl LocalPrekeys {
                 _ => return None,
             };
             let at = u64::from_be_bytes(take(8)?.try_into().ok()?);
-            let expires_at = u64::from_be_bytes(take(8)?.try_into().ok()?);
             keys.push(LocalPrekey {
                 id,
                 secret,
                 created_at_ms,
                 consumed_at_ms: consumed.then_some(at),
-                expires_at_ms: (expires_at != 0).then_some(expires_at),
             });
         }
         if !cursor.is_empty() {
@@ -339,6 +313,11 @@ pub fn seal_offline(
     identity: &MeshIdentity,
     now_ms: u64,
 ) -> Option<(Vec<u8>, Option<u32>)> {
+    if let Some(pairing) = state.courier_sender(recipient_key) {
+        return seal_courier(payload, recipient_key, &pairing)
+            .ok()
+            .map(|ciphertext| (ciphertext, None));
+    }
     let prekey = state.with(|inner| inner.prekeys.peers.take(recipient_key, now_ms));
     match prekey {
         Some(prekey) => seal_prekey(payload, prekey.id, &prekey.public_key, identity)
@@ -435,21 +414,12 @@ mod tests {
 
     #[test]
     fn a_new_epoch_publishes_no_prekeys_from_the_previous_epoch() {
-        let (old, next, sender) = (identity(), identity(), identity());
+        let (old, next) = (identity(), identity());
         let mut local = LocalPrekeys::default();
-        local.rebind(&old, &[]);
+        local.rebind(&old);
         assert!(local.refresh(NOW, &mut os_rng()));
         let original = local.bundle(&old).unwrap();
-        let prekey = original.prekeys[0];
-        let ciphertext = seal_prekey(b"queued", prekey.id, &prekey.public_key, &sender).unwrap();
-        let expires_at = NOW / 1_000 + 300;
-        local.rebind(
-            &next,
-            &[crate::storage::mesh_identity_store::RetiredMeshEpoch {
-                identity: std::sync::Arc::new(old),
-                expires_at,
-            }],
-        );
+        local.rebind(&next);
         assert!(local.refresh(NOW + 1, &mut os_rng()));
         let bundle = local.bundle(&next).unwrap();
         assert_ne!(bundle.owner_static, original.owner_static);
@@ -460,17 +430,6 @@ mod tests {
                 .iter()
                 .all(|old| old.id != key.id && old.public_key != key.public_key)
         }));
-        let mut reloaded = LocalPrekeys::from_bytes(&local.to_bytes()).unwrap();
-        assert!(
-            reloaded
-                .open(prekey.id, &ciphertext, &next, expires_at * 1_000 - 1)
-                .is_some()
-        );
-        assert!(
-            reloaded
-                .open(prekey.id, &ciphertext, &next, expires_at * 1_000)
-                .is_none()
-        );
     }
 
     #[test]

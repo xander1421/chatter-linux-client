@@ -103,6 +103,7 @@ impl MeshService {
             state.binding_offers.clear();
             state.pairing_offers.clear();
             state.peers.clear_pins();
+            state.pairing_couriers = Default::default();
             state.peers.remove_all();
             state.prekeys = prekeys::PrekeyState::default();
         });

@@ -168,8 +168,11 @@ pub struct BleRuntime {
     nostr_state: Arc<NostrState>,
     identity: Arc<MeshIdentity>,
     rotation: Option<RadioRotation>,
-    retired_identities: Vec<crate::storage::mesh_identity_store::RetiredMeshEpoch>,
-    pending_rotations: std::collections::BTreeMap<PeerId, rotation::RotationProof>,
+    pairing_candidates: std::collections::BTreeMap<PeerId, (PeerId, u64)>,
+    pairing_proofs_sent: std::collections::BTreeMap<PeerId, [u8; 32]>,
+    pairing_proofs_received: std::collections::BTreeMap<PeerId, [u8; 32]>,
+    courier_claims: std::collections::BTreeMap<PeerId, std::collections::BTreeSet<[u8; 32]>>,
+    beacon_cursor: usize,
     config: Arc<MeshConfig>,
     events: MeshEvents,
     router: Arc<RouterHandle>,
@@ -273,8 +276,11 @@ impl BleRuntime {
             nostr_state,
             identity,
             rotation: None,
-            retired_identities: Vec::new(),
-            pending_rotations: std::collections::BTreeMap::new(),
+            pairing_candidates: std::collections::BTreeMap::new(),
+            pairing_proofs_sent: std::collections::BTreeMap::new(),
+            pairing_proofs_received: std::collections::BTreeMap::new(),
+            courier_claims: std::collections::BTreeMap::new(),
+            beacon_cursor: 0,
             config,
             events,
             router,
@@ -312,9 +318,14 @@ impl BleRuntime {
             .load(StorageKey::PeerPins)
             .map_err(|e| e.to_string())?
         {
-            let bytes = self.sealer.open(&sealed).map_err(|e| e.to_string())?;
+            let bytes =
+                zeroize::Zeroizing::new(self.sealer.open(&sealed).map_err(|e| e.to_string())?);
             self.state
-                .with(|state| state.peers.restore_pins(&bytes))
+                .with(|state| {
+                    state.peers.restore_pins(&bytes)?;
+                    state.pairing_couriers.restore(&state.peers);
+                    Ok::<_, chatter_mesh_link::registry::MalformedPins>(())
+                })
                 .map_err(|_| "malformed peer pins".to_string())?;
         }
         Ok(())
@@ -504,7 +515,7 @@ impl BleRuntime {
     }
 
     async fn run_epoch(&mut self, commands: &mut UnboundedReceiver<BleCommand>) -> bool {
-        if self.rotation_stopped() || !self.restore_retired_identities(now_secs()) {
+        if self.rotation_stopped() {
             return false;
         }
         // Before `start`, because an advertiser already running will not pick it
@@ -546,7 +557,7 @@ impl BleRuntime {
         }
         match self.restore_prekeys() {
             Ok(mut local) => {
-                local.rebind(&self.identity, &self.retired_identities);
+                local.rebind(&self.identity);
                 self.state.with(|state| state.prekeys.local = Some(local));
             }
             // Left `None`: generating a fresh set over secrets we merely could
@@ -618,7 +629,7 @@ impl BleRuntime {
                 },
                 _ = ticker.tick() => {
                     let now = now_secs();
-                    if self.rotation_stopped() || !self.expire_retired_identities(now) {
+                    if self.rotation_stopped() {
                         break false;
                     }
                     if self.rotation_due(now) {
@@ -675,6 +686,7 @@ mod links;
 mod maintenance;
 mod messages;
 mod outgoing_files;
+mod pairing;
 mod rotation;
 pub(super) use rotation::RadioRotation;
 mod secure_ingress;

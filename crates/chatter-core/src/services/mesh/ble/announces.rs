@@ -135,6 +135,12 @@ impl BleRuntime {
         }
 
         let direct = accepted.direct_hint;
+        let paired_contact = direct
+            .then(|| self.state.paired_contact_for_announce(announcement))
+            .flatten();
+        if let Some(contact) = &paired_contact {
+            self.note_pairing_candidate(claimed, contact, now_ms);
+        }
 
         let (is_new, new_discovery, link_authenticated, first_sighting, reconnected, bound_peer) =
             self.state.with(|state| {
@@ -206,6 +212,17 @@ impl BleRuntime {
         // A verified direct announce on an authenticated link can retry the
         // handover. The courier retains each envelope until its recipient confirms it.
         let ingress = AnnounceIngress::new(direct, link_authenticated);
+        if ingress.permits_offer() {
+            let claimed_keys = self
+                .courier_claims
+                .get(claimed)
+                .cloned()
+                .unwrap_or_default();
+            for key in claimed_keys {
+                self.hand_over_courier_mail(claimed, &key, now_s, ingress)
+                    .await;
+            }
+        }
         if let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice()) {
             if ingress.permits_offer() {
                 self.hand_over_courier_mail(claimed, &key, now_s, ingress)
@@ -224,7 +241,9 @@ impl BleRuntime {
         }
 
         self.retry_pending_dm_handshake(claimed).await;
-        let recovery_candidate = direct && self.can_recover_rotation(claimed, now_s);
+        if paired_contact.is_some() && self.state.has_session(claimed) {
+            self.send_pairing_proof(claimed).await;
+        }
         // A known peer may return on a new link, where an old session alone
         // cannot authorize routing. Reopen Noise to restore private delivery.
         // Strangers still open Noise on demand.
@@ -249,8 +268,7 @@ impl BleRuntime {
                 let has_session = state.sessions.has_session(claimed);
                 let known = has_session
                     || state.peers.pinned(claimed).is_some()
-                    || self.pending_rotation_for(claimed)
-                    || recovery_candidate;
+                    || paired_contact.is_some();
                 known && (!has_session || !state.links.presence(claimed).any()) && due
             })
             && self.state.can_open_session_to(claimed)

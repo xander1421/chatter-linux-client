@@ -3,6 +3,7 @@ use sha2_10::{Digest, Sha256};
 
 pub(super) const PAIRING_RECEIPT_MAGIC: &[u8; 8] = b"CHTRPQR1";
 
+#[derive(zeroize::ZeroizeOnDrop)]
 pub(super) struct PairingOffer {
     pub token: [u8; 32],
     pub transcript: [u8; 32],
@@ -38,15 +39,16 @@ pub(super) fn pairing_receipt(
 }
 
 pub(super) fn store_paired_pin(
-    peers: &mut chatter_mesh_link::registry::PeerRegistry,
+    state: &mut state::LinkStateInner,
     storage: &dyn Storage,
     sealer: &dyn Sealer,
     peer: &PeerId,
     noise: &[u8; 32],
     signing: &[u8; 32],
+    pairing: chatter_mesh_link::registry::PairingKey,
 ) -> bool {
-    let mut candidate = peers.clone();
-    if !candidate.pair_noise_identity(peer, noise, signing, now_millis()) {
+    let mut candidate = state.peers.clone();
+    if !candidate.pair_noise_identity(peer, noise, signing, now_millis(), pairing.clone()) {
         return false;
     }
     if let Ok(sealed) = sealer.seal(&candidate.pins_to_bytes())
@@ -54,7 +56,10 @@ pub(super) fn store_paired_pin(
             .save(chatter_mesh_store::storage::StorageKey::PeerPins, &sealed)
             .is_ok()
     {
-        *peers = candidate;
+        state
+            .pairing_couriers
+            .insert(candidate.contact(peer).clone(), &pairing);
+        state.peers = candidate;
         return true;
     }
     false
@@ -470,16 +475,18 @@ impl MeshService {
             ));
         }
         let _signal_guard = self.signal_lock.lock();
-        if qr.is_some() {
+        if let Some(qr) = &qr {
+            let pairing = pairing::establish_key(&pairing_token(qr), &hash, &remote, &local, false);
             let paired = self.state.with(|s| {
                 s.sessions.handshake_hash(peer) == Some(hash)
                     && store_paired_pin(
-                        &mut s.peers,
+                        s,
                         self.storage.as_ref(),
                         self.sealer.as_ref(),
                         peer,
                         &proof.mesh_static,
                         &proof.mesh_signing,
+                        pairing,
                     )
             });
             if !paired {

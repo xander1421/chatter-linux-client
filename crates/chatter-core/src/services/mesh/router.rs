@@ -239,18 +239,21 @@ struct MeshDropSink {
 impl MeshDropSink {
     /// Open a sealed envelope addressed to us and turn it into a timeline row.
     fn open(&self, envelope: &CourierEnvelope) -> Option<MeshMessage> {
-        let (plaintext, sender_key) = super::prekeys::open_envelope(
-            &self.state,
-            envelope,
-            self.identity.read().as_deref()?,
-            now_secs().saturating_mul(1_000),
-        )?;
+        let now = now_secs();
+        let (plaintext, sender) = self.state.open_paired_mail(envelope, now).or_else(|| {
+            let (plaintext, sender_key) = super::prekeys::open_envelope(
+                &self.state,
+                envelope,
+                self.identity.read().as_deref()?,
+                now.saturating_mul(1_000),
+            )?;
+            Some((plaintext, PeerId::from_noise_key(&sender_key)))
+        })?;
         let (payload_type, body) = decode_noise_payload(&plaintext)?;
         if payload_type != NoisePayloadType::PrivateMessage {
             return None;
         }
         let message = PrivateMessagePacket::decode(body).ok()?;
-        let sender = PeerId::from_noise_key(&sender_key);
         let nickname = self
             .state
             .with(|state| state.peers.nickname(&sender, false).map(str::to_string))
@@ -355,6 +358,7 @@ struct Actor {
     /// own borrow. Drained after every command.
     abandoned: Rc<RefCell<Vec<AbandonedDrop>>>,
     identity: super::identity::ActiveMeshIdentity,
+    state: Arc<MeshState>,
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     events: MeshEvents,
@@ -452,6 +456,7 @@ impl Actor {
             bridge,
             abandoned,
             identity,
+            state,
             storage,
             sealer,
             events,
@@ -550,7 +555,13 @@ impl Actor {
                 if now >= bridge.next_refresh_due()
                     && let Some(identity) = self.identity.read().as_ref()
                 {
-                    let evicted = bridge.refresh(Some(identity.static_public()), now);
+                    let local_keys = self
+                        .state
+                        .local_courier_keys()
+                        .into_iter()
+                        .map(|identity| identity.static_public())
+                        .chain(std::iter::once(identity.static_public()));
+                    let evicted = bridge.refresh(local_keys, now);
                     self.abandoned.borrow_mut().extend(evicted);
                 }
                 drop(bridge);

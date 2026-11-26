@@ -10,11 +10,10 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
     /// [`next_refresh_due`](Self::next_refresh_due) comes around — the periodic call is
     /// what carries the tag set across UTC midnight. Idempotent.
     ///
-    /// `local_noise_key` is our own Noise static public key; `None` before an
-    /// identity exists, in which case there is nothing to watch.
+    /// Watch each local courier address. An empty set closes the subscription.
     pub fn refresh(
         &mut self,
-        local_noise_key: Option<[u8; 32]>,
+        local_noise_keys: impl IntoIterator<Item = [u8; 32]>,
         now_unix_secs: u64,
     ) -> Vec<AbandonedDrop> {
         self.last_refresh = now_unix_secs;
@@ -31,10 +30,10 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             return Vec::new();
         }
 
-        self.my_tags = match local_noise_key {
-            Some(key) => candidate_tags(&key, now_unix_secs).to_vec(),
-            None => Vec::new(),
-        };
+        self.my_tags = local_noise_keys
+            .into_iter()
+            .flat_map(|key| candidate_tags(&key, now_unix_secs))
+            .collect();
 
         let mut all_tags: Vec<[u8; TAG_LEN]> = self.my_tags.clone();
         all_tags.sort_unstable();

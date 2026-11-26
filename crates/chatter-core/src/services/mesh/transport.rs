@@ -247,6 +247,9 @@ impl MeshDirectory {
 impl CourierDirectory for MeshDirectory {
     fn noise_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
         let peer = peer.to_short();
+        if let Some(courier) = self.state.pairing_courier(&peer) {
+            return Some(courier.remote);
+        }
         self.state.with(|state| {
             let route = state.peers.route(&peer);
             state

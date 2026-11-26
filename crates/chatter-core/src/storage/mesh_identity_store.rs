@@ -15,17 +15,11 @@ use crate::storage::Database;
 const SECRET_LEN: usize = 32;
 
 pub(crate) const ROTATION_SECS: u64 = 24 * 60 * 60;
-pub(crate) const OVERLAP_SECS: u64 = 5 * 60;
 
 pub(crate) struct MeshEpoch {
     pub identity: Arc<MeshIdentity>,
     pub started_at: u64,
     pub previous_peer: Option<PeerId>,
-}
-
-pub(crate) struct RetiredMeshEpoch {
-    pub identity: Arc<MeshIdentity>,
-    pub expires_at: u64,
 }
 
 /// Keeps independent Noise and signing keys in SQLCipher, separate from Signal.
@@ -50,7 +44,6 @@ impl MeshIdentityStore {
         // Scrub deleted keys from freed SQLCipher pages as well as the live table.
         conn.pragma_update(None, "secure_delete", true)?;
         let tx = conn.transaction()?;
-        Self::purge(&tx, now)?;
         let stamp = i64::try_from(now).unwrap_or(i64::MAX);
         let (identity, started_at, previous_peer) = match Self::read(&tx)? {
             Some((identity, started_at))
@@ -59,10 +52,7 @@ impl MeshIdentityStore {
                 (identity, started_at, None)
             }
             Some((previous, _)) => {
-                tx.execute(
-                    "UPDATE mesh_identity_epochs SET retired_at = ?1 WHERE retired_at IS NULL",
-                    [stamp],
-                )?;
+                tx.execute("DELETE FROM mesh_identity_epochs", [])?;
                 (Self::insert(&tx, stamp)?, now, Some(previous.peer_id()))
             }
             None => (Self::insert(&tx, stamp)?, now, None),
@@ -75,58 +65,7 @@ impl MeshIdentityStore {
         })
     }
 
-    /// Expire retired epochs even if the radio is switched off meanwhile.
-    pub(crate) fn schedule_cleanup(self: &Arc<Self>, retired_at: u64) {
-        let store = Arc::downgrade(self);
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(OVERLAP_SECS)).await;
-            if let Some(store) = store.upgrade() {
-                let cutoff = retired_at.saturating_add(OVERLAP_SECS);
-                if let Err(error) = store.delete_expired(cutoff) {
-                    tracing::warn!(target: "mesh", %error, "Could not delete expired mesh epochs");
-                }
-            }
-        });
-    }
-
-    fn delete_expired(&self, now: u64) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.pragma_update(None, "secure_delete", true)?;
-        Self::purge(&conn, now)
-    }
-
-    /// Read the overlap following a restart and delete epochs that have expired.
-    pub(crate) fn retired(&self, now: u64) -> Result<Vec<RetiredMeshEpoch>, StorageError> {
-        let conn = self.db.connection()?;
-        conn.pragma_update(None, "secure_delete", true)?;
-        Self::purge(&conn, now)?;
-        let mut stmt = conn.prepare(
-            "SELECT static_secret, signing_secret, retired_at FROM mesh_identity_epochs
-             WHERE retired_at IS NOT NULL ORDER BY id DESC",
-        )?;
-        let mut rows = stmt.query([])?;
-        let mut epochs = Vec::new();
-        while let Some(row) = rows.next()? {
-            let retired_at: u64 = row.get(2)?;
-            epochs.push(RetiredMeshEpoch {
-                identity: Arc::new(Self::decode_row(row)?),
-                expires_at: retired_at.saturating_add(OVERLAP_SECS),
-            });
-        }
-        Ok(epochs)
-    }
-
-    fn purge(conn: &Connection, now: u64) -> Result<(), StorageError> {
-        if let Some(cutoff) = now.checked_sub(OVERLAP_SECS) {
-            conn.execute(
-                "DELETE FROM mesh_identity_epochs WHERE retired_at <= ?1",
-                [i64::try_from(cutoff).unwrap_or(i64::MAX)],
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Used by the panic wipe to erase current and retired secrets.
+    /// Used by the panic wipe to erase the current identity.
     pub fn wipe(&self) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.pragma_update(None, "secure_delete", true)?;
@@ -137,8 +76,8 @@ impl MeshIdentityStore {
     fn insert(conn: &Connection, started_at: i64) -> Result<MeshIdentity, StorageError> {
         let identity = MeshIdentity::generate(&mut os_rng());
         conn.execute(
-            "INSERT INTO mesh_identity_epochs (static_secret, signing_secret, started_at)
-             VALUES (?1, ?2, ?3)",
+            "INSERT INTO mesh_identity_epochs (id, static_secret, signing_secret, started_at)
+             VALUES (1, ?1, ?2, ?3)",
             params![
                 &identity.static_secret()[..],
                 &identity.signing_secret()[..],
@@ -152,7 +91,7 @@ impl MeshIdentityStore {
         let row = conn
             .query_row(
                 "SELECT static_secret, signing_secret, started_at FROM mesh_identity_epochs
-             WHERE retired_at IS NULL",
+             WHERE id = 1",
                 [],
                 |row| {
                     Ok((
@@ -169,12 +108,6 @@ impl MeshIdentityStore {
             Ok((Self::decode(&static_secret, &signing_secret)?, stamp))
         })
         .transpose()
-    }
-
-    fn decode_row(row: &rusqlite::Row<'_>) -> Result<MeshIdentity, StorageError> {
-        let static_secret = Zeroizing::new(row.get::<_, Vec<u8>>(0)?);
-        let signing_secret = Zeroizing::new(row.get::<_, Vec<u8>>(1)?);
-        Self::decode(&static_secret, &signing_secret)
     }
 
     /// Rebuild a `MeshIdentity` from stored secret bytes.
@@ -349,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn a_daily_rotation_keeps_only_unexpired_old_keys_across_a_restart() {
+    fn an_epoch_rotation_keeps_only_the_current_keypair_across_restart() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("epochs.db");
         let open = || {
@@ -366,7 +299,7 @@ mod tests {
                 .unwrap()
                 .identity
                 .peer_id(),
-            first.identity.peer_id(),
+            first.identity.peer_id()
         );
         let next = store.advance(deadline, false).unwrap();
         assert_ne!(next.identity.peer_id(), first.identity.peer_id());
@@ -381,25 +314,17 @@ mod tests {
         drop(store);
 
         let reopened = open();
-        let retired = reopened.retired(deadline + OVERLAP_SECS - 1).unwrap();
-        assert_eq!(retired.len(), 1);
-        assert_eq!(retired[0].identity.peer_id(), first.identity.peer_id());
         assert_eq!(
             reopened.get().unwrap().unwrap().peer_id(),
             next.identity.peer_id()
         );
-        assert!(
-            reopened
-                .retired(deadline + OVERLAP_SECS)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            reopened
-                .retired(deadline + OVERLAP_SECS + 1)
-                .unwrap()
-                .is_empty()
-        );
+        let conn = reopened.db.read_connection().unwrap();
+        let rows: u32 = conn
+            .query_row("SELECT count(*) FROM mesh_identity_epochs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     #[test]
@@ -414,7 +339,7 @@ mod tests {
         {
             let conn = db.connection().unwrap();
             conn.execute(
-                "UPDATE mesh_identity_epochs SET static_secret = ?1 WHERE retired_at IS NULL",
+                "UPDATE mesh_identity_epochs SET static_secret = ?1 WHERE id = 1",
                 params![short],
             )
             .unwrap_err();
