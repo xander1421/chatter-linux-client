@@ -112,6 +112,9 @@ impl SignalService {
         // the user decides.
         self.refuse_pending_identity_change(recipient_id)?;
 
+        let build_lock = self.get_encrypt_lock(&format!("{recipient_id}:establish")).await;
+        let _build = build_lock.lock().await;
+
         // Check if we already have a usable session with this peer
         // has_session now validates structural integrity (not just existence)
         if self.actor.has_session(address.clone()).await? {

@@ -3972,14 +3972,7 @@ msgstr "Consenti la visualizzazione delle chiamate in arrivo sulla schermata di 
 msgid "Not now"
 msgstr "Non ora"
 
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Sign in to the same account to finish publishing your encryption keys."
-msgstr "Accedi allo stesso account per completare la pubblicazione delle chiavi di crittografia."
 
 #: crates/chatter-core/src/client/startup.rs
 msgid "Sign in again to finish publishing your encryption keys."
 msgstr "Accedi di nuovo per completare la pubblicazione delle chiavi di crittografia."
-
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Could not verify which account owns the local data on this device."
-msgstr "Impossibile verificare a quale account appartengono i dati locali su questo dispositivo."

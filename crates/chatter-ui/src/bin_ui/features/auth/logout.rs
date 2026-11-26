@@ -60,14 +60,18 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
 
-            if let Some(w) = weak.upgrade() {
-                crate::bin_ui::features::composer::reset_session(&w, &ui_ctx);
-            }
-
             tokio::spawn(async move {
-                // Local sign-out and teardown happen even if the server call fails.
-                if let Err(e) = ui_ctx.logout().await {
-                    tracing::warn!("logout: {e}");
+                if let Err(error) = ui_ctx.logout().await {
+                    tracing::warn!(%error, "Could not log out");
+                    let message = error.user_message();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_toast_message(message.into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        }
+                    });
+                    return;
                 }
                 // The next account must not be shown this one's avatars and media.
                 crate::bin_ui::decode_cache::on_logout();
@@ -75,6 +79,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // Switch to login view
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
+                        crate::bin_ui::features::composer::reset_session(&w, &ui_ctx);
                         w.global::<crate::AuthFlow>().set_is_signed_in(false);
                         w.set_current_view("login".into());
                         crate::bin_ui::features::back::reset_to_chats(&w);

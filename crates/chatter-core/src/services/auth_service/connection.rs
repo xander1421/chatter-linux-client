@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use super::*;
 
 impl AuthService {
@@ -19,7 +17,6 @@ impl AuthService {
             user_repo,
             settings_repo,
             auth_interceptor,
-            republish_completed: AtomicBool::new(false),
             recovery_login_grant: parking_lot::Mutex::new(None),
         }
     }
@@ -103,56 +100,47 @@ impl AuthService {
     pub fn restore_session(&self) -> bool {
         // A saved device token cannot provide the fresh password proof needed
         // to retry an interrupted identity republish.
-        match self.key_republish_pending() {
+        match self.sign_in_publication_pending() {
             Ok(false) => return self.restore_password_session(),
-            Ok(true) => tracing::info!("Sign-in required to finish the pending identity republish"),
-            Err(error) => tracing::warn!(%error, "Could not read pending identity republish"),
+            Ok(true) => tracing::info!("Sign-in required to finish publishing this device"),
+            Err(error) => tracing::warn!(%error, "Could not read pending device publication"),
         }
         self.auth_interceptor.clear();
         false
     }
 
-    pub(crate) fn key_republish_pending(&self) -> Result<bool, StorageError> {
-        if self.republish_completed.load(Ordering::Acquire) {
-            return Ok(false);
-        }
-        Ok(self.pending_key_republish()?.is_some())
+    pub(crate) fn sign_in_publication_pending(&self) -> Result<bool, StorageError> {
+        Ok(self.key_republish_pending()? || self.login_bundle_pending()?)
     }
 
-    pub(super) fn pending_key_republish(&self) -> Result<Option<PendingKeyRepublish>, StorageError> {
-        self.settings_repo.get(keys::KEY_REPUBLISH_PENDING)
+    pub(crate) fn login_bundle_pending(&self) -> Result<bool, StorageError> {
+        Ok(self
+            .settings_repo
+            .get_bool(keys::LOGIN_BUNDLE_PENDING)?
+            .unwrap_or(false))
+    }
+
+    pub(crate) fn finish_sign_in_publication(&self) -> Result<(), StorageError> {
+        let mut conn = self.settings_repo.database().connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM settings WHERE key IN (?1, ?2)",
+            rusqlite::params![keys::LOGIN_BUNDLE_PENDING, keys::KEY_REPUBLISH_PENDING],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn key_republish_pending(&self) -> Result<bool, StorageError> {
+        Ok(self
+            .settings_repo
+            .get_bool(keys::KEY_REPUBLISH_PENDING)?
+            .unwrap_or(false))
     }
 
     pub(crate) fn begin_key_republish(&self) -> Result<(), StorageError> {
-        let owner = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)?
-            .and_then(|id| id.parse().ok())
-            .ok_or_else(|| StorageError::InvalidData("missing identity republish owner".into()))?;
-        let nickname = self
-            .settings_repo
-            .get_string(keys::SVR_SALT_USERNAME)?
-            .filter(|nickname| !nickname.trim().is_empty())
-            .ok_or_else(|| StorageError::InvalidData("missing identity republish login".into()))?;
-        self.republish_completed.store(false, Ordering::Release);
-        self.settings_repo.set(
-            keys::KEY_REPUBLISH_PENDING,
-            &PendingKeyRepublish {
-                owner,
-                login_identifier: login_identifier(&nickname),
-            },
-        )
-    }
-
-    pub(crate) fn finish_key_republish(&self) {
-        let cleanup = self.settings_repo.delete(keys::KEY_REPUBLISH_PENDING);
-        // The bundle and KT authorization already landed. Keep the live
-        // session usable even if a restart has to retry the publication.
-        self.republish_completed
-            .store(cleanup.is_err(), Ordering::Release);
-        if let Err(error) = cleanup {
-            tracing::warn!(%error, "Could not clear the completed identity republish");
-        }
+        self.settings_repo
+            .set_bool(keys::KEY_REPUBLISH_PENDING, true)
     }
 
     /// Restore a password-based (Basic auth) session.

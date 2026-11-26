@@ -64,6 +64,7 @@ const DEVICE_CONFIGURATION_SETTINGS: &[&str] = &[
     keys::PIN_FINGERPRINT,
     keys::IDENTITY_KEY_PUBLIC,
     keys::KEY_REPUBLISH_PENDING,
+    keys::LOGIN_BUNDLE_PENDING,
     keys::PROFILE_KEY_NEXT,
     keys::PROFILE_KEY_ROTATION_PENDING,
     keys::SENDER_CERTIFICATE,
@@ -106,10 +107,8 @@ pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(),
 /// every row of every table except the migration ledger, the mesh tables and
 /// the `mesh.*` settings.
 ///
-/// Mesh is left alone on purpose: it is a separate device identity with its
-/// own threat model and its own wipe (`services::mesh::control` `panic_wipe`),
-/// and its link to the former account was removed when the device was
-/// unlinked. FTS shadow tables are skipped; their virtual table is emptied.
+/// Mesh is a separate device identity. Account switching uses
+/// `wipe_all_rows` to erase its data too. FTS shadow tables are skipped.
 ///
 /// A trigger can write a row into a table already emptied, so the pass repeats
 /// until every table is empty; one that never empties fails the wipe rather

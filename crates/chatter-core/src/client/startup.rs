@@ -310,7 +310,7 @@ impl ChatterClient {
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
-        if self.auth().key_republish_pending().map_err(AuthError::Storage)? {
+        if self.auth().sign_in_publication_pending().map_err(AuthError::Storage)? {
             return Err(ClientError::Validation(
                 chatter_i18n::tr("Sign in again to finish publishing your encryption keys.").into(),
             ));
@@ -339,6 +339,9 @@ impl ChatterClient {
         // own-message notification gate among them) went blind until an app
         // restart. Fill it from the persisted identity.
         if self.auth_state().get().current_user_id.is_none() {
+            self.messages().reload_session_state().await;
+            self.signal().clear_account_state();
+            self.anon_groups().held_posts.clear();
             let sessions = self.sessions();
             if let (Some(user_id), Some(device_id)) =
                 (sessions.current_user_id(), sessions.current_device_id())

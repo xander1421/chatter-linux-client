@@ -234,14 +234,25 @@ impl SignalService {
         let (bundle, one_time_prekeys, kyber_one_time_prekeys) =
             self.build_device_key_material().await?;
         let device_id = bundle.device_id;
-        auth_client
-            .upload_pre_key_bundle(bundle)
-            .await
-            .map_err(ServiceError::Network)?;
-        auth_client
-            .refresh_pre_keys_with_kyber_otpk(one_time_prekeys, kyber_one_time_prekeys)
-            .await
-            .map_err(ServiceError::Network)?;
+        use crate::error::NetworkError;
+        for attempt in 0.. {
+            let upload = async {
+                auth_client.upload_pre_key_bundle(bundle.clone()).await?;
+                auth_client.refresh_pre_keys_with_kyber_otpk(
+                    one_time_prekeys.clone(),
+                    kyber_one_time_prekeys.clone(),
+                ).await
+            }.await;
+            match upload {
+                Ok(()) => break,
+                Err(NetworkError::RequestNotSent(_) | NetworkError::Unavailable | NetworkError::Timeout)
+                    if attempt < 2 =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         tracing::info!(device_id, "published this device's Signal bundle");
         Ok(())
     }

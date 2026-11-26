@@ -15,15 +15,8 @@ impl AuthService {
         on_verifying: &(dyn Fn() + Send + Sync),
     ) -> Result<LoginResult, AuthError> {
         let identifier = login_identifier(username);
-        if self.is_logged_in() {
-            let pending = self
-                .pending_key_republish()?
-                .ok_or(AuthError::AlreadyLoggedIn)?;
-            // LoginFinish can replace a device. A live session can retry its
-            // own unfinished publication, and must sign out before switching.
-            if pending.login_identifier != identifier {
-                return Err(wrong_republish_account());
-            }
+        if self.is_logged_in() && !self.sign_in_publication_pending()? {
+            return Err(AuthError::AlreadyLoggedIn);
         }
 
         // Reuse one PIN derivation for the login's SVR key and local fingerprint.
@@ -110,19 +103,12 @@ impl AuthService {
                 _ => AuthError::Network(e),
             })?;
 
-        self.finish_login(
-            username,
-            stored_device_id,
-            &auth_token,
-            &svr_secret,
-            response,
-        )
+        self.finish_login(username, &auth_token, &svr_secret, response)
     }
 
     fn finish_login(
         &self,
         username: &str,
-        stored_device_id: Option<u32>,
         auth_token: &DeviceToken,
         svr_secret: &[u8; 32],
         response: AuthResponse,
@@ -138,46 +124,17 @@ impl AuthService {
             .parse()
             .map_err(|_| AuthError::LoginFailed("invalid user_id format".to_string()))?;
         let device_id = session.device_id;
-
-        // A server-unlinked install may already have lost its keys. A normal
-        // logout keeps history, whose SavedMessages channel records its owner.
-        let mut local_owner = self.local_account_owner()?;
-        if local_owner.is_none()
-            && let Some((owner, _)) = self.current_user()
-        {
-            // Backfill the channel for an older, still-configured device whose
-            // first channel sync was interrupted.
-            self.cache_saved_messages_channel(owner)?;
-            local_owner = self.local_account_owner()?;
-        }
-        let switched_account = local_owner.is_some_and(|owner| owner != user_id);
-        if switched_account && !self.is_logged_in() {
-            super::wipe_unlinked_install(self.settings_repo.database())?;
-            self.republish_completed
-                .store(false, std::sync::atomic::Ordering::Release);
-            self.recovery_login_grant.lock().take();
+        // Saved Messages is the only local account ownership record.
+        let db = self.settings_repo.database();
+        if crate::storage::unlink::local_account_owner(db)? == Some(user_id) {
+            super::unlink::restore_staged_attachments(db)?;
         } else {
-            let pending = self.pending_key_republish()?;
-            if switched_account
-                || pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.owner != user_id)
-            {
-                return Err(wrong_republish_account());
-            }
-            if local_owner.is_none()
-                && pending.is_none()
-                && (self.identity_manager.has_identity()? || self.user_repo.count()? > 0)
-            {
-                // A legacy install could sign out before Saved Messages was
-                // synced. Preserve its data when ownership can't be established.
-                return Err(AuthError::LoginFailed(chatter_i18n::tr(
-                    "Could not verify which account owns the local data on this device.",
-                )));
-            }
+            self.auth_interceptor.clear();
+            super::wipe_switched_account(db)?;
+            self.recovery_login_grant.lock().take();
         }
         self.settings_repo.delete(keys::UNLINKED_ACCOUNT_ID)?;
-        self.cache_saved_messages_channel(user_id)?;
+        super::cache_saved_messages_channel(&self.settings_repo, user_id)?;
 
         // Read these only after the wipe. Missing keys let ChatterClient run
         // SVR recovery; only its explicit recovery flow can mint a new identity.
@@ -283,6 +240,7 @@ impl AuthService {
                 keys::DEVICE_AUTH_TOKEN,
                 &auth_token.to_base64(),
             )?;
+            SettingsRepository::set_with_connection(&tx, keys::LOGIN_BUNDLE_PENDING, &true)?;
             tx.commit().map_err(StorageError::from)?;
         }
         self.auth_interceptor
@@ -292,7 +250,7 @@ impl AuthService {
             user_id,
             device_id,
             display_name,
-            needs_prekey_upload: switched_account || stored_device_id != Some(device_id),
+            needs_prekey_upload: true,
             keys_restored: false, // Set by caller after the SVR restore attempt
             // No local identity yet. The caller must resolve this before the
             // login can be called successful — see `ChatterClient::login`.
@@ -302,12 +260,6 @@ impl AuthService {
             recovery_codes: None, // Login never returns recovery codes
         })
     }
-}
-
-fn wrong_republish_account() -> AuthError {
-    AuthError::LoginFailed(chatter_i18n::tr(
-        "Sign in to the same account to finish publishing your encryption keys.",
-    ))
 }
 
 #[cfg(test)]
@@ -328,7 +280,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_refuses_to_reuse_unattributed_legacy_keys() {
+    async fn login_wipes_data_without_a_saved_messages_owner() {
         let dir = tempfile::tempdir().unwrap();
         let client = test_client(dir.path());
         let auth = client.auth();
@@ -347,12 +299,11 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(matches!(
-            auth.finish_login("owner", None, &DeviceToken::generate(), &[4; 32], reply),
-            Err(AuthError::LoginFailed(_))
-        ));
-        assert!(auth.identity_manager.has_identity().unwrap());
-        assert!(!auth.is_logged_in());
+        let result = auth
+            .finish_login("owner", &DeviceToken::generate(), &[4; 32], reply)
+            .unwrap();
+        assert!(result.key_recovery.is_some());
+        assert!(!auth.identity_manager.has_identity().unwrap());
     }
 
     async fn check_login_after_logout(switch_accounts: bool) {
@@ -414,15 +365,15 @@ mod tests {
 
         // The client had not synced channels when it logged out. Sign-out
         // should still keep the real Saved Messages channel and its history.
-        assert_eq!(auth.local_account_owner().unwrap(), None);
-        if switch_accounts {
-            let channel =
-                tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
-            let mut rpc = AuthClient::new(channel.into(), auth.auth_interceptor.clone());
-            auth.logout(&mut rpc).await.unwrap();
-        } else {
-            auth.do_logout().await.unwrap();
-        }
+        assert_eq!(
+            crate::storage::unlink::local_account_owner(db).unwrap(),
+            None
+        );
+        assert!(auth.do_logout().await.is_err());
+        assert!(auth.is_logged_in());
+        // Model the acknowledgement of the logout RPC before local cleanup.
+        crate::services::auth_service::cache_saved_messages_channel(settings, old_owner).unwrap();
+        auth.finish_logout().unwrap();
         assert!(!auth.is_logged_in());
         assert!(auth.auth_interceptor.get_auth_info().is_none());
         assert!(
@@ -431,14 +382,30 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(auth.local_account_owner().unwrap(), Some(old_owner));
+        assert_eq!(
+            crate::storage::unlink::local_account_owner(db).unwrap(),
+            Some(old_owner)
+        );
+
+        let saved_channel = crate::domain::ids::ChannelId::from(old_owner);
+        let channels = crate::storage::ChannelRepository::new(db.clone());
+        let membership = channels
+            .get_membership(&saved_channel, &old_owner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(membership.role, crate::domain::channel::MemberRole::Owner);
+
+        // Simulate the filesystem state after a process dies before the wipe
+        // commits. A retry for the same owner keeps the attachment intact.
+        let staged = db.path().with_file_name("attachments.account-wipe");
+        std::fs::rename(&files, &staged).unwrap();
+        std::fs::create_dir(&files).unwrap();
 
         // Enter the same completion path as a successful LoginFinish.
         let token = DeviceToken::generate();
         let result = auth
             .finish_login(
                 new_username,
-                None,
                 &token,
                 &[4; 32],
                 AuthResponse {
@@ -459,8 +426,12 @@ mod tests {
         assert_eq!(result.user_id, new_owner);
         assert_eq!(result.device_id, 9);
         assert!(result.needs_prekey_upload);
+        assert!(auth.login_bundle_pending().unwrap());
         assert_eq!(auth.current_user(), Some((new_owner, 9)));
-        assert_eq!(auth.local_account_owner().unwrap(), Some(new_owner));
+        assert_eq!(
+            crate::storage::unlink::local_account_owner(db).unwrap(),
+            Some(new_owner)
+        );
         assert_eq!(
             settings
                 .get_bytes(keys::DEVICE_AUTH_TOKEN)
@@ -472,6 +443,9 @@ mod tests {
         assert_eq!(session.user_id, new_owner.to_string());
         assert_eq!(session.device_id, 9);
         assert_eq!(session.token, token.to_base64());
+        assert!(!auth.restore_session());
+        assert!(auth.auth_interceptor.get_auth_info().is_none());
+        assert!(!staged.exists());
 
         if switch_accounts {
             assert_eq!(result.key_recovery, Some(KeyRecoveryNeed::NoPinProvided));

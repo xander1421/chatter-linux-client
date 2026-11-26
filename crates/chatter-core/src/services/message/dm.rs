@@ -244,7 +244,7 @@ impl MessageService {
         };
         let me = me_id.to_string();
         let shield = self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
-        if use_all_devices_for_own_sync(shield, &sync) {
+        if !shield {
             Self::pad_content_to_bucket(&mut sync);
             let outcome = self
                 .deposit_sealed_to_all_devices(
@@ -274,51 +274,34 @@ impl MessageService {
             .get::<u32>(keys::CURRENT_DEVICE_ID)
             .ok()
             .flatten();
-        // Shield can send only existing sessions, but those cannot stand in
-        // for the full registered set when acknowledging a durable obligation.
-        let expected = if strict {
-            match auth_client.list_devices().await {
-                Ok(response) => Some(
-                    response
-                        .devices
-                        .into_iter()
-                        .filter(|device| {
-                            !device.is_current && Some(device.device_id) != this_device
-                        })
-                        .map(|device| device.device_id)
-                        .collect::<std::collections::HashSet<_>>(),
-                ),
-                Err(_) => return (0, false),
-            }
-        } else {
-            None
-        };
-        let devices = self
-            .signal_service
-            .session_devices(&me)
-            .await
-            .map(|devices| {
-                devices
-                    .into_iter()
-                    .filter(|d| Some(*d) != this_device)
-                    .collect()
-            });
-        let devices: Vec<u32> = match devices {
-            Ok(devices) => devices,
-            Err(e) => {
-                tracing::warn!(error = %e, "Own-device sync: device lookup failed");
+        // An account-only roster lets us skip discovery on single-device
+        // accounts and settle strict sync only when every linked device lands.
+        let expected = match auth_client.list_devices().await {
+            Ok(roster) => roster.devices.into_iter().filter_map(|device| {
+                (!device.is_current && Some(device.device_id) != this_device).then_some(device.device_id)
+            }).collect::<std::collections::HashSet<_>>(),
+            Err(error) => {
+                tracing::warn!(%error, "Own-device sync: roster unavailable");
                 return (0, false);
             }
         };
+        if expected.is_empty() {
+            return (0, true);
+        }
+        let signal = self.signal_service.for_anonymous_route();
+        let mut discovery = self.anonymous_prekey_source(true);
+        let mut devices = Vec::with_capacity(expected.len());
+        for &device_id in &expected {
+            match signal.ensure_session_with_source(&mut discovery, &me, device_id).await {
+                Ok(()) => devices.push(device_id),
+                Err(error) => tracing::warn!(device_id, %error, "Own-device sync: session repair failed"),
+            }
+        }
         if devices.is_empty() {
-            return (
-                0,
-                expected.as_ref().is_some_and(|devices| devices.is_empty()),
-            );
+            return (0, false);
         }
         Self::pad_content_to_bucket(&mut sync);
-        let ciphertexts = match self
-            .signal_service
+        let ciphertexts = match signal
             .encrypt_message_session_devices(auth_client, &me, devices, &sync.encode_to_vec())
             .await
         {
@@ -335,14 +318,9 @@ impl MessageService {
         // (`resend_dm_on_decryption_error`).
         self.record_dm_send(me_id, &sync, &outcome.deposits);
         let acknowledged = outcome.error.is_none()
-            && expected.as_ref().is_some_and(|devices| {
-                devices.iter().all(|device| {
-                    outcome
-                        .deposits
-                        .iter()
-                        .any(|(delivered, _)| delivered == device)
-                })
-            });
+            && (!strict || expected.iter().all(|device| {
+                outcome.deposits.iter().any(|(delivered, _)| delivered == device)
+            }));
         (outcome.delivered, acknowledged)
     }
 
@@ -979,29 +957,6 @@ pub(crate) fn null_message_content() -> chatter_proto::content_v1::Content {
     };
     MessageService::pad_content_to_bucket(&mut null);
     null
-}
-
-/// Saved deletion is account-wide even in Shield. Discovering our own
-/// devices on the authenticated connection exposes no peer or mailbox.
-fn use_all_devices_for_own_sync(shield: bool, sync: &chatter_proto::content_v1::Content) -> bool {
-    use chatter_proto::content_v1::content::Content::DeleteForMeSync;
-    !shield || matches!(&sync.content, Some(DeleteForMeSync(delete)) if delete.saved_messages_scope)
-}
-
-#[test]
-fn saved_delete_fanout_uses_all_devices_even_in_shield() {
-    let owner = UserId::new();
-    let ordinary = crate::services::build_delete_for_me_content(
-        &UserId::new().to_string(),
-        &owner.to_string(),
-        1,
-    );
-    assert!(use_all_devices_for_own_sync(false, &ordinary));
-    assert!(!use_all_devices_for_own_sync(true, &ordinary));
-
-    let saved = super::saved::saved_delete_content(owner, crate::domain::ids::MessageId::new(), 1);
-    assert!(use_all_devices_for_own_sync(false, &saved));
-    assert!(use_all_devices_for_own_sync(true, &saved));
 }
 
 /// What our own other devices get for `content` sent to `peer_id` over

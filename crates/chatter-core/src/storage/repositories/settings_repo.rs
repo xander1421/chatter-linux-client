@@ -114,6 +114,7 @@ pub mod keys {
     /// by a different road. The record survives logout alongside the local
     /// identity and is wiped with it.
     pub const KEY_REPUBLISH_PENDING: &str = "crypto.key_republish_pending";
+    pub const LOGIN_BUNDLE_PENDING: &str = "crypto.login_bundle_pending";
     /// Who receives our profile key ("everyone" | "contacts" | "nobody"),
     /// see `services::profile_visibility`. Absent = everyone.
     pub const PROFILE_VISIBILITY: &str = "privacy.profile_visibility";

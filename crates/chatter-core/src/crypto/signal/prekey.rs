@@ -109,6 +109,27 @@ impl PreKeyManager {
         id: u32,
         identity_key_pair: &IdentityKeyPair,
     ) -> Result<SignedPreKeyRecord, CryptoError> {
+        let record = Self::new_signed_prekey(rng, id, identity_key_pair)?;
+
+        // Store in database
+        self.key_store
+            .save_signed_prekey(
+                id,
+                &record
+                    .serialize()
+                    .map_err(|e| CryptoError::Protocol(e.to_string()))?,
+            )
+            .map_err(CryptoError::Storage)?;
+
+        Ok(record)
+    }
+
+    /// Build a signed prekey without writing it to the device store.
+    pub(crate) fn new_signed_prekey<R: CryptoRng + Rng>(
+        rng: &mut R,
+        id: u32,
+        identity_key_pair: &IdentityKeyPair,
+    ) -> Result<SignedPreKeyRecord, CryptoError> {
         // Generate EC key pair for the signed prekey
         let key_pair = KeyPair::generate(rng);
 
@@ -131,16 +152,6 @@ impl PreKeyManager {
             &key_pair,
             &signature.into_vec(),
         );
-
-        // Store in database
-        self.key_store
-            .save_signed_prekey(
-                id,
-                &record
-                    .serialize()
-                    .map_err(|e| CryptoError::Protocol(e.to_string()))?,
-            )
-            .map_err(CryptoError::Storage)?;
 
         Ok(record)
     }

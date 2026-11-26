@@ -212,6 +212,7 @@ impl ChatterClient {
         let mut result = login?;
         self.messages().reload_session_state().await;
         self.signal().clear_account_state();
+        self.anon_groups().held_posts.clear();
         self.auth_state().set_logged_in(
             result.user_id,
             result.device_id,
@@ -251,39 +252,28 @@ impl ChatterClient {
             return Err(ClientError::IdentityRecoveryRequired(need));
         }
 
-        // A device that just obtained its identity from a backup holds none of
-        // the prekey private keys the account previously published — those died
-        // with the old device. Replace the account's key material with this
-        // device's, or peers keep fetching prekeys that can never complete a
-        // handshake.
-        // Also retried when a previous attempt was interrupted after the local
-        // keys landed: without that, the next login sees a local identity,
-        // skips the restore, and the account is left serving prekeys nobody
-        // holds the private half of.
-        if self.auth().key_republish_pending().map_err(AuthError::Storage)? {
-            let mut auth_client = self
-                .auth()
-                .try_auth_client()
-                .ok_or(ClientError::NotConnected)?;
-            let proof = prove_password(&mut auth_client, password).await?;
-            self.republish_identity_keys(&mut auth_client, proof).await?;
-        } else {
-            // The server issued this login a device id it holds no bundle for
-            // (every login gets a new one). Without this, a Log Out -> Log In
-            // left peers encrypting to the previous, signed-out device and
-            // every incoming DM was delivered to nobody. Failing the login is
-            // better than reporting success for an unreachable device.
-            let mut auth_client = self
-                .auth()
-                .try_auth_client()
-                .ok_or(ClientError::NotConnected)?;
-            self.signal()
-                .publish_device_bundle(&mut auth_client)
-                .await
-                .map_err(|e| {
-                    ClientError::Validation(format!("failed to publish this device's keys: {e}"))
+        let publish = async {
+            let mut auth_client = self.auth().try_auth_client().ok_or(ClientError::NotConnected)?;
+            if self.auth().key_republish_pending().map_err(AuthError::Storage)? {
+                let proof = prove_password(&mut auth_client, password).await?;
+                self.republish_identity_keys(&mut auth_client, proof).await?;
+            } else if result.needs_prekey_upload {
+                self.signal().publish_device_bundle(&mut auth_client).await.map_err(|error| {
+                    tracing::warn!(%error, "Device bundle publication failed");
+                    ClientError::Validation(chatter_i18n::tr(
+                        "Sign in again to finish publishing your encryption keys.",
+                    ).into())
                 })?;
+            }
+            self.auth().finish_sign_in_publication().map_err(AuthError::Storage)?;
+            Ok::<(), ClientError>(())
+        }.await;
+        if let Err(error) = publish {
+            self.auth().end_session()?;
+            self.auth_state().set_logged_out();
+            return Err(error);
         }
+        result.needs_prekey_upload = false;
 
         // Our name, bio and avatar live on the server encrypted with our
         // profile key. A new device has none of them locally — the avatar
@@ -382,6 +372,9 @@ impl ChatterClient {
             .map_err(ClientError::Auth)?;
 
         self.republish_identity_keys(&mut auth_client, proof).await?;
+        self.auth().finish_sign_in_publication().map_err(AuthError::Storage)?;
+        self.auth().end_session()?;
+        self.auth_state().set_logged_out();
 
         tracing::warn!(
             "minted and published a NEW identity key — every contact's safety number has changed"
@@ -406,8 +399,6 @@ impl ChatterClient {
             .republish_identity_bundle(auth_client, proof)
             .await
             .map_err(|e| ClientError::Validation(format!("failed to publish key material: {e}")))?;
-
-        self.auth().finish_key_republish();
 
         tracing::info!(
             identity_key_changed = outcome.identity_key_changed,
@@ -1017,16 +1008,15 @@ impl ChatterClient {
         );
     }
 
-    /// Log out and shut down all background services.
-    /// Sign out: tell the server, wipe local credentials, and stop every
-    /// background loop. The teardown runs even if the first step fails, so a
-    /// signed-out client never keeps syncing and a later login can `start()`.
+    /// Retire the device on the server, then shut down the local session.
     pub async fn logout(&self) -> Result<(), ClientError> {
         let expected = self.auth_state().get().session_revision;
         let _lifecycle = self.auth_lifecycle_lock.lock().await;
         if self.auth_state().get().session_revision != expected {
             return Ok(());
         }
+        self.set_presence_for_shutdown(crate::domain::user::PresenceStatus::Offline).await;
+        self.auth().do_logout().await?;
         crate::system::messaging_background::set_signed_in(false);
         // Invalidate queued UI work immediately, then retire the old call owner
         // using its captured revision, before new credentials can be installed.
@@ -1061,18 +1051,11 @@ impl ChatterClient {
         if self.auth_state().get().session_revision != teardown_revision {
             return Ok(());
         }
-        // Publish the final status while this session can still authenticate.
-        // Every older session publication has been stopped above, and the
-        // lifecycle lock excludes new publications until teardown completes.
-        self.set_presence_for_shutdown(crate::domain::user::PresenceStatus::Offline)
-            .await;
-        let result = self.auth().do_logout().await;
         if self.auth_state().get().session_revision == teardown_revision {
             self.shutdown_session(teardown_revision, false).await;
             self.auth_state()
                 .set_logged_out_if_current(teardown_revision);
         }
-        result?;
         Ok(())
     }
 }

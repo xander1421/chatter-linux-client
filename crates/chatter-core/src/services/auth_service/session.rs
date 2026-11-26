@@ -12,15 +12,8 @@ impl AuthService {
         Ok(())
     }
 
-    /// Log out and retire this device on the server when reachable.
+    /// Retire this device before clearing local credentials.
     pub async fn logout(&self, auth_client: &mut AuthClient) -> Result<(), AuthError> {
-        self.logout_with_client(Some(auth_client)).await
-    }
-
-    async fn logout_with_client(
-        &self,
-        auth_client: Option<&mut AuthClient>,
-    ) -> Result<(), AuthError> {
         if !self.is_logged_in() {
             return Err(AuthError::NotLoggedIn);
         }
@@ -36,16 +29,17 @@ impl AuthService {
                     AuthError::NotLoggedIn
                 }
             })?;
-        self.cache_saved_messages_channel(owner)?;
+        super::cache_saved_messages_channel(&self.settings_repo, owner)?;
 
-        if let Some(auth_client) = auth_client {
-            let device_id = self
-                .settings_repo
-                .get(keys::CURRENT_DEVICE_ID)?
-                .unwrap_or(0);
-            let _ = auth_client.logout(device_id, None).await;
-        }
+        let device_id = self
+            .settings_repo
+            .get(keys::CURRENT_DEVICE_ID)?
+            .ok_or(AuthError::NotLoggedIn)?;
+        auth_client.logout(device_id, None).await?;
+        self.finish_logout()
+    }
 
+    pub(super) fn finish_logout(&self) -> Result<(), AuthError> {
         self.end_session()?;
         self.settings_repo.delete(keys::CURRENT_USER_ID)?;
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
@@ -108,9 +102,8 @@ impl AuthService {
         .await
     }
 
-    /// Log out locally even when the server connection is unavailable.
     pub async fn do_logout(&self) -> Result<(), AuthError> {
-        self.logout_with_client(self.try_auth_client().as_mut())
-            .await
+        let mut auth_client = self.try_auth_client().ok_or(NetworkError::Unavailable)?;
+        self.logout(&mut auth_client).await
     }
 }

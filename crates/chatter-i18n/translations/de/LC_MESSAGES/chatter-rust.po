@@ -4033,14 +4033,7 @@ msgstr "Erlaube, dass eingehende Anrufe auf dem Sperrbildschirm angezeigt werden
 msgid "Not now"
 msgstr "Jetzt nicht"
 
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Sign in to the same account to finish publishing your encryption keys."
-msgstr "Melde dich beim selben Konto an, um die Veröffentlichung deiner Verschlüsselungsschlüssel abzuschließen."
 
 #: crates/chatter-core/src/client/startup.rs
 msgid "Sign in again to finish publishing your encryption keys."
 msgstr "Melde dich erneut an, um die Veröffentlichung deiner Verschlüsselungsschlüssel abzuschließen."
-
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Could not verify which account owns the local data on this device."
-msgstr "Es konnte nicht geprüft werden, zu welchem Konto die lokalen Daten auf diesem Gerät gehören."

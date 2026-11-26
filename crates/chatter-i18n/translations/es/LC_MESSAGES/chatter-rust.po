@@ -3986,14 +3986,7 @@ msgstr "Permite que las llamadas entrantes se muestren en la pantalla de bloqueo
 msgid "Not now"
 msgstr "Ahora no"
 
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Sign in to the same account to finish publishing your encryption keys."
-msgstr "Inicia sesión en la misma cuenta para terminar de publicar tus claves de cifrado."
 
 #: crates/chatter-core/src/client/startup.rs
 msgid "Sign in again to finish publishing your encryption keys."
 msgstr "Vuelve a iniciar sesión para terminar de publicar tus claves de cifrado."
-
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Could not verify which account owns the local data on this device."
-msgstr "No se pudo comprobar a qué cuenta pertenecen los datos locales de este dispositivo."

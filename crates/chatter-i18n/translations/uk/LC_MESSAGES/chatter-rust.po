@@ -3989,14 +3989,7 @@ msgstr "Дозвольте показувати вхідні виклики на
 msgid "Not now"
 msgstr "Не зараз"
 
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Sign in to the same account to finish publishing your encryption keys."
-msgstr "Увійдіть у той самий обліковий запис, щоб завершити публікацію ключів шифрування."
 
 #: crates/chatter-core/src/client/startup.rs
 msgid "Sign in again to finish publishing your encryption keys."
 msgstr "Увійдіть знову, щоб завершити публікацію ключів шифрування."
-
-#: crates/chatter-core/src/services/auth_service/login.rs
-msgid "Could not verify which account owns the local data on this device."
-msgstr "Не вдалося перевірити, якому обліковому запису належать локальні дані на цьому пристрої."
