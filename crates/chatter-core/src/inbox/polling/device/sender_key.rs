@@ -107,6 +107,11 @@ pub(super) async fn process_sender_key_message(
                 plaintext_len = plaintext.len(),
                 "[INBOX_SK] Successfully decrypted, processing DataMessage"
             );
+            let attachments = crate::services::AttachmentService::new_local(Arc::new(
+                crate::storage::repositories::AttachmentRepository::new(
+                    message_gateway.settings_repo.database().clone(),
+                ),
+            ));
             match process_decrypted_data_message(
                 msg,
                 &plaintext,
@@ -117,6 +122,7 @@ pub(super) async fn process_sender_key_message(
                 message_repo,
                 channel_repo,
                 ephemeral_repo,
+                &attachments,
                 domain_tx,
             ) {
                 DataOutcome::Handled => {}
@@ -409,6 +415,7 @@ fn process_decrypted_data_message(
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
     ephemeral_repo: &Arc<EphemeralRepository>,
+    attachment_service: &crate::services::AttachmentService,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) -> DataOutcome {
     tracing::debug!(
@@ -526,6 +533,16 @@ fn process_decrypted_data_message(
                 data_message.quote.as_ref(),
                 message_repo,
             );
+
+            if !message.attachments.is_empty() {
+                let storage = attachment_service.for_conversation(
+                    &crate::state::ActiveConversation::Channel(channel_id),
+                );
+                if let Err(error) = storage.create_from_pointers(&data_message.attachments) {
+                    tracing::warn!(%error, "Channel attachment pointers await persistence");
+                    return DataOutcome::StoreFailed;
+                }
+            }
 
             // Store message with deduplication. Everything below announces
             // the row as stored (an early edit, reaction or pin applied), not
@@ -695,7 +712,7 @@ mod tests {
         db.run_migrations().unwrap();
         let messages = Arc::new(MessageRepository::new(db.clone()));
         let channels = Arc::new(ChannelRepository::new(db.clone()));
-        let ephemeral = Arc::new(EphemeralRepository::new(db));
+        let ephemeral = Arc::new(EphemeralRepository::new(db.clone()));
         let (event_tx, _rx) = broadcast::channel(16);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let (a, b, sender) = (ChannelId::new(), ChannelId::new(), UserId::new());
@@ -712,6 +729,9 @@ mod tests {
             server_timestamp: 1,
             ..Default::default()
         };
+        let attachments = crate::services::AttachmentService::new_local(Arc::new(
+            crate::storage::repositories::AttachmentRepository::new(db.clone()),
+        ));
         let count = |channel: &ChannelId| {
             messages
                 .list_for_conversation(
@@ -726,7 +746,7 @@ mod tests {
 
         let outcome = process_decrypted_data_message(
             &msg, &data(b), Some(a), &sender, &event_tx, &stats, &messages, &channels,
-            &ephemeral, None,
+            &ephemeral, &attachments, None,
         );
         assert!(matches!(outcome, DataOutcome::Malformed(_)), "{outcome:?}");
         assert_eq!(count(&b), 0, "nothing written into the named channel");
@@ -735,14 +755,14 @@ mod tests {
         // No envelope channel recovered: refused too.
         let outcome = process_decrypted_data_message(
             &msg, &data(a), None, &sender, &event_tx, &stats, &messages, &channels, &ephemeral,
-            None,
+            &attachments, None,
         );
         assert!(matches!(outcome, DataOutcome::Malformed(_)));
 
         // The bound case still stores.
         let outcome = process_decrypted_data_message(
             &msg, &data(a), Some(a), &sender, &event_tx, &stats, &messages, &channels,
-            &ephemeral, None,
+            &ephemeral, &attachments, None,
         );
         assert!(matches!(outcome, DataOutcome::Handled), "{outcome:?}");
         assert_eq!(count(&a), 1);

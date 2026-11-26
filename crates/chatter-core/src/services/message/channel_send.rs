@@ -971,12 +971,10 @@ impl MessageService {
             tracing::warn!(message_id=%server_id, "Channel delete-for-everyone sender changed; deletion retained");
             return retain();
         }
-        // A private channel's message has no server copy to delete; the
-        // delete-for-everyone control reaches the members end to end.
-        let remote = if !self.is_public_channel(&target.channel) {
-            Ok(())
-        } else {
-            tokio::time::timeout(
+        use crate::domain::ChannelType;
+        let remote = match self.channel_repo.routing_type(&target.channel)? {
+            Some(ChannelType::Private) => Ok(()),
+            Some(ChannelType::Public) => tokio::time::timeout(
                 std::time::Duration::from_secs(30),
                 self.message_client().delete_message(
                     &server_id.to_string(),
@@ -984,7 +982,9 @@ impl MessageService {
                 ),
             )
             .await
-            .unwrap_or(Err(NetworkError::Timeout))
+            .unwrap_or(Err(NetworkError::Timeout)),
+            // Leave the delete in the journal until routing is verified.
+            _ => return Err(NetworkError::Unavailable.into()),
         };
         match remote
         {

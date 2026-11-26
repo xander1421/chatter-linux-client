@@ -981,7 +981,7 @@ impl MessageService {
 
         // Call server: SpiceDB authorizes us as the message's author. A private
         // channel's message has no server copy.
-        if self.is_public_channel(channel_id) {
+        if !self.channel_send_requires_encryption(channel_id)? {
             self.message_client()
                 .delete_message(&message_id.to_string(), &channel_id.to_string())
                 .await?;
@@ -1027,7 +1027,7 @@ impl MessageService {
             }
             targets.push((id.to_string(), channel_id.to_string()));
         }
-        if self.is_public_channel(channel_id) {
+        if !self.channel_send_requires_encryption(channel_id)? {
             self.message_client().delete_messages(targets).await?;
         }
         self.message_repo.soft_delete_batch(message_ids)?;

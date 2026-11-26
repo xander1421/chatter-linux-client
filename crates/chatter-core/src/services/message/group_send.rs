@@ -251,7 +251,7 @@ impl MessageService {
         }
     }
 
-    /// Send a prepared private-channel request anonymously and return the
+    /// Encrypt channel-scoped controls as sender-key content and send over SSv2.
     pub(super) async fn send_private_channel_control(
         &self,
         channel_id: &ChannelId,
@@ -286,6 +286,7 @@ impl MessageService {
         Ok(())
     }
 
+    /// Send a prepared private-channel request anonymously and return the
     /// `Message` the channel journal records (what `SendMessage` would have
     /// answered: our id, our device, the server's timestamp). The request's
     /// `client_request_id` is the queue GUID, so a replay queues nothing twice.

@@ -678,6 +678,14 @@ async fn receive_group_post(
             &RetryBudget::new(),
         )
         .await;
+        if distribution.is_some() && message.queue_id == 2 {
+            let id = crate::domain::AttachmentId::from_cdn_key("test_attachment_key_v1");
+            let attachment = client.attachments().get(&id).unwrap().unwrap();
+            assert!(
+                attachment.private_channel,
+                "store the private route before ACK"
+            );
+        }
         let mut delivered = false;
         while let Ok(event) = received.try_recv() {
             delivered |= matches!(event, InboxEvent::ChannelMessageReceived { .. });
@@ -787,7 +795,15 @@ async fn private_channel_journal_and_actions_match_with_shield_on_and_off() {
             };
             sending_client
                 .send_channel_message_with_quote(
-                    None, &channel, text, vec![], vec![], Some(&thread), vec![], false, Some(&quote),
+                    None,
+                    &channel,
+                    text,
+                    vec![],
+                    vec![],
+                    Some(&thread),
+                    vec![],
+                    false,
+                    Some(&quote),
                 )
                 .await
                 .unwrap();

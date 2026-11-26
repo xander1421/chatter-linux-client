@@ -60,16 +60,26 @@ impl InboxEventProcessor {
                 attachments,
                 ..
             } => {
+                // Read the message store_data_message already persisted. Its
+                // conversation_type tells us how to address the delivery
+                // receipt: a channel-free DM (ServerDm, keyed by the sender)
+                // must receipt back to the peer via the sealed per-device
+                // path, NOT a non-existent channel.
+                let stored = message_id
+                    .parse::<crate::domain::ids::MessageId>()
+                    .ok()
+                    .and_then(|mid| self.message_service.get_message_local(&mid).ok().flatten());
+
                 // Create attachment records BEFORE UI handler reads from DB
                 // This prevents the "empty bubble" race condition
                 if !attachments.is_empty() {
-                    let service = self.attachment_service.for_conversation(
-                        &self.message_service.classify_active_conversation(
-                            channel_id,
-                            &self.message_service.conversation_type(channel_id),
-                            Some(*sender_id),
+                    let conversation = stored.as_ref().map_or(
+                        crate::state::ActiveConversation::Channel(*channel_id),
+                        |message| self.message_service.classify_active_conversation(
+                            channel_id, &message.conversation_type, Some(*sender_id),
                         ),
                     );
+                    let service = self.attachment_service.for_conversation(&conversation);
                     let pointers: Vec<_> = attachments
                         .iter()
                         .filter(|p| !p.cdn_key.is_empty())
@@ -81,16 +91,6 @@ impl InboxEventProcessor {
                         tracing::warn!(%error, "Failed to store attachment records");
                     }
                 }
-
-                // Read the message store_data_message already persisted. Its
-                // conversation_type tells us how to address the delivery
-                // receipt: a channel-free DM (ServerDm, keyed by the sender)
-                // must receipt back to the peer via the sealed per-device
-                // path, NOT a non-existent channel.
-                let stored = message_id
-                    .parse::<crate::domain::ids::MessageId>()
-                    .ok()
-                    .and_then(|mid| self.message_service.get_message_local(&mid).ok().flatten());
 
                 let may_refresh_sender = stored.as_ref().is_some_and(|message| {
                     message.conversation_type == crate::domain::message::ConversationType::ServerDm

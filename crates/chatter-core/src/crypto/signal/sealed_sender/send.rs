@@ -61,10 +61,18 @@ impl SealedSenderManager {
         const PADDING_FIELD: u32 = 15;
         let mut bytes = usmc.serialized().map_err(encryption_error)?.to_vec();
         if bytes.len() != size {
-            let padding = (1..=3).find_map(|len_bytes| {
-                let n = size.checked_sub(bytes.len() + key_len(PADDING_FIELD) + len_bytes)?;
+            let fit = |len: usize| (1..=3).find_map(|len_bytes| {
+                let n = size.checked_sub(len + key_len(PADDING_FIELD) + len_bytes)?;
                 (encoded_len_varint(n as u64) == len_bytes).then_some(n)
-            }).ok_or_else(|| CryptoError::EncryptionFailed("Sealed content does not fit fixed envelope".into()))?;
+            });
+            if fit(bytes.len()).is_none() {
+                // One empty field covers gaps at protobuf varint boundaries.
+                encode_key(PADDING_FIELD, WireType::LengthDelimited, &mut bytes);
+                encode_varint(0, &mut bytes);
+            }
+            let padding = fit(bytes.len()).ok_or_else(|| {
+                CryptoError::EncryptionFailed("Sealed content does not fit fixed envelope".into())
+            })?;
             encode_key(PADDING_FIELD, WireType::LengthDelimited, &mut bytes);
             encode_varint(padding as u64, &mut bytes);
             bytes.resize(size, 0);

@@ -278,7 +278,7 @@ impl AttachmentService {
         }
     }
 
-    /// Recover the required transport from the attachment's stored origin.
+    /// Preserve the most private transport required by the caller or stored origin.
     fn for_download(&self, attachment_id: &AttachmentId) -> Result<Self, AttachmentError> {
         if self.secret_chat {
             return Ok(self.clone());

@@ -44,12 +44,11 @@ impl ChatterClient {
         if root.exists() {
             std::fs::remove_dir_all(&root)?;
         }
-        self.ensure_staged_upload_temp_root()?;
+        Self::ensure_staged_upload_temp_root(root)?;
         Ok(())
     }
 
-    fn ensure_staged_upload_temp_root(&self) -> std::io::Result<PathBuf> {
-        let root = self.staged_upload_temp_root();
+    fn ensure_staged_upload_temp_root(root: PathBuf) -> std::io::Result<PathBuf> {
         std::fs::create_dir_all(&root)?;
         #[cfg(unix)]
         {
@@ -336,9 +335,10 @@ impl ChatterClient {
                 AttachmentError::DecryptionError("staged file has no encryption key".into())
             })?;
         let path = path.to_path_buf();
-        let root = self.ensure_staged_upload_temp_root()
-            .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+        let root = self.staged_upload_temp_root();
         crate::services::attachment::run_attachment_work(move || {
+            let root = Self::ensure_staged_upload_temp_root(root)
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
             let key: [u8; 64] = crypto
                 .key
                 .try_into()

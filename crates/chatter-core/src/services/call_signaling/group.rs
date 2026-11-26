@@ -76,7 +76,7 @@ impl CallSignalingService {
         user_id: &UserId,
     ) -> Result<bool, CallSignalingError> {
         if self.message_service.channel_send_requires_encryption(channel_id)? {
-            return Ok(self.message_service.group_gate().admits_content(channel_id, user_id));
+            return Ok(self.message_service.group_gate().admits(channel_id, user_id));
         }
         let members = with_policy_deadline(
             "channel member list",

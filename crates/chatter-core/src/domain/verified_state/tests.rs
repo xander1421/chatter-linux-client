@@ -1343,8 +1343,8 @@ fn vector_state(v: &serde_json::Value) -> pb::MembershipState {
     }
 }
 
-/// `internal/services/channel/membership/testdata/membership_vectors.json`,
-/// written by the server's Go verifier: canonical bytes and hashes must match
+/// The Go verifier generates these vectors. Its protocol gate checks that
+/// this snapshot matches the server copy. Canonical bytes and hashes must match
 /// byte for byte, every Go-signed change must verify (or fail with the same
 /// code) under libsignal's XEdDSA.
 #[test]
