@@ -6012,3 +6012,6 @@ msgstr "Cheie neverificată"
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr "Identitate schimbată"
+
+msgid "Waiting for anonymous credentials"
+msgstr "Se așteaptă credențiale anonime"

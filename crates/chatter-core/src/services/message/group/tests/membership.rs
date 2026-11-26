@@ -103,15 +103,19 @@
         #[derive(Clone, Default)]
         struct Probe {
             calls: Arc<Mutex<Vec<(String, bool, bool)>>>,
-            mismatch: Arc<Mutex<Option<String>>>,
+            mismatch: Arc<Mutex<Option<(String, Vec<u32>)>>>,
         }
 
         #[derive(Clone)]
-        struct RpcProbe<const AUTH: bool>(Probe);
-        impl<const AUTH: bool> NamedService for RpcProbe<AUTH> {
-            const NAME: &'static str = if AUTH { "chat.v1.AuthService" } else { "chat.v1.MessageService" };
+        struct RpcProbe<const SERVICE: u8>(Probe);
+        impl<const SERVICE: u8> NamedService for RpcProbe<SERVICE> {
+            const NAME: &'static str = match SERVICE {
+                0 => "chat.v1.AuthService",
+                1 => "chat.v1.MessageService",
+                _ => "chat.v1.ChannelService",
+            };
         }
-        impl<const AUTH: bool> tower::Service<http::Request<Body>> for RpcProbe<AUTH> {
+        impl<const SERVICE: u8> tower::Service<http::Request<Body>> for RpcProbe<SERVICE> {
             type Response = http::Response<Body>;
             type Error = Infallible;
             type Future = Ready<Result<Self::Response, Self::Error>>;
@@ -128,12 +132,12 @@
                     request.headers().contains_key("x-anonymous-credential"),
                 ));
                 if path.ends_with("/SendGroupMessage") {
-                    if let Some(user_id) = self.0.mismatch.lock().unwrap().take() {
+                    if let Some((user_id, missing_devices)) = self.0.mismatch.lock().unwrap().take() {
                         let response = pb::SendGroupMessageResponse {
                             mismatched: vec![pb::AccountMismatchedDevices {
                                 user_id,
                                 devices: Some(pb::MismatchedDevices {
-                                    missing_devices: vec![7],
+                                    missing_devices,
                                     ..Default::default()
                                 }),
                             }],
@@ -164,8 +168,9 @@
         });
         let probe = Probe::default();
         let server = tokio::spawn(Server::builder()
-            .add_service(RpcProbe::<true>(probe.clone()))
-            .add_service(RpcProbe::<false>(probe.clone()))
+            .add_service(RpcProbe::<0>(probe.clone()))
+            .add_service(RpcProbe::<1>(probe.clone()))
+            .add_service(RpcProbe::<2>(probe.clone()))
             .serve_with_incoming(incoming));
 
         let t = two_members_at(&url);
@@ -198,9 +203,17 @@
             ..Default::default()
         };
 
-        // The recorder intentionally refuses each send after recording it.
-        for path in ["SendSealedMessage", "SendGroupMessage"] {
-            alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
+        // A cache miss waits for maintenance and never starts identified work.
+        assert!(matches!(
+            alice.submit_group_request(&request, &distribution).await,
+            Err(MessageError::Network(crate::error::NetworkError::Unavailable))
+        ));
+        assert!(probe.calls.lock().unwrap().is_empty());
+
+        // The recorder refuses every send. Repeated rejection leaves the
+        // cached token in place and cannot request identified endorsements.
+        alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
+        for path in ["SendSealedMessage", "SendGroupMessage", "SendGroupMessage"] {
             let result = alice.submit_group_request(&request, &distribution).await;
             assert!(matches!(
                 result,
@@ -230,9 +243,19 @@
             "UPDATE peer_key_transparency SET state='verified' WHERE account=?1",
             [&bob],
         ).unwrap();
-        seed_tokens(alice, 3);
+        seed_tokens(alice, 7);
         alice.group_send_tokens.put(&t.channel_id, gate.state_hash, u64::MAX, vec![1]);
-        *probe.mismatch.lock().unwrap() = Some(bob.clone());
+        *probe.mismatch.lock().unwrap() = Some((bob.clone(), (7..=15).collect()));
+        assert!(matches!(
+            alice.submit_group_request(&request, &distribution).await,
+            Err(MessageError::Network(crate::error::NetworkError::InvalidRequest(_)))
+        ));
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 7);
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [("/chat.v1.MessageService/SendGroupMessage".into(), false, false)]
+        );
+        *probe.mismatch.lock().unwrap() = Some((bob.clone(), vec![7]));
         assert!(alice.submit_group_request(&request, &distribution).await.is_err());
         assert_eq!(
             std::mem::take(&mut *probe.calls.lock().unwrap()),
@@ -258,8 +281,25 @@
         // Exhaustion waits for an independent refill and sends no RPC.
         assert!(matches!(
             alice.submit_group_request(&request, &distribution).await,
-            Err(MessageError::Network(crate::error::NetworkError::Unavailable))
+            Err(MessageError::Network(crate::error::NetworkError::AnonymousCredentialsUnavailable))
         ));
+        assert!(probe.calls.lock().unwrap().is_empty());
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
+
+        // A private post with linked devices saves its receipt transcript and
+        // can be flushed only after the independent delay.
+        store_session(&t.alice, t.alice_id, 2, 1200).await;
+        let mut auth = alice.auth_client();
+        alice.sync_channel_receipt_targets(t.channel_id, 42, &mut auth, true).await;
+        let conn = alice.database.read_connection().unwrap();
+        let due: i64 = conn.query_row(
+            "SELECT json_extract(value,'$.due') FROM settings WHERE key LIKE 'private.receipt-sync:%'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        drop(conn);
+        assert!((299..=900).contains(&(due - chrono::Utc::now().timestamp())));
+        alice.flush_private_receipt_syncs(t.alice_id).await.unwrap();
         assert!(probe.calls.lock().unwrap().is_empty());
         server.abort();
     }

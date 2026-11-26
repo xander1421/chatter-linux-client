@@ -118,6 +118,8 @@ pub struct GrpcClientPool {
     /// connection — an isolated Tor circuit under onion — and the server can't
     /// correlate those ops with authenticated RPCs by connection.
     unidentified_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    // A private post's connection is independent of other anonymous RPCs.
+    private_post_channel: Arc<RwLock<Option<GrpcTransport>>>,
     #[cfg(feature = "onion")]
     unidentified_health: Arc<RwLock<Option<Instant>>>,
     /// Channel for secret chats (anonymous DMs and groups). Always an isolated
@@ -145,6 +147,8 @@ pub struct GrpcClientPool {
     /// first dial.
     #[cfg(feature = "onion")]
     unidentified_onion_tor: super::onion_transport::SharedTorClient,
+    #[cfg(feature = "onion")]
+    private_post_onion_tor: super::onion_transport::SharedTorClient,
     /// Cached ISOLATED Tor client for the secret-chat channel, its own
     /// circuit-group apart from both the account's and the unidentified one.
     #[cfg(feature = "onion")]

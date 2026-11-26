@@ -121,6 +121,11 @@ impl MessageService {
                     extra,
                     stale,
                 }) => {
+                    if missing.len() + extra.len() + stale.len() > 8 {
+                        return Err(MessageError::Network(crate::error::NetworkError::InvalidRequest(
+                            "Too many mailbox bootstrap device mismatches".into(),
+                        )));
+                    }
                     tracing::info!(peer_id = %peer_id, ?missing, ?extra, ?stale, "DM bootstrap: peer's devices changed");
                     for &peer_device_id in &extra {
                         self.retire_peer_device(peer_id, peer_device_id).await;

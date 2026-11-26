@@ -145,8 +145,8 @@ impl SignalService {
         // Fetch prekey bundles for ALL devices using wildcard
         let response = match source.fetch(recipient_id, "*").await {
             Ok(r) => r,
-            // A throttled policy read must not fail a send we can already
-            // encrypt: it goes identified, as it would have without the flag.
+            // A throttled policy read can reuse the established sessions.
+            // The caller applies its credential policy to the resulting send.
             Err(crate::error::NetworkError::RateLimited)
                 if !with_session.is_empty() => {
                 tracing::warn!(

@@ -42,12 +42,11 @@ impl SignalService {
     /// member the server says has others is reconciled by the caller.
     pub(crate) async fn seal_group_message(
         &self,
-        auth_client: &mut AuthClient,
         channel_id: &crate::domain::ids::ChannelId,
         contents: Vec<u8>,
         members: &[String],
     ) -> Result<(Vec<u8>, Vec<ProtocolAddress>), ServiceError> {
-        let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
+        let sender_cert = self.get_cached_sender_certificate()?.ok_or(crate::error::NetworkError::Unavailable)?;
         let ours = self.get_our_address()?;
         let mut destinations = Vec::new();
         for member in members {

@@ -8,6 +8,7 @@ impl GrpcClientPool {
         tracing::event!(target: "network_transport::channels_disconnected", tracing::Level::INFO, {});
         *self.channel.write() = None;
         *self.unidentified_channel.write() = None;
+        *self.private_post_channel.write() = None;
         *self.secret_channel.write() = None;
         #[cfg(feature = "onion")]
         {

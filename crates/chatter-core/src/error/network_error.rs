@@ -24,6 +24,10 @@ pub enum NetworkError {
     #[error("server unavailable")]
     Unavailable,
 
+    /// The local pre-fetched pool is below the amount available for this send.
+    #[error("waiting for anonymous credentials")]
+    AnonymousCredentialsUnavailable,
+
     /// Authentication required or invalid.
     #[error("authentication required")]
     Unauthenticated,
@@ -181,6 +185,7 @@ impl NetworkError {
             self,
             NetworkError::RequestNotSent(_)
                 | NetworkError::Unavailable
+                | NetworkError::AnonymousCredentialsUnavailable
                 | NetworkError::RateLimited
                 | NetworkError::ServerError(_)
                 | NetworkError::Timeout

@@ -51,6 +51,13 @@ pub struct MailboxToken {
     pub signature: Vec<u8>,
 }
 
+fn credential_error(error: MailboxError) -> crate::error::NetworkError {
+    match error {
+        MailboxError::NoTokensAvailable => crate::error::NetworkError::AnonymousCredentialsUnavailable,
+        other => crate::error::NetworkError::ServerError(other.to_string()),
+    }
+}
+
 /// Map a GetMailboxTokens failure. The server is the only authority on the
 /// daily token budget; it answers ResourceExhausted once that budget is
 /// spent. The client used to keep its own counter with a hard-coded ceiling
@@ -567,6 +574,13 @@ impl TokenManager {
             .db
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
+        Self::claim_available_token_in(&conn, 0)
+    }
+
+    fn claim_available_token_in(
+        conn: &rusqlite::Connection,
+        reserve: usize,
+    ) -> Result<Option<MailboxToken>, MailboxError> {
         let now = Utc::now().to_rfc3339();
         // Signing-key validity is stored in nanoseconds. Only claim tokens whose
         // signing key is STILL currently valid: the server verifies anonymous
@@ -587,10 +601,10 @@ impl TokenManager {
                  JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
                  WHERE t.used_at IS NULL AND k.valid_until > ?2 \
                  ORDER BY t.created_at ASC \
-                 LIMIT 1 \
+                 LIMIT 1 OFFSET ?3 \
              ) \
              RETURNING id, ephemeral_public_key, ephemeral_private_key, signature",
-            rusqlite::params![now, now_nanos],
+            rusqlite::params![now, now_nanos, reserve],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -629,6 +643,29 @@ impl TokenManager {
             );
             MailboxError::NoTokensAvailable
         })
+    }
+
+    pub(crate) fn claim_send_credential(&self) -> Result<MailboxToken, crate::error::NetworkError> {
+        self.claim_prefetched_token().map_err(credential_error)
+    }
+
+    /// Debit a durable send and claim its credential together. A dry pool
+    /// rolls back the debit, including when the eligible tokens are reserved.
+    pub(crate) fn claim_budgeted_credential(
+        &self,
+        reserve: usize,
+        debit: impl FnOnce(&rusqlite::Connection) -> Result<(), crate::error::NetworkError>,
+    ) -> Result<MailboxToken, crate::error::NetworkError> {
+        let mut conn = self.db.connection().map_err(|error| {
+            crate::error::NetworkError::ServerError(error.to_string())
+        })?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
+        debit(&tx)?;
+        let token = Self::claim_available_token_in(&tx, reserve).map_err(credential_error)?
+            .ok_or(crate::error::NetworkError::AnonymousCredentialsUnavailable)?;
+        tx.commit().map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
+        Ok(token)
     }
 
     /// Mark a token as used.

@@ -6011,3 +6011,6 @@ msgstr "Schlüssel nicht geprüft"
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr "Identität geändert"
+
+msgid "Waiting for anonymous credentials"
+msgstr "Warten auf anonyme Zugangsdaten"

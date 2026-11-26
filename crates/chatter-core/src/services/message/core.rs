@@ -25,6 +25,7 @@ pub(crate) const SHIELD_WAITING_FOR_TOKENS: &str =
 pub(crate) const NO_TOR_ROUTE: &str = "No Tor route";
 pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
+pub(crate) const WAITING_FOR_ANONYMOUS_CREDENTIALS: &str = "Waiting for anonymous credentials";
 pub(crate) const VERIFYING_KEY: &str = "Verifying key";
 pub(crate) const IDENTITY_CHANGED: &str = "Identity changed";
 pub(crate) const SHIELD_VERIFYING_KEY: &str = "Verifying key over Tor";
@@ -55,6 +56,7 @@ impl MessageError {
         match self {
             Self::Network(NetworkError::RequestNotSent(_)) => Some("Message not submitted"),
             Self::Network(NetworkError::SecretChatNeedsTor(_)) => Some(NO_TOR_ROUTE),
+            Self::Network(NetworkError::AnonymousCredentialsUnavailable) => Some(WAITING_FOR_ANONYMOUS_CREDENTIALS),
             Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
             Self::Network(NetworkError::MismatchedDevices { .. }) => None,
             // SpiceDB down answers PermissionDenied. That is a delivery miss,
@@ -393,7 +395,7 @@ impl MessageService {
         if let Some(stored) = self.message_repo.get(&message.id)? {
             message.delivery_status = stored.delivery_status;
         }
-        self.sync_channel_receipt_targets(*channel_id, message.sent_at, auth_client)
+        self.sync_channel_receipt_targets(*channel_id, message.sent_at, auth_client, private_distribution.is_some())
             .await;
         tracing::info!(
             channel_id = %channel_id,

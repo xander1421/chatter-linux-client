@@ -6014,3 +6014,6 @@ msgstr "Clé non vérifiée"
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr "Identité modifiée"
+
+msgid "Waiting for anonymous credentials"
+msgstr "En attente d’identifiants anonymes"

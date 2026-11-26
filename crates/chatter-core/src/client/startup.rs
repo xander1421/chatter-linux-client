@@ -433,6 +433,7 @@ impl ChatterClient {
         );
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);
+        let h_private_channels = crate::services::message::spawn_private_channel_maintenance(self);
         let h_dm_send_retry = crate::services::message::spawn_dm_send_recovery(self);
         let h_delete_batch_retry =
             crate::client::conversation::recovery::spawn_delete_batch_recovery(self);
@@ -588,6 +589,7 @@ impl ChatterClient {
             h_peer_verifier,
             h_saved_sync_retry,
             h_channel_send_retry,
+            h_private_channels,
             h_dm_send_retry,
             h_channel_messages,
             h_channel_bootstrap,

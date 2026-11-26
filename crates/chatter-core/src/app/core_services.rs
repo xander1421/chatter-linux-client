@@ -383,20 +383,10 @@ impl CoreServices {
     /// retry right after a refill would spend the fresh tokens next to the
     /// request that fetched them. Aborting the returned handle stops both.
     pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
-        /// Refill to this many claimable tokens…
-        ///
-        /// Sized for the largest burst a send makes: an anon-group post
-        /// spends one token per member it has no session with yet (first
-        /// contact), so a fresh join of an N-member group spends N at once.
-        /// Members past the batch are parked and retried below.
-        // fixed batch; size to the group roster if the parked
-        // backlog bites. Server daily budget is 48 + 2/conversation.
-        const BATCH: u32 = 20;
-        /// …once fewer than this remain.
-        const LOW_WATER: u32 = 10;
-
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
+        let messages = self.message_service.clone();
+        let auth = self.auth_state.clone();
         let refill = async move {
             // Session startup, never Shield entry or a send, schedules the
             // first refill. Avoid a 5–15 minute empty pool after sign-in.
@@ -404,10 +394,13 @@ impl CoreServices {
             loop {
                 let mut client = grpc_pool.mailbox_client();
                 let mut kt = grpc_pool.anonymous_kt_client();
+                let target = auth.get().current_user_id
+                    .and_then(|owner| messages.anonymous_credential_pool_target(owner).ok())
+                    .unwrap_or(20);
                 match token_manager.available_token_count() {
-                    Ok(current) if current < LOW_WATER => {
+                    Ok(current) if current < target / 2 => {
                         let now =
-                            top_up(&token_manager, &mut client, &mut kt, current, BATCH).await;
+                            top_up(&token_manager, &mut client, &mut kt, current, target).await;
                         tracing::info!(had = current, now, "Token refill: pool topped up");
                     }
                     Ok(_) => {}
@@ -945,17 +938,18 @@ async fn announce_rotated_group_mailbox(
 }
 
 /// Wait `BASE` plus up to `JITTER`, uniformly random.
-pub(crate) async fn jittered_sleep() {
+pub(crate) fn jittered_delay() -> std::time::Duration {
     use rand::Rng;
-    const BASE_SECS: u64 = 5 * 60;
-    const JITTER_SECS: u64 = 10 * 60;
-    let wait = BASE_SECS + rand::rng().random_range(0..=JITTER_SECS);
-    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+    std::time::Duration::from_secs(rand::rng().random_range(5 * 60..=15 * 60))
+}
+
+pub(crate) async fn jittered_sleep() {
+    tokio::time::sleep(jittered_delay()).await;
 }
 
 /// Startup is independent of Shield and sends. The shorter initial jitter
 /// prepares normal sessions early; subsequent refills retain their own cadence.
-async fn initial_token_refill_sleep() {
+pub(crate) async fn initial_token_refill_sleep() {
     use rand::Rng;
     let seconds = rand::rng().random_range(10..=30);
     tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;

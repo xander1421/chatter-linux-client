@@ -28,6 +28,26 @@ impl GrpcClientPool {
     ///
     /// Secret chats never use this: see [`Self::secret_channel`].
     pub fn unidentified_channel(&self) -> GrpcTransport {
+        self.isolated_unidentified_channel(
+            &self.unidentified_channel,
+            #[cfg(feature = "onion")]
+            &self.unidentified_onion_tor,
+        )
+    }
+
+    pub(super) fn private_post_channel(&self) -> GrpcTransport {
+        self.isolated_unidentified_channel(
+            &self.private_post_channel,
+            #[cfg(feature = "onion")]
+            &self.private_post_onion_tor,
+        )
+    }
+
+    fn isolated_unidentified_channel(
+        &self,
+        cached: &RwLock<Option<GrpcTransport>>,
+        #[cfg(feature = "onion")] circuit: &super::super::onion_transport::SharedTorClient,
+    ) -> GrpcTransport {
         // Hold the same lock swap_endpoint uses while we select and cache a
         // route, so a transport change cannot install a direct channel in Shield.
         let _route = self.channel.read();
@@ -38,12 +58,12 @@ impl GrpcClientPool {
         #[cfg(not(feature = "quic"))]
         let use_quic = false;
 
-        if let Some(channel) = self.unidentified_channel.read().clone()
+        if let Some(channel) = cached.read().clone()
             .filter(|channel| channel.is_http3() == use_quic)
         {
             return channel;
         }
-        let mut cached = self.unidentified_channel.write();
+        let mut cached = cached.write();
         if let Some(channel) = cached.clone().filter(|channel| channel.is_http3() == use_quic) {
             return channel;
         }
@@ -51,8 +71,11 @@ impl GrpcClientPool {
         let endpoint = self.endpoint.read().clone();
         #[cfg(feature = "onion")]
         if mode == TransportMode::Onion {
+            let connector = super::super::onion_transport::OnionConnector::new_isolated(
+                self.onion_tor.clone(), circuit.clone(),
+            );
             let channel = GrpcTransport::from_onion(
-                endpoint.connect_with_connector_lazy(self.unidentified_onion_connector()),
+                endpoint.connect_with_connector_lazy(connector),
                 self.transport_mode.clone(),
             );
             *cached = Some(channel.clone());

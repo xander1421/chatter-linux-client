@@ -104,10 +104,14 @@ impl MessageService {
         let reconciled = match policy {
             AccessPolicy::FetchIfNeeded => self.signal_service
                 .reconcile_devices(auth_client, recipient_id, missing, extra, stale).await,
-            AccessPolicy::AnonymousGroup => self.signal_service
-                .reconcile_devices_with_source(
-                    &mut self.anonymous_prekey_source(), recipient_id, missing, extra, stale,
-                ).await,
+            AccessPolicy::AnonymousGroup => {
+                match super::super::group_send::charge_private_repairs(missing.len() + extra.len() + stale.len()) {
+                    Ok(()) => self.signal_service.reconcile_devices_with_source(
+                        &mut self.private_post_prekeys(), recipient_id, missing, extra, stale,
+                    ).await,
+                    Err(error) => Err(error.into()),
+                }
+            }
         };
         if let Err(e) = reconciled {
             let rate_limited = matches!(
@@ -191,7 +195,7 @@ impl MessageService {
                 ).await,
             AccessPolicy::AnonymousGroup => self.signal_service
                 .encrypt_group_distribution(
-                    auth_client, &mut self.anonymous_prekey_source(), recipient_id, plaintext, group_id,
+                    &mut self.private_post_prekeys(), recipient_id, plaintext, group_id,
                 ).await,
         };
         let (sealed, unrestricted) = match encrypted {
@@ -465,8 +469,7 @@ impl MessageService {
         }
         crate::state::send_session::check_send_session()
             .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
-        let token = self.token_manager.claim_prefetched_token()
-            .map_err(|_| NetworkError::Unavailable)?;
+        let token = super::super::group_send::claim_private_post_credential(&self.token_manager)?;
         client.send_with_anonymous_credential(
             request_id, recipient_id, messages, delivery, 0, &token.public_key, &token.signature,
         ).await

@@ -174,13 +174,14 @@ impl KeyStore {
             [peer],
             |row| row.get(0),
         )?;
-        if pending && route == KtRoute::AnonymousTor {
-            // Normal jobs are suspended in Shield. Schedule the already-known
-            // key on Tor without another bundle fetch or a route downgrade.
+        if pending {
+            // An outbound session needs this peer on its selected route. Look
+            // up the exact key already queued on another route without popping
+            // another bundle. Secret-chat sends only select AnonymousTor.
             let added = self.db.connection()?.execute(
                 &format!("INSERT OR IGNORE INTO peer_kt_jobs (account,identity_key,route)
                           SELECT account,identity_key,?2 FROM ({BLOCKING})"),
-                params![peer, KtRoute::AnonymousTor as i64],
+                params![peer, route as i64],
             )?;
             if added > 0 {
                 self.kt_work.notify_one();

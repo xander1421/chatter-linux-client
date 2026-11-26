@@ -5975,3 +5975,6 @@ msgstr "Chave não verificada"
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr "Identidade alterada"
+
+msgid "Waiting for anonymous credentials"
+msgstr "A aguardar credenciais anónimas"

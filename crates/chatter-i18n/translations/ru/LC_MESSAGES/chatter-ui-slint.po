@@ -6003,3 +6003,6 @@ msgstr "Ключ не проверен"
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr "Ключ идентификации изменился"
+
+msgid "Waiting for anonymous credentials"
+msgstr "Ожидание анонимных учётных данных"

@@ -5977,3 +5977,6 @@ msgstr ""
 #: ui/chat/message_footer.slint
 msgid "Identity changed"
 msgstr ""
+
+msgid "Waiting for anonymous credentials"
+msgstr ""

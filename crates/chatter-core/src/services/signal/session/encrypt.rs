@@ -288,7 +288,7 @@ impl SignalService {
             .await?;
         let ciphertexts = self
             .encrypt_prepared_devices_bounded(
-                auth_client,
+                Some(auth_client),
                 recipient_id,
                 &devices,
                 plaintext,
@@ -301,7 +301,6 @@ impl SignalService {
 
     pub(crate) async fn encrypt_group_distribution(
         &self,
-        auth_client: &mut AuthClient,
         source: &mut PreKeySource<'_>,
         recipient_id: &str,
         plaintext: &[u8],
@@ -309,7 +308,7 @@ impl SignalService {
     ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
         let devices = self.require_group_device_sessions(source, recipient_id).await?;
         let ciphertexts = self.encrypt_prepared_devices_bounded(
-            auth_client, recipient_id, &devices, plaintext, group_id, false,
+            None, recipient_id, &devices, plaintext, group_id, false,
         ).await?;
         Ok((ciphertexts, self.unrestricted_access(recipient_id).unwrap_or(false)))
     }
@@ -325,7 +324,7 @@ impl SignalService {
         group_id: Option<&[u8]>,
     ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
         self.encrypt_prepared_devices_bounded(
-            auth_client,
+            Some(auth_client),
             recipient_id,
             devices,
             plaintext,
@@ -340,7 +339,7 @@ impl SignalService {
     /// authoritative state and trust inside the actor before batch commit.
     async fn encrypt_prepared_devices_bounded(
         &self,
-        auth_client: &mut AuthClient,
+        mut auth_client: Option<&mut AuthClient>,
         recipient_id: &str,
         devices: &[u32],
         plaintext: &[u8],
@@ -365,7 +364,7 @@ impl SignalService {
             destinations.push(ProtocolAddress::new(recipient_id.to_string(), id));
         }
         self.refuse_pending_identity_change(recipient_id)?;
-        if ensure_missing {
+        if let Some(auth_client) = auth_client.as_deref_mut().filter(|_| ensure_missing) {
             let usable = self.session_devices(recipient_id).await?;
             let mut ready = Vec::with_capacity(destinations.len());
             let mut blocked = None;
@@ -392,7 +391,10 @@ impl SignalService {
             }
             destinations = ready;
         }
-        let certificate = self.get_or_request_sender_certificate(auth_client).await?;
+        let certificate = match auth_client {
+            Some(client) => self.get_or_request_sender_certificate(client).await?,
+            None => self.get_cached_sender_certificate()?.ok_or(crate::error::NetworkError::Unavailable)?,
+        };
         let batch = self
             .actor
             .encrypt_sealed_bounded_batch(
