@@ -368,9 +368,10 @@
         };
         let own_registration = store.get_local_identity().unwrap().unwrap().0;
         let bob_registration = alice.signal_service.session_registration_id(&bob, 1).unwrap();
+        let next_registration = |registration| registration % 16383 + 1;
         for (member, registration) in [(t.alice_id, own_registration), (t.bob_id, bob_registration)] {
             probe.repair.lock().unwrap().insert(
-                member.to_string(), repair_bundle(member, registration, &mut rng),
+                member.to_string(), repair_bundle(member, next_registration(registration), &mut rng),
             );
             probe.stale_deposits.lock().unwrap().insert(member.to_string(), vec![1]);
         }
@@ -391,12 +392,39 @@
             assert_eq!(pair[0].destination_user_id, pair[1].destination_user_id);
             assert_eq!(pair[0].delivery, pair[1].delivery);
             assert_eq!(pair[0].messages.len(), pair[1].messages.len());
-            assert_eq!(pair[0].messages[0].registration_id, pair[1].messages[0].registration_id);
+            assert_eq!(
+                pair[1].messages[0].registration_id,
+                next_registration(pair[0].messages[0].registration_id),
+            );
         }
+        assert_eq!(alice.signal_service.private_echo_registration().unwrap(), Some(next_registration(own_registration)));
+        assert_eq!(store.get_local_identity().unwrap().unwrap().0, own_registration);
         assert!(store.load_session(&format!("{}:1", t.alice_id)).unwrap().is_none());
 
+        let distribution = alice.create_sender_key_for_channel(&t.channel_id).await.unwrap();
+        let (content, _) = alice.prepare_encrypted_content(
+            &t.channel_id,
+            &chatter_proto::protovalidate::test_plaintext("warm private post"),
+            pb::message::Content::default(),
+            true,
+            3,
+        ).await.unwrap();
+        let request = pb::SendMessageRequest {
+            content: Some(content),
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            ..request
+        };
+        *probe.group_success.lock().unwrap() = true;
+        alice.submit_group_request(&request, &distribution).await.unwrap();
+        *probe.group_success.lock().unwrap() = false;
+        assert_eq!(
+            std::mem::take(&mut *probe.calls.lock().unwrap()),
+            [("/chat.v1.MessageService/SendGroupMessage".into(), false, false)],
+            "the posting device and the member both retain their repaired registration on the next post",
+        );
+
         let mut auth = alice.auth_client();
-        alice.sync_channel_receipt_targets(t.channel_id, 2, &mut auth, true).await;
+        alice.sync_channel_receipt_targets(t.channel_id, 2, &mut auth).await;
         assert!(probe.calls.lock().unwrap().is_empty(), "private posts must not self-sync");
         let row_count: u32 = alice.database.read_connection().unwrap().query_row(
             "SELECT count(*) FROM settings WHERE key LIKE 'private.receipt-sync:%'",
@@ -404,15 +432,44 @@
         ).unwrap();
         assert_eq!(row_count, 0);
 
+        let channel = t.channel_id;
+        let kind = crate::domain::message::ConversationType::Channel;
+        let inbound = crate::domain::Message::new_text(channel, kind.clone(), Some(t.bob_id), "peer post".into(), 4);
+        alice.message_repo.insert(&inbound).unwrap();
+        let outbox = crate::storage::repositories::channel_delivery_repo::ChannelDeliveryRepository::new(alice.database.clone());
+        assert!(outbox.due(t.alice_id, i64::MAX).unwrap().is_empty());
+        for read in [false, true] {
+            alice.send_channel_receipt(channel, &[inbound.sent_at], read).await.unwrap();
+            alice.send_channel_receipt_to_author(channel, t.bob_id, vec![inbound.sent_at], read).await.unwrap();
+        }
+        assert!(probe.calls.lock().unwrap().is_empty(), "private posts must send neither receipt");
+        let mut outgoing = crate::domain::Message::new_text(channel, kind.clone(), Some(t.alice_id), "own post".into(), 3);
+        outgoing.delivery_status = "sent".into();
+        alice.message_repo.insert_outgoing(&outgoing).unwrap();
+        for receipt in [1, 2] {
+            alice.apply_peer_receipt(channel, kind.clone(), t.bob_id, crate::domain::ids::DeviceId(1), receipt, &[outgoing.sent_at]).unwrap();
+        }
+        assert_eq!(alice.message_repo.get(&outgoing.id).unwrap().unwrap().delivery_status, "sent");
+        assert!(alice.message_receipts(outgoing.id).unwrap().is_empty());
+        assert!(alice.message_receipt_info(outgoing.id).is_err());
+
         alice.database.connection().unwrap().execute(
             "UPDATE peer_key_transparency SET state='unverified-inbound' WHERE account=?1",
             [&bob],
         ).unwrap();
+        use std::sync::atomic::Ordering;
+        let shield = alice.signal_service.actor.shield_mode();
+        shield.store(true, Ordering::Release);
         assert!(matches!(
             alice.submit_group_request(&request, &distribution).await,
             Err(MessageError::RecipientKeyVerifying { peer_id }) if peer_id == bob
         ));
         assert!(probe.calls.lock().unwrap().is_empty());
+        let route = alice.signal_service.actor.kt_route();
+        let now = chrono::Utc::now().timestamp();
+        assert!(store.due_kt_jobs(route, now).unwrap().is_empty());
+        assert_eq!(store.due_kt_jobs(route, now + 15 * 60).unwrap().len(), 1);
+        shield.store(false, Ordering::Release);
 
         // A mismatch on an otherwise warm post triggers anonymous discovery.
         alice.database.connection().unwrap().execute(
@@ -440,9 +497,29 @@
             ]
         );
 
+        let route = alice.signal_service.actor.kt_route();
+        let pending = store.due_kt_jobs(route, i64::MAX).unwrap().len();
+        for member in [t.alice_id, t.bob_id] {
+            let forged = repair_bundle(UserId::new(), 15, &mut rng);
+            probe.repair.lock().unwrap().insert(member.to_string(), forged);
+            *probe.mismatch.lock().unwrap() = Some((member.to_string(), vec![1]));
+            let result = alice.submit_group_request(&request, &distribution).await;
+            assert!(matches!(result, Err(MessageError::EncryptionFailed(ref reason))
+                if reason.contains("invalid key format")), "{result:?}");
+            assert_eq!(store.due_kt_jobs(route, i64::MAX).unwrap().len(), pending);
+            assert!(store.get_pending_identity_change(&member.to_string()).unwrap().is_none());
+            assert_eq!(
+                std::mem::take(&mut *probe.calls.lock().unwrap()),
+                [
+                    ("/chat.v1.MessageService/SendGroupMessage".into(), false, false),
+                    ("/chat.v1.AuthService/GetPreKeyBundle".into(), false, true),
+                ],
+            );
+        }
+        assert_eq!(alice.signal_service.private_echo_registration().unwrap(), None);
+
         // A parked session cannot be rebuilt through identified discovery,
         // either for a private post or for a mailbox bootstrap.
-        assert_eq!(alice.signal_service.archive_peer_sessions(&bob).await.unwrap(), 1);
         assert!(alice.submit_group_request(&request, &distribution).await.is_err());
         assert!(alice.bootstrap_devices(&t.bob_id).await.is_err());
         assert_eq!(
@@ -453,10 +530,11 @@
             ]
         );
 
-        // Exhaustion waits for an independent refill and makes no RPC.
+        // Even when there is a credential available above the reserve, do not
+        // start a cold lookup until the projected fan-out can also run.
         alice.database.connection().unwrap().execute(
             "UPDATE mailbox_tokens SET used_at='test'
-             WHERE id IN (SELECT id FROM mailbox_tokens WHERE used_at IS NULL ORDER BY id LIMIT -1 OFFSET 4)",
+             WHERE id IN (SELECT id FROM mailbox_tokens WHERE used_at IS NULL ORDER BY id LIMIT -1 OFFSET 5)",
             [],
         ).unwrap();
         assert!(matches!(
@@ -464,7 +542,7 @@
             Err(MessageError::Network(crate::error::NetworkError::AnonymousCredentialsUnavailable))
         ));
         assert!(probe.calls.lock().unwrap().is_empty());
-        assert_eq!(alice.token_manager.available_token_count().unwrap(), 4);
+        assert_eq!(alice.token_manager.available_token_count().unwrap(), 5);
         server.abort();
     }
 

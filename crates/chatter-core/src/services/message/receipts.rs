@@ -61,7 +61,12 @@ pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>
 }
 
 impl MessageService {
-    /// A channel receipt belongs to each message's author and all of that
+    pub(crate) fn channel_receipts_enabled(&self, channel: &ChannelId) -> bool {
+        self.channel_repo.get_channel_type(channel).ok().flatten()
+            == Some(crate::domain::channel::ChannelType::Public)
+    }
+
+    /// A public-channel receipt belongs to each message's author and all of that
     /// author's devices, not every channel member. The sealed content retains
     /// channel scope; the server only sees the same per-device deposit pattern
     /// as a DM receipt.
@@ -71,6 +76,9 @@ impl MessageService {
         timestamps: &[u64],
         read: bool,
     ) -> Result<(), MessageError> {
+        if !self.channel_receipts_enabled(&channel) {
+            return Ok(());
+        }
         let me = self.current_user_id()?;
         let mut by_author: HashMap<UserId, Vec<u64>> = HashMap::new();
         for &timestamp in timestamps {
@@ -104,8 +112,19 @@ impl MessageService {
         stamps: Vec<u64>,
         read: bool,
     ) -> Result<(), MessageError> {
-        use prost::Message as _;
-        if stamps.is_empty() || author == self.current_user_id()? { return Ok(()) }
+        if stamps.is_empty() {
+            return Ok(());
+        }
+        match self.channel_repo.get_channel_type(&channel)? {
+            Some(crate::domain::channel::ChannelType::Public) => {}
+            Some(_) => return Ok(()),
+            // The durable outbox can precede channel metadata. Wait for
+            // classification before addressing a receipt to the author.
+            None => return Err(crate::error::NetworkError::Unavailable.into()),
+        }
+        if author == self.current_user_id()? {
+            return Ok(());
+        }
         let mut auth = self.auth_client();
         let mut client = self.message_client();
         let mut content = if read {
@@ -180,7 +199,8 @@ impl MessageService {
         Ok(())
     }
 
-    pub(super) fn snapshot_private_receipt_targets(
+    /// Retain the original private fan-out for sender-key recovery.
+    pub(super) fn snapshot_private_resend_targets(
         &self,
         channel: ChannelId,
         sent_at: u64,
@@ -329,6 +349,10 @@ impl MessageService {
                 ));
             }
         };
+        if kind == ConversationType::Channel && !self.channel_receipts_enabled(&conversation) {
+            sync.receipt_targets.clear();
+            return Ok(());
+        }
         sync.receipt_targets = MessageReceiptRepository::new(self.database.clone())
             .targets_for_send(conversation, kind, self.current_user_id()?, sync.timestamp)?
             .into_iter()
@@ -347,9 +371,8 @@ impl MessageService {
         channel: ChannelId,
         sent_at: u64,
         auth: &mut crate::network::grpc::auth_client::AuthClient,
-        private: bool,
     ) {
-        if !private {
+        if self.channel_receipts_enabled(&channel) {
             self.sync_to_own_devices(auth, channel_receipt_sync(channel, sent_at)).await;
         }
     }
@@ -358,6 +381,12 @@ impl MessageService {
         &self,
         message_id: MessageId,
     ) -> Result<Vec<DeviceReceipt>, MessageError> {
+        if self.message_repo.get(&message_id)?.is_some_and(|message| {
+            message.conversation_type == ConversationType::Channel
+                && !self.channel_receipts_enabled(&message.conversation_id)
+        }) {
+            return Ok(Vec::new());
+        }
         Ok(MessageReceiptRepository::new(self.database.clone()).for_message(message_id)?)
     }
 
@@ -366,7 +395,12 @@ impl MessageService {
             .message_repo
             .get(&id)?
             .ok_or(MessageError::MessageNotFound(id))?;
-        let rows = self.message_receipts(id)?;
+        if message.conversation_type == ConversationType::Channel
+            && !self.channel_receipts_enabled(&message.conversation_id)
+        {
+            return Err(MessageError::InvalidContent("channel has no message receipts".into()));
+        }
+        let rows = MessageReceiptRepository::new(self.database.clone()).for_message(id)?;
         let show_read = self
             .settings_repo
             .get_bool(keys::SEND_READ_RECEIPTS)?
@@ -424,6 +458,9 @@ impl MessageService {
         receipt_type: i32,
         timestamps: &[u64],
     ) -> Result<(), MessageError> {
+        if kind == ConversationType::Channel && !self.channel_receipts_enabled(&conversation) {
+            return Ok(());
+        }
         let Some(read) = receipt_stage(&self.settings_repo, receipt_type)? else {
             return Ok(());
         };

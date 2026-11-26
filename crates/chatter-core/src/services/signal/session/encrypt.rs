@@ -306,8 +306,8 @@ impl SignalService {
         recipient_id: &str,
         plaintext: &[u8],
         group_id: Option<&[u8]>,
-        echo_registration: Option<u32>,
     ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
+        let echo_registration = self.private_echo_registration()?;
         let mut devices = self.session_devices(recipient_id).await?;
         let own = self.get_our_address()?;
         if recipient_id == own.name() {

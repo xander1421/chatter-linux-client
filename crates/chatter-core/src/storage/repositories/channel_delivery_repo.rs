@@ -115,6 +115,62 @@ mod tests {
     }
 
     #[test]
+    fn private_receipt_upgrade_keeps_resend_targets_and_public_receipts() {
+        use crate::domain::channel::{Channel, ChannelType};
+        use crate::domain::ids::DeviceId;
+        use crate::storage::repositories::ChannelRepository;
+        use crate::storage::repositories::message_receipt_repo::MessageReceiptRepository;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("upgrade.db"), "fixture-only").unwrap());
+        db.run_migrations().unwrap();
+        let channels = ChannelRepository::new(db.clone());
+        let messages = MessageRepository::new(db.clone());
+        let receipts = MessageReceiptRepository::new(db.clone());
+        let deliveries = ChannelDeliveryRepository::new(db.clone());
+        let owner = UserId::new();
+        let peer = UserId::new();
+        let device = DeviceId(1);
+        let mut fixtures = Vec::new();
+        for (kind, text) in [(ChannelType::Private, "private"), (ChannelType::Public, "public")] {
+            let channel = ChannelId::new();
+            channels.insert(&Channel::new(channel, text.into(), kind, owner)).unwrap();
+            let mut row = Message::new_text(channel, ConversationType::Channel, Some(owner), text.into(), 100);
+            row.delivery_status = "sent".into();
+            messages.insert_outgoing(&row).unwrap();
+            receipts.snapshot_targets(row.id, owner, &[(peer, device)]).unwrap();
+            receipts.apply(channel, ConversationType::Channel, owner, peer, device, &[100], true, 200).unwrap();
+            assert_eq!(messages.get(&row.id).unwrap().unwrap().delivery_status, "read");
+            fixtures.push(row);
+        }
+
+        // Seed an old, queued delivery and run the migration over the legacy state.
+        let private = &fixtures[0];
+        let inbound = Message::new_text(private.conversation_id, ConversationType::Channel, Some(peer), "old inbound".into(), 300);
+        messages.insert(&inbound).unwrap();
+        {
+            let conn = db.connection().unwrap();
+            conn.execute(
+                "INSERT INTO channel_delivery_outbox (owner_id,message_id,conversation_id,sent_at) VALUES (?1,?2,?3,?4)",
+                params![owner.to_string(), inbound.id.to_string(), inbound.conversation_id.to_string(), inbound.sent_at],
+            ).unwrap();
+            conn.execute("DELETE FROM schema_version WHERE version=145", []).unwrap();
+        }
+        assert_eq!(deliveries.due(owner, i64::MAX).unwrap().len(), 1);
+        db.run_migrations().unwrap();
+        assert!(deliveries.due(owner, i64::MAX).unwrap().is_empty());
+        assert_eq!(messages.get(&private.id).unwrap().unwrap().delivery_status, "sent");
+        assert_eq!(messages.get(&fixtures[1].id).unwrap().unwrap().delivery_status, "read");
+        assert_eq!(
+            receipts.targets_for_send(private.conversation_id, ConversationType::Channel, owner, 100).unwrap(),
+            vec![(peer, device)],
+        );
+        let remaining = receipts.for_message(private.id).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!((remaining[0].delivered_at, remaining[0].read_at), (None, None));
+    }
+
+    #[test]
     fn identical_channel_clocks_keep_distinct_delivery_authors() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(Database::open(&dir.path().join("authors.db"), "fixture-only").unwrap());

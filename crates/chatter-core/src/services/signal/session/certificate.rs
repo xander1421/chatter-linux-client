@@ -45,9 +45,9 @@ impl SignalService {
         channel_id: &crate::domain::ids::ChannelId,
         contents: Vec<u8>,
         members: &[String],
-        echo_registration: Option<u32>,
     ) -> Result<(Vec<u8>, Vec<ProtocolAddress>), ServiceError> {
         let sender_cert = self.get_cached_sender_certificate()?.ok_or(crate::error::NetworkError::Unavailable)?;
+        let echo_registration = self.private_echo_registration()?;
         let ours = self.get_our_address()?;
         let mut destinations = Vec::new();
         for member in members {

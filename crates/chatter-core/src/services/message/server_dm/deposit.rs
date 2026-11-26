@@ -199,7 +199,7 @@ impl MessageService {
                 ).await,
             AccessPolicy::AnonymousGroup => self.signal_service
                 .encrypt_group_distribution(
-                    recipient_id, plaintext, group_id, self.private_echo_registration()?,
+                    recipient_id, plaintext, group_id,
                 ).await.map(|sealed| (sealed, false)),
         };
         let (sealed, unrestricted) = match encrypted {

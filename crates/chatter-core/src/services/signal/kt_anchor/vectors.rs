@@ -147,8 +147,8 @@ use std::sync::Arc;
 
 use chatter_proto::chat_v1::{KtMonitorRequest, KtMonitorResponse, KtSearchRequest};
 
-use super::{CHECKPOINT_REFRESH, DISTINGUISHED_HEAD, HEAD, KtError, KtTransport, Pin};
-use super::{check_own, label_state_key, load_head, search_contact};
+use super::{CHECKPOINT_REFRESH, DISTINGUISHED, DISTINGUISHED_HEAD, HEAD, KtError, KtTransport, Pin, PinScope};
+use super::{check_own, load_head, search_contact};
 use crate::error::NetworkError;
 use crate::storage::{Database, repositories::SettingsRepository};
 
@@ -285,6 +285,25 @@ async fn checkpoint_survives_unsigned_not_found_and_is_reused_after_refresh() {
         28
     );
     assert!(load_head(&settings, HEAD).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn anonymous_pin_starts_independent_of_the_account_pin() {
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let mut client = Script {
+        searches: [
+            (DISTINGUISHED, None, None, Some(search_proof(&vectors, "checkpoint 1"))),
+            (DISTINGUISHED, None, None, Some(search_proof(&vectors, "checkpoint 1"))),
+        ].into(),
+        ..Default::default()
+    };
+    Pin::load_at(&mut client, &settings, PinScope::Account, &verifier, now).await.unwrap();
+    assert!(load_head(&settings, PinScope::Anonymous.distinguished()).unwrap().is_none());
+    Pin::load_at(&mut client, &settings, PinScope::Anonymous, &verifier, now).await.unwrap();
+    assert!(client.searches.is_empty());
+    assert!(load_head(&settings, PinScope::Account.distinguished()).unwrap().is_some());
+    assert!(load_head(&settings, PinScope::Anonymous.distinguished()).unwrap().is_some());
 }
 
 #[tokio::test]

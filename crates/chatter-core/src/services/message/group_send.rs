@@ -13,7 +13,7 @@
 //! cannot make its sender request endorsements on the account connection.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use chatter_proto::chat_v1;
@@ -43,7 +43,6 @@ struct PostBudget {
     token_limit: usize,
     tokens: Cell<usize>,
     repairs: Cell<usize>,
-    echo_registration: Cell<Option<u32>>,
 }
 tokio::task_local! { static PRIVATE_POST_BUDGET: PostBudget; }
 
@@ -133,22 +132,14 @@ fn active_members(verified: &VerifiedChannel) -> Vec<String> {
 }
 
 impl MessageService {
-    pub(super) fn private_echo_registration(&self) -> Result<Option<u32>, NetworkError> {
-        PRIVATE_POST_BUDGET.try_with(|post| post.echo_registration.get())
-            .map_err(|_| budget_exhausted())
-    }
-
     pub(super) async fn reconcile_private_post_devices(
         &self,
         member: &str,
         devices: &chat_v1::MismatchedDevices,
     ) -> Result<(), crate::error::ServiceError> {
-        let repaired = self.signal_service.reconcile_private_post_devices(
-            &mut self.private_post_prekeys(), member, devices, self.private_echo_registration()?,
-        ).await?;
-        PRIVATE_POST_BUDGET.try_with(|post| post.echo_registration.set(repaired))
-            .map_err(|_| budget_exhausted())?;
-        Ok(())
+        self.signal_service.reconcile_private_post_devices(
+            &mut self.private_post_prekeys(), member, devices,
+        ).await
     }
 
     async fn private_post_devices(&self, member: &str, owner: &str) -> Result<Vec<(u32, Option<u32>)>, MessageError> {
@@ -157,7 +148,8 @@ impl MessageService {
         if member == owner {
             let local = self.current_device_id_or_zero();
             devices.retain(|(device, _)| *device != local);
-            if let Some(registration) = self.private_echo_registration()? {
+            if let Some(registration) = self.signal_service.private_echo_registration()
+                .map_err(|e| MessageError::from_signal_send(e, "private echo registration"))? {
                 devices.push((local, Some(registration)));
             }
         }
@@ -295,19 +287,42 @@ impl MessageService {
         self.signal_service.get_cached_sender_certificate()
             .map_err(|error| MessageError::from_signal_send(error, "Sender certificate"))?
             .ok_or(NetworkError::Unavailable)?;
-        let (local_registration, _) = self.signal_service.key_store.get_local_identity()?
-            .ok_or(NetworkError::Unavailable)?;
         let budget = PostBudget {
             // A cold member may need two lookups (before and after KT) and
             // one sender-key deposit. Repairs have their own cumulative cap.
             token_limit: 3 * members.len() + 2 * MAX_REPAIRS_PER_POST,
             tokens: Cell::new(0),
             repairs: Cell::new(0),
-            echo_registration: Cell::new(Some(local_registration)),
         };
         PRIVATE_POST_BUDGET.scope(budget, self.submit_verified_group(
             request, distribution, channel_id, verified, me, members, contents, token,
         )).await
+    }
+
+    fn require_private_post_balance(&self, planned: usize, repairs_left: usize) -> Result<(), MessageError> {
+        if planned == 0 {
+            return Ok(());
+        }
+        let available = self.token_manager.available_token_count()
+            .map_err(|error| NetworkError::ServerError(error.to_string()))? as usize;
+        if available < planned + 2 * repairs_left + RESERVED_MAILBOX_CREDENTIALS {
+            return Err(NetworkError::AnonymousCredentialsUnavailable.into());
+        }
+        Ok(())
+    }
+
+    async fn private_post_holders(
+        &self,
+        channel_id: &ChannelId,
+        distribution: &chatter_proto::content_v1::SenderKeyDistribution,
+    ) -> Result<Option<HashSet<(String, u32, u32)>>, MessageError> {
+        let current = self.create_sender_key_for_channel(channel_id).await?;
+        if !sender_key_precedes(distribution, &current) {
+            return Ok(None);
+        }
+        self.signal_service.sender_key_holders(channel_id)
+            .map(Some)
+            .map_err(|error| MessageError::from_signal_send(error, "sender key holders"))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -322,6 +337,21 @@ impl MessageService {
         contents: Vec<u8>,
         token: Vec<u8>,
     ) -> Result<chat_v1::Message, MessageError> {
+        let holders = self.private_post_holders(&channel_id, distribution).await?.unwrap_or_default();
+        let mut planned = 0;
+        for member in &members {
+            let devices = self.private_post_devices(member, &me).await?;
+            if devices.is_empty() {
+                // One deposit and room for discovery before and after KT.
+                planned += 3;
+            } else if devices.iter().any(|(device, registration)| {
+                !registration.is_some_and(|r| holders.contains(&(member.clone(), *device, r)))
+            }) {
+                planned += 1;
+            }
+        }
+        self.require_private_post_balance(planned, MAX_REPAIRS_PER_POST)?;
+
         let mut auth_client = self.auth_client();
         let mut prekeys = self.private_post_prekeys();
         // Reuse cached sessions. Cold members need initial discovery; the
@@ -331,9 +361,7 @@ impl MessageService {
             match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
                 .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
             {
-                Ok(devices) if devices.is_empty() && member != &me => {
-                    return Err(MessageError::Network(NetworkError::Unavailable));
-                }
+                Ok(devices) if devices.is_empty() => return Err(NetworkError::Unavailable.into()),
                 Ok(_) => {}
                 Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
                 Err(error) => return Err(error),
@@ -342,16 +370,12 @@ impl MessageService {
         if let Some(error) = blocked {
             return Err(error);
         }
-        let current = self.create_sender_key_for_channel(&channel_id).await?;
-        let same_next = sender_key_precedes(distribution, &current);
-        let holders = if same_next {
-            self.signal_service.sender_key_holders(&channel_id)
-                .map_err(|e| MessageError::from_signal_send(e, "sender key holders"))?
-        } else {
-            Default::default()
-        };
+        // Discovery can await the network while the local sender key advances.
+        let holders = self.private_post_holders(&channel_id, distribution).await?;
+        let same_next = holders.is_some();
+        let holders = holders.unwrap_or_default();
         let mut message_client = self.message_client();
-        let mut distributed = std::collections::HashSet::new();
+        let mut distributed = HashSet::new();
         for round in 0..=MAX_RECONCILE_ROUNDS {
             let mut fanout = Vec::new();
             for member in &members {
@@ -363,16 +387,8 @@ impl MessageService {
                     fanout.push(member);
                 }
             }
-            if !fanout.is_empty() {
-                let repair_headroom = PRIVATE_POST_BUDGET.with(|post| {
-                    2 * (MAX_REPAIRS_PER_POST - post.repairs.get())
-                });
-                let available = self.token_manager.available_token_count()
-                    .map_err(|error| NetworkError::ServerError(error.to_string()))? as usize;
-                if available < fanout.len() + repair_headroom + RESERVED_MAILBOX_CREDENTIALS {
-                    return Err(NetworkError::AnonymousCredentialsUnavailable.into());
-                }
-            }
+            let repairs_left = PRIVATE_POST_BUDGET.with(|post| MAX_REPAIRS_PER_POST - post.repairs.get());
+            self.require_private_post_balance(fanout.len(), repairs_left)?;
             for member in fanout {
                 let plaintext = self.skdm_plaintext(&channel_id, &verified, distribution, member);
                 let outcome = self.deposit_private_channel_key(
@@ -395,7 +411,7 @@ impl MessageService {
             }
             let (sealed, destinations) = self
                 .signal_service
-                .seal_group_message(&channel_id, contents.clone(), &members, self.private_echo_registration()?)
+                .seal_group_message(&channel_id, contents.clone(), &members)
                 .await
                 .map_err(|e| MessageError::from_signal_send(e, "group seal"))?;
             crate::services::gateway::submission::mark_submission_started()?;
@@ -408,7 +424,7 @@ impl MessageService {
                 use prost::Message as _;
                 let original = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())
                     .map_err(invalid)?;
-                self.snapshot_private_receipt_targets(channel_id, original.timestamp, &destinations)?;
+                self.snapshot_private_resend_targets(channel_id, original.timestamp, &destinations)?;
                 return self.sent_group_message(request, resp.server_timestamp);
             }
             if resp.mismatched.is_empty() || round == MAX_RECONCILE_ROUNDS {
