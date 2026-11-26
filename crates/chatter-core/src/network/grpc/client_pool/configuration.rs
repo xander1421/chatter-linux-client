@@ -283,12 +283,16 @@ impl GrpcClientPool {
     /// lock: before this, `disconnect()` ran first, and a `channel()` landing
     /// between it and the endpoint write cached a channel on the OLD transport
     /// (direct) that then outlived the switch to onion.
-    pub(super) fn swap_endpoint(&self, endpoint: Endpoint, mode: TransportMode) -> Result<(), NetworkError> {
+    pub(super) fn swap_endpoint(
+        &self,
+        endpoint: Endpoint,
+        mode: TransportMode,
+    ) -> Result<(), NetworkError> {
         let mut channel = self.channel.write();
         if mode == TransportMode::Onion
             && self.active_unconsented_media.load(std::sync::atomic::Ordering::Acquire) != 0
         {
-            return Err(NetworkError::InvalidRequest("an active call has not authorized direct media in Shield".into()));
+            return Err(NetworkError::ShieldBlockedByActiveCall);
         }
         #[cfg(feature = "quic")]
         {

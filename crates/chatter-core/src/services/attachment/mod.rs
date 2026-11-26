@@ -25,12 +25,13 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use chatter_attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, ContentLocation};
 use crate::domain::ids::AttachmentId;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use chatter_proto::content_v1::AttachmentPointer;
+use crate::network::storage_http::fence_cdn_transfer;
 use crate::storage::repositories::AttachmentRepository;
+use chatter_attachment_crypto::KEY_SET_LENGTH;
+use chatter_proto::content_v1::AttachmentPointer;
 
 // Submodules add impl blocks to AttachmentService
 // No re-exports needed - methods are on the struct
@@ -223,39 +224,6 @@ pub fn ensure_attachments_dir() -> std::io::Result<()> {
     Ok(())
 }
 
-async fn fence_cdn_transfer<T>(
-    token: tokio_util::sync::CancellationToken,
-    transfer: impl std::future::Future<Output = Result<T, AttachmentError>>,
-) -> Result<T, AttachmentError> {
-    tokio::select! {
-        biased;
-        _ = token.cancelled() => Err(AttachmentError::TransportChanged),
-        result = transfer => {
-            if token.is_cancelled() {
-                Err(AttachmentError::TransportChanged)
-            } else {
-                result
-            }
-        },
-    }
-}
-
-#[tokio::test]
-async fn retired_route_cancels_a_cdn_transfer_and_refuses_to_start_another() {
-    let token = tokio_util::sync::CancellationToken::new();
-    let old = token.clone();
-    let cancelled = fence_cdn_transfer(token, async move {
-        old.cancel();
-        std::future::pending::<Result<(), AttachmentError>>().await
-    }).await;
-    assert!(matches!(cancelled, Err(AttachmentError::TransportChanged)));
-
-    let token = tokio_util::sync::CancellationToken::new();
-    token.cancel();
-    assert!(fence_cdn_transfer::<()>(token, async { panic!("retired CDN route started") })
-        .await.is_err());
-}
-
 /// Attachment service for file operations.
 ///
 /// The `grpc_pool` field is required for upload/download operations but
@@ -387,7 +355,12 @@ impl AttachmentService {
     /// back to a direct request, so the leak stays closed.
     pub(crate) async fn cdn_http_get(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
         let (tor, token) = self.cdn_route()?;
-        fence_cdn_transfer(token, self.cdn_http_get_on_route(url, tor)).await
+        fence_cdn_transfer(
+            token,
+            AttachmentError::TransportChanged,
+            self.cdn_http_get_on_route(url, tor),
+        )
+        .await
     }
 
     async fn cdn_http_get_on_route(&self, url: &str, tor: bool) -> Result<Vec<u8>, AttachmentError> {
@@ -441,7 +414,12 @@ impl AttachmentService {
         limit: u64,
     ) -> Result<u64, AttachmentError> {
         let (tor, token) = self.cdn_route()?;
-        fence_cdn_transfer(token, self.cdn_http_get_to_file_on_route(url, file, limit, tor)).await
+        fence_cdn_transfer(
+            token,
+            AttachmentError::TransportChanged,
+            self.cdn_http_get_to_file_on_route(url, file, limit, tor),
+        )
+        .await
     }
 
     async fn cdn_http_get_to_file_on_route(

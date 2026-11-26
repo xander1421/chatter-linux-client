@@ -70,18 +70,15 @@ impl ChatterClient {
         channel: &str,
         installed_code: u64,
     ) -> Result<Option<crate::update::UpdateManifest>, String> {
-        let mut changed = self.update_transport_epoch.subscribe();
-        tokio::select! {
-          result = crate::update::check_latest(
+        crate::update::check_latest(
             &self.services.grpc_pool,
             self.anon_mode.load(Ordering::Acquire),
             platform,
             channel,
             installed_code,
             self.directories().data_dir(),
-          ) => result,
-          _ = changed.changed() => Err("network mode changed during update check".into()),
-        }
+        )
+        .await
     }
 
     pub async fn check_available_update(
@@ -112,22 +109,14 @@ impl ChatterClient {
             .lock()
             .clone()
             .ok_or_else(|| "no verified update is available".to_string())?;
-        let mut changed = self.update_transport_epoch.subscribe();
-        tokio::select! {
-          result = crate::update::download_verified_with_progress(
+        crate::update::download_verified_with_progress(
             &self.services.grpc_pool,
             self.anon_mode.load(Ordering::Acquire),
             &manifest,
             self.directories().data_dir(),
             progress,
-          ) => result,
-          _ = changed.changed() => {
-              let staged = self.directories().data_dir().join("updates")
-                  .join(format!("{}-{}.download", manifest.platform, manifest.version_code));
-              let _ = tokio::fs::remove_file(staged).await;
-              Err("network mode changed during update download".into())
-          },
-        }
+        )
+        .await
     }
 
     pub fn available_update(&self) -> Option<crate::update::UpdateManifest> {

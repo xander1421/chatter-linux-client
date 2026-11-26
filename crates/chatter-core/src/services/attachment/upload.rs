@@ -60,10 +60,10 @@ impl AttachmentService {
         F: std::future::Future<Output = Result<T, AttachmentError>> + Send,
     {
         let (tor, generation) = self.cdn_route()?;
-        match super::fence_cdn_transfer(generation, attempt(tor)).await {
+        match super::fence_cdn_transfer(generation, AttachmentError::TransportChanged, attempt(tor)).await {
             Err(AttachmentError::TransportChanged) => {
                 let (tor, generation) = self.cdn_route()?;
-                super::fence_cdn_transfer(generation, attempt(tor)).await
+                super::fence_cdn_transfer(generation, AttachmentError::TransportChanged, attempt(tor)).await
             }
             result => result,
         }

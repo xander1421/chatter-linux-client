@@ -342,7 +342,10 @@ mod tests {
         let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         let onion = || tonic::transport::Endpoint::from_static("http://example.onion");
         let room = pool.admit_unconsented_media().unwrap();
-        assert!(pool.swap_endpoint(onion(), TransportMode::Onion).is_err());
+        assert!(matches!(
+            pool.swap_endpoint(onion(), TransportMode::Onion),
+            Err(crate::error::NetworkError::ShieldBlockedByActiveCall)
+        ));
         assert_eq!(pool.transport_mode(), TransportMode::Direct);
         drop(room);
         pool.swap_endpoint(onion(), TransportMode::Onion).unwrap();

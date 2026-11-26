@@ -114,6 +114,14 @@ impl ChatterClient {
     /// this method does not emit a domain event because the flag is a
     /// presentation concern, not a chatter-core state change.
     pub fn set_anon_mode_enabled(self: &Arc<Self>, enabled: bool) {
+        let _ = self.try_set_anon_mode_enabled(enabled);
+    }
+
+    /// Switch Shield transport and report why a request was refused.
+    pub fn try_set_anon_mode_enabled(
+        self: &Arc<Self>,
+        enabled: bool,
+    ) -> Result<(), crate::error::NetworkError> {
         // Anon mode also routes the network transport over Tor (onion): enabling
         // it switches the whole pool to the pinned .onion; disabling it switches
         // back to direct. A failed endpoint switch leaves the previous state.
@@ -124,6 +132,14 @@ impl ChatterClient {
         } else {
             TransportMode::Direct
         };
+        // Serialize listener admission with the switch. A queued shutdown wins
+        // over any reconnect before the pool publishes Onion.
+        let mut push_slot = self.push_shutdown.lock();
+        let stopped_push = enabled
+            && push_slot.take().is_some_and(|tx| {
+                let _ = tx.send(());
+                true
+            });
         let switch_result = self.services.grpc_pool.set_transport_mode(mode);
 
         // Reflect the pool's ACTUAL transport into the process-global HTTP flag
@@ -147,24 +163,26 @@ impl ChatterClient {
             TorStatus::Off
         });
 
+        drop(push_slot);
         if let Err(e) = switch_result {
             tracing::warn!(
                 requested = ?mode,
                 error = %e,
                 "Shield transport switch failed; keeping previous transport"
             );
-            // Transport unchanged: leave the long-lived loops alone. They are
-            // already on the current (correct) transport, and tearing them down
-            // would only churn connections for no anonymity gain.
-            return;
-        }
-
-        self.update_transport_epoch
-            .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
-        if on_onion {
-            if let Some(tx) = self.push_shutdown.lock().take() {
-                let _ = tx.send(());
+            if stopped_push {
+                let this = Arc::clone(self);
+                self.services.runtime_handle.spawn(async move {
+                    let _guard = this.transport_switch_lock.lock().await;
+                    let url = this.push_url.lock().clone();
+                    if let Some(url) = url {
+                        if let Err(error) = this.configure_push(&url) {
+                            tracing::warn!(%error, "failed to restore ntfy push after Shield refusal");
+                        }
+                    }
+                });
             }
+            return Err(e);
         }
 
         // ANONYMITY-CRITICAL: set_transport_mode drops the pool's cached
@@ -203,6 +221,7 @@ impl ChatterClient {
                 );
             }
         });
+        Ok(())
     }
 
     /// Tear down and rebuild every long-lived network loop so it re-dials over

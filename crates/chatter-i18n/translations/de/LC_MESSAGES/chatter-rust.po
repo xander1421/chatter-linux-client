@@ -4019,3 +4019,7 @@ msgstr "Die Medienverbindung des Anrufs ist direkt und kann deine IP-Adresse off
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
 msgstr "Shield nicht verfügbar"
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "End the active call before enabling Shield."
+msgstr "Beende den laufenden Anruf, bevor du Shield aktivierst."

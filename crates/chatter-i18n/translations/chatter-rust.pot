@@ -3430,3 +3430,7 @@ msgstr ""
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
 msgstr ""
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "End the active call before enabling Shield."
+msgstr ""

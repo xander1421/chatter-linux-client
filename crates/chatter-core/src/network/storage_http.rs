@@ -56,8 +56,50 @@ fn build_client() -> CachedClient {
         .map_err(|e| format!("could not build pinned storage client: {}", e.without_url()))
 }
 
+/// Drop a transfer as soon as its route is retired, including while dialing or
+/// reading the body. A retired generation cannot start a new request.
+pub(crate) async fn fence_cdn_transfer<T, E>(
+    generation: tokio_util::sync::CancellationToken,
+    transport_changed: E,
+    transfer: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    tokio::select! {
+        biased;
+        _ = generation.cancelled() => Err(transport_changed),
+        result = transfer => {
+            if generation.is_cancelled() {
+                Err(transport_changed)
+            } else {
+                result
+            }
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn retired_route_cancels_a_cdn_transfer_and_refuses_to_start_another() {
+        use tokio_util::sync::CancellationToken;
+
+        let generation = CancellationToken::new();
+        let old = generation.clone();
+        let cancelled = super::fence_cdn_transfer(generation.clone(), "transport changed", async {
+            old.cancel();
+            std::future::pending::<Result<(), &str>>().await
+        })
+        .await;
+        assert_eq!(cancelled, Err("transport changed"));
+        assert_eq!(
+            super::fence_cdn_transfer::<(), _>(generation, "transport changed", async {
+                panic!("retired CDN route started")
+            })
+            .await,
+            Err("transport changed")
+        );
+    }
+
+
     #[test]
     #[ignore = "requires live private-CA storage health endpoint"]
     fn storage_client_survives_runtime_restart() {

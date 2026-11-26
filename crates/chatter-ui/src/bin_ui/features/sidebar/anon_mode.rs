@@ -96,11 +96,16 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     if result == chatter_core::client::PinVerification::Match
                     {
-                        ui_ctx.set_anon_mode_enabled(true);
-                        if !ui_ctx.anon_mode_enabled() {
+                        if let Err(error) = ui_ctx.try_set_anon_mode_enabled(true) {
                             w.global::<AnonMode>().set_enabled(false);
                             w.set_anon_mode_pin("".into());
-                            w.set_anon_mode_pin_error(chatter_i18n::tr("Shield unavailable").into());
+                            let message = match error {
+                                chatter_core::error::NetworkError::ShieldBlockedByActiveCall => {
+                                    chatter_i18n::tr("End the active call before enabling Shield.")
+                                }
+                                _ => chatter_i18n::tr("Shield unavailable"),
+                            };
+                            w.set_anon_mode_pin_error(message.into());
                             return;
                         }
                         #[cfg(target_os = "android")]

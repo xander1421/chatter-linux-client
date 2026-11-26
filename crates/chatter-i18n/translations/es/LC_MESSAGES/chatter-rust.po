@@ -3972,3 +3972,7 @@ msgstr "El audio y el vídeo de la llamada se conectan directamente y pueden rev
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
 msgstr "Shield no está disponible"
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "End the active call before enabling Shield."
+msgstr "Finaliza la llamada activa antes de activar Shield."

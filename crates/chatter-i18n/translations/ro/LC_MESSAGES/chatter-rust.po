@@ -3989,3 +3989,7 @@ msgstr "Fluxul audio și video al apelului folosește o conexiune directă și p
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
 msgstr "Shield indisponibil"
+
+#: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
+msgid "End the active call before enabling Shield."
+msgstr "Încheie apelul în curs înainte de a activa Shield."

@@ -28,6 +28,10 @@ pub enum NetworkError {
     #[error("transport changed")]
     TransportChanged,
 
+    /// Shield cannot start while a call still holds its direct media lease.
+    #[error("an active call has not authorized direct media in Shield")]
+    ShieldBlockedByActiveCall,
+
     /// Authentication required or invalid.
     #[error("authentication required")]
     Unauthenticated,
