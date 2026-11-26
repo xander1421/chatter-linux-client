@@ -52,11 +52,14 @@ impl GossipSyncManager {
         let mut sends: Vec<SyncSend> = Vec::new();
 
         // Announces are exempt from the since-cursor: they carry the signing keys
-        // needed to verify everything else, and there is at most one per peer, so
-        // the resend cost is negligible next to being unable to verify anything.
+        // needed to verify everything else. Each sender has a bounded key set.
         if requested.contains(MessageType::Announce) {
-            for packet in self.latest_announce_by_peer.values() {
-                if fresh(packet) && !might_contain(packet) {
+            for packet in self
+                .latest_announce_by_peer
+                .values()
+                .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
+            {
+                if announcement_is_fresh(config, packet, now_unix_secs) && !might_contain(packet) {
                     sends.push(SyncSend::response(from, packet));
                 }
             }
@@ -107,11 +110,14 @@ impl GossipSyncManager {
         }
 
         // Like announces, bundles are exempt from the since-cursor: there is at
-        // most one per owner (newer replaces older), so the resend cost is bounded,
-        // and a joining peer must be able to learn bundles generated long before it
-        // arrived.
+        // most one per owner and signing key. A joining peer must be able
+        // to learn bundles generated long before it arrived.
         if requested.contains(MessageType::PrekeyBundle) {
-            for packet in self.latest_prekey_bundle_by_owner.values() {
+            for packet in self
+                .latest_prekey_bundle_by_owner
+                .values()
+                .flat_map(|candidates| candidates.iter().map(|(_, packet)| packet))
+            {
                 if fresh(packet) && !might_contain(packet) {
                     sends.push(SyncSend::response(from, packet));
                 }

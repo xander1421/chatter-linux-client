@@ -7,13 +7,19 @@ impl BleRuntime {
         else {
             return;
         };
+        self.request_signing_pin(peer).await;
         let payload = encode_noise_payload(NoisePayloadType::PrivateMessage, &tlv);
 
         let sealed = self
             .state
-            .with(|state| state.sessions.encrypt(peer, &payload));
+            .can_write_to(peer)
+            .then(|| {
+                self.state
+                    .with(|state| state.sessions.encrypt(peer, &payload))
+            })
+            .and_then(Result::ok);
         match sealed {
-            Ok(ciphertext) => {
+            Some(ciphertext) => {
                 let packet = self.build_packet(
                     MessageType::NoiseEncrypted,
                     Some(peer),
@@ -23,8 +29,8 @@ impl BleRuntime {
                 self.transmit(&packet, Some(peer), None).await;
                 self.rekey_if_due(peer).await;
             }
-            Err(_) => {
-                // No session yet. Hold the message and start a handshake: the
+            None => {
+                // No confirmed route yet. Hold the message and start a handshake: the
                 // router has already retained a copy, so nothing is lost if the
                 // handshake never completes.
                 let first = self.state.with(|state| {
@@ -45,6 +51,38 @@ impl BleRuntime {
                 if first {
                     self.start_handshake(peer).await;
                 }
+            }
+        }
+    }
+
+    pub(super) async fn request_signing_pin(&mut self, peer: &PeerId) {
+        use super::secure_ingress::{SIGNING_BINDING_REQUEST, SIGNING_PIN_INTENT_MS};
+
+        const BINDING_REQUEST_INTERVAL_MS: u64 = 10_000;
+        let now = now_millis();
+        self.signing_pin_intent
+            .retain(|_, (at, _)| now.saturating_sub(*at) < SIGNING_PIN_INTENT_MS);
+        let (pinned, can_request) = self.state.with(|state| {
+            let supported = state.chatter_hello.get(peer).is_some_and(|hello| {
+                hello.capabilities & super::super::chatter_hello::NOISE_SIGNING_BINDING != 0
+            });
+            (
+                state.peers.pinned(peer).is_some(),
+                supported && state.sessions.has_session(peer),
+            )
+        });
+        if !pinned
+            && (self.signing_pin_intent.contains_key(peer) || self.signing_pin_intent.len() < 512)
+        {
+            let (intent, request) = self.signing_pin_intent.entry(peer.clone()).or_default();
+            *intent = now;
+            if can_request
+                && request
+                    .is_none_or(|last| now.saturating_sub(last) >= BINDING_REQUEST_INTERVAL_MS)
+            {
+                *request = Some(now);
+                self.send_private_control(peer, SIGNING_BINDING_REQUEST)
+                    .await;
             }
         }
     }
@@ -79,6 +117,21 @@ impl BleRuntime {
             opening,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
+        if !self.state.can_write_to(peer) {
+            let links = self.state.with(|state| {
+                state
+                    .links
+                    .discovery_links_to(peer)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            if !links.is_empty() {
+                for link in links {
+                    self.transmit_on_link(&packet, peer, &link).await;
+                }
+                return;
+            }
+        }
         self.transmit(&packet, Some(peer), None).await;
     }
 
@@ -94,27 +147,29 @@ impl BleRuntime {
 
     pub(super) async fn retry_pending_dm_handshake(&mut self, peer: &PeerId) {
         let now = now_millis();
-        let due = self.state.with(|state| {
-            !state.sessions.has_session(peer)
-                && state
-                    .pending_dms
-                    .get(peer)
-                    .is_some_and(|pending| !pending.is_empty())
-                && state
-                    .links
-                    .links_to(peer)
-                    .iter()
-                    .any(|link| state.links.is_writable(link))
-                && {
-                    let attempts = state.known_peer_reopen_attempts.get(peer).copied().unwrap_or(0);
-                    let delay = if state.peers.pinned(peer).is_some() && attempts > 0 {
-                        super::announces::known_peer_retry_delay_ms(attempts, 0)
-                    } else {
-                        DM_HANDSHAKE_RETRY_MS
-                    };
-                    now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0)) >= delay
-                }
-        });
+        let writable = self.state.can_open_session_to(peer);
+        let due = writable
+            && self.state.with(|state| {
+                (!state.sessions.has_session(peer) || !state.links.presence(peer).any())
+                    && state
+                        .pending_dms
+                        .get(peer)
+                        .is_some_and(|pending| !pending.is_empty())
+                    && {
+                        let attempts = state
+                            .known_peer_reopen_attempts
+                            .get(peer)
+                            .copied()
+                            .unwrap_or(0);
+                        let delay = if state.peers.pinned(peer).is_some() && attempts > 0 {
+                            super::announces::known_peer_retry_delay_ms(attempts, 0)
+                        } else {
+                            DM_HANDSHAKE_RETRY_MS
+                        };
+                        now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
+                            >= delay
+                    }
+            });
         if due {
             let first_attempt = self.state.with(|state| {
                 if state.peers.pinned(peer).is_some() {
@@ -209,7 +264,7 @@ impl BleRuntime {
                 .await;
             // In range but no Chatter Hello yet (sessions open lazily, e.g.
             // after a restart): open one. The hello flushes queued carriers.
-            if self.state.can_write_to(peer)
+            if self.state.can_open_session_to(peer)
                 && !self.state.with(|state| state.sessions.has_session(peer))
             {
                 self.start_handshake(peer).await;

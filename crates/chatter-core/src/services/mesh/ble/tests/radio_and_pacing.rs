@@ -143,8 +143,8 @@ async fn a_relay_never_sends_a_packet_back_to_the_peer_it_came_from() {
     // thousand fragments of its own traffic returning to occupy the air its
     // transfer needed.
     let (runtime, radio, state, _timeline) = runtime_parts();
-    let neighbour = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &neighbour, "twolinks");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let neighbour = register_verified_peer(&state, &identity, "twolinks");
 
     // Both links to the same peer, as two devices that each dialled the other.
     let inbound = writable_link_on(&state, &radio, "/mock/they-dialled-us", 512);
@@ -343,8 +343,8 @@ async fn a_chunk_request_from_a_receiver_is_served_before_the_first_pass() {
     let bytes = body(4_000);
     std::fs::write(&source, &bytes).expect("write");
     writable_link_on(&state, &radio, "/mock/serve", 4096);
-    let asker = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let asker_identity = register_verified_peer(&state, &asker, "wanderer");
+    let asker_identity = MeshIdentity::generate(&mut os_rng());
+    let asker = register_verified_peer(&state, &asker_identity, "wanderer");
 
     let manifest = test_manifest([0x18; 8], &bytes);
     runtime
@@ -492,8 +492,8 @@ async fn a_chunked_transfer_is_refused_when_it_is_addressed_to_us_alone() {
     // one would teach the UI that private traffic can arrive in the clear.
     let (mut runtime, _radio, state, _timeline) = runtime_parts();
     isolate_spool(&mut runtime);
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let local = runtime.identity.peer_id();
 
     let bytes = body(2_048);

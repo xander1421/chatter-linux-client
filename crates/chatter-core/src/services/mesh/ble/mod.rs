@@ -47,7 +47,6 @@ use chatter_mesh_link::backpressure::{
 use chatter_mesh_link::duty::{self, ScanCommand};
 use chatter_mesh_link::guard::{IngressGuard, IngressInput, IngressRejection};
 use chatter_mesh_link::planner::{self, DIRECTED_SPOOL_WINDOW_SECS, OutboundPlanRequest};
-use chatter_mesh_link::registry::VerifiedDirectAnnounce;
 use chatter_mesh_link::scheduler::{
     DiscoveryDecision, ExistingConnectionState, MAX_CENTRAL_LINKS, PeripheralConnectionState,
     QueueDecision,
@@ -64,7 +63,6 @@ use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::sync::{GossipSyncManager, SyncConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::domain::mesh::account_binding::BindingV1;
 use super::chatter_hello::ChatterHello;
 use super::config::MeshConfig;
 use super::events::{MeshEvent, MeshMessage};
@@ -74,16 +72,17 @@ use super::file_stream::{
 };
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::private_channel::{
-    EpochProof, Invite, LeaveNotice, Member, PrivateChannel, PrivateChannelStore,
+    EpochProof, Invite, LeaveNotice, PrivateChannel, PrivateChannelStore,
 };
 use super::router::{RouterCommand, RouterHandle};
 use super::signal_mesh;
-use crate::domain::mesh::frames::{self, BundleFrame};
 use super::state::{
     LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs,
 };
 use super::timeline::MeshEvents;
 use super::transport::BleCommand;
+use crate::domain::mesh::account_binding::BindingV1;
+use crate::domain::mesh::frames::{self, BundleFrame};
 use crate::storage::{
     KeyStore,
     mesh_binding_store::{MeshBindingStore, PeerBinding},
@@ -194,10 +193,14 @@ pub struct BleRuntime {
     last_throughput_report_ms: u64,
     /// Per-ingress budget for open channels, independent of outbound pacing.
     channel_ingress: std::collections::HashMap<String, (u64, u32)>,
+    announce_ingress: std::collections::HashMap<(String, bool), (u64, u32)>,
+    signing_pin_intent: std::collections::HashMap<PeerId, (u64, Option<u64>)>,
     private_ingress: std::collections::HashMap<String, (u64, u32)>,
     /// Authenticated private authors share one budget across relay links.
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
+    prekey_ingress: std::collections::HashMap<LinkId, (u64, u32)>,
+    pending_private_joins: std::collections::HashMap<(PeerId, String), Invite>,
     last_channel_presence_ms: u64,
     last_private_rekey_ms: u64,
     /// Connect attempts run off the loop and report back here. Awaiting one
@@ -281,6 +284,8 @@ impl BleRuntime {
             frames_written: std::sync::atomic::AtomicU64::new(0),
             last_throughput_report_ms: 0,
             channel_ingress: std::collections::HashMap::new(),
+            announce_ingress: std::collections::HashMap::new(),
+            signing_pin_intent: std::collections::HashMap::new(),
             dial_tx,
             dial_rx: Some(dial_rx),
             dial_in_flight: false,
@@ -288,6 +293,8 @@ impl BleRuntime {
             private_ingress: std::collections::HashMap::new(),
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
+            prekey_ingress: std::collections::HashMap::new(),
+            pending_private_joins: std::collections::HashMap::new(),
             last_channel_presence_ms: 0,
             last_private_rekey_ms: 0,
         }
@@ -377,32 +384,88 @@ impl BleRuntime {
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
         let packet = self.maybe_sign(packet, true);
+        if packet.signature.is_none() {
+            return;
+        }
+        self.gossip.on_verified_prekey_bundle_seen(
+            &packet,
+            self.identity.signing_public(),
+            now_secs(),
+        );
         self.originate_broadcast(&packet).await;
     }
 
-    /// A peer's prekey bundle. Cached and re-gossiped only if it verifies
-    /// against the signing key pinned from that owner's verified announce — the
-    /// bundle's own signature proves nothing about whose static key it names.
+    /// Relay well-formed owner packets through the bounded gossip archive.
+    /// Only a Noise-bound key authorizes caching a bundle for local sealing.
     fn on_prekey_bundle(&mut self, packet: &BitchatPacket) -> bool {
         let Ok(bundle) = PrekeyBundle::decode(&packet.payload) else {
             return false;
         };
-        if bundle.owner_static == self.identity.static_public() {
+        let owner = PeerId::from_noise_key(&bundle.owner_static);
+        if owner == self.identity.peer_id()
+            || owner != PeerId::from_bytes(&packet.sender_id)
+            || !packet.is_broadcast()
+        {
             return false;
         }
-        let owner = PeerId::from_noise_key(&bundle.owner_static);
-        let now_ms = now_millis();
+        let now_s = now_secs();
+        if !self.gossip.within_retention(packet, now_s) {
+            return false;
+        }
+        let Some(key) = self.matching_signing_key(&owner, packet, None) else {
+            return false;
+        };
+        if !bundle.verify(&key) {
+            return false;
+        }
         self.state.with(|state| {
-            let verified = state.peers.pinned(&owner).is_some_and(|pin| {
-                pin.noise_public_key.as_slice() == bundle.owner_static.as_slice()
-                    && <[u8; 32]>::try_from(pin.signing_public_key.as_slice())
-                        .is_ok_and(|key| bundle.verify(&key))
-            });
-            if verified {
-                state.prekeys.peers.ingest(bundle, now_ms);
+            if state.peers.pinned(&owner).is_some_and(|pin| {
+                pin.noise_public_key.as_slice() == bundle.owner_static
+                    && pin.signing_public_key.as_slice() == key
+            }) {
+                state.prekeys.peers.ingest(bundle, now_millis());
             }
-            verified
-        })
+        });
+        self.gossip
+            .on_verified_prekey_bundle_seen(packet, key, now_s);
+        true
+    }
+
+    /// A pinned owner has one admissible key. Announcements supply candidates
+    /// for public or relay traffic while the owner is still unproven.
+    fn matching_signing_key(
+        &self,
+        peer: &PeerId,
+        packet: &BitchatPacket,
+        preverified: Option<[u8; 32]>,
+    ) -> Option<[u8; 32]> {
+        // A stale sync verdict only bypasses verification while its key
+        // remains admissible.
+        let verifies =
+            |key: &[u8; 32]| preverified.as_ref() == Some(key) || verify_packet(packet, key);
+        if *peer == self.identity.peer_id() {
+            let key = self.identity.signing_public();
+            return verifies(&key).then_some(key);
+        }
+        let (pin, announced) = self.state.with(|state| {
+            if let Some(pin) = state.peers.pinned(peer) {
+                return (pin.signing_public_key.as_slice().try_into().ok(), None);
+            }
+            let announced = state
+                .peers
+                .info(peer)
+                .and_then(|info| info.signing_public_key.as_deref())
+                .and_then(|key| key.try_into().ok());
+            (None, announced)
+        });
+        pin.into_iter()
+            .chain(announced)
+            .chain(
+                self.gossip
+                    .announced_signing_keys(peer, now_secs())
+                    .filter(|key| pin.is_none() && Some(*key) != announced),
+            )
+            .find(verifies)
     }
 
     #[cfg(test)]
@@ -499,11 +562,12 @@ impl BleRuntime {
 
         loop {
             let backlogged = !self.state.with(|state| state.writes.is_empty());
-            let quiet = !self.dial_in_flight && self.state.with(|state| {
-                state.links.links().next().is_none()
-                    && state.pending_dms.is_empty()
-                    && state.writes.is_empty()
-            });
+            let quiet = !self.dial_in_flight
+                && self.state.with(|state| {
+                    state.links.links().next().is_none()
+                        && state.pending_dms.is_empty()
+                        && state.writes.is_empty()
+                });
             tokio::select! {
                 event = radio.next_event() => match event {
                     Some(event) => {
@@ -679,8 +743,8 @@ fn report_stall_discard(link: &LinkId, metadata: &InboundAppendMetadata) {
 /// exists for.
 ///
 /// The keeper is chosen deterministically — writable first, then *newest* —
-/// because every link carrying an announce runs this, and two announces arriving
-/// together must agree on the survivor or they close each other.
+/// because every newly authenticated link can trigger pruning, and both ends
+/// of the handoff must agree on the survivor.
 ///
 /// Newest rather than lowest id, which is what this did first and got wrong. A
 /// duplicate exists because the peer rotated its address, so the older link is

@@ -30,6 +30,22 @@ impl BleRuntime {
 
     pub(super) async fn dispatch_sync(&self, send: chatter_mesh_store::sync::SyncSend) {
         let packet = self.maybe_sign(send.packet, send.sign_before_send);
+        if let Some(peer) = send.to.as_ref() {
+            if !self.state.can_write_to(peer) {
+                let links = self.state.with(|state| {
+                    state
+                        .links
+                        .discovery_links_to(peer)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                });
+                for link in links {
+                    if self.transmit_on_link(&packet, peer, &link).await {
+                        return;
+                    }
+                }
+            }
+        }
         self.transmit(&packet, send.to.as_ref(), None).await;
     }
 

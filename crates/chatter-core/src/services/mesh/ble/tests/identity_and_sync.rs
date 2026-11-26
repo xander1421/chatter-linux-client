@@ -54,27 +54,13 @@ async fn a_peer_heard_only_by_relay_is_not_marked_connected() {
     );
 }
 
-/// §98 — the other half of the same attack, once the derivation check closed
-/// the first half.
-///
-/// A peer's Noise public key travels in the clear in every announce it sends,
-/// and the peer ID derives from it, so an attacker who has simply HEARD a
-/// victim announce can replay that Noise key and the derived ID will match.
-/// Everything then hinges on the signing key — which was pinned by nothing.
-/// The attacker signs with their own key, the signature verifies against the
-/// key the packet supplies, and the victim's identity is taken over in our
-/// registry.
-///
-/// The registry had recorded the victim's signing key since first contact.
-/// Nothing compared it.
 #[tokio::test]
-async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_peer() {
+async fn an_announce_only_claim_cannot_lock_out_the_noise_key_owner() {
     let (mut runtime, _radio, state) = runtime();
 
     let victim_identity = MeshIdentity::generate(&mut os_rng());
     let victim = victim_identity.peer_id();
 
-    // First contact: the victim announces itself, honestly.
     let honest = AnnouncementPacket::new(
         "victim".to_string(),
         victim_identity.static_public().to_vec(),
@@ -99,21 +85,6 @@ async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_p
         inner.links.set_writable(&victim_link, true);
         inner.max_write.insert(victim_link.clone(), 512);
     });
-    assert!(
-        runtime
-            .on_announce(&victim_link, &honest_packet, &victim)
-            .await,
-        "the honest announce establishes the pin"
-    );
-    let pinned_signing_key = state
-        .with(|inner| {
-            inner
-                .peers
-                .info(&victim)
-                .and_then(|r| r.signing_public_key.clone())
-        })
-        .expect("the registry records the signing key on first contact");
-
     // The attacker replays the victim's Noise key — so the peer ID still
     // derives correctly — under its own signing key, and self-signs.
     let attacker = MeshIdentity::generate(&mut os_rng());
@@ -146,10 +117,42 @@ async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_p
     state.with(|inner| {
         inner
             .links
-            .link_up(attacker_link.clone(), LinkRole::Central);
+            .link_up(attacker_link.clone(), LinkRole::Peripheral);
         inner.links.set_writable(&attacker_link, true);
         inner.max_write.insert(attacker_link.clone(), 512);
     });
+
+    for _ in 0..2 {
+        assert!(runtime.on_announce(&attacker_link, &forged_packet, &victim).await);
+    }
+    assert!(state.with(|inner| {
+        inner.links.peer_for(&attacker_link).is_none()
+            && !inner.links.presence(&victim).any()
+            && !inner.links.preferred_links().contains_key(&victim)
+            && inner.links.discovery_peer_for(&attacker_link) == Some(&victim)
+    }));
+    assert!(!state.can_write_to(&victim));
+    assert!(state.with(|inner| inner.peers.pinned(&victim).is_none()));
+    assert!(state.with(|inner| {
+        let record = inner.peers.info(&victim).unwrap();
+        record.signing_public_key.as_deref() == Some(attacker.signing_public().as_slice())
+            && !record.verified_nickname
+    }));
+
+    assert!(runtime.on_announce(&victim_link, &honest_packet, &victim).await);
+    let pinned_signing_key = victim_identity.signing_public().to_vec();
+    assert!(state.with(|inner| {
+        let record = inner.peers.info(&victim).unwrap();
+        record.signing_public_key.as_ref() == Some(&pinned_signing_key)
+            && !record.verified_nickname
+    }));
+    assert!(state.with(|inner| inner.peers.pin_noise_identity(
+        &victim,
+        &victim_identity.static_public(),
+        &victim_identity.signing_public(),
+        now_millis(),
+    )));
+    state.with(|inner| inner.links.link_down(&attacker_link));
 
     runtime.save_pins().expect("save pins");
     state.with(|inner| {
@@ -317,7 +320,9 @@ async fn a_sync_request_from_a_peer_that_never_announced_is_not_answered() {
     );
 
     let before = radio.write_count();
-    runtime.on_request_sync(&packet, &stranger).await;
+    runtime
+        .on_request_sync(&LinkId::new("/mock/stranger"), &packet, &stranger)
+        .await;
     runtime.drain_writes().await;
 
     assert_eq!(
@@ -373,14 +378,132 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
         chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
     );
 
+    let author = MeshIdentity::generate(&mut os_rng());
+    let author_id = author.peer_id();
+    let mut author_payload = AnnouncementPacket::new(
+        "public author".into(),
+        author.static_public().to_vec(),
+        author.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    )
+    .encode()
+    .unwrap();
+    // The announce decoder ignores an incomplete TLV header.
+    author_payload.push(0x04);
+    let author_announce = signed(
+        &author_id,
+        &author,
+        MessageType::Announce,
+        author_payload,
+        true,
+    );
+    runtime
+        .gossip
+        .on_public_packet_seen(&author_announce, now_secs());
+    let history = signed(
+        &author_id,
+        &author,
+        MessageType::Message,
+        b"public history".to_vec(),
+        true,
+    );
+    runtime.gossip.on_public_packet_seen(&history, now_secs());
+    let competing = MeshIdentity::generate(&mut os_rng());
+    let mut competing_announce = signed(
+        &author_id,
+        &competing,
+        MessageType::Announce,
+        AnnouncementPacket::new(
+            "competing candidate".into(),
+            author.static_public().to_vec(),
+            competing.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        )
+        .encode()
+        .unwrap(),
+        true,
+    );
+    // The relay saw a different signing claim after the author and their message.
+    competing_announce.ttl -= 1;
+    runtime.on_packet(&link, competing_announce).await;
+    assert!(state.with(|inner| {
+        inner
+            .peers
+            .info(&author_id)
+            .unwrap()
+            .signing_public_key
+            .as_deref()
+            == Some(competing.signing_public().as_slice())
+    }));
+    runtime.drain_writes().await;
+    assert_eq!(
+        runtime.matching_signing_key(&author_id, &history, None),
+        Some(author.signing_public())
+    );
     let before = radio.write_count();
-    runtime.on_request_sync(&packet, &subject_peer).await;
+    runtime.on_request_sync(&link, &packet, &subject_peer).await;
     runtime.drain_writes().await;
 
-    assert!(
-        radio.write_count() > before,
-        "an announced peer must still get its diff"
+    let replies: Vec<_> = radio
+        .writes()
+        .iter()
+        .skip(before)
+        .map(|(_, bytes)| codec::decode(bytes).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 2, "only public history and its author's key");
+    assert_eq!(replies[0].message_type(), Some(MessageType::Announce));
+    assert_eq!(replies[0].sender_id, author_announce.sender_id);
+    assert_eq!(replies[0].payload, author_announce.payload);
+    assert_eq!(replies[1].message_type(), Some(MessageType::Message));
+    assert_eq!(replies[1].sender_id, author_announce.sender_id);
+
+    let mut announce = author_announce;
+    assert_eq!(announce.payload.pop(), Some(0x04));
+    announce.payload.extend_from_slice(&[0x04, 0x01, 0xa5]);
+    announce.signature = Some(sign_packet(&author, &announce).unwrap());
+    assert!(AnnouncementPacket::decode(&announce.payload).unwrap().direct_neighbors.is_none());
+    runtime.gossip.on_public_packet_seen(&announce, now_secs());
+    let before = radio.write_count();
+    runtime.on_request_sync(&link, &packet, &subject_peer).await;
+    runtime.drain_writes().await;
+    let replies = radio.writes();
+    assert_eq!(replies.len(), before + 1);
+    assert_eq!(codec::decode(&replies[before].1).unwrap().message_type(), Some(MessageType::Message));
+
+    assert!(state.with(|inner| inner.links.mark_noise_authenticated(&link, &subject_peer)));
+    let before = radio.write_count();
+    runtime.on_request_sync(&link, &packet, &subject_peer).await;
+    runtime.drain_writes().await;
+    assert!(radio.writes()[before..].iter().any(|(_, bytes)| {
+        let reply = codec::decode(bytes).unwrap();
+        AnnouncementPacket::decode(&reply.payload).is_ok_and(|value| {
+            reply.message_type() == Some(MessageType::Announce)
+                && value.signing_public_key == competing.signing_public()
+        })
+    }));
+}
+
+#[tokio::test]
+async fn rejected_announces_do_not_use_the_new_candidate_budget() {
+    let (mut runtime, radio, state) = runtime();
+    let link = writable_link_on(&state, &radio, "/mock/announce-quota", 512);
+    let owner = MeshIdentity::generate(&mut os_rng());
+    let peer = owner.peer_id();
+    let announce = AnnouncementPacket::new(
+        "owner".into(), owner.static_public().to_vec(), owner.signing_public().to_vec(),
+        None, None, None,
     );
+    let mut packet = signed(&peer, &owner, MessageType::Announce, announce.encode().unwrap(), true);
+    let signature = packet.signature.take();
+    for _ in 0..61 {
+        assert!(!runtime.on_announce(&link, &packet, &peer).await);
+    }
+    packet.signature = signature;
+    assert!(runtime.on_announce(&link, &packet, &peer).await);
 }
 
 #[tokio::test]
@@ -431,14 +554,7 @@ async fn a_refused_announce_is_not_kept_or_re_served_by_the_gossip_store() {
 }
 
 #[tokio::test]
-async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
-    // Defence in depth behind the derivation check: the sender ID is only
-    // eight bytes of the digest, so a second key hashing into the same ID is
-    // 2^64 work rather than impossible. Once we have recorded a Noise key
-    // for a peer, an announce carrying a *different* one is a key
-    // substitution attempt and is refused before the signature is even
-    // checked — a valid signature over a swapped key is exactly what the
-    // attack looks like (`BLEAnnounceTrustPolicy`, `MessageHandler.kt:252`).
+async fn a_new_candidate_key_uses_the_ingress_budget_but_a_renewal_does_not() {
     let (mut runtime, _radio, state) = runtime();
 
     let honest = MeshIdentity::generate(&mut os_rng());
@@ -457,11 +573,11 @@ async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
             .upsert_verified_announce(&peer, &first, true, now_millis());
     });
 
-    // Same peer ID, attacker's keys, signed by the attacker.
+    // The Noise key stays the same. Only the signing key is replaced.
     let attacker = MeshIdentity::generate(&mut os_rng());
     let swapped = AnnouncementPacket::new(
         "honest".to_string(),
-        attacker.static_public().to_vec(),
+        honest.static_public().to_vec(),
         attacker.signing_public().to_vec(),
         None,
         None,
@@ -484,26 +600,25 @@ async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
         inner.max_write.insert(link.clone(), 512);
     });
 
-    runtime.on_announce(&link, &packet, &peer).await;
-
+    packet.ttl = DIRECT_ANNOUNCE_TTL;
+    runtime
+        .announce_ingress
+        .insert((link.to_string(), true), (now_millis(), 60));
+    assert!(!runtime.on_announce(&link, &packet, &peer).await);
     assert_eq!(
-        state.with(|inner| inner
-            .peers
-            .info(&peer)
-            .expect("still known")
-            .noise_public_key
-            .clone()),
-        Some(honest.static_public().to_vec()),
-        "the recorded Noise key must survive an announce that tries to \
-             replace it — that key is what courier mail is sealed to"
+        state.with(|inner| inner.peers.info(&peer).unwrap().signing_public_key.clone()),
+        Some(honest.signing_public().to_vec()),
     );
+    packet.payload = first.encode().unwrap();
+    packet.signature = Some(sign_packet(&honest, &packet).unwrap());
+    assert!(runtime.on_announce(&link, &packet, &peer).await);
 }
 
 #[tokio::test]
 async fn stale_verdict_is_reused_only_for_the_current_signing_key() {
     let (mut runtime, _radio, state) = runtime();
-    let sender = PeerId::from_str("eeeeeeeeeeeeeeee");
-    let identity = register_verified_peer(&state, &sender, "peer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "peer");
     let attacker = MeshIdentity::generate(&mut os_rng());
     let mut events = runtime.events.subscribe();
     let forged = signed(
@@ -540,8 +655,8 @@ async fn an_empty_public_message_is_not_stored_as_a_blank_row() {
     // bitchat refuses on its send path too (`MeshCore.kt:415`). Neither checks
     // on receive, which is the gap.
     let (mut runtime, _radio, state) = runtime();
-    let sender = PeerId::from_str("eeeeeeeeeeeeeeee");
-    let identity = register_verified_peer(&state, &sender, "quiet");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "quiet");
     let mut events = runtime.events.subscribe();
 
     for payload in [b"".to_vec(), b"   ".to_vec(), b"\n\t".to_vec()] {
@@ -1030,4 +1145,81 @@ async fn an_announce_is_signed_and_carries_both_public_keys() {
         packet.recipient_id.is_none(),
         "an announce is addressed to everyone by omitting the recipient"
     );
+}
+
+#[tokio::test]
+async fn public_broadcast_from_a_blocked_peer_is_archived_without_display() {
+    let (mut runtime, _radio, state) = runtime();
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let peer = register_verified_peer(&state, &identity, "author");
+    let link = writable_link(&state, "/mock/blocked-author", 512);
+    runtime.events.set_peer_blocked(&peer, true);
+    let mut events = runtime.events.subscribe();
+    let message = signed(
+        &peer,
+        &identity,
+        MessageType::Message,
+        b"public".to_vec(),
+        true,
+    );
+    runtime.on_packet(&link, message.clone()).await;
+    assert!(runtime.gossip.holds(&message));
+    assert_eq!(messages_shown(&mut events), 0);
+}
+
+#[tokio::test]
+async fn sync_tries_the_next_discovery_link_when_the_first_cannot_take_a_write() {
+    let (mut runtime, radio, state) = runtime();
+    let peer = MeshIdentity::generate(&mut os_rng()).peer_id();
+    let unavailable = writable_link(&state, "/mock/a", 512);
+    let available = writable_link_on(&state, &radio, "/mock/b", 512);
+    state.with(|inner| {
+        inner.links.note_discovery_peer(&unavailable, &peer);
+        inner.links.note_discovery_peer(&available, &peer);
+        inner.max_write.remove(&unavailable);
+    });
+
+    let send = runtime.gossip.initial_sync_to(&peer, now_secs()).unwrap();
+    runtime.dispatch_sync(send).await;
+    runtime.drain_writes().await;
+    assert_eq!(radio.writes().len(), 1);
+    assert_eq!(radio.writes()[0].0, available);
+}
+
+#[tokio::test]
+async fn a_renewed_discovery_hint_syncs_after_peer_demotion_without_counting_as_connected() {
+    let (mut runtime, radio, state) = runtime();
+    let link = writable_link_on(&state, &radio, "/mock/discovery", 512);
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let peer = identity.peer_id();
+    let payload = AnnouncementPacket::new(
+        "nearby".into(),
+        identity.static_public().to_vec(),
+        identity.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    )
+    .encode()
+    .unwrap();
+
+    let announce = signed(&peer, &identity, MessageType::Announce, payload, true);
+    assert!(runtime.on_announce(&link, &announce, &peer).await);
+    runtime.drain_writes().await;
+    assert!(!state.peers()[0].connected);
+    assert!(state.peers()[0].reachable);
+    assert_eq!(state.status(0).connected_peers, 0);
+
+    state.with(|inner| inner.peers.update_last_seen(&peer, now_millis() - 9_000));
+    runtime.reconcile_peers();
+    let before = radio.write_count();
+    assert!(runtime.on_announce(&link, &announce, &peer).await);
+    runtime.drain_writes().await;
+    assert!(radio.writes()[before..].iter().any(|(_, bytes)| {
+        codec::decode(bytes).unwrap().message_type() == Some(MessageType::RequestSync)
+    }));
+
+    assert!(state.with(|inner| inner.links.mark_noise_authenticated(&link, &peer)));
+    assert!(state.peers()[0].connected);
+    assert_eq!(state.status(0).connected_peers, 1);
 }

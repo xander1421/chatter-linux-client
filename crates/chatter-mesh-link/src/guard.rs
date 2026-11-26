@@ -423,14 +423,9 @@ impl IngressGuard {
                 });
             }
 
-            // A direct-looking announce claiming a new sender on a bound link is
-            // either a peer-ID rotation on a connection that outlived the old ID, or
-            // a replay with its TTL restored. The two are indistinguishable here,
-            // because the TTL is not signed. Attribute it to the claimed sender and
-            // let it through — announces are self-authenticating, and only a
-            // signature-verified announce may actually rebind the link (see
-            // [`crate::announce`]). It is not a freshness bypass: the same payload
-            // validation runs before it is accepted.
+            // Validate a direct-looking announce under its claimed sender for
+            // discovery. The hint comes from the unsigned TTL, and changing
+            // the link binding requires Noise proof.
             if direct_announce_hint {
                 let peer = input.claimed_sender.clone();
                 self.validate_payload(

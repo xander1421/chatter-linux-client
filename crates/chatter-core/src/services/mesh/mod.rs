@@ -83,13 +83,13 @@ use uuid::Uuid;
 use crate::crypto::signal::store::SignalStore;
 use crate::domain::UnifiedConversation;
 use crate::domain::ids::{ChannelId, UserId};
+use crate::domain::mesh::account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
 use crate::domain::message::Message;
 use crate::storage::KeyStore;
 use crate::storage::mesh_binding_store::{BindingMethod, MeshBindingStore, PeerBinding};
 use crate::storage::mesh_identity_store::MeshIdentityStore;
 use crate::storage::repositories::MessageRepository;
-use crate::domain::mesh::account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
-use private_channel::{Member, PendingLeave, PrivateChannel, PrivateChannelStore};
+use private_channel::{PendingLeave, PrivateChannel, PrivateChannelStore};
 
 /// A mesh conversation with its sidebar state resolved by the mesh service.
 pub struct MeshSidebarRow {

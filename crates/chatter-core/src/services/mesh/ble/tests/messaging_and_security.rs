@@ -498,7 +498,7 @@ async fn our_prekey_bundle_is_saved_before_it_is_published() {
 }
 
 #[tokio::test]
-async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
+async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_sealing() {
     let (mut runtime, _radio, state) = runtime();
     let owner = MeshIdentity::generate(&mut os_rng());
     let announcement = AnnouncementPacket::new(
@@ -519,15 +519,24 @@ async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
     theirs.refresh(now_millis(), &mut os_rng());
     let genuine = theirs.bundle(&owner).expect("bundle");
     let bundle_packet = |bundle: &PrekeyBundle| {
-        BitchatPacket::new(
+        let mut packet = BitchatPacket::new(
             MessageType::PrekeyBundle,
             owner.peer_id().to_routing_bytes().expect("routing bytes"),
             None,
             now_millis(),
             bundle.encode().expect("encodes"),
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-        )
+        );
+        packet.signature = Some(sign_packet(&owner, &packet).unwrap());
+        packet
     };
+
+    // A signature-shaped packet alone is insufficient without the owner's announce.
+    state.with(|inner| inner.peers.remove(&owner.peer_id()));
+    assert!(!runtime.on_prekey_bundle(&bundle_packet(&genuine)));
+    state.with(|inner| {
+        inner.peers.upsert_verified_announce(&owner.peer_id(), &announcement, true, now_millis());
+    });
 
     // Signed by someone else over the owner's static key: refused.
     let forger = MeshIdentity::generate(&mut os_rng());
@@ -547,7 +556,29 @@ async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
             .is_none()
     );
 
-    // The genuine one is cached, so offline mail to the owner seals to it.
+    let mut spoofed = bundle_packet(&genuine);
+    spoofed.timestamp += 2 * 24 * 60 * 60 * 1000;
+    assert!(!runtime.on_prekey_bundle(&spoofed), "the outer timestamp must be signed");
+    spoofed.signature = Some(sign_packet(&owner, &spoofed).unwrap());
+    assert!(!runtime.on_prekey_bundle(&spoofed));
+    assert!(!runtime.gossip.has_prekey_bundle(&owner.peer_id()));
+
+    // Announce-only relays can propagate it, but cannot use it for sealing.
+    assert!(runtime.on_prekey_bundle(&bundle_packet(&genuine)));
+    assert!(
+        state
+            .with(|inner| inner
+                .prekeys
+                .peers
+                .take(&owner.static_public(), now_millis()))
+            .is_none()
+    );
+    assert!(state.with(|inner| inner.peers.pin_noise_identity(
+        &owner.peer_id(),
+        &owner.static_public(),
+        &owner.signing_public(),
+        now_millis(),
+    )));
     assert!(runtime.on_prekey_bundle(&bundle_packet(&genuine)));
     let (_, prekey_id) = super::super::prekeys::seal_offline(
         &state,
@@ -558,6 +589,260 @@ async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
     )
     .expect("sealed");
     assert!(prekey_id.is_some_and(|id| genuine.prekeys.iter().any(|p| p.id == id)));
+}
+
+#[tokio::test]
+async fn a_newer_prekey_under_a_competing_announce_cannot_displace_the_owner_bundle() {
+    use chatter_mesh::sync_flags::SyncTypeFlags;
+
+    let (mut runtime, radio, state) = runtime();
+    let owner = MeshIdentity::generate(&mut os_rng());
+    let competing = MeshIdentity::generate(&mut os_rng());
+    let peer = owner.peer_id();
+    let link = writable_link_on(&state, &radio, "/mock/prekey-relay", 512);
+    let announce = |signer: &MeshIdentity| {
+        signed(
+            &peer,
+            signer,
+            MessageType::Announce,
+            AnnouncementPacket::new(
+                "owner candidate".into(),
+                owner.static_public().to_vec(),
+                signer.signing_public().to_vec(),
+                None,
+                None,
+                None,
+            )
+            .encode()
+            .unwrap(),
+            true,
+        )
+    };
+    runtime.on_packet(&link, announce(&owner)).await;
+    let mut keys = super::super::prekeys::LocalPrekeys::default();
+    keys.refresh(now_millis(), &mut os_rng());
+    let genuine = keys.bundle(&owner).unwrap();
+    let genuine_packet = signed(
+        &peer,
+        &owner,
+        MessageType::PrekeyBundle,
+        genuine.encode().unwrap(),
+        true,
+    );
+    assert!(runtime.on_prekey_bundle(&genuine_packet));
+
+    runtime.on_packet(&link, announce(&competing)).await;
+    let other = PrekeyBundle::sign(
+        owner.static_public(),
+        genuine.prekeys.clone(),
+        genuine.generated_at,
+        &competing,
+    );
+    let mut newer = signed(
+        &peer,
+        &competing,
+        MessageType::PrekeyBundle,
+        other.encode().unwrap(),
+        true,
+    );
+    newer.timestamp += 119_000;
+    newer.signature = Some(sign_packet(&competing, &newer).unwrap());
+    assert!(runtime.on_prekey_bundle(&newer));
+    // A genuine refresh arriving after the competing announce still verifies.
+    assert!(runtime.on_prekey_bundle(&genuine_packet));
+    let mut request = RequestSyncPacket::new(19, 4096, Vec::new());
+    request.types = Some(SyncTypeFlags::PREKEY_BUNDLE.raw());
+    let requester = MeshIdentity::generate(&mut os_rng()).peer_id();
+    let sends = runtime
+        .gossip
+        .handle_request_sync(&requester, &request, now_secs());
+    assert_eq!(sends.len(), 2);
+    assert!(
+        sends
+            .iter()
+            .any(|send| verify_packet(&send.packet, &owner.signing_public()))
+    );
+
+    runtime
+        .gossip
+        .retain_signing_key(&peer, &owner.signing_public());
+    let sends = runtime
+        .gossip
+        .handle_request_sync(&requester, &request, now_secs());
+    assert_eq!(sends.len(), 1);
+    assert!(verify_packet(&sends[0].packet, &owner.signing_public()));
+}
+
+#[tokio::test]
+async fn prekey_ingress_budget_applies_before_signature_verification() {
+    let (mut runtime, radio, state) = runtime();
+    let owner = MeshIdentity::generate(&mut os_rng());
+    let peer = register_verified_peer(&state, &owner, "owner");
+    let exhausted = writable_link_on(&state, &radio, "/mock/exhausted", 512);
+    let other = writable_link_on(&state, &radio, "/mock/other", 512);
+    let invalid = signed(&peer, &owner, MessageType::PrekeyBundle, Vec::new(), false);
+    for _ in 0..60 {
+        assert!(!runtime.handle_typed(&exhausted, &invalid, &peer).await);
+    }
+
+    let mut keys = super::super::prekeys::LocalPrekeys::default();
+    keys.refresh(now_millis(), &mut os_rng());
+    let payload = keys.bundle(&owner).unwrap().encode().unwrap();
+    let valid = signed(&peer, &owner, MessageType::PrekeyBundle, payload, true);
+    assert!(!runtime.handle_typed(&exhausted, &valid, &peer).await);
+    assert!(!runtime.gossip.has_prekey_bundle(&peer));
+    assert!(runtime.handle_typed(&other, &valid, &peer).await);
+    assert!(runtime.gossip.has_prekey_bundle(&peer));
+}
+
+#[tokio::test]
+async fn qr_join_requires_a_live_noise_session_and_the_pinned_signing_key() {
+    let (mut runtime, _radio, state) = runtime();
+    let local = runtime.identity.peer_id();
+    let joiner = MeshIdentity::generate(&mut os_rng());
+    let peer = joiner.peer_id();
+    let other = MeshIdentity::generate(&mut os_rng());
+    let announcement = AnnouncementPacket::new(
+        "unproven".into(),
+        joiner.static_public().to_vec(),
+        other.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    );
+    let mut remote = super::super::session::SessionManager::new();
+    let m1 = remote.initiate(&local, &joiner).unwrap();
+    state.with(|inner| {
+        inner
+            .peers
+            .upsert_verified_announce(&peer, &announcement, true, now_millis());
+        let m2 = inner
+            .sessions
+            .on_handshake(&peer, &local, &runtime.identity, &m1)
+            .unwrap()
+            .reply
+            .unwrap();
+        let m3 = remote
+            .on_handshake(&local, &peer, &joiner, &m2)
+            .unwrap()
+            .reply
+            .unwrap();
+        inner
+            .sessions
+            .on_handshake(&peer, &local, &runtime.identity, &m3)
+            .unwrap();
+    });
+
+    let mut channel_ids = Vec::new();
+    for name in ["private", "second channel"] {
+        let mut channel = PrivateChannel::create(name, &runtime.identity, "creator").unwrap();
+        let qr = channel
+            .invite(
+                &runtime.identity,
+                &peer,
+                runtime.identity.static_public(),
+                now_secs(),
+            )
+            .unwrap();
+        let invite = Invite::from_text(&qr, now_secs()).unwrap();
+        runtime.private_channels.save(&channel).unwrap();
+        runtime.on_private_join_request(&peer, invite).await;
+        assert!(
+            runtime
+                .private_channels
+                .load(&channel.id)
+                .unwrap()
+                .unwrap()
+                .member_key(&peer)
+                .is_none()
+        );
+        channel_ids.push(channel.id);
+    }
+    assert_eq!(runtime.pending_private_joins.len(), 2);
+    let transcript = remote.handshake_hash(&local).unwrap();
+    let key = joiner.signing_public();
+    let proof = chatter_mesh_noise::sign::sign_bytes(
+        &joiner,
+        &[
+            b"CHTRNSB1".as_slice(),
+            &joiner.static_public(),
+            &transcript,
+            &key,
+        ]
+        .concat(),
+    );
+    let binding = [b"CHTRNSB1".as_slice(), &key, &proof].concat();
+    let packet = BitchatPacket::new(
+        MessageType::NoiseEncrypted,
+        peer.to_routing_bytes().unwrap(),
+        local.to_routing_bytes(),
+        now_millis(),
+        remote.encrypt(&local, &binding).unwrap(),
+        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+    );
+    runtime
+        .on_encrypted(&LinkId::new("/mock/joiner"), &packet, &peer)
+        .await;
+    assert!(state.with(|inner| {
+        inner.peers.info(&peer).is_some_and(|record| {
+            !record.verified_nickname && record.signing_public_key.as_deref() == Some(key.as_slice())
+        })
+    }));
+    assert!(runtime.pending_private_joins.is_empty());
+    for id in channel_ids {
+        let roster = runtime.private_channels.load(&id).unwrap().unwrap();
+        let member = roster
+            .members
+            .iter()
+            .find(|member| member.peer == peer.as_str())
+            .unwrap();
+        assert_eq!(member.signing_key, joiner.signing_public());
+        assert_ne!(member.nickname, "unproven");
+    }
+}
+
+#[tokio::test]
+async fn courier_deposit_accepts_a_pinned_peer_after_its_record_expires() {
+    use chatter_mesh::tlv::courier_envelope::{epoch_day, recipient_tag};
+    use chatter_mesh_link::registry::REACHABILITY_RETENTION_VERIFIED_MS;
+    use chatter_mesh_noise::seal::seal_courier;
+
+    let (mut runtime, _radio, state) = runtime();
+    let sender = MeshIdentity::generate(&mut os_rng());
+    let peer = register_verified_peer(&state, &sender, "sender");
+    let now_ms = now_millis();
+    state.with(|inner| {
+        let presence = Default::default();
+        inner
+            .peers
+            .update_last_seen(&peer, now_ms - REACHABILITY_RETENTION_VERIFIED_MS - 1);
+        // The first sweep disconnects the stale peer and the second expires its record.
+        inner.peers.reconcile_connectivity(now_ms, &presence);
+        inner.peers.reconcile_connectivity(now_ms, &presence);
+        assert!(inner.peers.info(&peer).is_none());
+        assert!(inner.peers.pinned(&peer).is_some());
+    });
+
+    let recipient = MeshIdentity::generate(&mut os_rng()).static_public();
+    let now_s = now_ms / 1000;
+    let ciphertext = seal_courier(b"offline message", &recipient, &sender).expect("seal courier");
+    let envelope = CourierEnvelope::new(
+        recipient_tag(&recipient, epoch_day(now_s)),
+        (now_s + 3600) * 1000,
+        ciphertext,
+        1,
+        None,
+    );
+    let packet = BitchatPacket::new(
+        MessageType::CourierEnvelope,
+        peer.to_routing_bytes().expect("routing bytes"),
+        runtime.identity.peer_id().to_routing_bytes(),
+        now_ms,
+        envelope.encode().expect("encodes"),
+        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+    );
+    runtime.on_courier_envelope(&packet, &peer).await;
+    assert!(runtime.couriers.carries_for(&recipient, now_s));
 }
 
 #[tokio::test]
@@ -615,7 +900,9 @@ async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
         envelope.encode().expect("encodes"),
         chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
     );
-    runtime.on_courier_envelope(&packet, &sender.peer_id()).await;
+    runtime
+        .on_courier_envelope(&packet, &sender.peer_id())
+        .await;
 
     match events.try_recv() {
         Ok(MeshEvent::Message(message)) => {
@@ -654,8 +941,8 @@ async fn a_file_from_a_verified_peer_is_stored_and_reachable_from_its_row() {
     // and "its bytes are somewhere the user can open" are two claims, and
     // the second is the one that makes the feature exist.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let mut events = runtime.events.subscribe();
 
     let file = sample_file();
@@ -713,8 +1000,8 @@ async fn the_same_file_arriving_again_does_not_store_a_second_copy() {
     // and letting the row be ignored leaves an encrypted megabyte nothing
     // references, and shows the user an attachment the stored row never had.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let packet = file_packet(&sender, &identity, &sample_file(), None, true);
 
     runtime.on_file_transfer(&packet, &sender);
@@ -753,8 +1040,8 @@ async fn an_unsigned_file_transfer_is_dropped() {
     // voice burst spoofing a broadcast note under the talker's ID to
     // overwrite their signature-verified bubble with attacker audio.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let mut events = runtime.events.subscribe();
 
     let packet = file_packet(&sender, &identity, &sample_file(), None, false);
@@ -861,8 +1148,8 @@ async fn a_file_addressed_to_us_alone_is_not_accepted_in_the_clear() {
     // can arrive in the clear. `on_public_message` refuses the legacy
     // directed `Message` for the same reason.
     let (mut runtime, _radio, state, timeline) = runtime_parts();
-    let sender = PeerId::from_str("bbbbbbbbbbbbbbbb");
-    let identity = register_verified_peer(&state, &sender, "wanderer");
+    let identity = MeshIdentity::generate(&mut os_rng());
+    let sender = register_verified_peer(&state, &identity, "wanderer");
     let local = runtime.identity.peer_id();
     let mut events = runtime.events.subscribe();
 
