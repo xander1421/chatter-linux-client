@@ -304,6 +304,9 @@ class MainActivity : GameActivity() {
             connectivity.unregisterNetworkCallback(callback)
         }
         torNetworkCallback = null
+        for (request in runtimePermissionRequests.cancelAll()) {
+            nativeOnPermissionsResult(request.id, emptyArray(), emptyArray())
+        }
         nativeClearActivity()
         super.onDestroy()
     }
@@ -1437,8 +1440,7 @@ class MainActivity : GameActivity() {
 
     private var fullScreenCallPrompt: FullScreenCallPrompt? = null
     private var fullScreenCallDialog: android.app.AlertDialog? = null
-    private val runtimePermissionRequests = ArrayDeque<Array<String>>()
-    private var runtimePermissionRequestInFlight = false
+    private val runtimePermissionRequests = RuntimePermissionQueue()
 
     private fun refreshFullScreenCallState(): Int {
         if (Build.VERSION.SDK_INT < 34) return 0
@@ -1460,7 +1462,7 @@ class MainActivity : GameActivity() {
 
     private fun maybeShowFullScreenCallPrompt() {
         val prompt = fullScreenCallPrompt ?: return
-        if (!activityResumed || !window.decorView.hasWindowFocus() || runtimePermissionRequests.isNotEmpty() ||
+        if (!activityResumed || !window.decorView.hasWindowFocus() || runtimePermissionRequests.hasRequests() ||
             isFinishing || isDestroyed || lockScreenCallId != null ||
             getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return
 
@@ -1512,28 +1514,24 @@ class MainActivity : GameActivity() {
     // --- Runtime permissions ---------------------------------------------------
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            val requestId = runtimePermissionRequests.completeActive()?.id ?: 0L
             val granted = result.filterValues { it }.keys.toTypedArray()
             val denied = result.filterValues { !it }.keys.toTypedArray()
             callAudio.retryMediaService()
-            nativeOnPermissionsResult(granted, denied)
-            if (runtimePermissionRequestInFlight) {
-                runtimePermissionRequests.removeFirst()
-                runtimePermissionRequestInFlight = false
-            }
+            nativeOnPermissionsResult(requestId, granted, denied)
             window.decorView.post { launchNextRuntimePermissionRequest() }
         }
 
     private fun launchNextRuntimePermissionRequest() {
-        if (runtimePermissionRequestInFlight) return
-        while (runtimePermissionRequests.isNotEmpty()) {
-            runtimePermissionRequestInFlight = true
+        while (true) {
+            val request = runtimePermissionRequests.startNext() ?: break
             try {
-                permissionRequest.launch(runtimePermissionRequests.first())
+                permissionRequest.launch(request.permissions)
                 return
             } catch (error: RuntimeException) {
-                runtimePermissionRequestInFlight = false
-                runtimePermissionRequests.removeFirst()
+                runtimePermissionRequests.completeActive()
                 Log.w("ChatterCalls", "Runtime permission request unavailable", error)
+                nativeOnPermissionsResult(request.id, emptyArray(), emptyArray())
             }
         }
         if (Build.VERSION.SDK_INT >= 34) maybeShowFullScreenCallPrompt()
@@ -1557,10 +1555,14 @@ class MainActivity : GameActivity() {
 
     /** Called from Rust (JNI). Shows the system grant dialog for [permissions]. */
     @Suppress("unused")
-    fun requestPermissions(permissions: Array<String>) {
+    fun requestPermissions(permissions: Array<String>, requestId: Long) {
         runOnUiThread {
-            runtimePermissionRequests.addLast(permissions)
-            if (runtimePermissionRequests.size == 1) launchNextRuntimePermissionRequest()
+            if (isFinishing || isDestroyed) {
+                nativeOnPermissionsResult(requestId, emptyArray(), emptyArray())
+                return@runOnUiThread
+            }
+            runtimePermissionRequests.enqueue(requestId, permissions)
+            launchNextRuntimePermissionRequest()
         }
     }
 
@@ -1581,7 +1583,7 @@ class MainActivity : GameActivity() {
     }
 
     /** Implemented in Rust (libchatter_ui.so). Delivers grant results. */
-    private external fun nativeOnPermissionsResult(granted: Array<String>, denied: Array<String>)
+    private external fun nativeOnPermissionsResult(requestId: Long, granted: Array<String>, denied: Array<String>)
 
     /** Called from Rust (JNI, platform/android/qr_scanner.rs). See QrScanner. */
     @Suppress("unused")
