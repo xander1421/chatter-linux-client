@@ -35,9 +35,8 @@
 //! - **Server mode** KEK = HKDF-SHA256(ikm = svr_secret,
 //!   info = "Chatter Message Backup KEK v1"). The server never sees the PIN,
 //!   the svr_secret, or the KEK — the blob it stores is noise to it.
-//! - Server index = HMAC-SHA256(svr_secret, "MessageBackupId"), mirroring
-//!   `svr_backup::derive_backup_id`'s "BackupId" derivation with a distinct
-//!   context string.
+//! - The server index is the SHA-256 digest of an account-bound libsignal
+//!   BackupId, with its own root derived from the SVR secret.
 //!
 //! Single-shot AES-GCM over the payload is deliberate: history backups are
 //! text-dominated (MBs, not GBs) and GCM is safe far past that (~64 GiB per
@@ -46,7 +45,7 @@
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use libsignal_core::Aci;
 use prost::Message;
 use sha2::Sha256;
 use zeroize::Zeroize;
@@ -170,18 +169,9 @@ pub fn derive_link_sync_kek(
     kek
 }
 
-/// Derive the server-side index for the message backup:
-/// HMAC-SHA256(svr_secret, "MessageBackupId"). Mirrors
-/// `svr_backup::derive_backup_id` ("BackupId") with a distinct context so the
-/// two backups are independently addressable.
-pub fn derive_message_backup_id(svr_secret: &[u8; 32]) -> [u8; 32] {
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(svr_secret)
-        .expect("HMAC accepts any key size");
-    mac.update(b"MessageBackupId");
-    let mut id = [0u8; 32];
-    id.copy_from_slice(&mac.finalize().into_bytes());
-    id
+/// Derive the message-backup lookup digest for this PIN root and account.
+pub fn derive_message_backup_id_hash(svr_secret: &[u8; 32], aci: &Aci) -> [u8; 32] {
+    crate::crypto::svr::backup_id_hash(svr_secret, aci, b"Chatter Message Backup ID Key v1")
 }
 
 fn random_bytes<const N: usize>() -> [u8; N] {
@@ -362,24 +352,32 @@ mod tests {
     /// KDF construction re-keys every existing backup — fail loudly instead.
     #[test]
     fn server_kek_and_backup_id_match_pinned_vectors() {
+        let aci = Aci::from_uuid_bytes([0x11; 16]);
+        let other_aci = Aci::from_uuid_bytes([0x22; 16]);
+        let key_backup_id = crate::crypto::svr_backup::derive_backup_id_hash;
         assert_eq!(
             hex::encode(derive_server_kek(&secret())),
             "0a7f32256fb338f38b2751511dc417d04c4c16657bf3ffeb0c9d30a2049f9a4f",
         );
         assert_eq!(
-            hex::encode(derive_message_backup_id(&secret())),
-            "11192d4389f60baf9f35d5fd2d18fd7f76e0578c0c046e3223ba7fa44fa81de0",
+            hex::encode(derive_message_backup_id_hash(&secret(), &aci)),
+            "254e3e29bf802470182a4c415a2bc20487b91ee51426b21980c2ad35426c4bf3",
         );
-        // Distinct from the SVR key-backup id (HKDF info "Chatter SVR Backup Id
-        // v1" since CRYPTO-3; it was HMAC(secret, "BackupId")) — the two backups
-        // must be independently addressable server-side.
         assert_eq!(
-            hex::encode(crate::crypto::svr_backup::derive_backup_id(&secret())),
-            "c795c10a785300f313f43403a419adc4db433c5bf8148675c030aea76fbce02c",
+            hex::encode(key_backup_id(&secret(), &aci)),
+            "11562a7a862e796289270b222712f0217357cfe911e71d9c34fc05420af93cec",
         );
         assert_ne!(
-            derive_message_backup_id(&secret()),
-            crate::crypto::svr_backup::derive_backup_id(&secret())
+            derive_message_backup_id_hash(&secret(), &aci),
+            key_backup_id(&secret(), &aci),
+        );
+        assert_ne!(
+            derive_message_backup_id_hash(&secret(), &aci),
+            derive_message_backup_id_hash(&secret(), &other_aci),
+        );
+        assert_ne!(
+            key_backup_id(&secret(), &aci),
+            key_backup_id(&secret(), &other_aci),
         );
         // And the KEK must not equal the raw secret (domain separation).
         assert_ne!(derive_server_kek(&secret()), secret());

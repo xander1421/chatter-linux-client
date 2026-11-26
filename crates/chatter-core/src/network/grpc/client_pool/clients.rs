@@ -76,6 +76,18 @@ impl GrpcClientPool {
         super::super::SvrClient::new(self.channel(), self.auth_clone())
     }
 
+    /// Use the same account for deriving the backup ID and authorizing its RPC.
+    pub(crate) fn account_bound_svr_client(
+        &self,
+    ) -> Result<(libsignal_core::Aci, super::super::SvrClient), NetworkError> {
+        let (user_id, auth) = self
+            .auth
+            .bind_basic_account()
+            .ok_or(NetworkError::Unauthenticated)?;
+        let aci = libsignal_core::Aci::from_uuid_bytes(*user_id.as_bytes());
+        Ok((aci, super::super::SvrClient::new(self.channel(), auth)))
+    }
+
     /// Create an authenticated NotificationClient.
     pub fn notification_client(&self) -> super::super::NotificationClient {
         super::super::NotificationClient::new(self.channel(), self.auth_clone())
@@ -157,6 +169,8 @@ impl GrpcClientPool {
     /// direct transport. Fails closed exactly like [`Self::secret_channel`].
     /// Not cached: the certificate is refreshed about once a day.
     pub fn secret_route_auth_client(&self) -> Result<super::super::AuthClient, NetworkError> {
+        #[cfg(feature = "onion")]
+        let token = self.transport_token.read().clone();
         let onion = self
             .onion_addr
             .read()
@@ -170,7 +184,8 @@ impl GrpcClientPool {
             let ch = GrpcTransport::from_onion(
                 endpoint.connect_with_connector_lazy(self.onion_connector()),
                 self.transport_mode.clone(),
-            );
+            )
+            .in_generation(token);
             Ok(super::super::AuthClient::new(ch, self.auth_clone()))
         }
         #[cfg(not(feature = "onion"))]

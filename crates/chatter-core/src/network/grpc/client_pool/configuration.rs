@@ -62,7 +62,9 @@ impl GrpcClientPool {
             direct_url: Arc::new(RwLock::new(server_url.to_string())),
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
+            transport_token: Arc::new(RwLock::new(tokio_util::sync::CancellationToken::new())),
             transport_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            active_unconsented_media: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             unidentified_channel: Arc::new(RwLock::new(None)),
             private_post_channel: Arc::new(RwLock::new(None)),
             #[cfg(feature = "onion")]
@@ -186,7 +188,7 @@ impl GrpcClientPool {
             tracing::info!("gRPC pool direct URL updated to {server_url} (stays on onion)");
             return Ok(());
         }
-        self.swap_endpoint(new_endpoint, TransportMode::Direct);
+        self.swap_endpoint(new_endpoint, TransportMode::Direct)?;
         tracing::info!("gRPC pool URL updated to: {}", server_url);
         Ok(())
     }
@@ -213,6 +215,68 @@ impl GrpcClientPool {
         *self.transport_mode.read()
     }
 
+    pub(crate) fn route_generation_snapshot(
+        &self,
+    ) -> (TransportMode, tokio_util::sync::CancellationToken) {
+        // The endpoint swap holds the channel write lock across both fields.
+        let _channel = self.channel.read();
+        (self.transport_mode(), self.transport_token.read().clone())
+    }
+
+    /// Capture the generation whose onion poll may update the Tor indicator.
+    pub(crate) fn tor_poll_generation(&self) -> Option<u64> {
+        let _channel = self.channel.read();
+        (self.transport_mode() == TransportMode::Onion).then(|| {
+            self.transport_gen
+                .load(std::sync::atomic::Ordering::Acquire)
+        })
+    }
+
+    pub(crate) fn note_tor_poll(
+        &self,
+        generation: u64,
+        status: crate::network::connection::TorStatus,
+    ) -> bool {
+        // Endpoint swaps and network refreshes retire the generation under
+        // this lock, so neither can interleave with checking and publishing.
+        let _channel = self.channel.read();
+        if self.transport_mode() != TransportMode::Onion
+            || self
+                .transport_gen
+                .load(std::sync::atomic::Ordering::Acquire)
+                != generation
+        {
+            return false;
+        }
+        crate::network::connection::set_tor_status(status);
+        true
+    }
+
+    #[cfg(feature = "media")]
+    pub(crate) fn admit_unconsented_media(
+        &self,
+    ) -> Result<super::DirectMediaLease, crate::error::CallError> {
+        let _channel = self.channel.read();
+        if self.transport_mode() == TransportMode::Onion {
+            return Err(crate::error::CallError::ConnectionFailed(chatter_i18n::tr(
+                "Call media connects directly and can reveal your IP address.",
+            )));
+        }
+        self.active_unconsented_media
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Ok(super::DirectMediaLease(
+            self.active_unconsented_media.clone(),
+        ))
+    }
+
+    #[cfg(feature = "media")]
+    pub(crate) fn call_origin(&self) -> (String, Option<String>) {
+        (
+            self.direct_url.read().clone(),
+            self.onion_addr.read().clone(),
+        )
+    }
+
     /// Shared handle to the pool's lazily-bootstrapped Tor client, for carrying
     /// direct HTTP (CDN content) over the same circuit substrate in anon mode.
     #[cfg(feature = "onion")]
@@ -233,8 +297,20 @@ impl GrpcClientPool {
     /// lock: before this, `disconnect()` ran first, and a `channel()` landing
     /// between it and the endpoint write cached a channel on the OLD transport
     /// (direct) that then outlived the switch to onion.
-    pub(super) fn swap_endpoint(&self, endpoint: Endpoint, mode: TransportMode) {
+    pub(super) fn swap_endpoint(
+        &self,
+        endpoint: Endpoint,
+        mode: TransportMode,
+    ) -> Result<(), NetworkError> {
         let mut channel = self.channel.write();
+        if mode == TransportMode::Onion
+            && self
+                .active_unconsented_media
+                .load(std::sync::atomic::Ordering::Acquire)
+                != 0
+        {
+            return Err(NetworkError::ShieldBlockedByActiveCall);
+        }
         #[cfg(feature = "quic")]
         {
             // Stop direct UDP work before changing origin or entering Tor.
@@ -247,15 +323,22 @@ impl GrpcClientPool {
         }
         *self.endpoint.write() = endpoint;
         *self.transport_mode.write() = mode;
+        {
+            let mut token = self.transport_token.write();
+            token.cancel();
+            *token = tokio_util::sync::CancellationToken::new();
+        }
         self.transport_gen
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *channel = None;
         *self.unidentified_channel.write() = None;
         *self.private_post_channel.write() = None;
+        self.disconnect_secret();
         #[cfg(feature = "onion")]
         {
             *self.unidentified_health.write() = None;
         }
+        Ok(())
     }
 
     /// Endpoint, transport and generation read together (under the channel
@@ -297,7 +380,7 @@ impl GrpcClientPool {
             TransportMode::Direct => {
                 let url = self.direct_url.read().clone();
                 let ep = Self::create_endpoint(&url, self.timeout)?;
-                self.swap_endpoint(ep, TransportMode::Direct);
+                self.swap_endpoint(ep, TransportMode::Direct)?;
                 tracing::info!("transport: direct ({url})");
                 Ok(())
             }
@@ -311,7 +394,7 @@ impl GrpcClientPool {
                     // onion address self-authenticates). The real dial goes through
                     // the Arti connector on the next `channel()`/`connect()`.
                     let ep = Self::create_endpoint(&_onion, self.timeout)?;
-                    self.swap_endpoint(ep, TransportMode::Onion);
+                    self.swap_endpoint(ep, TransportMode::Onion)?;
                     tracing::info!("transport: onion");
                     Ok(())
                 }

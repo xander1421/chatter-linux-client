@@ -1,9 +1,8 @@
 //! SVR Backup Encryption/Decryption.
 //!
 //! Encrypts and decrypts key backup payloads for Secure Value Recovery.
-//! Uses AES-256-GCM for confidentiality and HKDF-SHA256 for the backup ID.
-//! Both keys are per-use HKDF expansions of the SVR secret, never the secret
-//! itself — see `svr::svr_subkey` (CRYPTO-3).
+//! Uses AES-256-GCM and an account-bound libsignal BackupId digest.
+//! Their keys use separate HKDF contexts under the SVR secret.
 //!
 //! Wire format for serialized payload (fixed size):
 //!   version(1) || identity_len(4 LE) || identity_keypair(64) || profile_len(4 LE) || profile_key(32)
@@ -16,15 +15,13 @@
 //!   nonce(12) || ciphertext || tag(16)
 
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use libsignal_core::Aci;
 use zeroize::Zeroize;
 
-use crate::crypto::svr::svr_subkey;
+use crate::crypto::svr::{backup_id_hash, svr_subkey};
 use crate::error::CryptoError;
 
-/// HKDF info strings for the two consumers of the SVR secret in this module.
-/// See `svr::svr_subkey` (CRYPTO-3) for why they are not the raw secret.
 const SVR_INFO_BACKUP_AES: &[u8] = b"Chatter SVR Backup AES-GCM Key v1";
-const SVR_INFO_BACKUP_ID: &[u8] = b"Chatter SVR Backup Id v1";
 
 /// Current serialization version for key backup payloads. 0x02 added the
 /// full username; 0x01 backups are rejected (pre-release clean break).
@@ -276,12 +273,7 @@ pub fn decrypt_backup(
     result
 }
 
-/// Derive a deterministic backup ID from an SVR secret.
-///
-/// HKDF-SHA256(svr_secret, info = "Chatter SVR Backup Id v1") — a 32-byte
-/// identifier the server can use to locate the encrypted backup without learning
-/// the secret, and which shares no key material with the AES-GCM key that
-/// protects the backup itself.
-pub fn derive_backup_id(svr_secret: &[u8; 32]) -> [u8; 32] {
-    svr_subkey(svr_secret, SVR_INFO_BACKUP_ID)
+/// Derive the key-backup lookup digest for this PIN root and account.
+pub fn derive_backup_id_hash(svr_secret: &[u8; 32], aci: &Aci) -> [u8; 32] {
+    backup_id_hash(svr_secret, aci, b"Chatter SVR Backup ID Key v1")
 }

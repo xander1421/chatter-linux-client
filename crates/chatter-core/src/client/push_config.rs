@@ -409,6 +409,19 @@ impl ChatterClient {
                     if listeners.contains_key(&topic) {
                         continue;
                     }
+                    let direct_generation = if secret {
+                        None
+                    } else {
+                        let Some(owner) = client.upgrade() else { break };
+                        let (mode, generation) =
+                            owner.services.grpc_pool.route_generation_snapshot();
+                        if mode != crate::network::grpc::client_pool::TransportMode::Direct
+                            || !owner.push_wakeup_allowed(revision)
+                        {
+                            continue;
+                        }
+                        Some(generation)
+                    };
                     let endpoint = if secret {
                         secret_push_url(&url)
                     } else {
@@ -434,7 +447,16 @@ impl ChatterClient {
                         // Cancellation drops this future and its Tor stream together.
                         let listen=listener.listen(shutdown);
                         tokio::pin!(listen);
+                        let route_retired = async {
+                            match direct_generation {
+                                Some(generation) => generation.cancelled().await,
+                                None => std::future::pending().await,
+                            }
+                        };
+                        tokio::pin!(route_retired);
                         loop { tokio::select! {
+                            biased;
+                            _=&mut route_retired => break,
                             _=&mut listen => break,
                             event=wakes.recv() => {
                                 let Ok(event)=event else { continue };

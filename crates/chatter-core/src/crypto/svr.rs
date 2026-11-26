@@ -6,22 +6,18 @@
 
 use argon2::{Argon2, Params};
 use hkdf::Hkdf;
-use sha2::Sha256;
+use libsignal_account_keys::{BackupKey, SvrKey};
+use libsignal_core::Aci;
+use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
 
 /// Minimum PIN length enforced at the crypto layer.
 ///
-/// 8 ASCII characters at ~36 alphabet entropy give ~41 bits of password
-/// entropy. Without an enclave protecting the SVR backup, this is the user's
-/// only defense against an attacker who has stolen the wrapped backup blob:
-/// the search space size dictates the offline brute-force cost. Coupled with
-/// [`get_argon2_params`] below, 41 bits × ~10^9 Argon2 ops/sec/GPU pushes a
-/// full-keyspace search to multi-decade scale, which is the best a software-
-/// only deployment can do. A real enclave (SGX/Nitro/etc.) would let us drop
-/// this to 4-6 chars while remaining safe.
+/// Without an enclave, a stolen backup can be tested offline. Resistance
+/// depends on how the user chose the PIN and the Argon2id work per guess.
 pub const MIN_PIN_LENGTH: usize = 8;
 pub const MAX_PIN_LENGTH: usize = 64;
 
@@ -29,19 +25,9 @@ pub const MAX_PIN_LENGTH: usize = 64;
 ///
 /// `m=128 MiB`, `t=8`, `p=4`, output = 32 bytes.
 ///
-/// **Why these numbers (no-enclave deployment):** every Argon2 invocation
-/// must dominate offline brute-force cost. Bumped from the prior `(64 MiB,
-/// 3)` because in a software-only deployment the SVR backup is plain
-/// ciphertext on Postgres, so an attacker who steals the DB does an offline
-/// attack against (PIN entropy × Argon2 work). The current numbers cost
-/// roughly ~2-3 seconds per derivation on a modern mobile device and
-/// multiple seconds of GPU time per attacker guess. With [`MIN_PIN_LENGTH`]
-/// = 8, the combined cost makes full-keyspace search infeasible on
-/// commodity hardware.
-///
-/// If you switch to an enclave-backed SVR (see SECURITY.md, "SVR enclave
-/// gap"), these can drop back to (64 MiB, 3) - the enclave provides the
-/// throttling guarantee instead of work factor.
+/// Chatter raised the work factor from 64 MiB and three passes because an
+/// offline attacker with the stored ciphertext can bypass the server's
+/// attempt counter. The higher cost applies to each offline guess.
 pub(crate) fn get_argon2_params() -> Params {
     Params::new(
         131072,   // m_cost (128 MiB)
@@ -287,9 +273,8 @@ pub fn validate_pin_shape(pin: &str) -> Result<(), CryptoError> {
 /// # Salt padding
 ///
 /// Argon2id requires at least 8 bytes of salt. For usernames shorter than 8
-/// bytes (after `trim().to_lowercase()` normalisation) we right-pad with NUL
-/// bytes (`0x00`) up to the 8-byte minimum. This is safe and matches Signal's
-/// reference behaviour for short identifiers because:
+/// bytes (after `trim().to_lowercase()` normalization) we right-pad with NUL
+/// bytes (`0x00`) up to the 8-byte minimum:
 ///
 /// 1. **Argon2 hashes the salt internally.** The KDF compresses the salt
 ///    through BLAKE2b before mixing it into the memory-hard core, so the salt
@@ -358,7 +343,7 @@ pub async fn derive_svr_secret_async(pin: &str, username: &str) -> Result<[u8; 3
 /// Derive a local-only PIN fingerprint, used for in-memory PIN re-auth gates
 /// (e.g. authorising a new linked device via PIN instead of password). Never
 /// sent to the server. Computed as
-/// `HMAC-SHA256(svr_secret, "Chatter Local PIN Fingerprint")`.
+/// HKDF-SHA256 with the SVR secret and the local fingerprint context.
 ///
 /// Persist with [`SettingsRepository::set_bytes(keys::PIN_FINGERPRINT, …)`]
 /// on register / change-pin; constant-time compare on verify.
@@ -375,9 +360,8 @@ pub fn derive_pin_fingerprint(pin: &str, username: &str) -> Result<[u8; 32], Cry
 /// AES-256-GCM key, a lookup index the server sees, an X25519 static scalar and
 /// two more authenticators. Handing the same 32 bytes to different primitives
 /// gives none of them a key of their own, so a weakness or a leak in any one of
-/// them is a weakness in all of them. Every consumer now takes an HKDF-SHA256
-/// expansion under its own info string, exactly as `message_backup::
-/// derive_server_kek` already did.
+/// them is a weakness in all of them. Each use of this helper needs its own
+/// HKDF info string.
 pub fn svr_subkey(svr_secret: &[u8; 32], info: &[u8]) -> [u8; 32] {
     let hk = Hkdf::<Sha256>::new(None, svr_secret);
     let mut out = [0u8; 32];
@@ -386,10 +370,17 @@ pub fn svr_subkey(svr_secret: &[u8; 32], info: &[u8]) -> [u8; 32] {
     out
 }
 
-/// HKDF info strings. Each consumer of the SVR secret gets exactly one.
+/// HKDF info strings for the local fingerprint and the SVR keypair.
 pub(crate) const SVR_INFO_PIN_FINGERPRINT: &[u8] = b"Chatter SVR Local PIN Fingerprint v1";
-pub(crate) const SVR_INFO_REGISTRATION_LOCK: &[u8] = b"Chatter SVR Registration Lock v1";
 pub(crate) const SVR_INFO_X25519: &[u8] = b"Chatter SVR X25519 Static Secret v1";
+
+/// The lookup fields carry the SHA-256 digest of libsignal's 16-byte BackupId.
+/// Each backup type gets its own BackupKey, separate from its encryption key.
+pub(super) fn backup_id_hash(svr_secret: &[u8; 32], aci: &Aci, info: &[u8]) -> [u8; 32] {
+    let root = Zeroizing::new(svr_subkey(svr_secret, info));
+    let key = <&BackupKey>::from(&*root);
+    Sha256::digest(key.derive_backup_id(aci).0).into()
+}
 
 /// Same as [`derive_pin_fingerprint`] but takes an already-derived SVR secret.
 ///
@@ -419,7 +410,16 @@ pub fn derive_registration_lock(pin: &str, username: &str) -> Result<[u8; 32], C
 /// Same as [`derive_registration_lock`] but takes an already-derived SVR secret.
 /// See [`pin_fingerprint_from_secret`] for why callers should prefer this.
 pub fn registration_lock_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
-    svr_subkey(svr_secret, SVR_INFO_REGISTRATION_LOCK)
+    let mut key = SvrKey::new(*svr_secret);
+    let token = key.derive_registration_lock();
+
+    // SvrKey owns a copy of the root and does not implement Zeroize. Use a
+    // volatile overwrite so the compiler retains the store after the last use.
+    // SAFETY: `key` is a live, aligned local and its current type has no drop
+    // glue. Writing a valid SvrKey avoids relying on its private layout.
+    unsafe { std::ptr::write_volatile(&mut key, SvrKey::new([0; 32])) };
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    token
 }
 
 /// SVR Keypair for Secure Value Recovery.
@@ -738,11 +738,9 @@ mod tests {
     /// CRYPTO-3: the Argon2id SVR secret used to be handed unmodified to an
     /// AES-256-GCM key, an HMAC key whose output the server sees as a lookup
     /// index, an X25519 static scalar and two more HMAC keys — one secret, five
-    /// primitives, no separation. Each consumer now takes its own HKDF-SHA256
-    /// expansion. These vectors were computed independently (Python
-    /// hmac/hashlib HKDF over ikm = 0x00..0x1f) so a silent change to an info
-    /// string — which re-keys every backup and every registration lock — fails
-    /// loudly instead.
+    /// primitives, no separation. Each consumer now has its own context.
+    /// These vectors were computed independently with Python hmac/hashlib
+    /// using a synthetic root of 0x00..0x1f.
     #[test]
     fn svr_subkeys_match_pinned_vectors_and_are_distinct() {
         let secret: [u8; 32] = core::array::from_fn(|i| i as u8);
@@ -753,7 +751,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(registration_lock_from_secret(&secret)),
-            "fec745f7e2513c68282a8dceb96077b0a57405e85f2f237faecef53f657ad002",
+            "0c5f865eea5eebe9ef4fa8c4d99cb91de301bebb5b3b91bf775da1a57c725975",
         );
         assert_eq!(
             hex::encode(svr_subkey(&secret, SVR_INFO_X25519)),
@@ -765,7 +763,10 @@ mod tests {
             pin_fingerprint_from_secret(&secret),
             registration_lock_from_secret(&secret),
             svr_subkey(&secret, SVR_INFO_X25519),
-            crate::crypto::svr_backup::derive_backup_id(&secret),
+            crate::crypto::svr_backup::derive_backup_id_hash(
+                &secret,
+                &Aci::from_uuid_bytes([0x11; 16]),
+            ),
         ];
         for (i, a) in subkeys.iter().enumerate() {
             assert_ne!(*a, secret, "subkey {i} is the raw SVR secret");

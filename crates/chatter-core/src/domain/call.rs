@@ -388,6 +388,8 @@ pub struct PendingDmCall {
     pub peer_id: UserId,
     /// Call type label (e.g., "Voice Call", "Video Call").
     pub call_type: String,
+    /// The originator authorized opening direct media while Shield is active.
+    pub(crate) shield_confirmed: bool,
     /// Whether this is a video call.
     pub is_video: bool,
 }

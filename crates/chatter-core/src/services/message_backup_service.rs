@@ -8,8 +8,8 @@
 //! - **Server**: upload the same container to RustFS via a presigned URL
 //!   (`SvrService.SetMessageBackup`) / fetch + restore on a fresh install
 //!   after login + PIN. KEK = HKDF(svr_secret, "Chatter Message Backup KEK
-//!   v1"); index = HMAC(svr_secret, "MessageBackupId"). The server stores an
-//!   opaque blob and never holds key material.
+//!   v1"); the lookup digest comes from the account-bound BackupId. The
+//!   server stores an opaque blob and never holds key material.
 //!
 //! What's inside the container and the idempotent import rules live in
 //! `storage::backup_data`; the container crypto lives in
@@ -22,12 +22,12 @@ use zeroize::Zeroize;
 
 use crate::crypto::message_backup::{
     ARGON2_SALT_LEN, KEY_MODE_LINK, KEY_MODE_PASSPHRASE, KEY_MODE_SVR, decrypt_backup_file,
-    derive_message_backup_id, derive_passphrase_kek, derive_server_kek, encrypt_backup_file,
+    derive_message_backup_id_hash, derive_passphrase_kek, derive_server_kek, encrypt_backup_file,
     parse_backup_file,
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
-use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::storage_http::storage_client;
+use crate::network::grpc::client_pool::{GrpcClientPool, TransportMode};
+use crate::network::storage_http::{fence_cdn_transfer, storage_client};
 use crate::storage::Database;
 use crate::storage::backup_data::{ImportSummary, dump_frames, import_frames};
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
@@ -251,10 +251,11 @@ impl MessageBackupService {
         &self,
         pin: &str,
         username: &str,
+        aci: &libsignal_core::Aci,
     ) -> Result<([u8; 32], [u8; 32]), MessageBackupError> {
         let mut svr_secret = crate::crypto::svr::derive_svr_secret_async(pin, username).await?;
         let kek = derive_server_kek(&svr_secret);
-        let backup_id = derive_message_backup_id(&svr_secret);
+        let backup_id = derive_message_backup_id_hash(&svr_secret, aci);
         svr_secret.zeroize();
         Ok((kek, backup_id))
     }
@@ -281,14 +282,14 @@ impl MessageBackupService {
         // was set must not block the user's own backup (see validate_pin_shape).
         crate::crypto::svr::validate_pin_shape(pin)
             .map_err(|e| MessageBackupError::Generic(format!("invalid PIN: {e}")))?;
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         let username = self.salt_username()?;
-        let (mut kek, backup_id) = self.derive_server_keys(pin, &username).await?;
+        let (mut kek, backup_id) = self.derive_server_keys(pin, &username, &aci).await?;
 
         let result = self.build_container(&kek, KEY_MODE_SVR, &[]);
         kek.zeroize();
         let (container, rows) = result?;
 
-        let mut client = self.grpc_pool.svr_client();
         let upload = client
             .set_message_backup(backup_id.to_vec(), container.len() as u64)
             .await?;
@@ -316,10 +317,10 @@ impl MessageBackupService {
         &self,
         pin: &str,
     ) -> Result<ImportSummary, MessageBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         let username = self.salt_username()?;
-        let (mut kek, backup_id) = self.derive_server_keys(pin, &username).await?;
+        let (mut kek, backup_id) = self.derive_server_keys(pin, &username, &aci).await?;
 
-        let mut client = self.grpc_pool.svr_client();
         let download = match client.get_message_backup(backup_id.to_vec()).await {
             Ok(d) => d,
             Err(NetworkError::NotFound(_)) => {
@@ -356,12 +357,12 @@ impl MessageBackupService {
 
     /// Delete the server-side backup (metadata row + blob).
     pub async fn delete_server_backup(&self, pin: &str) -> Result<(), MessageBackupError> {
+        let (aci, mut client) = self.grpc_pool.account_bound_svr_client()?;
         let username = self.salt_username()?;
         let mut svr_secret = crate::crypto::svr::derive_svr_secret_async(pin, &username).await?;
-        let backup_id = derive_message_backup_id(&svr_secret);
+        let backup_id = derive_message_backup_id_hash(&svr_secret, &aci);
         svr_secret.zeroize();
 
-        let mut client = self.grpc_pool.svr_client();
         client.delete_message_backup(backup_id.to_vec()).await?;
         tracing::info!("server message backup deleted");
         Ok(())
@@ -386,38 +387,45 @@ impl MessageBackupService {
         body: Vec<u8>,
         context: &str,
     ) -> Result<(), MessageBackupError> {
-        #[cfg(feature = "onion")]
-        if self.grpc_pool.transport_mode()
-            == crate::network::grpc::client_pool::TransportMode::Onion
-        {
-            let tor = self.grpc_pool.onion_tor();
-            let resp = crate::network::anon_http::put(&tor, url, body, "application/octet-stream")
+        let (mode, generation) = self.grpc_pool.route_generation_snapshot();
+        fence_cdn_transfer(generation, NetworkError::TransportChanged.into(), async {
+            if mode == TransportMode::Onion {
+                #[cfg(not(feature = "onion"))]
+                return Err(NetworkError::SecretChatNeedsTor("this build has none").into());
+                #[cfg(feature = "onion")]
+                {
+                    let tor = self.grpc_pool.onion_tor();
+                    let resp =
+                        crate::network::anon_http::put(&tor, url, body, "application/octet-stream")
+                            .await
+                            .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")))?;
+                    if !(200..300).contains(&resp.status) {
+                        return Err(MessageBackupError::Generic(format!(
+                            "{context} with status {}",
+                            resp.status
+                        )));
+                    }
+                    return Ok(());
+                }
+            }
+
+            let response = storage_client()
+                .map_err(MessageBackupError::Generic)?
+                .put(url)
+                .header("Content-Type", "application/octet-stream")
+                .body(body)
+                .send()
                 .await
-                .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")))?;
-            if !(200..300).contains(&resp.status) {
+                .map_err(|e| storage_transfer_error(context, e))?;
+            if !response.status().is_success() {
                 return Err(MessageBackupError::Generic(format!(
                     "{context} with status {}",
-                    resp.status
+                    response.status()
                 )));
             }
-            return Ok(());
-        }
-
-        let response = storage_client()
-            .map_err(MessageBackupError::Generic)?
-            .put(url)
-            .header("Content-Type", "application/octet-stream")
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| storage_transfer_error(context, e))?;
-        if !response.status().is_success() {
-            return Err(MessageBackupError::Generic(format!(
-                "{context} with status {}",
-                response.status()
-            )));
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// GET an archive from a presigned storage URL, over Tor in Shield (see
@@ -425,29 +433,35 @@ impl MessageBackupService {
     /// response limit, so an archive larger than that fails rather than
     /// going direct.
     async fn storage_get(&self, url: &str, context: &str) -> Result<Vec<u8>, MessageBackupError> {
-        #[cfg(feature = "onion")]
-        if self.grpc_pool.transport_mode()
-            == crate::network::grpc::client_pool::TransportMode::Onion
-        {
-            let tor = self.grpc_pool.onion_tor();
-            return crate::network::anon_http::get(&tor, url)
-                .await
-                .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")));
-        }
+        let (mode, generation) = self.grpc_pool.route_generation_snapshot();
+        fence_cdn_transfer(generation, NetworkError::TransportChanged.into(), async {
+            if mode == TransportMode::Onion {
+                #[cfg(not(feature = "onion"))]
+                return Err(NetworkError::SecretChatNeedsTor("this build has none").into());
+                #[cfg(feature = "onion")]
+                {
+                    let tor = self.grpc_pool.onion_tor();
+                    return crate::network::anon_http::get(&tor, url)
+                        .await
+                        .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")));
+                }
+            }
 
-        let response = storage_client()
-            .map_err(MessageBackupError::Generic)?
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| storage_transfer_error(context, e))?;
-        if !response.status().is_success() {
-            return Err(MessageBackupError::Generic(format!(
-                "{context} with status {}",
-                response.status()
-            )));
-        }
-        read_archive(response, context).await
+            let response = storage_client()
+                .map_err(MessageBackupError::Generic)?
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| storage_transfer_error(context, e))?;
+            if !response.status().is_success() {
+                return Err(MessageBackupError::Generic(format!(
+                    "{context} with status {}",
+                    response.status()
+                )));
+            }
+            read_archive(response, context).await
+        })
+        .await
     }
 
     /// Build the encrypted Link'n'Sync transfer archive from the local store.
@@ -560,6 +574,47 @@ mod tests {
                 assert!(!rendered.contains("capability"));
                 assert!(rendered.contains("transfer archive"));
             }
+        }
+    }
+
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn shield_entry_cancels_pending_archive_upload_and_download() {
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+
+        for upload in [true, false] {
+            let (service, _db, _file) = svc_with_db();
+            service
+                .grpc_pool
+                .set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("https://{}/archive", listener.local_addr().unwrap());
+            let transfer = async {
+                if upload {
+                    service.storage_put(&url, vec![1], "upload").await
+                } else {
+                    service.storage_get(&url, "download").await.map(|_| ())
+                }
+            };
+            let switch = async {
+                // Hold the connection in the TLS handshake until the request exits.
+                let (socket, _) = listener.accept().await.unwrap();
+                service
+                    .grpc_pool
+                    .set_transport_mode(TransportMode::Onion)
+                    .unwrap();
+                socket
+            };
+            let (result, _socket) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(transfer, switch)
+            })
+            .await
+            .expect("Shield must cancel the pending storage transfer");
+            assert!(matches!(
+                result,
+                Err(MessageBackupError::Network(NetworkError::TransportChanged))
+            ));
         }
     }
 

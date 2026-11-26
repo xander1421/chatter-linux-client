@@ -361,6 +361,21 @@ impl ChatterClient {
             provider.set_app_visible(self.chat_state().is_app_visible());
         }
         self.ctx.init_group_fanout();
+        // Sign-in may follow a direct endpoint change. These providers survive
+        // logout, so reacquire their route before resuming their work.
+        if let Some(provider) = self.ctx.get_device_inbox_provider() {
+            provider.refresh_clients(&self.services.grpc_pool).await;
+        }
+        if let Some(fanout) = self.ctx.get_group_fanout() {
+            fanout.refresh_client(&self.services.grpc_pool).await;
+        }
+        #[cfg(feature = "media")]
+        if let Some(worker) = self.ctx.get_call_service() {
+            worker
+                .swap_call_client(self.services.grpc_pool.call_client())
+                .await;
+        }
+
         // ── Event handling ──────────────────────────────────────────
         let mut listeners = StartupListeners {
             handles: Vec::new(),
@@ -429,7 +444,7 @@ impl ChatterClient {
         let h_peer_verifier = crate::services::signal::spawn_peer_verifier(
             self.services.signal_service.clone(), self.services.grpc_pool.clone(),
             self.event_bus().clone(), self.auth_state().clone(),
-            self.update_transport_epoch.subscribe(),
+            self.transport_epoch.subscribe(),
         );
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);

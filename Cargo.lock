@@ -2014,6 +2014,7 @@ dependencies = [
  "keyring-core",
  "ksni",
  "libc",
+ "libsignal-account-keys",
  "libsignal-core",
  "libsignal-keytrans",
  "libsignal-protocol",

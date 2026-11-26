@@ -5985,5 +5985,13 @@ msgstr "Chiave non verificata"
 msgid "Identity changed"
 msgstr "Identità cambiata"
 
+#: ui/chat/call_confirm.slint
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "L’audio e il video della chiamata usano una connessione diretta che può rivelare il tuo indirizzo IP."
+
+#: ui/anon_mode/shield_network_banner.slint
+msgid "Couldn't reach the server over Tor. Shield is still on."
+msgstr "Impossibile raggiungere il server tramite Tor. Shield è ancora attivo."
+
 msgid "Waiting for anonymous credentials"
 msgstr "In attesa di credenziali anonime"

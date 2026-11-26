@@ -33,6 +33,11 @@ impl ChannelEventService {
                 });
                 match outcome {
                     Ok(()) => tracing::info!("Channel event stream ended; reconnecting"),
+                    Err(ChannelEventError::Network(
+                        crate::error::NetworkError::TransportChanged,
+                    )) => {
+                        continue;
+                    }
                     Err(e) => tracing::warn!("Channel event stream error: {}; reconnecting", e),
                 }
                 let wait = if healthy {
@@ -92,7 +97,7 @@ impl ChannelEventService {
                 }
                 Next::Item(Err(e)) => {
                     tracing::error!("Channel event stream error: {}", e);
-                    return Err(ChannelEventError::Stream(e.to_string()));
+                    return Err(e.into());
                 }
                 Next::Ended => return Ok(()),
                 Next::Silent => {

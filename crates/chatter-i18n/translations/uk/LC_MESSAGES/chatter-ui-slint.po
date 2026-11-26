@@ -6014,5 +6014,13 @@ msgstr "Ключ не підтверджено"
 msgid "Identity changed"
 msgstr "Ідентичність змінилася"
 
+#: ui/chat/call_confirm.slint
+msgid "Call media connects directly and can reveal your IP address."
+msgstr "Аудіо й відео виклику передаються напряму й можуть розкрити вашу IP-адресу."
+
+#: ui/anon_mode/shield_network_banner.slint
+msgid "Couldn't reach the server over Tor. Shield is still on."
+msgstr "Не вдалося з’єднатися із сервером через Tor. Shield досі увімкнено."
+
 msgid "Waiting for anonymous credentials"
 msgstr "Очікування анонімних облікових даних"

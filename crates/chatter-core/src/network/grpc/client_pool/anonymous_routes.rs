@@ -59,16 +59,17 @@ impl GrpcClientPool {
         let use_quic = false;
 
         if let Some(channel) = cached.read().clone()
-            .filter(|channel| channel.is_http3() == use_quic)
+            .filter(|channel| channel.is_current() && channel.is_http3() == use_quic)
         {
             return channel;
         }
         let mut cached = cached.write();
-        if let Some(channel) = cached.clone().filter(|channel| channel.is_http3() == use_quic) {
+        if let Some(channel) = cached.clone().filter(|channel| channel.is_current() && channel.is_http3() == use_quic) {
             return channel;
         }
 
         let endpoint = self.endpoint.read().clone();
+        let generation = self.transport_token.read().clone();
         #[cfg(feature = "onion")]
         if mode == TransportMode::Onion {
             let connector = super::super::onion_transport::OnionConnector::new_isolated(
@@ -77,7 +78,7 @@ impl GrpcClientPool {
             let channel = GrpcTransport::from_onion(
                 endpoint.connect_with_connector_lazy(connector),
                 self.transport_mode.clone(),
-            );
+            ).in_generation(generation);
             *cached = Some(channel.clone());
             return channel;
         }
@@ -87,7 +88,7 @@ impl GrpcClientPool {
             if let Some(channel) = self.direct_url.read().parse::<http::Uri>().ok()
                 .and_then(|uri| super::super::transport::build_quic(uri).ok())
             {
-                let channel = channel.for_pool(self.transport_mode.clone(), mode);
+                let channel = channel.for_pool(self.transport_mode.clone(), mode).in_generation(generation);
                 *cached = Some(channel.clone());
                 return channel;
             }
@@ -95,7 +96,7 @@ impl GrpcClientPool {
 
         let channel = GrpcTransport::from(endpoint.connect_with_connector_lazy(
             crate::network::pq_tls::grpc_connector(&endpoint),
-        )).for_pool(self.transport_mode.clone(), mode);
+        )).for_pool(self.transport_mode.clone(), mode).in_generation(generation);
         *cached = Some(channel.clone());
         channel
     }
@@ -103,7 +104,16 @@ impl GrpcClientPool {
     /// Establish and health-check Shield's anonymous deposit route in advance.
     #[cfg(feature = "onion")]
     pub async fn preconnect_unidentified(&self) -> Result<(), NetworkError> {
-        let (endpoint, mode, generation) = self.snapshot();
+        let (endpoint, mode, generation, token) = {
+            let _channel = self.channel.read();
+            (
+                self.endpoint.read().clone(),
+                self.transport_mode(),
+                self.transport_gen
+                    .load(std::sync::atomic::Ordering::Acquire),
+                self.transport_token.read().clone(),
+            )
+        };
         if mode != TransportMode::Onion {
             return Ok(());
         }
@@ -113,7 +123,8 @@ impl GrpcClientPool {
             .map_err(|e| {
                 NetworkError::ConnectionFailed(format!("anonymous onion preconnect: {e}"))
             })?;
-        let channel = GrpcTransport::from_onion(channel, self.transport_mode.clone());
+        let channel =
+            GrpcTransport::from_onion(channel, self.transport_mode.clone()).in_generation(token);
         let mut probe = super::super::AnonymousMailboxClient::new(channel.clone());
         tokio::time::timeout(
             Duration::from_secs(15),

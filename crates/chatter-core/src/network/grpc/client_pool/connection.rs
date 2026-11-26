@@ -75,9 +75,14 @@ impl GrpcClientPool {
     /// The return value reflects current authoritative evidence, including when
     /// newer RPC evidence supersedes this dial or QUIC construction performs no I/O.
     pub(crate) async fn connect_with_evidence(&self) -> Result<bool, NetworkError> {
+        let token = self.transport_token.read().clone();
         let (endpoint, mode, generation) = self.snapshot();
         let revision = crate::network::connection::server_evidence_revision();
-        let connect_result = self.dial_network(&endpoint, mode).await;
+        let connect_result = tokio::select! {
+            biased;
+            _ = token.cancelled() => return Err(NetworkError::ConnectionFailed("transport changed while connecting; retry".into())),
+            result = self.dial_network(&endpoint, mode) => result,
+        };
         let mut guard = self.channel.write();
         if self
             .transport_gen
@@ -111,7 +116,11 @@ impl GrpcClientPool {
         if fresh && channel.is_http3() && !guard.as_ref().is_some_and(GrpcTransport::is_http3) {
             tracing::event!(target: "network_transport::quic_promoted", tracing::Level::INFO, {});
         }
-        *guard = Some(channel.for_pool(self.transport_mode.clone(), mode));
+        *guard = Some(
+            channel
+                .for_pool(self.transport_mode.clone(), mode)
+                .in_generation(self.transport_token.read().clone()),
+        );
         Ok(crate::network::connection::server_status()
             == crate::network::connection::ServerStatus::Reachable)
     }
@@ -341,17 +350,24 @@ impl GrpcClientPool {
             ServerStatus, server_evidence_revision, set_server_status_if_current,
         };
 
+        let token = self.transport_token.read().clone();
         let (endpoint, mode, generation) = self.snapshot();
         if require_fresh && mode != TransportMode::Direct {
             return Ok(());
         }
         let revision = server_evidence_revision();
-        let result = self.dial_network(&endpoint, mode).await;
-        let result = match result {
-            Ok((_, false)) if require_fresh => {
-                self.probe_lazy_direct(&endpoint).await.map(|()| true)
+        let dial = async {
+            match self.dial_network(&endpoint, mode).await {
+                Ok((_, false)) if require_fresh => {
+                    self.probe_lazy_direct(&endpoint).await.map(|()| true)
+                }
+                other => other.map(|(_, fresh)| fresh),
             }
-            other => other.map(|(_, fresh)| fresh),
+        };
+        let result = tokio::select! {
+            biased;
+            _ = token.cancelled() => return Err(NetworkError::ConnectionFailed("transport changed while probing; retry".into())),
+            result = dial => result,
         };
         // A transport swap uses this same lock, so validation and publication
         // cannot race the switch after the generation check.

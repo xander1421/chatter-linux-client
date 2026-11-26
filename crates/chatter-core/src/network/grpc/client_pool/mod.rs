@@ -112,7 +112,9 @@ pub struct GrpcClientPool {
     /// before a swap must not install its channel after it — that is how a
     /// direct dial still in flight when Shield was switched on would otherwise
     /// become the cached channel every later RPC rides.
+    transport_token: Arc<RwLock<tokio_util::sync::CancellationToken>>,
     transport_gen: Arc<std::sync::atomic::AtomicU64>,
+    active_unconsented_media: Arc<std::sync::atomic::AtomicUsize>,
     /// Separate channel for the unidentified (no auth header) clients of the
     /// ordinary sealed-sender DM path, so their traffic rides its OWN
     /// connection — an isolated Tor circuit under onion — and the server can't
@@ -338,6 +340,62 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "media")]
+    #[test]
+    fn shield_cannot_enable_while_an_unconsented_room_remains_owned() {
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        let onion = || tonic::transport::Endpoint::from_static("http://example.onion");
+        let room = pool.admit_unconsented_media().unwrap();
+        assert!(matches!(
+            pool.swap_endpoint(onion(), TransportMode::Onion),
+            Err(crate::error::NetworkError::ShieldBlockedByActiveCall)
+        ));
+        assert_eq!(pool.transport_mode(), TransportMode::Direct);
+        drop(room);
+        pool.swap_endpoint(onion(), TransportMode::Onion).unwrap();
+        assert!(pool.admit_unconsented_media().is_err());
+    }
+
+    #[test]
+    fn retired_onion_polls_cannot_publish_to_a_new_generation() {
+        use crate::network::connection::TorStatus;
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        let onion = || Endpoint::from_static("http://example.onion");
+
+        pool.swap_endpoint(onion(), TransportMode::Onion).unwrap();
+        let retired = pool.tor_poll_generation().unwrap();
+        pool.set_transport_mode(TransportMode::Direct).unwrap();
+        assert!(!pool.note_tor_poll(retired, TorStatus::Connected));
+        assert!(pool.tor_poll_generation().is_none());
+
+        pool.swap_endpoint(onion(), TransportMode::Onion).unwrap();
+        assert!(!pool.note_tor_poll(retired, TorStatus::Error));
+        let current = pool.tor_poll_generation().unwrap();
+        assert!(pool.note_tor_poll(current, TorStatus::Connected));
+        #[cfg(feature = "onion")]
+        {
+            pool.invalidate_onion_connections();
+            assert!(!pool.note_tor_poll(current, TorStatus::Error));
+        }
+    }
+
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn endpoint_swap_clears_secret_probe_health_and_retires_anonymous_channels() {
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+        pool.set_transport_mode(TransportMode::Onion).unwrap();
+        let anonymous = pool.unidentified_channel();
+        let secret = pool.secret_channel().unwrap();
+        *pool.secret_health.write() = Some(std::time::Instant::now());
+
+        pool.set_transport_mode(TransportMode::Direct).unwrap();
+        assert!(!anonymous.is_current());
+        assert!(!secret.is_current());
+        assert!(pool.secret_health.read().is_none());
+        assert!(pool.unidentified_channel().is_current());
+    }
+
     /// A direct-URL change while on onion (the sign-in form re-applies its
     /// Server URL field) must not put a clearnet endpoint under the onion
     /// dialer; it is remembered for the switch back.
@@ -394,7 +452,7 @@ mod tests {
         let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
 
         // Materialise a (lazy) channel — pool now reports connected + caches it.
-        let _ch = pool.channel();
+        let old = pool.channel();
         assert!(pool.is_connected(), "channel() should cache a channel");
 
         // Any transport switch — even Direct→Direct — must drop the cache.
@@ -405,6 +463,11 @@ mod tests {
              channel() rebuilds over the new transport"
         );
         assert!(pool.try_channel().is_none());
+        assert!(!old.is_current(), "an old holder must be fenced");
+        assert!(
+            pool.channel().is_current(),
+            "new holders redial in the new generation"
+        );
     }
 
     #[test]
@@ -594,7 +657,8 @@ mod tests {
         pool.swap_endpoint(
             Endpoint::from_static("http://example.onion:443"),
             TransportMode::Onion,
-        );
+        )
+        .unwrap();
         assert!(pool.quic_probe_task.lock().is_none());
         tokio::time::timeout(Duration::from_secs(1), async {
             while !old_probe.is_finished() {
@@ -716,5 +780,15 @@ mod transport_security_tests {
             assert!(GrpcClientPool::validate_direct_url(url).is_err(), "{url}");
         }
         assert!(GrpcClientPool::validate_direct_url("https://example.com").is_ok());
+    }
+}
+
+#[cfg(feature = "media")]
+pub(crate) struct DirectMediaLease(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(feature = "media")]
+impl Drop for DirectMediaLease {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
