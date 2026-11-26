@@ -32,14 +32,14 @@ rust-version = "1.99"
 
 # Shared dependency versions. Features stay in each member's manifest.
 [workspace.dependencies]
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-zkgroup = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-signal-media = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-usernames = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
-tokio = "1"
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+zkgroup = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+signal-media = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+usernames = { git = "https://github.com/signalapp/libsignal", rev = "e5ca0e0b1c55ccf675c47dee636e02337c487356" }
+tokio = "1.53.3"
 futures = "0.3"
 prost = "0.14"
 prost-types = "0.14"

@@ -216,6 +216,7 @@ impl SealedSenderManager {
                 )
                 .await
                 .map_err(map_inner_err)?
+                .plaintext
             }
             // A DecryptionErrorMessage ride-along: the "message" is the
             // serialized `PlaintextContent` (0xC0-prefixed), not ratchet

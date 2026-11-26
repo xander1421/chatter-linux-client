@@ -178,6 +178,7 @@ pub async fn decrypt(
                 &mut rng,
             )
             .await
+            .map(|result| result.plaintext)
         }
         3 => {
             let message = libsignal_protocol::SignalMessage::try_from(frame.ciphertext.as_slice())
