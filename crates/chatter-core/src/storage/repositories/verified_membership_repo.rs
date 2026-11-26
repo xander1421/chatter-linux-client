@@ -590,6 +590,32 @@ mod tests {
         assert_eq!(channels.save_remote(metadata).unwrap().channel_type, ChannelType::Private);
     }
 
+    #[test]
+    fn untyped_open_membership_does_not_authorize_plaintext() {
+        use crate::domain::{Channel, ChannelType, UserId};
+        use crate::storage::repositories::ChannelRepository;
+
+        let (_dir, repo) = repo();
+        let channels = ChannelRepository::new(repo.db.clone());
+        let channel = ChannelId::new();
+        let owner = UserId::new();
+        let identity = KeyPair::generate(&mut rand::rng());
+        let (signed, verified) = change(
+            &channel.to_string(),
+            None,
+            (&owner.to_string(), &identity),
+            vec![Action::Genesis(pb::Genesis {
+                policy: Some(Policy::defaults(true).to_proto()),
+                disappearing_seconds: 0,
+                channel_type: pb::ChannelType::Unspecified as i32,
+            })],
+        );
+        repo.commit(&channel, &signed, &verified).unwrap();
+        channels.save_remote(Channel::new(channel, "Open".into(), ChannelType::Public, owner)).unwrap();
+
+        assert_eq!(channels.routing_type(&channel).unwrap(), None);
+    }
+
     /// The signed mute survives storage exactly, `u64::MAX` (stored as the
     /// i64 -1) included, and is 0 for anyone outside the verified state.
     #[test]

@@ -1,10 +1,13 @@
 //! Compare complete RPC traces while changing only the posting member.
 use super::{private_wire_fixture::{grpc_reply, read_wire, repair_bundle}, two_members_with_ids_at};
-use crate::domain::{ChannelId, UserId};
+use crate::client::ChatterClient;
+use crate::domain::{ChannelId, ChannelType, UserId};
 use crate::services::{
+    channel_event_service::ChannelEventService,
     gateway::{MessageGateway, RouteResult},
     message::{MessageService, dm_bootstrap::tests::{cache_fixture_sender_certificate, seed_tokens}},
 };
+use crate::sync::channel_sync::ChannelSync;
 use chatter_proto::chat_v1 as pb;
 use libsignal_protocol::SealedSenderV2SentMessage;
 use prost::Message as _;
@@ -49,11 +52,25 @@ struct ServerState {
     connections: BTreeMap<SocketAddr, usize>,
     calls: Vec<Rpc>,
     bundles: BTreeMap<String, Vec<pb::SignalPreKeyBundle>>,
+    listing: Option<pb::Channel>,
     stale: Option<String>,
     lose_response: bool,
 }
 
 impl ServerState {
+    fn new(bundles: BTreeMap<String, Vec<pb::SignalPreKeyBundle>>) -> Self {
+        Self {
+            phase: "cold",
+            phase_started: Instant::now(),
+            connections: BTreeMap::new(),
+            calls: Vec::new(),
+            bundles,
+            listing: None,
+            stale: None,
+            lose_response: false,
+        }
+    }
+
     fn phase(&mut self, phase: &'static str) {
         self.phase = phase;
         self.phase_started = Instant::now();
@@ -69,6 +86,18 @@ impl ServerState {
         let endpoint = head.uri.path().to_owned();
         let mut state = state.lock().unwrap();
         let (routing, reply) = match endpoint.rsplit('/').next().unwrap() {
+            "ListChannels" => (Routing::Other, grpc_reply(pb::ListChannelsResponse {
+                channels: state.listing.clone().into_iter().collect(),
+                ..Default::default()
+            })),
+            "GetChannelMembers" => {
+                let members = state.listing.as_ref().unwrap().members.clone();
+                (Routing::Other, grpc_reply(pb::GetChannelMembersResponse {
+                    total: members.len() as i32,
+                    members,
+                }))
+            }
+            "GetChannelChanges" => (Routing::Other, grpc_reply(pb::GetChannelChangesResponse::default())),
             "GetPreKeyBundle" => {
                 use pb::get_pre_key_bundle_response::Result as Bundles;
                 let request = pb::GetPreKeyBundleRequest::decode(payload.as_slice()).unwrap();
@@ -143,6 +172,67 @@ impl ServerState {
     }
 }
 
+async fn start_server(
+    state: ServerState,
+) -> (
+    String,
+    Arc<Mutex<ServerState>>,
+    tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let probe = Arc::new(Mutex::new(state));
+    let state = probe.clone();
+    let incoming = futures::stream::unfold(listener, |listener| async {
+        Some((listener.accept().await.map(|(socket, _)| socket), listener))
+    });
+    let server = tokio::spawn(Server::builder().serve_with_incoming(
+        tower::service_fn(move |request| ServerState::call(state.clone(), request)),
+        incoming,
+    ));
+    (url, probe, server)
+}
+
+fn roster_bundles(members: [UserId; 2]) -> BTreeMap<String, Vec<pb::SignalPreKeyBundle>> {
+    let mut rng = StdRng::seed_from_u64(911);
+    members
+        .into_iter()
+        .map(|user| {
+            let devices = (1..=2)
+                .map(|device| {
+                    let mut bundle = repair_bundle(user, 40 + device, &mut rng);
+                    bundle.device_id = device;
+                    bundle
+                })
+                .collect();
+            (user.to_string(), devices)
+        })
+        .collect()
+}
+
+async fn prepare_author(
+    client: &ChatterClient,
+    owner: UserId,
+    channel: ChannelId,
+    bundles: &BTreeMap<String, Vec<pb::SignalPreKeyBundle>>,
+) {
+    let messages = client.messages();
+    let identity = libsignal_protocol::IdentityKeyPair::generate(
+        &mut StdRng::seed_from_u64(owner.as_uuid().as_u128() as u64),
+    );
+    let keys = &messages.signal_service.key_store;
+    keys.set_local_identity(41, &identity.serialize()).unwrap();
+    messages.signal_service.actor.rotate_signed_prekey().await.unwrap();
+    for (peer, devices) in bundles {
+        keys.mark_peer_verified(peer, &devices[0].identity_key).unwrap();
+    }
+    messages.grpc_pool.auth().set_basic(format!("{owner}.1"), "fixture".into());
+    cache_fixture_sender_certificate(client, owner);
+    seed_tokens(messages, 90);
+    let state = messages.group_gate().for_distribution(&channel).unwrap();
+    messages.group_send_tokens.put(&channel, state.state_hash, u64::MAX, vec![1]);
+}
+
 async fn post(
     author: &MessageService, channel: ChannelId, index: u128,
 ) -> (pb::SendMessageRequest, chatter_proto::content_v1::SenderKeyDistribution) {
@@ -199,32 +289,11 @@ async fn deliver_before_distribution(
 
 #[tokio::test]
 async fn private_post_server_trace_is_independent_of_author() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
     let channel = ChannelId::new();
     let alice_id = UserId::new();
     let bob_id = UserId::new();
-    let mut rng = StdRng::seed_from_u64(911);
-    let bundles: BTreeMap<_, Vec<pb::SignalPreKeyBundle>> = [alice_id, bob_id].into_iter().map(|user| {
-        let devices = (1..=2).map(|device| {
-            let mut bundle = repair_bundle(user, 40 + device, &mut rng);
-            bundle.device_id = device;
-            bundle
-        }).collect();
-        (user.to_string(), devices)
-    }).collect();
-    let probe = Arc::new(Mutex::new(ServerState {
-        phase: "cold", phase_started: Instant::now(), calls: Vec::new(), connections: BTreeMap::new(),
-        bundles: bundles.clone(), stale: None, lose_response: false,
-    }));
-    let state = probe.clone();
-    let incoming = futures::stream::unfold(listener, |listener| async {
-        Some((listener.accept().await.map(|(socket, _)| socket), listener))
-    });
-    let server = tokio::spawn(Server::builder().serve_with_incoming(
-        tower::service_fn(move |request| ServerState::call(state.clone(), request)),
-        incoming,
-    ));
+    let bundles = roster_bundles([alice_id, bob_id]);
+    let (url, probe, server) = start_server(ServerState::new(bundles.clone())).await;
 
     let mut traces = Vec::new();
     for index in [0, 1] {
@@ -233,21 +302,8 @@ async fn private_post_server_trace_is_independent_of_author() {
             (alice_id, fixture.alice.messages(), &fixture.alice),
             (bob_id, fixture.bob.messages(), &fixture.bob),
         ];
-        for (owner, messages, client) in &members {
-            let identity = libsignal_protocol::IdentityKeyPair::generate(
-                &mut StdRng::seed_from_u64(owner.as_uuid().as_u128() as u64),
-            );
-            let keys = &messages.signal_service.key_store;
-            keys.set_local_identity(41, &identity.serialize()).unwrap();
-            messages.signal_service.actor.rotate_signed_prekey().await.unwrap();
-            for (peer, devices) in &bundles {
-                keys.mark_peer_verified(peer, &devices[0].identity_key).unwrap();
-            }
-            messages.grpc_pool.auth().set_basic(format!("{owner}.1"), "fixture".into());
-            cache_fixture_sender_certificate(client, *owner);
-            seed_tokens(messages, 90);
-            let state = messages.group_gate().for_distribution(&channel).unwrap();
-            messages.group_send_tokens.put(&channel, state.state_hash, u64::MAX, vec![1]);
+        for (owner, _, client) in &members {
+            prepare_author(client, *owner, channel, &bundles).await;
         }
         let (author, sender, _) = members[index];
         let (_, receiver, _) = members[1 - index];
@@ -304,4 +360,75 @@ async fn private_post_server_trace_is_independent_of_author() {
     assert_eq!(cold_accounts, bundles.into_keys().collect::<Vec<_>>());
     assert_eq!(trace.iter().filter(|rpc| rpc.phase == "warm").count(), 1);
     assert_eq!(trace.iter().filter(|rpc| rpc.phase == "lost response and retry").count(), 2);
+}
+
+#[tokio::test]
+async fn forged_public_listing_cannot_send_a_private_post_in_plaintext() {
+    let channel = ChannelId::new();
+    let alice_id = UserId::new();
+    let bob_id = UserId::new();
+    let bundles = roster_bundles([alice_id, bob_id]);
+    let mut server = ServerState::new(bundles.clone());
+    server.listing = Some(pb::Channel {
+        id: channel.to_string(),
+        owner_id: alice_id.to_string(),
+        name: "Server listing".into(),
+        r#type: pb::ChannelType::ChannelPublic as i32,
+        config: Some(pb::channel::Config {
+            max_members: 100,
+            encrypted: false,
+            ..Default::default()
+        }),
+        members: [alice_id, bob_id]
+            .into_iter()
+            .map(|member| pb::channel::ChannelMember {
+                user_id: member.to_string(),
+                role: pb::ChannelRole::Member as i32,
+                joined_at: 17,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    let (url, probe, server) = start_server(server).await;
+    let fixture = two_members_with_ids_at(&url, channel, alice_id, bob_id);
+    let alice = &fixture.alice;
+    prepare_author(alice, alice_id, channel, &bundles).await;
+    let messages = alice.messages();
+    let events = Arc::new(ChannelEventService::new(
+        messages.message_repo.clone(),
+        messages.channel_repo.clone(),
+        messages.user_repo.clone(),
+        messages.grpc_pool.clone(),
+        alice.event_bus().clone(),
+        messages.settings_repo.clone(),
+        alice.channels().membership_log().clone(),
+    ));
+    let sync = ChannelSync::new(
+        messages.grpc_pool.clone(),
+        messages.channel_repo.clone(),
+        messages.settings_repo.clone(),
+        events,
+    );
+    probe.lock().unwrap().phase("forged listing");
+    let (listed, stats) = sync.sync().await.unwrap();
+    assert!(!stats.incomplete, "{stats:?}");
+    assert_eq!(stats.updated_channels, 1);
+
+    probe.lock().unwrap().phase("post");
+    let sent = alice
+        .send_channel_message(None, &channel, "private text", vec![], vec![], None, vec![], false)
+        .await;
+    server.abort();
+
+    let trace = &probe.lock().unwrap().calls;
+    assert!(trace.iter().any(|rpc| rpc.endpoint.ends_with("/ListChannels")));
+    assert!(trace.iter().all(|rpc| !rpc.endpoint.ends_with("/SendMessage")), "{trace:?}");
+    assert!(trace.iter().any(|rpc| matches!(&rpc.routing, Routing::Group(..))));
+    assert!(trace.iter().filter(|rpc| rpc.phase == "post").all(|rpc| rpc.authorization.is_none()));
+    sent.expect("the post should succeed on the encrypted route");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "Server listing");
+    assert_eq!(listed[0].channel_type, ChannelType::Private);
+    assert!(listed[0].config.require_encryption);
 }

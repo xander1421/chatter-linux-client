@@ -143,10 +143,9 @@ impl ChannelRepository {
         let value: Option<i32> = conn.query_row(
             "SELECT COALESCE(
                 (SELECT channel_type FROM channel_type_pins WHERE channel_id=?1),
-                (SELECT channel_type FROM channels WHERE id=?1 AND channel_type IN (1,3)),
-                (SELECT 0 FROM verified_channel_state WHERE channel_id=?1 AND policy_join=?2)
+                (SELECT channel_type FROM channels WHERE id=?1 AND channel_type IN (1,3))
             )",
-            params![id.to_string(), crate::domain::verified_state::JoinMode::Open as i32],
+            params![id.to_string()],
             |row| row.get(0),
         )?;
         Ok(value.map(channel_type_from_i32))
@@ -199,12 +198,17 @@ impl ChannelRepository {
     /// Store refreshed metadata and return the effective channel.
     pub(crate) fn save_remote(&self, mut channel: Channel) -> Result<Channel, StorageError> {
         self.upsert(&channel)?;
+        self.apply_stored_type(&mut channel)?;
+        Ok(channel)
+    }
+
+    pub(crate) fn apply_stored_type(&self, channel: &mut Channel) -> Result<(), StorageError> {
         if let Some(kind) = self.get_channel_type(&channel.id)? {
             channel.channel_type = kind;
             channel.config.require_encryption =
                 Self::encryption_for_type(kind, channel.config.require_encryption);
         }
-        Ok(channel)
+        Ok(())
     }
 
     /// Get a channel by ID.
