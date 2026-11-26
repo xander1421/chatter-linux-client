@@ -65,7 +65,14 @@ impl BleRuntime {
                 reply,
                 chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
             );
-            self.transmit(&packet, Some(claimed), None).await;
+            if self.state.with(|state| {
+                state.links.peer_for(link) == Some(claimed)
+                    || state.links.discovery_peer_for(link) == Some(claimed)
+            }) {
+                self.transmit_on_link(&packet, claimed, link).await;
+            } else {
+                self.transmit(&packet, Some(claimed), None).await;
+            }
         }
 
         if step.established.is_some() {
@@ -78,8 +85,9 @@ impl BleRuntime {
             // The handshake authenticated `claimed`'s static key (the session
             // manager refuses one that does not derive the ID), and it finished
             // on this link: that is the per-link proof courier handover needs.
-            self.state
-                .with(|state| state.links.mark_noise_authenticated(link, claimed));
+            if self.state.with(|state| state.links.mark_noise_authenticated(link, claimed)) {
+                self.prune_duplicate_links(claimed, now_millis()).await;
+            }
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.
             self.send_chatter_hello(claimed).await;
@@ -191,8 +199,11 @@ impl BleRuntime {
         };
 
         // The link carried traffic only this peer's session key could produce.
-        self.state
-            .with(|state| state.links.mark_noise_authenticated(link, claimed));
+        self.state.with(|state| {
+            if state.links.peer_for(link) == Some(claimed) {
+                state.links.mark_noise_authenticated(link, claimed);
+            }
+        });
 
         if let Some(hello) = ChatterHello::decode(&plaintext) {
             let can_bind = hello.compatible()
@@ -302,9 +313,12 @@ impl BleRuntime {
                 true
             });
             if saved {
-                self.gossip.retain_prekey_bundle_signed_by(claimed, key);
+                self.gossip.retain_signing_key(claimed, key);
                 self.signing_pin_intent.remove(claimed);
                 self.emit_peers();
+                if let Some(invite) = self.pending_private_joins.remove(claimed) {
+                    self.on_private_join_request(claimed, invite).await;
+                }
             }
             return;
         }

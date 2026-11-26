@@ -472,6 +472,31 @@ fn rebind_drops_the_links_noise_proof() {
 }
 
 #[test]
+fn discovery_hints_do_not_bind_or_protect_a_peer_until_noise_proof() {
+    let mut store = LinkStateStore::new();
+    let claim = peer(0xAA);
+    let candidate = link("candidate");
+    let owner = link("owner");
+    store.link_up(candidate.clone(), LinkRole::Central);
+    store.link_up(owner.clone(), LinkRole::Central);
+    assert!(store.note_discovery_peer(&candidate, &claim));
+    assert!(store.note_discovery_peer(&owner, &claim));
+    assert_eq!(store.peer_for(&candidate), None);
+    assert!(!store.presence(&claim).any());
+    assert!(store.preferred_links().get(&claim).is_none());
+    assert!(!store.mark_noise_authenticated(&candidate, &peer(0xBB)));
+
+    assert!(store.mark_noise_authenticated(&owner, &claim));
+    assert!(store.is_noise_authenticated(&owner, &claim));
+    assert!(!store.note_discovery_peer(&owner, &peer(0xBB)));
+    assert_eq!(store.preferred_links().get(&claim), Some(&owner));
+    assert_eq!(
+        store.links_to(&claim),
+        std::collections::BTreeSet::from([owner])
+    );
+}
+
+#[test]
 fn noise_proof_requires_the_binding_to_agree() {
     let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
     // A proof from a peer the link is not bound to (a relayed handshake)

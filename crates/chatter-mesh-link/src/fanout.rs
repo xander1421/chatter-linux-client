@@ -57,11 +57,8 @@ pub struct LinkCandidate {
     pub id: LinkId,
     /// Which side of this link we are. See the module note on the naming trap.
     pub role: LinkRole,
-    /// The peer this link is bound to, or `None` while it is still pre-announce.
-    ///
-    /// A link is bound only once its peer proved an identity with a signed
-    /// announce. Unbound links are never collapsed away — they are exactly the
-    /// links still waiting for the announce that would bind them.
+    /// The peer selected for this link, if known. Unbound links stay eligible
+    /// for broadcast discovery.
     pub peer: Option<PeerId>,
     /// Largest single write this link accepts. Feeds fragment sizing in
     /// [`crate::planner`]; the selection itself ignores it.

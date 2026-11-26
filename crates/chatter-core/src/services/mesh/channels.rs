@@ -97,6 +97,9 @@ impl MeshService {
         }) {
             return Err(self.needs_session(peer));
         }
+        if self.state.pinned_member(peer, true).is_none() {
+            return Err(self.needs_signing_binding(peer));
+        }
         let mut state = self
             .private_channels
             .load(id)?
@@ -130,30 +133,20 @@ impl MeshService {
         Ok(bytes)
     }
 
+    fn needs_signing_binding(&self, peer: &PeerId) -> MeshError {
+        let _ = self
+            .ble
+            .send(BleCommand::EnsureSigningBinding { peer: peer.clone() });
+        self.needs_session(peer)
+    }
+
     /// Queue bitchat's native 0x06 group invitation for a verified nearby peer.
     pub fn invite_private_channel_direct(&self, id: &str, peer: &PeerId) -> Result<(), MeshError> {
         if self.events.peer_blocked(peer) {
             return Err(self.needs_session(peer));
         }
-        let (static_key, signing_key, nickname) = self.state.with(|s| {
-            (
-                s.sessions.remote_static(peer).or_else(|| {
-                    s.peers
-                        .info(peer)
-                        .filter(|p| p.verified_nickname)
-                        .and_then(|p| p.noise_public_key.as_deref())
-                        .and_then(|key| <[u8; 32]>::try_from(key).ok())
-                }),
-                s.peers
-                    .info(peer)
-                    .and_then(|p| p.signing_public_key.clone()),
-                s.peers.info(peer).map(|p| p.nickname.clone()),
-            )
-        });
-        let (Some(static_key), Some(signing_key)) = (static_key, signing_key) else {
-            return Err(MeshError::Binding(
-                "peer signing identity is not verified".into(),
-            ));
+        let Some(member) = self.state.pinned_member(peer, false) else {
+            return Err(self.needs_signing_binding(peer));
         };
         let mut state = self
             .private_channels
@@ -163,8 +156,8 @@ impl MeshService {
             return Err(MeshError::Binding("only the creator can invite".into()));
         }
         if let Some(existing) = state.members.iter().find(|m| m.peer == peer.as_str()) {
-            if existing.fingerprint != chatter_mesh_noise::fingerprint_of(&static_key)
-                || existing.signing_key != signing_key
+            if existing.fingerprint != member.fingerprint
+                || existing.signing_key != member.signing_key
             {
                 return Err(MeshError::Binding(
                     "peer identity differs from the group roster".into(),
@@ -186,12 +179,6 @@ impl MeshService {
                 })
                 .map_err(|_| MeshError::NotRunning);
         }
-        let member = Member {
-            peer: peer.to_string(),
-            fingerprint: chatter_mesh_noise::fingerprint_of(&static_key),
-            signing_key,
-            nickname: nickname.unwrap_or_else(|| peer.to_string()),
-        };
         state.rotate(&self.identity, Some(member), None)?;
         state
             .unanswered_direct_invites

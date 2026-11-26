@@ -560,7 +560,7 @@ async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_s
     spoofed.timestamp += 2 * 24 * 60 * 60 * 1000;
     assert!(!runtime.on_prekey_bundle(&spoofed), "the outer timestamp must be signed");
     spoofed.signature = Some(sign_packet(&owner, &spoofed).unwrap());
-    runtime.gossip.on_public_packet_seen(&spoofed, now_secs());
+    assert!(!runtime.on_prekey_bundle(&spoofed));
     assert!(!runtime.gossip.has_prekey_bundle(&owner.peer_id()));
 
     // Announce-only relays can propagate it, but cannot use it for sealing.
@@ -589,6 +589,210 @@ async fn prekey_bundle_can_relay_before_noise_binding_but_requires_binding_for_s
     )
     .expect("sealed");
     assert!(prekey_id.is_some_and(|id| genuine.prekeys.iter().any(|p| p.id == id)));
+}
+
+#[tokio::test]
+async fn a_newer_prekey_under_a_competing_announce_cannot_displace_the_owner_bundle() {
+    use chatter_mesh::sync_flags::SyncTypeFlags;
+
+    let (mut runtime, radio, state) = runtime();
+    let owner = MeshIdentity::generate(&mut os_rng());
+    let competing = MeshIdentity::generate(&mut os_rng());
+    let peer = owner.peer_id();
+    let link = writable_link_on(&state, &radio, "/mock/prekey-relay", 512);
+    let announce = |signer: &MeshIdentity| {
+        signed(
+            &peer,
+            signer,
+            MessageType::Announce,
+            AnnouncementPacket::new(
+                "owner candidate".into(),
+                owner.static_public().to_vec(),
+                signer.signing_public().to_vec(),
+                None,
+                None,
+                None,
+            )
+            .encode()
+            .unwrap(),
+            true,
+        )
+    };
+    runtime.on_packet(&link, announce(&owner)).await;
+    let mut keys = super::super::prekeys::LocalPrekeys::default();
+    keys.refresh(now_millis(), &mut os_rng());
+    let genuine = keys.bundle(&owner).unwrap();
+    let genuine_packet = signed(
+        &peer,
+        &owner,
+        MessageType::PrekeyBundle,
+        genuine.encode().unwrap(),
+        true,
+    );
+    assert!(runtime.on_prekey_bundle(&genuine_packet));
+
+    runtime.on_packet(&link, announce(&competing)).await;
+    let other = PrekeyBundle::sign(
+        owner.static_public(),
+        genuine.prekeys.clone(),
+        genuine.generated_at,
+        &competing,
+    );
+    let mut newer = signed(
+        &peer,
+        &competing,
+        MessageType::PrekeyBundle,
+        other.encode().unwrap(),
+        true,
+    );
+    newer.timestamp += 119_000;
+    newer.signature = Some(sign_packet(&competing, &newer).unwrap());
+    assert!(runtime.on_prekey_bundle(&newer));
+    // A genuine refresh arriving after the competing announce still verifies.
+    assert!(runtime.on_prekey_bundle(&genuine_packet));
+    let mut request = RequestSyncPacket::new(19, 4096, Vec::new());
+    request.types = Some(SyncTypeFlags::PREKEY_BUNDLE.raw());
+    let requester = MeshIdentity::generate(&mut os_rng()).peer_id();
+    let sends = runtime
+        .gossip
+        .handle_request_sync(&requester, &request, now_secs());
+    assert_eq!(sends.len(), 2);
+    assert!(
+        sends
+            .iter()
+            .any(|send| verify_packet(&send.packet, &owner.signing_public()))
+    );
+
+    runtime
+        .gossip
+        .retain_signing_key(&peer, &owner.signing_public());
+    let sends = runtime
+        .gossip
+        .handle_request_sync(&requester, &request, now_secs());
+    assert_eq!(sends.len(), 1);
+    assert!(verify_packet(&sends[0].packet, &owner.signing_public()));
+}
+
+#[tokio::test]
+async fn prekey_ingress_budget_applies_before_signature_verification() {
+    let (mut runtime, radio, state) = runtime();
+    let owner = MeshIdentity::generate(&mut os_rng());
+    let peer = register_verified_peer(&state, &owner, "owner");
+    let exhausted = writable_link_on(&state, &radio, "/mock/exhausted", 512);
+    let other = writable_link_on(&state, &radio, "/mock/other", 512);
+    let invalid = signed(&peer, &owner, MessageType::PrekeyBundle, Vec::new(), false);
+    for _ in 0..60 {
+        assert!(!runtime.handle_typed(&exhausted, &invalid, &peer).await);
+    }
+
+    let mut keys = super::super::prekeys::LocalPrekeys::default();
+    keys.refresh(now_millis(), &mut os_rng());
+    let payload = keys.bundle(&owner).unwrap().encode().unwrap();
+    let valid = signed(&peer, &owner, MessageType::PrekeyBundle, payload, true);
+    assert!(!runtime.handle_typed(&exhausted, &valid, &peer).await);
+    assert!(!runtime.gossip.has_prekey_bundle(&peer));
+    assert!(runtime.handle_typed(&other, &valid, &peer).await);
+    assert!(runtime.gossip.has_prekey_bundle(&peer));
+}
+
+#[tokio::test]
+async fn qr_join_requires_a_live_noise_session_and_the_pinned_signing_key() {
+    let (mut runtime, _radio, state) = runtime();
+    let local = runtime.identity.peer_id();
+    let joiner = MeshIdentity::generate(&mut os_rng());
+    let peer = joiner.peer_id();
+    let other = MeshIdentity::generate(&mut os_rng());
+    let announcement = AnnouncementPacket::new(
+        "unproven".into(),
+        joiner.static_public().to_vec(),
+        other.signing_public().to_vec(),
+        None,
+        None,
+        None,
+    );
+    let mut remote = super::super::session::SessionManager::new();
+    let m1 = remote.initiate(&local, &joiner).unwrap();
+    state.with(|inner| {
+        inner
+            .peers
+            .upsert_verified_announce(&peer, &announcement, true, now_millis());
+        let m2 = inner
+            .sessions
+            .on_handshake(&peer, &local, &runtime.identity, &m1)
+            .unwrap()
+            .reply
+            .unwrap();
+        let m3 = remote
+            .on_handshake(&local, &peer, &joiner, &m2)
+            .unwrap()
+            .reply
+            .unwrap();
+        inner
+            .sessions
+            .on_handshake(&peer, &local, &runtime.identity, &m3)
+            .unwrap();
+    });
+
+    let mut channel = PrivateChannel::create("private", &runtime.identity, "creator").unwrap();
+    let qr = channel
+        .invite(
+            &runtime.identity,
+            &peer,
+            runtime.identity.static_public(),
+            now_secs(),
+        )
+        .unwrap();
+    let invite = Invite::from_text(&qr, now_secs()).unwrap();
+    runtime.private_channels.save(&channel).unwrap();
+    runtime.on_private_join_request(&peer, invite).await;
+    assert!(
+        runtime
+            .private_channels
+            .load(&channel.id)
+            .unwrap()
+            .unwrap()
+            .member_key(&peer)
+            .is_none()
+    );
+
+    assert!(runtime.pending_private_joins.contains_key(&peer));
+    let transcript = remote.handshake_hash(&local).unwrap();
+    let key = joiner.signing_public();
+    let proof = chatter_mesh_noise::sign::sign_bytes(
+        &joiner,
+        &[
+            b"CHTRNSB1".as_slice(),
+            &joiner.static_public(),
+            &transcript,
+            &key,
+        ]
+        .concat(),
+    );
+    let binding = [b"CHTRNSB1".as_slice(), &key, &proof].concat();
+    let packet = BitchatPacket::new(
+        MessageType::NoiseEncrypted,
+        peer.to_routing_bytes().unwrap(),
+        local.to_routing_bytes(),
+        now_millis(),
+        remote.encrypt(&local, &binding).unwrap(),
+        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+    );
+    runtime
+        .on_encrypted(&LinkId::new("/mock/joiner"), &packet, &peer)
+        .await;
+    assert!(state.with(|inner| {
+        inner.peers.info(&peer).is_some_and(|record| {
+            record.verified_nickname && record.signing_public_key.as_deref() == Some(key.as_slice())
+        })
+    }));
+    let roster = runtime.private_channels.load(&channel.id).unwrap().unwrap();
+    let member = roster
+        .members
+        .iter()
+        .find(|member| member.peer == peer.as_str())
+        .unwrap();
+    assert_eq!(member.signing_key, joiner.signing_public());
+    assert_ne!(member.nickname, "unproven");
 }
 
 #[tokio::test]

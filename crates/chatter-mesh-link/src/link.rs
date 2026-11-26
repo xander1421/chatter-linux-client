@@ -21,8 +21,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// Opaque and backend-assigned: a D-Bus object path on Linux, a `BluetoothDevice`
 /// handle on Android. Deliberately **not** a peer ID — a link is bound to a peer
-/// identity only after that peer proves it with a signed announce, and conflating
-/// the two is what lets a replayed announce steal someone else's link.
+/// identity after a direct discovery hint and authenticated Noise exchange.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LinkId(String);
 

@@ -125,6 +125,13 @@ async fn an_announce_only_claim_cannot_lock_out_the_noise_key_owner() {
     for _ in 0..2 {
         assert!(runtime.on_announce(&attacker_link, &forged_packet, &victim).await);
     }
+    assert!(state.with(|inner| {
+        inner.links.peer_for(&attacker_link).is_none()
+            && !inner.links.presence(&victim).any()
+            && !inner.links.preferred_links().contains_key(&victim)
+            && inner.links.discovery_peer_for(&attacker_link) == Some(&victim)
+    }));
+    assert!(!state.can_write_to(&victim));
     assert!(state.with(|inner| inner.peers.pinned(&victim).is_none()));
     assert!(state.with(|inner| {
         let record = inner.peers.info(&victim).unwrap();
@@ -403,6 +410,40 @@ async fn a_sync_request_from_a_peer_that_did_announce_is_still_answered() {
         true,
     );
     runtime.gossip.on_public_packet_seen(&history, now_secs());
+    let competing = MeshIdentity::generate(&mut os_rng());
+    let mut competing_announce = signed(
+        &author_id,
+        &competing,
+        MessageType::Announce,
+        AnnouncementPacket::new(
+            "competing candidate".into(),
+            author.static_public().to_vec(),
+            competing.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        )
+        .encode()
+        .unwrap(),
+        true,
+    );
+    // The relay saw a different signing claim after the author and their message.
+    competing_announce.ttl -= 1;
+    runtime.on_packet(&link, competing_announce).await;
+    assert!(state.with(|inner| {
+        inner
+            .peers
+            .info(&author_id)
+            .unwrap()
+            .signing_public_key
+            .as_deref()
+            == Some(competing.signing_public().as_slice())
+    }));
+    runtime.drain_writes().await;
+    assert_eq!(
+        runtime.matching_signing_key(&author_id, &history, None),
+        Some(author.signing_public())
+    );
     let before = radio.write_count();
     runtime.on_request_sync(&link, &packet, &subject_peer).await;
     runtime.drain_writes().await;

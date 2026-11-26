@@ -331,32 +331,40 @@ impl PeerRegistry {
             return false;
         }
         if let Some(pin) = self.pins.get(peer) {
-            return pin.noise_public_key.as_slice() == noise
-                && pin.signing_public_key.as_slice() == signing;
-        }
-        if !self.can_pin(peer) {
+            if pin.noise_public_key.as_slice() != noise || pin.signing_public_key.as_slice() != signing {
+                return false;
+            }
+        } else if !self.can_pin(peer) {
             return false;
         }
-        let matching = self.peers.get_mut(peer).filter(|record| {
-            record.noise_public_key.as_deref() == Some(noise.as_slice())
+
+        let mut nickname = self
+            .pins
+            .get(peer)
+            .map_or_else(|| peer.to_string(), |pin| pin.nickname.clone());
+        if let Some(record) = self.peers.get_mut(peer) {
+            if record.noise_public_key.as_deref() == Some(noise.as_slice())
                 && record.signing_public_key.as_deref() == Some(signing.as_slice())
-        });
-        let nickname = matching.map_or_else(
-            || peer.as_str().to_string(),
-            |record| {
-                record.verified_nickname = true;
-                record.nickname.clone()
-            },
-        );
-        self.pins.insert(
-            peer.clone(),
+            {
+                nickname = record.nickname.clone();
+            } else {
+                // Only the keys were proven. Drop the displaced candidate's metadata.
+                record.nickname = nickname.clone();
+                record.capabilities = Default::default();
+                record.bridge_geohash = None;
+                record.noise_public_key = Some(noise.to_vec());
+                record.signing_public_key = Some(signing.to_vec());
+            }
+            record.verified_nickname = true;
+        }
+        self.pins.entry(peer.clone()).or_insert_with(|| {
             PinnedIdentity {
                 noise_public_key: noise.to_vec(),
                 signing_public_key: signing.to_vec(),
                 nickname,
                 pinned_at_ms: now_ms,
-            },
-        );
+            }
+        });
         true
     }
 

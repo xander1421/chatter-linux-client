@@ -340,7 +340,7 @@ fn the_diff_is_computed_over_recomputed_packet_ids() {
 #[test]
 fn the_since_cursor_excludes_older_packets_but_never_announces() {
     let mut manager = manager();
-    let announce = packet_of(MessageType::Announce, b"", NOW_MS - 50_000);
+    let announce = announcement(NOW_MS - 50_000);
     let old = message(b"old", NOW_MS - 60_000);
     let new = message(b"new", NOW_MS);
     manager.on_public_packet_seen(&announce, NOW);
@@ -490,8 +490,16 @@ fn prekey_bundles_keep_a_day_and_the_boundary_is_exact() {
     assert_eq!(window_ms, 24 * 60 * 60 * 1000);
 
     let mut manager = manager();
-    manager.on_public_packet_seen(&bundle_packet([0xE1; 32], NOW_MS - window_ms), NOW);
-    manager.on_public_packet_seen(&bundle_packet([0xE2; 32], NOW_MS - window_ms - 1), NOW);
+    manager.on_verified_prekey_bundle_seen(
+        &bundle_packet([0xE1; 32], NOW_MS - window_ms),
+        [7; 32],
+        NOW,
+    );
+    manager.on_verified_prekey_bundle_seen(
+        &bundle_packet([0xE2; 32], NOW_MS - window_ms - 1),
+        [7; 32],
+        NOW,
+    );
 
     assert!(manager.has_prekey_bundle(&PeerId::from_noise_key(&[0xE1; 32])));
     assert!(

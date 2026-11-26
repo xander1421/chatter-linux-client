@@ -53,20 +53,19 @@ fn re_seeing_a_packet_does_not_move_it_up_the_queue() {
 // -- announces and peer removal ---------------------------------------
 
 #[test]
-fn a_stale_announce_evicts_the_peer_rather_than_being_stored() {
+fn a_stale_announce_does_not_evict_a_recent_announcement_or_history() {
     let mut manager = manager_with(SyncConfig {
         stale_peer_timeout_secs: 60,
         ..SyncConfig::default()
     });
 
     manager.on_public_packet_seen(&message(b"theirs", NOW_MS), NOW);
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS), NOW);
+    manager.on_public_packet_seen(&announcement(NOW_MS), NOW);
     assert!(manager.has_announcement(&PeerId::from_bytes(&sender())));
 
-    // An announce older than the stale timeout says the peer left.
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS - 61_000), NOW);
-    assert!(!manager.has_announcement(&PeerId::from_bytes(&sender())));
-    assert_eq!(manager.message_count(), 0, "their carried traffic goes too");
+    manager.on_public_packet_seen(&announcement(NOW_MS - 61_000), NOW);
+    assert!(manager.has_announcement(&PeerId::from_bytes(&sender())));
+    assert_eq!(manager.message_count(), 1);
 }
 
 #[test]
@@ -77,7 +76,7 @@ fn stale_cleanup_runs_on_its_own_interval() {
         ..SyncConfig::default()
     });
 
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS), NOW);
+    manager.on_public_packet_seen(&announcement(NOW_MS), NOW);
     // First tick records the cleanup time.
     manager.maintenance(&[], NOW).expect("maintenance");
     assert!(manager.has_announcement(&PeerId::from_bytes(&sender())));
@@ -98,7 +97,7 @@ fn a_present_android_peer_keeps_its_messages_between_announces() {
     // messages between two of its announces.
     let mut manager = manager();
     let peer = PeerId::from_bytes(&sender());
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS), NOW);
+    manager.on_public_packet_seen(&announcement(NOW_MS), NOW);
     manager.on_public_packet_seen(&message(b"theirs", NOW_MS), NOW);
     manager.maintenance(&[], NOW).expect("maintenance");
 
@@ -108,7 +107,7 @@ fn a_present_android_peer_keeps_its_messages_between_announces() {
     assert_eq!(manager.message_count(), 1);
 
     // A relayed announce 90 s old is presence, not departure.
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS - 90_000), NOW);
+    manager.on_public_packet_seen(&announcement(NOW_MS - 90_000), NOW);
     assert_eq!(manager.message_count(), 1);
 
     // Silent past bitchat-android's 180 s: gone, with its traffic.
@@ -122,7 +121,7 @@ fn a_present_android_peer_keeps_its_messages_between_announces() {
 #[test]
 fn removing_public_messages_spares_everything_else() {
     let mut manager = manager();
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS), NOW);
+    manager.on_public_packet_seen(&announcement(NOW_MS), NOW);
     manager.on_public_packet_seen(&message(b"blocked", NOW_MS), NOW);
     manager.on_public_packet_seen(&fragment([0x03; 8], 0, NOW_MS), NOW);
 
@@ -139,8 +138,8 @@ fn removing_public_messages_spares_everything_else() {
 fn removing_a_peer_keeps_its_prekey_bundle() {
     let mut manager = manager();
     let owner_key = [0xAB; 32];
-    manager.on_public_packet_seen(&bundle_packet(owner_key, NOW_MS), NOW);
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS), NOW);
+    manager.on_verified_prekey_bundle_seen(&bundle_packet(owner_key, NOW_MS), [7; 32], NOW);
+    manager.on_public_packet_seen(&announcement(NOW_MS), NOW);
 
     let owner = PeerId::from_noise_key(&owner_key);
     manager.remove_announcement_for_peer(&PeerId::from_bytes(&sender()));
@@ -170,7 +169,7 @@ fn bundles_are_keyed_by_owner_not_by_sender_id() {
             7,
         );
         packet.recipient_id = Some(BROADCAST_RECIPIENT);
-        manager.on_public_packet_seen(&packet, NOW);
+        manager.on_verified_prekey_bundle_seen(&packet, [7; 32], NOW);
         assert!(
             !manager.has_prekey_bundle(&PeerId::from_bytes(
                 &[u8::try_from(i).unwrap_or(0); SENDER_ID_LEN]
@@ -185,8 +184,8 @@ fn bundles_are_keyed_by_owner_not_by_sender_id() {
 fn a_newer_bundle_replaces_an_older_one_and_a_replay_does_not() {
     let mut manager = manager();
     let owner_key = [0xCE; 32];
-    manager.on_public_packet_seen(&bundle_packet(owner_key, NOW_MS), NOW);
-    manager.on_public_packet_seen(&bundle_packet(owner_key, NOW_MS - 1000), NOW);
+    manager.on_verified_prekey_bundle_seen(&bundle_packet(owner_key, NOW_MS), [7; 32], NOW);
+    manager.on_verified_prekey_bundle_seen(&bundle_packet(owner_key, NOW_MS - 1000), [7; 32], NOW);
 
     let sends =
         manager.handle_request_sync(&them(), &empty_request(SyncTypeFlags::PREKEY_BUNDLE), NOW);
@@ -196,7 +195,7 @@ fn a_newer_bundle_replaces_an_older_one_and_a_replay_does_not() {
         "the older copy is refused"
     );
 
-    manager.on_public_packet_seen(&bundle_packet(owner_key, NOW_MS + 1000), NOW);
+    manager.on_verified_prekey_bundle_seen(&bundle_packet(owner_key, NOW_MS + 1000), [7; 32], NOW);
     let sends =
         manager.handle_request_sync(&them(), &empty_request(SyncTypeFlags::PREKEY_BUNDLE), NOW);
     assert_eq!(sends[0].packet.timestamp, NOW_MS + 1000);
@@ -205,8 +204,9 @@ fn a_newer_bundle_replaces_an_older_one_and_a_replay_does_not() {
 #[test]
 fn an_undecodable_bundle_is_dropped() {
     let mut manager = manager();
-    manager.on_public_packet_seen(
+    manager.on_verified_prekey_bundle_seen(
         &packet_of(MessageType::PrekeyBundle, b"not a bundle", NOW_MS),
+        [7; 32],
         NOW,
     );
     assert!(
@@ -223,14 +223,14 @@ fn the_owner_cap_bounds_the_bundle_store() {
         ..SyncConfig::default()
     });
     for i in 0..4u8 {
-        manager.on_public_packet_seen(&bundle_packet([0xD0 + i; 32], NOW_MS), NOW);
+        manager.on_verified_prekey_bundle_seen(&bundle_packet([0xD0 + i; 32], NOW_MS), [7; 32], NOW);
     }
     let sends =
         manager.handle_request_sync(&them(), &empty_request(SyncTypeFlags::PREKEY_BUNDLE), NOW);
     assert_eq!(sends.len(), 2);
 
     // A refresh from a known owner still lands: the cap must never block one.
-    manager.on_public_packet_seen(&bundle_packet([0xD0; 32], NOW_MS + 5), NOW);
+    manager.on_verified_prekey_bundle_seen(&bundle_packet([0xD0; 32], NOW_MS + 5), [7; 32], NOW);
     let sends =
         manager.handle_request_sync(&them(), &empty_request(SyncTypeFlags::PREKEY_BUNDLE), NOW);
     assert_eq!(sends.len(), 2);
@@ -267,7 +267,7 @@ fn a_round_answers_only_the_types_it_asked_for() {
 fn a_request_with_no_type_field_means_the_default_round() {
     let mut manager = manager();
     manager.on_public_packet_seen(&message(b"m", NOW_MS), NOW);
-    manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS), NOW);
+    manager.on_public_packet_seen(&announcement(NOW_MS), NOW);
     manager.on_public_packet_seen(&fragment([0x05; 8], 0, NOW_MS), NOW);
 
     let mut request = empty_request(SyncTypeFlags::MESSAGE);

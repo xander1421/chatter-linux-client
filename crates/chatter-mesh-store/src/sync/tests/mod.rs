@@ -32,6 +32,20 @@ fn message(payload: &[u8], timestamp_ms: u64) -> BitchatPacket {
     packet_of(MessageType::Message, payload, timestamp_ms)
 }
 
+fn announcement(timestamp_ms: u64) -> BitchatPacket {
+    let payload = AnnouncementPacket::new(
+        "test peer".into(),
+        vec![1; 32],
+        vec![2; 32],
+        None,
+        None,
+        None,
+    )
+    .encode()
+    .unwrap();
+    packet_of(MessageType::Announce, &payload, timestamp_ms)
+}
+
 fn fragment(stream: [u8; 8], index: u16, timestamp_ms: u64) -> BitchatPacket {
     let mut payload = Vec::new();
     payload.extend_from_slice(&stream);

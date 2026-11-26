@@ -11,7 +11,8 @@ impl BleRuntime {
             return;
         };
         let (announced, authenticated) = self.state.with(|state| {
-            let announced = state.links.peer_for(link) == Some(claimed)
+            let announced = (state.links.peer_for(link) == Some(claimed)
+                || state.links.discovery_peer_for(link) == Some(claimed))
                 && state
                     .peers
                     .info(claimed)
@@ -25,25 +26,43 @@ impl BleRuntime {
         let sends = self
             .gossip
             .handle_request_sync(claimed, &request, now_secs());
-        let public_authors: std::collections::HashSet<_> = sends
-            .iter()
-            .filter(|send| send.packet.message_type() == Some(MessageType::Message))
-            .map(|send| send.packet.sender_id)
-            .collect();
+        let mut public_messages = std::collections::HashMap::<_, Vec<_>>::new();
+        for send in &sends {
+            if send.packet.message_type() == Some(MessageType::Message) {
+                public_messages
+                    .entry(send.packet.sender_id)
+                    .or_default()
+                    .push(&send.packet);
+            }
+        }
         let requester = claimed.to_routing_bytes();
-        for send in sends {
+        for send in &sends {
             let kind = send.packet.message_type();
-            // Public history sometimes needs the author's signing key. Only
-            // include a matching author announce when it carries no neighbor
-            // list or rendezvous location, and never dump the contact archive.
-            let public_author_key = kind == Some(MessageType::Announce)
-                && requester != Some(send.packet.sender_id)
-                && public_authors.contains(&send.packet.sender_id)
-                && matches!(
-                    AnnouncementPacket::carries_contact_metadata(&send.packet.payload),
-                    Ok(false)
-                );
-            if !authenticated && kind != Some(MessageType::Message) && !public_author_key {
+            if kind == Some(MessageType::Announce) {
+                // Only pair history with an announce whose key actually
+                // verifies that author's messages.
+                if let Some(messages) = public_messages.get(&send.packet.sender_id) {
+                    let Ok(announce) = AnnouncementPacket::decode(&send.packet.payload) else {
+                        continue;
+                    };
+                    let Ok(key) = <[u8; 32]>::try_from(announce.signing_public_key) else {
+                        continue;
+                    };
+                    if !messages.iter().any(|packet| verify_packet(packet, &key)) {
+                        continue;
+                    }
+                }
+                if !authenticated
+                    && (requester == Some(send.packet.sender_id)
+                        || !public_messages.contains_key(&send.packet.sender_id)
+                        || !matches!(
+                            AnnouncementPacket::carries_contact_metadata(&send.packet.payload),
+                            Ok(false)
+                        ))
+                {
+                    continue;
+                }
+            } else if !authenticated && kind != Some(MessageType::Message) {
                 continue;
             }
             if kind == Some(MessageType::GroupMessage) {
@@ -70,7 +89,7 @@ impl BleRuntime {
                     continue;
                 }
             }
-            self.dispatch_sync(send).await;
+            self.transmit_on_link(&send.packet, claimed, link).await;
         }
     }
 
@@ -93,11 +112,14 @@ impl BleRuntime {
                 }
             }
             BleCommand::OpenSession { peer } => {
-                if self.state.can_write_to(&peer)
-                    && !self.state.with(|state| state.sessions.has_session(&peer))
+                if self.state.can_open_session_to(&peer)
+                    && (!self.state.has_session(&peer) || !self.state.can_write_to(&peer))
                 {
                     self.start_handshake(&peer).await;
                 }
+            }
+            BleCommand::EnsureSigningBinding { peer } => {
+                self.request_signing_pin(&peer).await;
             }
             BleCommand::SignalBundle { peer, bytes } => {
                 self.send_signal_bundle(&peer, &bytes).await

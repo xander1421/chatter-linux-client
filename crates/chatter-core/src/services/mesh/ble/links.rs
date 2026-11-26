@@ -403,7 +403,13 @@ impl BleRuntime {
         let now_s = now_secs();
         let local = self.identity.peer_id();
         let claimed = PeerId::from_bytes(&packet.sender_id);
-        let bound = self.state.with(|state| state.links.peer_for(link).cloned());
+        let bound = self.state.with(|state| {
+            state
+                .links
+                .peer_for(link)
+                .or_else(|| state.links.discovery_peer_for(link))
+                .cloned()
+        });
 
         // Which peer's outstanding request this could be answering.
         //
@@ -529,7 +535,9 @@ impl BleRuntime {
                 now_ms,
                 chatter_mesh_link::registry::INGRESS_RECORD_LIFETIME_MS,
             );
-            state.peers.update_last_seen(&received_from, now_ms);
+            if state.links.peer_for(link) == Some(&received_from) {
+                state.peers.update_last_seen(&received_from, now_ms);
+            }
         });
 
         let retainable = self
@@ -592,27 +600,17 @@ impl BleRuntime {
             return None;
         }
         let peer = bound?;
-        let author_key = self.state.with(|state| {
-            if !state
-                .peers
-                .info(peer)
-                .is_some_and(|info| info.signing_public_key.is_some())
-            {
-                return None;
-            }
-            state
-                .peers
-                .info(claimed)
-                .and_then(|info| info.signing_public_key.clone())
-        })?;
+        if !self.state.with(|state| state.peers.info(peer).is_some()) {
+            return None;
+        }
         if !self.gossip.awaits_answer_from(peer, now_s)
             || !self.gossip.within_retention(packet, now_s)
             || self.gossip.holds(packet)
         {
             return None;
         }
-        let key = <[u8; 32]>::try_from(author_key.as_slice()).ok()?;
-        verify_packet(packet, &key).then(|| (peer.clone(), key))
+        let key = self.matching_signing_key(claimed, packet, None)?;
+        Some((peer.clone(), key))
     }
 
     /// Unwrap a fragment, then handle whatever it turns out to be.
@@ -656,14 +654,7 @@ impl BleRuntime {
 
     /// Handle one decoded packet, and say whether the gossip store may keep it.
     ///
-    /// The flag exists for announces alone. An announce we refused is an identity
-    /// forgery, and retaining it would make this device re-serve that forgery to
-    /// every peer that syncs with us; worse, `on_public_packet_seen` reads a
-    /// *stale* announce as "this peer left" and purges the store's state for the
-    /// claimed sender, so an unauthenticated old announce is a remote wipe of a
-    /// real peer's gossip state. Genuine staleness is still collected by
-    /// `cleanup_stale_announcements_if_needed` on the maintenance tick, which
-    /// needs no packet from anyone to do its job.
+    /// A refused identity or public message must not be retained or re-gossiped.
     pub(super) async fn handle_typed(
         &mut self,
         link: &LinkId,
@@ -684,7 +675,7 @@ impl BleRuntime {
         match packet.message_type() {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => {
-                self.on_public_message_with_verdict(packet, claimed, verified_key)
+                return self.on_public_message_with_verdict(packet, claimed, verified_key);
             }
             Some(MessageType::ChannelMessage) => return self.on_channel_message(packet, claimed),
             Some(MessageType::GroupMessage) => {
@@ -721,7 +712,19 @@ impl BleRuntime {
             Some(MessageType::FileManifest) => self.on_file_manifest(packet, claimed),
             Some(MessageType::FileChunk) => self.on_file_chunk(packet, claimed),
             Some(MessageType::FileChunkRequest) => self.on_file_chunk_request(packet, claimed),
-            Some(MessageType::PrekeyBundle) => return self.on_prekey_bundle(packet),
+            Some(MessageType::PrekeyBundle) => {
+                let now = now_millis();
+                self.prekey_ingress.retain(|_, (start, _)| now.saturating_sub(*start) < 60_000);
+                if self.prekey_ingress.len() >= 128 && !self.prekey_ingress.contains_key(link) {
+                    return false;
+                }
+                let budget = self.prekey_ingress.entry(link.clone()).or_insert((now, 0));
+                if budget.1 >= 60 {
+                    return false;
+                }
+                budget.1 += 1;
+                return self.on_prekey_bundle(packet);
+            }
             // Boards, groups, voice and prekey bundles were deferred from P0.
             // Not handling them is right; not *relaying* them would partition
             // every peer that does implement them, so the relay decision in

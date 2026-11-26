@@ -23,16 +23,9 @@
 //! property: anyone can capture Bob's announce, restore its TTL to the origin
 //! value and emit it on their own link, and it will verify and look direct.
 //!
-//! Every guard here exists to bound what that forgery buys. The design rule is
-//! that the type system, not caller discipline, enforces them:
-//!
-//! - An unverified announce reaches only [`LinkStateStore::bind_if_unbound`],
-//!   which refuses to move an already-bound link.
-//! - Moving a bound link requires a [`VerifiedDirectAnnounce`], which cannot be
-//!   constructed without asserting both signature verification and directness.
-//! - Even then [`LinkStateStore::rebind_after_verified_direct`] applies the
-//!   containment checks: no stealing an identity that already owns a live link,
-//!   and at most one rebind per link per [`LINK_REBIND_COOLDOWN_MS`] window.
+//! Direct announces can record a discovery hint. Hints allow public sync and
+//! an attempt to open Noise without affecting preferred routing, link presence
+//! or registry retention. The runtime promotes a hint only after Noise proof.
 //!
 //! # Sans-IO
 //!

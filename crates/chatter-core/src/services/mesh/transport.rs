@@ -63,6 +63,10 @@ pub enum BleCommand {
     OpenSession {
         peer: PeerId,
     },
+    /// A local action needs the peer's Noise-bound signing key.
+    EnsureSigningBinding {
+        peer: PeerId,
+    },
     /// A PQXDH bundle exchanged only inside a live authenticated Noise link.
     SignalBundle {
         peer: PeerId,
@@ -356,11 +360,8 @@ impl RouterTransport for BleTransport {
 
     /// An **established Noise session**, not a live link.
     ///
-    /// This is the only predicate the router trusts enough to retain nothing
-    /// against. A link binding is not enough: bindings heal on "direct"
-    /// announces whose directness rides on the unsigned TTL, so a replayed
-    /// announce can bind an absent peer's ID to the replayer's link, where the
-    /// send stalls on a handshake that can never complete.
+    /// The router skips retention only when the peer has a session and a
+    /// confirmed writable route. A discovery hint can only start a handshake.
     fn can_deliver_securely(&self, peer: &PeerId) -> bool {
         self.state.has_session(peer) && self.state.can_write_to(peer)
     }
@@ -374,7 +375,7 @@ impl RouterTransport for BleTransport {
         // something can carry it: a writable link, or a session whose link is
         // momentarily busy. With neither, the router must fall through to the
         // courier branch rather than believe this was sent.
-        if !self.state.can_write_to(to) && !self.state.has_session(to) {
+        if !self.state.can_open_session_to(to) && !self.state.has_session(to) {
             return false;
         }
         self.commands

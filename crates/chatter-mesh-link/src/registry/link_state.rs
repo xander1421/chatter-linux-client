@@ -54,6 +54,8 @@ pub struct LinkState {
     pub role: LinkRole,
     /// The identity bound to it, once one has claimed it.
     pub peer: Option<PeerId>,
+    /// A direct announce hints who to try for public sync and Noise opening.
+    discovery_peer: Option<PeerId>,
     /// Whether the link can currently carry a write: the characteristic has been
     /// discovered (central) or a subscription is active (peripheral). A link can
     /// be up and not writable, and offering it to the planner in that state
@@ -72,6 +74,7 @@ impl LinkState {
         Self {
             role,
             peer: None,
+            discovery_peer: None,
             writable: false,
             noise_authenticated_owner: None,
         }
@@ -330,6 +333,28 @@ impl LinkStateStore {
         self.links.get(link).and_then(|s| s.peer.as_ref())
     }
 
+    /// A link-local discovery hint. It never sets preferred routing or presence.
+    pub fn note_discovery_peer(&mut self, link: &LinkId, peer: &PeerId) -> bool {
+        let Some(state) = self.links.get_mut(link) else {
+            return false;
+        };
+        if state.peer.is_some() || state.discovery_peer.as_ref() == Some(peer) {
+            return false;
+        }
+        state.discovery_peer = Some(peer.clone());
+        true
+    }
+
+    pub fn discovery_peer_for(&self, link: &LinkId) -> Option<&PeerId> {
+        self.links.get(link)?.discovery_peer.as_ref()
+    }
+
+    pub fn discovery_links_to(&self, peer: &PeerId) -> impl Iterator<Item = &LinkId> {
+        self.links.iter().filter_map(move |(link, state)| {
+            (state.writable && state.discovery_peer.as_ref() == Some(peer)).then_some(link)
+        })
+    }
+
     /// Every live link bound to an identity.
     ///
     /// Scans rather than consulting the reverse map, matching Swift: one peer can
@@ -383,10 +408,8 @@ impl LinkStateStore {
 
     /// Binds an identity to a link that has no owner yet.
     ///
-    /// This is the path an **unverified** announce takes, so it must never move a
-    /// link that already belongs to someone: the only claim it carries is the
-    /// sender ID in the header, which anyone can write. A bound link changes
-    /// hands only through [`Self::rebind_after_verified_direct`].
+    /// Production callers promote a discovery hint after Noise proof. This
+    /// operation keeps any existing binding in place.
     pub fn bind_if_unbound(&mut self, link: &LinkId, peer: &PeerId) -> BindOutcome {
         let Some(state) = self.links.get(link) else {
             return BindOutcome::UnknownLink;
@@ -403,6 +426,7 @@ impl LinkStateStore {
             None => {
                 if let Some(state) = self.links.get_mut(link) {
                     state.peer = Some(peer.clone());
+                    state.discovery_peer = None;
                 }
                 self.set_preferred_if_central(link, peer);
                 BindOutcome::Bound
@@ -473,6 +497,7 @@ impl LinkStateStore {
         if let Some(state) = self.links.get_mut(link) {
             // The proof belonged to the previous owner's physical binding.
             state.noise_authenticated_owner = None;
+            state.discovery_peer = None;
             state.peer = Some(peer.clone());
         }
         if self.preferred.get(&previous) == Some(link) {
@@ -513,13 +538,17 @@ impl LinkStateStore {
     /// authorise traffic on a *different* link would accept exactly the state a
     /// successful rebind attack produces.
     pub fn mark_noise_authenticated(&mut self, link: &LinkId, peer: &PeerId) -> bool {
-        match self.links.get_mut(link) {
-            Some(state) => {
-                state.noise_authenticated_owner = Some(peer.clone());
-                true
-            }
-            None => false,
+        if self.discovery_peer_for(link) == Some(peer) {
+            self.bind_if_unbound(link, peer);
         }
+        let Some(state) = self.links.get_mut(link) else {
+            return false;
+        };
+        if state.peer.as_ref() != Some(peer) {
+            return false;
+        }
+        state.noise_authenticated_owner = Some(peer.clone());
+        true
     }
 
     pub fn clear_noise_authentication(&mut self, link: &LinkId) {
