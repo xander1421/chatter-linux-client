@@ -155,7 +155,7 @@ impl BleRuntime {
     pub(super) fn emit_status(&self) {
         let status = self.state.status(self.nostr_state.connected_relay_count());
         if status.radio_running {
-            self.config.rotate_nickname(&self.identity.peer_id());
+            self.config.on_identity_rotated(&self.identity.peer_id());
         }
         self.events.send(MeshEvent::Status(status));
     }

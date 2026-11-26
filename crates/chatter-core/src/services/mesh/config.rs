@@ -92,8 +92,8 @@ impl MeshConfig {
         self.nickname.write().unwrap().custom = (!nickname.is_empty()).then(|| nickname.to_owned());
     }
 
-    /// Refresh the automatic nickname when a fresh BLE identity takes effect.
-    pub fn rotate_nickname(&self, peer: &PeerId) {
+    /// Refresh the automatic nickname once when a fresh BLE identity takes effect.
+    pub fn on_identity_rotated(&self, peer: &PeerId) {
         let mut nickname = self.nickname.write().unwrap();
         if nickname.peer.as_ref() != Some(peer) {
             nickname.automatic = anonymous_nickname();
@@ -213,10 +213,10 @@ mod tests {
         assert_eq!(config.custom_nickname(), None);
 
         let peer = PeerId::from_bytes(&[1; 8]);
-        config.rotate_nickname(&peer);
+        config.on_identity_rotated(&peer);
         assert_ne!(config.nickname(), original);
         let rotated = config.nickname();
-        config.rotate_nickname(&peer);
+        config.on_identity_rotated(&peer);
         assert_eq!(config.nickname(), rotated);
         assert_ne!(MeshConfig::default().nickname(), config.nickname());
     }
@@ -226,7 +226,7 @@ mod tests {
         let config = MeshConfig::default();
         let original = config.nickname();
         config.set_nickname("  ada  ".into());
-        config.rotate_nickname(&PeerId::from_bytes(&[2; 8]));
+        config.on_identity_rotated(&PeerId::from_bytes(&[2; 8]));
         assert_eq!(config.nickname(), "ada");
         assert_eq!(config.custom_nickname().as_deref(), Some("ada"));
 

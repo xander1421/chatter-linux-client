@@ -11,7 +11,7 @@ pub(super) fn is_private_group_packet(packet: &BitchatPacket) -> bool {
 
 impl BleRuntime {
     pub(super) async fn announce(&mut self) {
-        self.config.rotate_nickname(&self.identity.peer_id());
+        self.config.on_identity_rotated(&self.identity.peer_id());
         let now_ms = now_millis();
         let passed = self.state.with(|state| {
             let passed = duty::announce_floor_passed(state.last_announce_ms, now_ms);
