@@ -46,7 +46,7 @@ pub(crate) fn append_storage_chunk(
         .len()
         .checked_add(chunk.len())
         .filter(|len| *len <= limit)
-        .ok_or_else(|| "storage response exceeds attachment size limit".to_string())?;
+        .ok_or_else(|| "storage response exceeds byte limit".to_string())?;
     body.try_reserve(len - body.len())
         .map_err(|_| "not enough memory for storage response".to_string())?;
     body.extend_from_slice(chunk);
@@ -142,7 +142,7 @@ mod tor {
     use std::sync::Arc;
 
     use http_body_util::{BodyExt, Full};
-    use hyper::body::Bytes;
+    use hyper::body::{Body, Bytes};
     use hyper_util::rt::TokioIo;
     use tokio_rustls::TlsConnector;
     use tokio_rustls::rustls::ClientConfig;
@@ -275,23 +275,22 @@ mod tor {
                 tracing::debug!(error = %e, "anon_http: connection closed with error");
             }
         }));
-        let resp = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            sender.send_request(req),
-        )
-        .await
-        .map_err(|_| "storage response stalled".to_string())?
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
+        let resp =
+            tokio::time::timeout(std::time::Duration::from_secs(30), sender.send_request(req))
+                .await
+                .map_err(|_| "storage response stalled".to_string())?
+                .map_err(|e| format!("HTTP request failed: {e}"))?;
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
         let mut incoming = resp.into_body();
+        if incoming.size_hint().lower() > limit as u64 {
+            return Err("storage response exceeds byte limit".into());
+        }
         let mut body = Vec::new();
-        while let Some(frame) = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            incoming.frame(),
-        )
-        .await
-        .map_err(|_| "storage response stalled".to_string())?
+        while let Some(frame) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), incoming.frame())
+                .await
+                .map_err(|_| "storage response stalled".to_string())?
         {
             let frame = frame.map_err(|e| format!("reading response body failed: {e}"))?;
             if let Ok(data) = frame.into_data() {
@@ -350,6 +349,14 @@ mod tor {
 
     /// HTTP GET over Tor. Verifies the response is 2xx and returns the body.
     pub async fn get(tor: &SharedTorClient, url: &str) -> Result<Vec<u8>, String> {
+        get_with_limit(tor, url, super::storage_response_limit()).await
+    }
+
+    pub(crate) async fn get_with_limit(
+        tor: &SharedTorClient,
+        url: &str,
+        limit: usize,
+    ) -> Result<Vec<u8>, String> {
         let p = parse_url(url)?;
         let req = hyper::Request::builder()
             .method(hyper::Method::GET)
@@ -357,8 +364,7 @@ mod tor {
             .header(hyper::header::HOST, host_header(&p))
             .body(Full::new(Bytes::new()))
             .map_err(|e| format!("building GET request failed: {e}"))?;
-        let (status, _headers, body) =
-            request(tor, &p, req, super::storage_response_limit()).await?;
+        let (status, _headers, body) = request(tor, &p, req, limit).await?;
         if !(200..300).contains(&status) {
             return Err(format!("storage GET returned status {status}"));
         }
@@ -526,8 +532,53 @@ mod tor {
             .filter(|s| !s.is_empty());
         Ok(PutResponse { status, etag })
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        #[tokio::test]
+        async fn buffered_get_enforces_limit_with_or_without_content_length() {
+            for (response, expected) in [
+                (
+                    "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n",
+                    Err("storage response exceeds byte limit"),
+                ),
+                (
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
+                    Err("storage response exceeds byte limit"),
+                ),
+                (
+                    "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc",
+                    Ok(&b"abc"[..]),
+                ),
+            ] {
+                let (client, mut server) = tokio::io::duplex(512);
+                let responder = tokio::spawn(async move {
+                    let mut byte = [0];
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        server.read_exact(&mut byte).await.unwrap();
+                        request.push(byte[0]);
+                    }
+                    server.write_all(response.as_bytes()).await.unwrap();
+                });
+                let request = hyper::Request::get("/")
+                    .body(Full::new(Bytes::new()))
+                    .unwrap();
+                let result = send(TokioIo::new(client), request, 3)
+                    .await
+                    .map(|(_, _, body)| body);
+                assert_eq!(result.as_deref().map_err(String::as_str), expected);
+                responder.await.unwrap();
+            }
+        }
+    }
 }
 
+#[cfg(feature = "onion")]
+pub(crate) use tor::get_with_limit;
 #[cfg(feature = "onion")]
 pub use tor::{get, get_optional, get_to_file, get_to_file_with_progress, put};
 
