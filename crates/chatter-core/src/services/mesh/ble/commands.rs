@@ -105,18 +105,10 @@ impl BleRuntime {
     pub(super) async fn on_command(&mut self, command: BleCommand) {
         match command {
             BleCommand::BindingProof { peer, bytes } => {
-                let sealed = self
-                    .state
-                    .with(|state| state.sessions.encrypt(&peer, &bytes));
-                if let Ok(ciphertext) = sealed {
-                    let packet = self.build_packet(
-                        MessageType::NoiseEncrypted,
-                        Some(&peer),
-                        ciphertext,
-                        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-                    );
-                    self.transmit(&packet, Some(&peer), None).await;
+                if bytes.starts_with(super::super::account_identity::PAIRING_RECEIPT_MAGIC) {
+                    self.install_pairing_beacons();
                 }
+                self.send_private_control(&peer, &bytes).await;
             }
             BleCommand::OpenSession { peer } => {
                 if self.state.can_open_session_to(&peer)

@@ -87,6 +87,7 @@ impl BleRuntime {
             true
         });
         if paired {
+            self.install_pairing_beacons();
             self.gossip.retain_signing_key(peer, key);
             self.emit_peers();
         }
@@ -233,7 +234,7 @@ impl BleRuntime {
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.
             if direct {
-                self.send_pairing_proof(claimed).await;
+                self.send_pairing_proof(link, claimed).await;
             }
             self.send_chatter_hello(claimed).await;
             if !application_data_allowed {
@@ -382,7 +383,7 @@ impl BleRuntime {
             return;
         }
         if let Some(payload) = plaintext.strip_prefix(PAIRED_COURIER_MAGIC) {
-            if self.paired_session(claimed) {
+            if self.state.is_paired_link_to(link, claimed) {
                 self.receive_courier(payload, packet.timestamp, claimed).await;
             }
             return;
@@ -1018,6 +1019,9 @@ impl BleRuntime {
         let peer = self.state.route(peer);
         if self.state.has_paired_pin(&peer) {
             // Stable recipient tags and repeated envelopes stay inside Noise.
+            if !self.state.paired_session(&peer) {
+                return false;
+            }
             let frame = [PAIRED_COURIER_MAGIC.as_slice(), &payload].concat();
             return self.send_private_control(&peer, &frame).await;
         }

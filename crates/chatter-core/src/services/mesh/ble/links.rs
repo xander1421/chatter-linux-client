@@ -41,8 +41,8 @@ impl BleRuntime {
                 if !powered {
                     self.matched_scans.lock().clear();
                     self.link_admission.clear();
-                    self.pending_central_contact = None;
-                    self.central_contacts.clear();
+                    self.pending_central = None;
+                    self.central_admissions.clear();
                 }
                 self.state.with(|state| {
                     state.adapter_powered = powered;
@@ -174,18 +174,19 @@ impl BleRuntime {
         let Some(permission) = self.outbound_admission(address, Instant::now()) else {
             return;
         };
-        self.pending_central_contact = match permission {
-            ConnectionAdmission::Paired(contact) => Some(contact),
+        let beacon = match &permission {
+            ConnectionAdmission::Paired(contact) => {
+                let Some(beacon) = self
+                    .state
+                    .pairing_beacon_for_contact(&self.broadcast_peer_id(), contact)
+                else {
+                    return;
+                };
+                Some(beacon)
+            }
             _ => None,
         };
-        let beacon = self.pending_central_contact.as_ref().and_then(|contact| {
-            self.state
-                .pairing_beacon_for_contact(&self.broadcast_peer_id(), contact)
-        });
-        if self.pending_central_contact.is_some() && beacon.is_none() {
-            self.pending_central_contact = None;
-            return;
-        }
+        self.pending_central = Some(permission);
         self.dial_in_flight = true;
         let now = now_millis();
         self.state.with(|state| {
@@ -204,7 +205,7 @@ impl BleRuntime {
 
     pub(super) fn finish_dial(&mut self, outcome: DialOutcome) {
         self.dial_in_flight = false;
-        let contact = self.pending_central_contact.take();
+        let permission = self.pending_central.take();
         // BlueZ pauses its own discovery session for a dial. Its scan duty
         // state must issue a fresh StartScanning on the next tick.
         #[cfg(target_os = "linux")]
@@ -213,8 +214,8 @@ impl BleRuntime {
         let address = address.as_str();
         match result {
             Ok(link) => {
-                if let Some(contact) = contact {
-                    self.central_contacts.insert(link.clone(), contact);
+                if let Some(permission) = permission {
+                    self.central_admissions.insert(link.clone(), permission);
                 }
                 self.state.with(|state| {
                     // `Connected` can now be handled before this result: the
@@ -285,10 +286,14 @@ impl BleRuntime {
         let now = Instant::now();
         let permission = match role {
             LinkRole::Central => {
-                let contact = self
-                    .central_contacts
+                let previous = self
+                    .central_admissions
                     .remove(&link)
-                    .or_else(|| self.pending_central_contact.take());
+                    .or_else(|| self.pending_central.take());
+                let contact = match previous {
+                    Some(ConnectionAdmission::Paired(contact)) => Some(contact),
+                    _ => None,
+                };
                 self.config.connection_admission(contact, now)
             }
             LinkRole::Peripheral => inbound.and_then(|inbound| {
@@ -341,7 +346,9 @@ impl BleRuntime {
         let now = now_millis();
         self.link_last_inbound_ms.remove(link);
         self.link_admission.remove(link);
-        self.central_contacts.remove(link);
+        self.central_admissions.remove(link);
+        self.pairing_proofs_received
+            .retain(|(proved_link, _), _| proved_link != link);
         let peer = self.state.with(|state| {
             let (moved, discarded) = rescue_link_writes(state, link, None);
             let peer = state.links.link_down(link);

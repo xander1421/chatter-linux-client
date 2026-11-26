@@ -176,7 +176,7 @@ impl LinkStateInner {
         {
             return false;
         }
-        let Some(pin) = self.peers.pinned(peer).filter(|pin| pin.paired) else {
+        let Some(pin) = self.peers.pinned(peer).filter(|pin| pin.pairing.is_some()) else {
             return false;
         };
         self.sessions
@@ -226,7 +226,7 @@ impl MeshState {
                     state
                         .peers
                         .pinned(state.peers.route(&peer.peer))
-                        .is_some_and(|pin| pin.paired)
+                        .is_some_and(|pin| pin.pairing.is_some())
                 });
             });
         }

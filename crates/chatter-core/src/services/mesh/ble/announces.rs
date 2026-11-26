@@ -139,9 +139,15 @@ impl BleRuntime {
             .then(|| self.state.paired_contact_for_announce(announcement))
             .flatten();
         if direct
-            && let Some(expected) = self.link_admission.get(link).and_then(|record| record.expected_contact.clone())
+            && let Some(expected) = self
+                .link_admission
+                .get(link)
+                .and_then(|record| record.expected_contact.clone())
         {
-            if paired_contact.as_ref().is_some_and(|contact| *contact != expected) {
+            if paired_contact
+                .as_ref()
+                .is_some_and(|contact| *contact != expected)
+            {
                 return false;
             }
             paired_contact = Some(expected);
@@ -254,7 +260,7 @@ impl BleRuntime {
 
         self.retry_pending_dm_handshake(claimed).await;
         if direct && paired_contact.is_some() && link_authenticated {
-            self.send_pairing_proof(claimed).await;
+            self.send_pairing_proof(link, claimed).await;
         }
         // A known peer may return on a new link, where an old session alone
         // cannot authorize routing. Reopen Noise to restore private delivery.

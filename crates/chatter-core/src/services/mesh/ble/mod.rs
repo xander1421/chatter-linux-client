@@ -177,8 +177,8 @@ pub struct BleRuntime {
     published_beacons: Vec<chatter_mesh::tlv::pairing::PairingBeacon>,
     config: Arc<MeshConfig>,
     matched_scans: Arc<parking_lot::Mutex<admission::MatchedScans>>,
-    pending_central_contact: Option<PeerId>,
-    central_contacts: std::collections::HashMap<LinkId, PeerId>,
+    pending_central: Option<ConnectionAdmission>,
+    central_admissions: std::collections::HashMap<LinkId, ConnectionAdmission>,
     link_admission: std::collections::HashMap<LinkId, admission::LinkAdmission>,
     events: MeshEvents,
     router: Arc<RouterHandle>,
@@ -290,8 +290,8 @@ impl BleRuntime {
             published_beacons: Vec::new(),
             config,
             matched_scans: Arc::default(),
-            pending_central_contact: None,
-            central_contacts: std::collections::HashMap::new(),
+            pending_central: None,
+            central_admissions: std::collections::HashMap::new(),
             link_admission: std::collections::HashMap::new(),
             events,
             router,
@@ -677,8 +677,8 @@ impl BleRuntime {
             self.degraded(format!("the radio would not stop: {error}"));
         }
         self.matched_scans.lock().clear();
-        self.pending_central_contact = None;
-        self.central_contacts.clear();
+        self.pending_central = None;
+        self.central_admissions.clear();
         self.link_admission.clear();
         self.state.with(|state| {
             state.radio_running = false;

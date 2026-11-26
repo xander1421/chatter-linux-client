@@ -173,7 +173,6 @@ impl BleRuntime {
         if !self.config.public_chat_enabled()
             && !self.state.paired_session(peer)
             && !self.allows_pairing_control(peer, bytes)
-            && !bytes.starts_with(super::pairing::ROUTE_MAGIC)
             && !bytes.starts_with(super::super::account_identity::PAIRING_RECEIPT_MAGIC)
         {
             return false;
