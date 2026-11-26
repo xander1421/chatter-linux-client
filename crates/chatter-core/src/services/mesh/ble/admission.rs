@@ -13,6 +13,7 @@ const MATCHED_SCAN_LIFETIME: Duration = Duration::from_secs(15);
 const MAX_MATCHED_ADDRESSES: usize = 128;
 const PAIRED_PROOF_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIRING_PREVIEW: Duration = Duration::from_secs(8);
+const PAIRING_SELECTION_GRACE: Duration = Duration::from_secs(5);
 const INBOUND_RESERVATION: Duration = Duration::from_secs(5);
 const PREVIEW_COOLDOWN: Duration = Duration::from_secs(20);
 const PROOF_BACKOFF_RESET: Duration = Duration::from_secs(120);
@@ -82,6 +83,7 @@ pub(super) struct LinkAdmission {
     pub(super) role: Option<LinkRole>,
     pub(super) preview: Option<(LinkRole, String)>,
     pub(super) candidate: Option<PeerId>,
+    pub(super) candidate_authenticated: bool,
     preview_deadline: Instant,
 }
 
@@ -93,6 +95,7 @@ impl LinkAdmission {
             role: None,
             preview: None,
             candidate: None,
+            candidate_authenticated: false,
             preview_deadline: now + PAIRING_PREVIEW,
         }
     }
@@ -104,7 +107,11 @@ impl LinkAdmission {
                     return false;
                 }
                 match (&self.candidate, config.pairing_peer(now)) {
-                    (Some(candidate), Some(selected)) => *candidate == selected,
+                    (Some(candidate), Some(selected)) => {
+                        *candidate == selected
+                            && (self.candidate_authenticated
+                                || now < self.preview_deadline + PAIRING_SELECTION_GRACE)
+                    }
                     _ => now < self.preview_deadline,
                 }
             },
@@ -253,6 +260,10 @@ mod tests {
         assert!(!record.permits_proof(&config, now + PAIRING_PREVIEW));
         config.select_pairing_peer(selected, now);
         assert!(record.permits_proof(&config, now + PAIRING_PREVIEW));
+        let after_grace = now + PAIRING_PREVIEW + PAIRING_SELECTION_GRACE;
+        assert!(!record.permits_proof(&config, after_grace));
+        record.candidate_authenticated = true;
+        assert!(record.permits_proof(&config, after_grace));
         config.select_pairing_peer(PeerId::from_bytes(&[8; 8]), now);
         assert!(!record.permits_proof(&config, now));
     }

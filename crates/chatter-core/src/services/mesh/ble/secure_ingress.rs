@@ -209,6 +209,12 @@ impl BleRuntime {
                 && self
                     .state
                     .with(|state| state.links.mark_noise_authenticated(link, claimed));
+            if direct
+                && let Some(record) = self.link_admission.get_mut(link)
+                && record.candidate.as_ref() == Some(claimed)
+            {
+                record.candidate_authenticated = true;
+            }
             let paired = self.state.is_paired_link_to(link, claimed);
             let application_data_allowed = paired || self.config.public_chat_enabled();
             if direct {
