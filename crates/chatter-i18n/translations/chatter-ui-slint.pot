@@ -5984,6 +5984,7 @@ msgstr ""
 
 #: ui/anon_mode/shield_network_banner.slint
 msgid "Couldn't reach the server over Tor. Shield is still on."
+msgstr ""
 
 msgid "Waiting for anonymous credentials"
 msgstr ""
