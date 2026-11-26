@@ -350,6 +350,11 @@ mod tests {
         let peer_address = format!("{}:1", UserId::new());
         key_store.store_session(&peer_address, &[3]).unwrap();
 
+        db.connection().unwrap().execute(
+            "INSERT INTO mesh_binding_offers (owner_id, peer_id, created_at) VALUES (?1, 'peer', 1)",
+            [old_owner.to_string()],
+        ).unwrap();
+
         let saved_message = Message::new_text(
             old_owner.into(),
             ConversationType::SavedMessages,
@@ -446,6 +451,15 @@ mod tests {
         assert!(!auth.restore_session());
         assert!(auth.auth_interceptor.get_auth_info().is_none());
         assert!(!staged.exists());
+
+        let mesh_offer_count: u32 = db
+            .connection()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM mesh_binding_offers", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(mesh_offer_count, u32::from(!switch_accounts));
 
         if switch_accounts {
             assert_eq!(result.key_recovery, Some(KeyRecoveryNeed::NoPinProvided));
