@@ -12,6 +12,7 @@ pub const HELLO_VERSION: u8 = 1;
 pub const SIGNAL_MESH: u8 = 1;
 pub const QR_CHANNELS: u8 = 2;
 pub const NOISE_SIGNING_BINDING: u8 = 4;
+pub const COURIER_RECEIPTS: u8 = 8;
 const MAGIC: &[u8; 8] = b"CHTRHLO1";
 const MAX_VERSIONS: usize = 8;
 const REPLAY_LIMIT: usize = 64;
@@ -29,7 +30,7 @@ impl ChatterHello {
         Self {
             versions: vec![HELLO_VERSION],
             // Advertise only inside Noise; neither capability reaches announces.
-            capabilities: SIGNAL_MESH | QR_CHANNELS | NOISE_SIGNING_BINDING,
+            capabilities: SIGNAL_MESH | QR_CHANNELS | NOISE_SIGNING_BINDING | COURIER_RECEIPTS,
             max_carrier_bytes: 4 * 1024,
             nonce,
         }

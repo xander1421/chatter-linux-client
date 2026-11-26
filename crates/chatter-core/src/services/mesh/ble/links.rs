@@ -627,9 +627,12 @@ impl BleRuntime {
         local: &PeerId,
         now_s: u64,
     ) {
-        let Ok((header, _)) = chatter_mesh::fragment::FragmentHeader::parse(packet) else {
+        let Ok((header, chunk)) = chatter_mesh::fragment::FragmentHeader::parse(packet) else {
             return;
         };
+        if header.index == 0 && chunk.get(1) != Some(&header.original_type) {
+            return;
+        }
         let received = self.state.with(|state| {
             if header.original_type == MessageType::RequestSync.as_u8()
                 && state
@@ -640,21 +643,34 @@ impl BleRuntime {
             {
                 return None;
             }
-            state.fragments.receive(packet, link.clone(), now_s).ok()
+            let authenticated_sender = state.links.is_noise_authenticated(link, claimed);
+            state.fragments.receive(
+                packet,
+                link.clone(),
+                link.as_str().len(),
+                authenticated_sender,
+                now_s,
+            ).ok()
         });
         let Some(received) = received else { return };
         if let Some(bytes) = received.reassembled {
-            let Ok(mut inner) = codec::decode(&bytes) else { return };
-            if inner.msg_type != header.original_type
-                || inner.sender_id != packet.sender_id
-                || inner.message_type() == Some(MessageType::Fragment)
+            let accepted = if let Ok(mut inner) = codec::decode(&bytes)
+                && inner.msg_type == header.original_type
+                && inner.sender_id == packet.sender_id
+                && inner.message_type() != Some(MessageType::Fragment)
             {
-                return;
-            }
-            if matches!(inner.message_type(), Some(MessageType::NoiseHandshake | MessageType::NoiseEncrypted)) {
-                inner.ttl = inner.ttl.min(received.ttl);
-            }
-            if !self.handle_typed(link, &inner, claimed).await {
+                if matches!(
+                    inner.message_type(),
+                    Some(MessageType::NoiseHandshake | MessageType::NoiseEncrypted)
+                ) {
+                    inner.ttl = inner.ttl.min(received.ttl);
+                }
+                self.handle_typed(link, &inner, claimed).await
+            } else {
+                false
+            };
+            if !accepted {
+                self.state.with(|state| state.fragments.reject_completion(packet, header));
                 return;
             }
         }

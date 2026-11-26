@@ -1,4 +1,7 @@
 use super::*;
+use chatter_mesh_store::courier::CourierReceiptSupport;
+
+use super::super::chatter_hello::COURIER_RECEIPTS;
 
 impl BleRuntime {
     // ----------------------------------------------------------------- helpers
@@ -10,10 +13,20 @@ impl BleRuntime {
         now_s: u64,
         ingress: AnnounceIngress,
     ) {
-        let envelopes = self
-            .couriers
-            .offer_envelopes(recipient_key, now_s, ingress)
-            .unwrap_or_default();
+        let support = self.state.with(|state| match state.chatter_hello.get(peer) {
+            Some(hello) if hello.capabilities & COURIER_RECEIPTS != 0 => {
+                CourierReceiptSupport::Supported
+            }
+            Some(_) => CourierReceiptSupport::Unsupported,
+            None => CourierReceiptSupport::Unknown,
+        });
+        let envelopes = match self.couriers.offer_envelopes(recipient_key, now_s, ingress) {
+            Ok(envelopes) => envelopes,
+            Err(error) => {
+                tracing::warn!(target: "mesh::ble", %error, "courier offers unavailable");
+                return;
+            }
+        };
         for envelope in envelopes {
             let Ok(payload) = envelope.encode() else {
                 continue;
@@ -24,7 +37,11 @@ impl BleRuntime {
                 payload,
                 chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
             );
-            self.transmit(&packet, Some(peer), None).await;
+            if self.transmit(&packet, Some(peer), None).await
+                && let Err(error) = self.couriers.record_offer(&envelope, support, now_s)
+            {
+                tracing::warn!(target: "mesh::ble", %error, "courier offer could not be recorded");
+            }
         }
     }
 

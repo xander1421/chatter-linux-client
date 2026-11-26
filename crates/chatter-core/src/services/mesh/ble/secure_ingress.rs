@@ -2,6 +2,8 @@ use super::*;
 use chatter_mesh::tlv::courier_envelope::courier_receipt_id;
 use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
 
+use super::super::chatter_hello::COURIER_RECEIPTS;
+
 pub(super) const COURIER_RECEIPT_MAGIC: &[u8; 8] = b"CHTRCRP1";
 const SIGNING_BINDING_MAGIC: &[u8; 8] = b"CHTRNSB1";
 pub(super) const SIGNING_BINDING_REQUEST: &[u8; 8] = b"CHTRNSR1";
@@ -252,9 +254,19 @@ impl BleRuntime {
                     return;
                 }
             }
-            self.state.with(|state| {
-                state.chatter_hello.accept(claimed, hello);
+            let supports_receipts = hello.capabilities & COURIER_RECEIPTS != 0;
+            let recipient_key = self.state.with(|state| {
+                if state.chatter_hello.accept(claimed, hello) {
+                    state.sessions.remote_static(claimed)
+                } else {
+                    None
+                }
             });
+            if let Some(key) = recipient_key
+                && let Err(error) = self.couriers.resolve_receipt_support(&key, supports_receipts, now_secs())
+            {
+                tracing::warn!(target: "mesh::ble", %error, "courier receipt support could not be recorded");
+            }
             tracing::info!(target: "mesh::ble", peer = %claimed, signal_capable, "Chatter Hello accepted");
             if can_bind {
                 self.send_mesh_signing_binding(claimed).await;

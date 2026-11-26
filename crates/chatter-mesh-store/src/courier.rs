@@ -8,8 +8,8 @@
 //! only because per-depositor quotas cannot exist without it. Nothing here should
 //! ever grow a field that would let it learn more.
 //!
-//! Store and forward here is deposit and take only: an envelope is carried until
-//! its recipient is met on an authenticated link, or until it expires. This store
+//! Handover takes place on an authenticated direct link. Receipt-capable peers
+//! acknowledge delivery. Legacy peers receive a single offer. This store
 //! does not spray copies to other couriers, hand over speculatively to recipients
 //! heard through relays, or park envelopes on Nostr relays.
 //!
@@ -26,7 +26,7 @@
 //! was established on, and a replayed announce can rebind an attacker's link to the
 //! victim's ID — so "a session exists for this peer" hands the mail to the attacker.
 //! A verified peer can receive an offer on its authenticated direct link. The
-//! courier retains the sealed bytes until a receipt from the recipient or expiry.
+//! courier retains receipt-capable recipients' mail until acknowledged or expired.
 //!
 //! **3. Copy budgets are capped.** The wire envelope's `copies` field is clamped to
 //! `MAX_COPIES` (8) on deposit and carried unchanged. Nothing here spends or grows
@@ -132,6 +132,30 @@ impl AnnounceIngress {
 }
 
 const OFFER_RETRY_SECS: u64 = 30;
+const OFFER_LIMIT: u8 = 4;
+const RECEIPT_NEGOTIATION_SECS: u64 = 30;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CourierReceiptSupport {
+    Unknown,
+    Unsupported,
+    Supported,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Offer {
+    at: u64,
+    attempts: u8,
+    awaiting_hello: bool,
+}
+
+impl Offer {
+    fn can_retry(self, now: u64) -> bool {
+        !self.awaiting_hello
+            && self.attempts < OFFER_LIMIT
+            && now.saturating_sub(self.at) >= (OFFER_RETRY_SECS << (self.attempts - 1))
+    }
+}
 
 /// One envelope in the bag, plus the bookkeeping the wire format does not carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,7 +169,7 @@ struct StoredEnvelope {
     /// The wire copy budget, clamped and carried unchanged.
     copies: u8,
     prekey_id: Option<u32>,
-    last_offer_at: Option<u64>,
+    offer: Option<Offer>,
 }
 
 impl StoredEnvelope {
@@ -257,7 +281,7 @@ impl<S: Storage> CourierStore<S> {
     /// is [`StoreError::DepositRefused`] and is not a failure: the pool is bounded
     /// on purpose and refusing is how the bound is enforced.
     ///
-    /// Depositing an envelope whose ciphertext is already carried is idempotent: it
+    /// Depositing the same recipient tag and ciphertext is idempotent: it
     /// succeeds without consuming a second slot, keeping the larger copy budget.
     pub fn deposit(
         &mut self,
@@ -303,7 +327,9 @@ impl<S: Storage> CourierStore<S> {
         let duplicate = self
             .envelopes
             .iter()
-            .position(|stored| stored.ciphertext == envelope.ciphertext);
+            .position(|stored| {
+                stored.recipient_tag == envelope.recipient_tag && stored.ciphertext == envelope.ciphertext
+            });
         if let Some(index) = duplicate {
             if let Some(stored) = self.envelopes.get_mut(index) {
                 stored.copies = stored.copies.max(copies);
@@ -335,14 +361,14 @@ impl<S: Storage> CourierStore<S> {
             stored_at_unix_secs: now_unix_secs,
             copies,
             prekey_id: envelope.prekey_id,
-            last_offer_at: None,
+            offer: None,
         });
         self.persist()
     }
 
     // MARK: - Handover (on encountering a peer)
 
-    /// Offer eligible envelopes without retiring the durable copy.
+    /// List eligible envelopes for this authenticated direct handover.
     pub fn offer_envelopes(
         &mut self,
         recipient_noise_static_key: &[u8],
@@ -354,18 +380,83 @@ impl<S: Storage> CourierStore<S> {
         }
         self.prune_expired(now_unix_secs)?;
         let tags = candidate_tags(recipient_noise_static_key, now_unix_secs);
-        let mut offered = Vec::new();
-        for stored in &mut self.envelopes {
-            if tags.contains(&stored.recipient_tag)
-                && stored.last_offer_at.is_none_or(|at| {
-                    now_unix_secs.saturating_sub(at) >= OFFER_RETRY_SECS
-                })
-            {
-                offered.push(stored.envelope());
-                stored.last_offer_at = Some(now_unix_secs);
+        Ok(self.envelopes.iter()
+            .filter(|stored| tags.contains(&stored.recipient_tag)
+                && stored.offer.is_none_or(|offer| offer.can_retry(now_unix_secs)))
+            .map(StoredEnvelope::envelope)
+            .collect())
+    }
+
+    /// Account for an offer once the transport has accepted it.
+    pub fn record_offer(
+        &mut self,
+        envelope: &CourierEnvelope,
+        support: CourierReceiptSupport,
+        now_unix_secs: u64,
+    ) -> Result<(), StoreError> {
+        let Some(index) = self.envelopes.iter().position(|stored| {
+            stored.recipient_tag == envelope.recipient_tag && stored.ciphertext == envelope.ciphertext
+        }) else {
+            return Ok(());
+        };
+        let stored = &mut self.envelopes[index];
+        if support == CourierReceiptSupport::Unsupported {
+            let mut legacy = self.envelopes.remove(index);
+            if let Err(error) = self.persist() {
+                // Suppress further offers while maintenance retries retirement.
+                legacy.offer = Some(Offer {
+                    at: now_unix_secs,
+                    attempts: 1,
+                    awaiting_hello: true,
+                });
+                self.envelopes.insert(index, legacy);
+                return Err(error);
             }
+            return Ok(());
         }
-        Ok(offered)
+        let previous = stored.offer;
+        if previous.is_some_and(|offer| !offer.can_retry(now_unix_secs)) {
+            return Ok(());
+        }
+        stored.offer = Some(Offer {
+            at: now_unix_secs,
+            attempts: previous.map_or(1, |offer| offer.attempts + 1),
+            awaiting_hello: previous.is_none() && support == CourierReceiptSupport::Unknown,
+        });
+        // Keep the in-memory backoff even if storage is temporarily unavailable.
+        self.persist()
+    }
+
+    /// Resolve pending offers when the authenticated recipient sends its Hello.
+    pub fn resolve_receipt_support(
+        &mut self,
+        recipient_noise_static_key: &[u8],
+        supports_receipts: bool,
+        now_unix_secs: u64,
+    ) -> Result<(), StoreError> {
+        let tags = candidate_tags(recipient_noise_static_key, now_unix_secs);
+        let matches = |stored: &StoredEnvelope| {
+            tags.contains(&stored.recipient_tag)
+                && stored.offer.is_some_and(|offer| !supports_receipts || offer.awaiting_hello)
+        };
+        if !self.envelopes.iter().any(matches) {
+            return Ok(());
+        }
+        let previous = self.envelopes.clone();
+        if supports_receipts {
+            for stored in self.envelopes.iter_mut().filter(|stored| matches(stored)) {
+                if let Some(offer) = &mut stored.offer {
+                    offer.awaiting_hello = false;
+                }
+            }
+        } else {
+            self.envelopes.retain(|stored| !matches(stored));
+        }
+        if let Err(error) = self.persist() {
+            self.envelopes = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Retire sealed mail acknowledged inside the recipient's Noise session.
@@ -413,7 +504,12 @@ impl<S: Storage> CourierStore<S> {
     fn prune_locked(&mut self, now_unix_secs: u64) -> usize {
         let now_ms = unix_millis(now_unix_secs);
         let before = self.envelopes.len();
-        self.envelopes.retain(|stored| !stored.is_expired(now_ms));
+        self.envelopes.retain(|stored| {
+            !stored.is_expired(now_ms) && !stored.offer.is_some_and(|offer| {
+                offer.awaiting_hello
+                    && now_unix_secs.saturating_sub(offer.at) >= RECEIPT_NEGOTIATION_SECS
+            })
+        });
         before - self.envelopes.len()
     }
 
@@ -460,7 +556,8 @@ impl<S: Storage> CourierStore<S> {
 // fields. Everything written here is ciphertext or bookkeeping about ciphertext —
 // the `Storage` seam never sees plaintext.
 
-const POOL_MAGIC: &[u8; 4] = b"CRP2";
+const POOL_MAGIC: &[u8; 4] = b"CRP3";
+const LEGACY_POOL_MAGIC: &[u8; 4] = b"CRP2";
 
 fn malformed() -> StoreError {
     StoreError::Malformed("courier pool")
@@ -491,15 +588,24 @@ fn encode_pool(envelopes: &[StoredEnvelope]) -> Vec<u8> {
             }
             None => out.push(0),
         }
+        if let Some(offer) = stored.offer {
+            out.push(offer.attempts);
+            out.extend_from_slice(&offer.at.to_be_bytes());
+            out.push(u8::from(offer.awaiting_hello));
+        } else {
+            out.push(0);
+        }
     }
     out
 }
 
 fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
     let mut cursor = Cursor::new(bytes);
-    if cursor.take(4)? != &POOL_MAGIC[..] {
-        return Err(malformed());
-    }
+    let has_offers = match cursor.take(4)? {
+        magic if magic == POOL_MAGIC => true,
+        magic if magic == LEGACY_POOL_MAGIC => false,
+        _ => return Err(malformed()),
+    };
     let count = cursor.u32()? as usize;
     // A length prefix is attacker-influenced only after a disk compromise, but a
     // hostile count must still not make us reserve gigabytes.
@@ -532,6 +638,23 @@ fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
             _ => Some(cursor.u32()?),
         };
 
+        let offer = if has_offers {
+            match cursor.u8()? {
+                0 => None,
+                attempts @ 1..=OFFER_LIMIT => {
+                    let at = cursor.u64()?;
+                    let awaiting_hello = match cursor.u8()? {
+                        0 => false,
+                        1 if attempts == 1 => true,
+                        _ => return Err(malformed()),
+                    };
+                    Some(Offer { at, attempts, awaiting_hello })
+                }
+                _ => return Err(malformed()),
+            }
+        } else {
+            None
+        };
         envelopes.push(StoredEnvelope {
             recipient_tag,
             expiry_ms,
@@ -540,7 +663,7 @@ fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
             stored_at_unix_secs,
             copies,
             prekey_id,
-            last_offer_at: None,
+            offer,
         });
     }
 
@@ -648,7 +771,8 @@ mod tests {
         store.deposit(&mail, &key(0xA1), NOW).expect("deposit");
 
         let offered = store.offer_envelopes(&recipient, NOW, direct()).expect("offer");
-        assert_eq!(offered, vec![mail]);
+        assert_eq!(offered, vec![mail.clone()]);
+        store.record_offer(&mail, CourierReceiptSupport::Supported, NOW).unwrap();
         assert!(store.offer_envelopes(&recipient, NOW, direct()).unwrap().is_empty());
         let mut store = CourierStore::new(store.into_storage());
         assert_eq!(store.restore(NOW).expect("durable copy"), 1);
@@ -695,14 +819,44 @@ mod tests {
     }
 
     #[test]
-    fn an_unacknowledged_offer_can_retry() {
+    fn known_receipt_support_backs_off_and_caps_offers_across_restart() {
         let mut store = store();
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
         store.deposit(&mail, &key(0xA1), NOW).unwrap();
-        assert_eq!(store.offer_envelopes(&recipient, NOW, direct()).unwrap(), vec![mail.clone()]);
-        assert_eq!(store.offer_envelopes(&recipient, NOW + OFFER_RETRY_SECS, direct()).unwrap(), vec![mail]);
+        store.record_offer(&mail, CourierReceiptSupport::Unknown, NOW).unwrap();
+        store.resolve_receipt_support(&recipient, true, NOW + 1).unwrap();
+
+        let mut deadline = NOW;
+        for retry in [30, 60, 120] {
+            deadline += retry;
+            let mut restored = CourierStore::new(store.into_storage());
+            assert_eq!(restored.restore(deadline - 1).unwrap(), 1);
+            assert!(restored.offer_envelopes(&recipient, deadline - 1, direct()).unwrap().is_empty());
+            assert_eq!(restored.offer_envelopes(&recipient, deadline, direct()).unwrap(), vec![mail.clone()]);
+            restored.record_offer(&mail, CourierReceiptSupport::Supported, deadline).unwrap();
+            store = restored;
+        }
+        assert!(store.offer_envelopes(&recipient, deadline + 600, direct()).unwrap().is_empty());
         assert_eq!(store.carried_count(), 1);
+    }
+
+    #[test]
+    fn a_legacy_offer_releases_the_slot_without_a_second_offer() {
+        let recipient = key(0xB0);
+        let mail = envelope(&recipient, 1);
+        for support in [CourierReceiptSupport::Unknown, CourierReceiptSupport::Unsupported] {
+            let mut store = store();
+            store.deposit(&mail, &key(0xA1), NOW).unwrap();
+            assert_eq!(store.offer_envelopes(&recipient, NOW, direct()).unwrap(), vec![mail.clone()]);
+            store.record_offer(&mail, support, NOW).unwrap();
+            let deadline = NOW + RECEIPT_NEGOTIATION_SECS;
+            let mut restored = CourierStore::new(store.into_storage());
+            assert_eq!(restored.restore(deadline - 1).unwrap(), usize::from(support == CourierReceiptSupport::Unknown));
+            assert!(restored.offer_envelopes(&recipient, deadline - 1, direct()).unwrap().is_empty());
+            assert!(restored.offer_envelopes(&recipient, deadline, direct()).unwrap().is_empty());
+            assert_eq!(restored.carried_count(), 0);
+        }
     }
 
     #[test]
@@ -717,6 +871,18 @@ mod tests {
             .deposit(&mail, &key(0xA1), NOW)
             .expect("second deposit");
         assert_eq!(store.carried_count(), 1);
+    }
+
+    #[test]
+    fn the_same_ciphertext_can_be_carried_for_distinct_recipient_tags() {
+        let mut store = store();
+        let first = envelope(&key(0xB0), 1);
+        let second = envelope(&key(0xB1), 1);
+        assert_eq!(first.ciphertext, second.ciphertext);
+        store.deposit(&first, &key(0xA1), NOW).unwrap();
+        store.deposit(&second, &key(0xA1), NOW).unwrap();
+        assert_eq!(store.carried_count(), 2);
+        assert_eq!(store.offer_envelopes(&key(0xB1), NOW, direct()).unwrap(), vec![second]);
     }
 
     // MARK: - Non-negotiable 2: the ingress rule
@@ -994,8 +1160,17 @@ mod tests {
             stored_at_unix_secs: NOW + u64::from(index),
             copies: 1,
             prekey_id: None,
-            last_offer_at: None,
+            offer: None,
         }
+    }
+
+    #[test]
+    fn legacy_pool_entries_restore_without_an_offer_history() {
+        let stored = stored(1, key(0xA1).to_vec());
+        let mut encoded = encode_pool(core::slice::from_ref(&stored));
+        encoded[..4].copy_from_slice(LEGACY_POOL_MAGIC);
+        assert_eq!(encoded.pop(), Some(0));
+        assert_eq!(decode_pool(&encoded).unwrap(), vec![stored]);
     }
 
     #[test]
@@ -1095,7 +1270,7 @@ mod tests {
             stored_at_unix_secs: NOW,
             copies: 4,
             prekey_id: Some(0xDEAD_BEEF),
-            last_offer_at: None,
+            offer: None,
         };
         let encoded = encode_pool(core::slice::from_ref(&stored));
         assert_eq!(decode_pool(&encoded).expect("decode"), vec![stored]);
