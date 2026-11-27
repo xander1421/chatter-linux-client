@@ -16,9 +16,7 @@ export global Colors {
     out property <color> qr-background: #ffffff;
     // Stable, dark initials fills: the uploaded avatar must match this preview
     // in either theme and keep white initials legible.
-    out property <color> avatar-teal: #0f766e;
-    out property <color> avatar-blue: #1d4ed8;
-    out property <color> avatar-purple: #6d28d9;
+    out property <color> avatar-teal: #29413f;
 
     // Primary teal. Light uses teal-700 so primary-coloured text passes AA on
     // white (#0d9488 was 3.7:1).
@@ -112,7 +110,7 @@ export global Colors {
     out property <color> code-bg: Appearance.dark ? #141819 : #eceeee;
     out property <color> code-text: Appearance.dark ? #d4d4d4 : #1f2328;
 
-    // Group accent (purple for private groups)
+    // Ring for anonymous identities
     out property <color> group-accent: Appearance.dark ? #9333ea : #7e22ce;
 
     // Message bubbles share geometry and a small neutral tone shift. Own
@@ -145,7 +143,7 @@ export global Colors {
     // File category colors
     out property <color> cat-image: Appearance.dark ? #4ade80 : #16a34a;
     out property <color> cat-video: Appearance.dark ? #f472b6 : #db2777;
-    out property <color> cat-audio: Appearance.dark ? #a78bfa : #7c3aed;
+    out property <color> cat-audio: text-secondary;
     out property <color> cat-document: Appearance.dark ? #60a5fa : #2563eb;
     out property <color> cat-code: Appearance.dark ? #fbbf24 : #b45309;
     out property <color> cat-archive: Appearance.dark ? #fb923c : #c2410c;

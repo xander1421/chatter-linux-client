@@ -1955,8 +1955,8 @@ msgid "Blue initials"
 msgstr "Iniciales azules"
 
 #: crates/chatter-ui/src/bin_ui/features/avatar_defaults.rs:51
-msgid "Purple initials"
-msgstr "Iniciales moradas"
+msgid "Graphite initials"
+msgstr "Iniciales color grafito"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/active.rs:132
 msgid "Camera is available once the call connects."

@@ -1958,8 +1958,8 @@ msgid "Blue initials"
 msgstr "Сині ініціали"
 
 #: crates/chatter-ui/src/bin_ui/features/avatar_defaults.rs:51
-msgid "Purple initials"
-msgstr "Фіолетові ініціали"
+msgid "Graphite initials"
+msgstr "Графітові ініціали"
 
 #: crates/chatter-ui/src/bin_ui/features/calls/active.rs:132
 msgid "Camera is available once the call connects."

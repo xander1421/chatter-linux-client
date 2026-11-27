@@ -48,7 +48,7 @@ fn option_label(label: &str) -> String {
         "Wojak" => chatter_i18n::tr("Wojak"),
         "Teal initials" => chatter_i18n::tr("Teal initials"),
         "Blue initials" => chatter_i18n::tr("Blue initials"),
-        "Purple initials" => chatter_i18n::tr("Purple initials"),
+        "Graphite initials" => chatter_i18n::tr("Graphite initials"),
         other => other.to_string(),
     }
 }

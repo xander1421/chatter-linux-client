@@ -1812,7 +1812,7 @@ msgid "Blue initials"
 msgstr ""
 
 #: crates/chatter-ui/src/bin_ui/features/avatar_defaults.rs:51
-msgid "Purple initials"
+msgid "Graphite initials"
 msgstr ""
 
 #: crates/chatter-ui/src/bin_ui/features/calls/active.rs:132

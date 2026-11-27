@@ -154,7 +154,7 @@ export component MeshComposeSheet inherits Rectangle {
                             background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             VerticalLayout {
                                 ComposeMenuRow { icon: Icons.lock; title: @tr("New private group"); detail: @tr("Invite only");
-                                    tint: Colors.group-accent; touch: root.touch;
+                                    tint: Colors.text-secondary; touch: root.touch;
                                     clicked => { root.page = "group"; } }
                                 if MeshGlobal.public-chat: Rectangle { height: 1px; background: Colors.divider; }
                                 if MeshGlobal.public-chat: ComposeMenuRow { icon: Icons.hash; title: @tr("Join public channel"); detail: @tr("Talk with devices nearby"); touch: root.touch;

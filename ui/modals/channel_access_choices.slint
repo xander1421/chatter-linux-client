@@ -173,13 +173,13 @@ export component ChannelAccessChoices inherits VerticalLayout {
                             source: Icons.shield;
                             width: 16px;
                             height: 16px;
-                            colorize: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-secondary;
+                            colorize: root.access-mode == "private-group" ? Colors.glass-accent : Colors.text-secondary;
                         }
                     }
                     Text {
                         accessible-role: none;
                         text: @tr("Anon group");
-                        color: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-primary;
+                        color: root.access-mode == "private-group" ? Colors.glass-accent : Colors.text-primary;
                         font-size: Typography.sm;
                         font-weight: Typography.semibold;
                         vertical-alignment: center;

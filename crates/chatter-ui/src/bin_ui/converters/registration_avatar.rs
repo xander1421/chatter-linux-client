@@ -6,6 +6,8 @@ pub struct DefaultAvatar {
     pub color: [u8; 3],
 }
 
+pub(crate) const DEFAULT_INITIALS_COLOR: [u8; 3] = [41, 65, 63];
+
 /// Order and payloads shared by registration and the profile editor.
 pub const DEFAULT_AVATARS: [DefaultAvatar; 6] = [
     DefaultAvatar {
@@ -35,17 +37,17 @@ pub const DEFAULT_AVATARS: [DefaultAvatar; 6] = [
     DefaultAvatar {
         label: "Teal initials",
         image: None,
-        color: [15, 118, 110],
+        color: DEFAULT_INITIALS_COLOR,
     },
     DefaultAvatar {
         label: "Blue initials",
         image: None,
-        color: [29, 78, 216],
+        color: [48, 62, 75],
     },
     DefaultAvatar {
-        label: "Purple initials",
+        label: "Graphite initials",
         image: None,
-        color: [109, 40, 217],
+        color: [57, 61, 62],
     },
 ];
 

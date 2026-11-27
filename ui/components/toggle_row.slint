@@ -17,7 +17,7 @@ export component ToggleRow inherits Rectangle {
     in-out property <bool> checked: false;
     in property <bool> disabled: false;
     in property <string> accessible-text: "";
-    // "" = plain Toggle; "cyan" / "violet" = NeoActionToggle with that glow.
+    // "cyan" selects the teal NeoActionToggle.
     in property <string> glow-mode: "";
     in property <length> row-padding: Spacing.none;
     in property <length> row-spacing: Spacing.sm;
@@ -60,17 +60,16 @@ export component ToggleRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
-            if root.glow-mode == "": Toggle {
+            if root.glow-mode != "cyan": Toggle {
                 checked <=> root.checked;
                 disabled: root.disabled;
                 accessible-text: root.accessible-text;
                 toggled(value) => { root.toggled(value); }
             }
-            if root.glow-mode != "": NeoActionToggle {
+            if root.glow-mode == "cyan": NeoActionToggle {
                 checked <=> root.checked;
                 disabled: root.disabled;
                 accessible-text: root.accessible-text;
-                glow-mode: root.glow-mode;
                 toggled(value) => { root.toggled(value); }
             }
         }

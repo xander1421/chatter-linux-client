@@ -93,9 +93,6 @@ export component PrivateGroupListItem inherits Rectangle {
     border-radius: root.card-mode ? Spacing.radius-control : Spacing.radius-md;
     clip: true;
 
-    // Use purple accent for private groups
-    property <color> accent-color: Colors.group-accent;
-
     // A Flickable cancels the pointer grab when scrolling begins. Release the
     // visual press as soon as the finger moves past the shared gesture slop.
     property <bool> press-active: false;
@@ -198,15 +195,15 @@ export component PrivateGroupListItem inherits Rectangle {
                     alignment: center;
                     HorizontalLayout {
                         spacing: Spacing.xs;
-                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(0)); }
-                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(1)); }
-                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(2)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: Colors.text-secondary.with-alpha(root.dot-opacity(0)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: Colors.text-secondary.with-alpha(root.dot-opacity(1)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: Colors.text-secondary.with-alpha(root.dot-opacity(2)); }
                     }
                 }
 
                 Text {
                     text: root.typing-text != "" ? root.typing-text : @tr("typing");
-                    color: accent-color;
+                    color: Colors.text-secondary;
                     font-size: Typography.xs;
                     min-width: 0px;
                     overflow: elide;

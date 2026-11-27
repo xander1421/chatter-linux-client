@@ -231,10 +231,11 @@ export component MeshPeerSheet inherits Rectangle {
                                             alignment: center;
                                             Rectangle {
                                                 width: 32px; height: 32px; border-radius: Spacing.radius-md;
-                                                background: Colors.group-accent;
+                                                background: transparent;
+                                                border-width: 1px; border-color: Colors.border;
                                                 Image { source: Icons.lock; width: 16px; height: 16px;
                                                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                                    colorize: Colors.on-action; }
+                                                    colorize: Colors.text-secondary; }
                                             }
                                         }
                                         Text { text: channel.name; color: Colors.text-primary; font-size: Typography.base;

@@ -69,12 +69,12 @@ export component MeshListItem inherits Rectangle {
             Rectangle {
                 width: 40px; height: 40px;
                 border-radius: root.kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
-                background: root.kind == "private-channel" ? Colors.group-accent
-                    : root.kind == "dm" ? Colors.avatar-blue : Colors.surface-control;
+                background: transparent;
+                border-width: 1px; border-color: Colors.border;
                 Image {
                     source: root.glyph; width: 20px; height: 20px;
                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                    colorize: root.kind == "private-channel" || root.kind == "dm" ? Colors.on-action : Colors.text-secondary;
+                    colorize: Colors.text-secondary;
                 }
                 if root.kind == "dm" && root.reachable: Rectangle {
                     width: 10px; height: 10px; x: parent.width - self.width; y: parent.height - self.height;

@@ -98,8 +98,9 @@ fn open(w: &MainWindow, owner: Owner, current_avatar: Option<&[u8]>) {
                 .or(current_avatar.is_none().then_some(default_index))
                 .map_or(-1, |i| i as i32),
         );
+    let [r, g, b] = crate::bin_ui::converters::DEFAULT_INITIALS_COLOR;
     w.global::<crate::ModalHostState>()
-        .set_edit_profile_avatar_color(slint::Color::from_rgb_u8(15, 118, 110));
+        .set_edit_profile_avatar_color(slint::Color::from_rgb_u8(r, g, b));
     w.global::<crate::ModalHostState>()
         .set_edit_profile_error("".into());
     w.global::<crate::ModalHostState>()

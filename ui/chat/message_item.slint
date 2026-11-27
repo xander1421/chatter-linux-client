@@ -804,7 +804,7 @@ export component MessageItem inherits Rectangle {
 
                         // Thread-reply chip — marks a message that lives in a
                         // thread (vs a main-chat quote reply, which shows the
-                        // quote block below). Purple to keep it distinct from
+                        // quote block below). The thread icon distinguishes it from
                         // the teal quote accent.
                         if root.is-thread-reply: HorizontalLayout {
                             spacing: Spacing.xs;
@@ -817,13 +817,13 @@ export component MessageItem inherits Rectangle {
                                     width: 11px;
                                     height: 11px;
                                     source: Icons.message-circle;
-                                    colorize: Colors.accent-purple;
+                                    colorize: Colors.text-secondary;
                                 }
                             }
 
                             Text {
                                 text: @tr("Thread reply");
-                                color: Colors.accent-purple;
+                                color: Colors.text-secondary;
                                 font-size: Typography.xs;
                                 font-italic: true;
                             }

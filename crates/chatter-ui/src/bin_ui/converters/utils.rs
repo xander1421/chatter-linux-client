@@ -34,7 +34,7 @@ pub(crate) fn category_color(category: &str) -> slint::Color {
         "archive" => slint::Color::from_argb_u8(255, 251, 146, 60),  // #fb923c
         "image" => slint::Color::from_argb_u8(255, 74, 222, 128),    // #4ade80
         "video" => slint::Color::from_argb_u8(255, 248, 113, 113),   // #f87171
-        "audio" => slint::Color::from_argb_u8(255, 167, 139, 250),   // #a78bfa
+        "audio" => slint::Color::from_argb_u8(255, 188, 197, 197),   // #bcc5c5
         _ => slint::Color::from_argb_u8(255, 148, 163, 184),         // #94a3b8
     }
 }
