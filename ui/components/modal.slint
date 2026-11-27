@@ -108,6 +108,8 @@ export component Modal inherits Rectangle {
         container.release-focus();
     }
 
+    private property <bool> narrow-modal: root.width < 520px;
+
     container := ModalContainer {
         show: root.show;
         accessibility-modal: !root.root-screen;
@@ -122,9 +124,9 @@ export component Modal inherits Rectangle {
         close => { root.close(); }
 
         modal-layout := VerticalLayout {
-            padding: root.dialog-card || root.full-screen || root.width < 520px ? Spacing.lg : Spacing.panel-gutter;
+            padding: root.dialog-card || root.full-screen || root.narrow-modal ? Spacing.lg : Spacing.panel-gutter;
             padding-bottom: self.padding-top + (root.floating-content ? root.bottom-inset : Spacing.none);
-            spacing: root.full-screen || root.width < 520px ? Spacing.md : Spacing.panel-gutter;
+            spacing: root.full-screen || root.narrow-modal ? Spacing.md : Spacing.panel-gutter;
 
             // Header row.
             //

@@ -279,7 +279,7 @@ export component Sidebar inherits Rectangle {
             // A row inserted above the visible conversations must not move
             // the content already under the user's finger.
             if (!root.show-card-list && root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
-                    ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
+                    ? (DesktopChrome.macos ? max(Spacing.none, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
                     : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm))) {
                 central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
             }
@@ -545,7 +545,7 @@ export component Sidebar inherits Rectangle {
                 // The pinned title and the floating footer stay outside the
                 // virtualized content; only their scroll clearance is a row.
                 padding-top: idx == 0 && !root.framed-archive
-                    ? (root.collapsed ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                    ? (root.collapsed ? (DesktopChrome.macos ? max(Spacing.none, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                         + (root.mobile-mode ? Spacing.none : Spacing.sm)
                     : Spacing.none;
                 padding-bottom: root.framed-archive && (entry.kind == "archive-back" || entry.kind == "archived-chat")
@@ -881,8 +881,8 @@ export component Sidebar inherits Rectangle {
                 if entry.kind == "channel-actions" && root.collapsed
                     && (root.desktop-rail || (!SidebarPane.archive-open && !AnonMode.enabled)): VerticalLayout {
                     spacing: Spacing.xs;
-                    padding-top: DesktopChrome.macos ? 0px : Spacing.xs;
-                    padding-bottom: DesktopChrome.macos ? 0px : Spacing.xs;
+                    padding-top: DesktopChrome.macos ? Spacing.none : Spacing.xs;
+                    padding-bottom: DesktopChrome.macos ? Spacing.none : Spacing.xs;
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
@@ -1113,7 +1113,7 @@ export component Sidebar inherits Rectangle {
             height: root.height;
             viewport-height: mesh-content.preferred-height;
             mesh-content := VerticalLayout {
-                padding-top: (root.collapsed ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                padding-top: (root.collapsed ? (DesktopChrome.macos ? max(Spacing.none, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                     + (root.mobile-mode ? Spacing.none : Spacing.sm);
                 padding-bottom: root.bottom-inset + Spacing.md;
                 MeshList {
