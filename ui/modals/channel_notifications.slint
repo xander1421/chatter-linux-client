@@ -67,7 +67,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     // All messages — Neo selection card
     Rectangle {
         min-height: Spacing.touch-target-min;
-        background: root.notification-preference == "all" ? Colors.inset : all-touch.pressed ? Materials.pressed : transparent;
+        background: root.notification-preference == "all" ? Colors.tint-strong : all-touch.pressed ? Materials.pressed : transparent;
         transform-scale-x: all-touch.pressed ? 0.98 : 1;
         transform-scale-y: all-touch.pressed ? 0.94 : 1;
         animate background { duration: Materials.motion-quick; easing: Materials.settle; }
@@ -78,7 +78,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         accessible-description: root.notification-preference == "all" ? @tr("Selected") : "";
         accessible-action-default => { root.change-notification("all"); }
         KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("all"); } }
-        border-radius: Spacing.radius-sm;
+        border-radius: Spacing.radius-control;
 
         HorizontalLayout {
             padding: Spacing.sm;
@@ -126,7 +126,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     // Mentions only — Neo selection card
     Rectangle {
         min-height: Spacing.touch-target-min;
-        background: root.notification-preference == "mentions" ? Colors.inset : mentions-touch.pressed ? Materials.pressed : transparent;
+        background: root.notification-preference == "mentions" ? Colors.tint-strong : mentions-touch.pressed ? Materials.pressed : transparent;
         transform-scale-x: mentions-touch.pressed ? 0.98 : 1;
         transform-scale-y: mentions-touch.pressed ? 0.94 : 1;
         animate background { duration: Materials.motion-quick; easing: Materials.settle; }
@@ -137,7 +137,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         accessible-description: root.notification-preference == "mentions" ? @tr("Selected") : "";
         accessible-action-default => { root.change-notification("mentions"); }
         KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("mentions"); } }
-        border-radius: Spacing.radius-sm;
+        border-radius: Spacing.radius-control;
 
         HorizontalLayout {
             padding: Spacing.sm;
@@ -185,7 +185,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     // None — Neo selection card
     Rectangle {
         min-height: Spacing.touch-target-min;
-        background: root.notification-preference == "none" ? Colors.inset : none-touch.pressed ? Materials.pressed : transparent;
+        background: root.notification-preference == "none" ? Colors.tint-strong : none-touch.pressed ? Materials.pressed : transparent;
         transform-scale-x: none-touch.pressed ? 0.98 : 1;
         transform-scale-y: none-touch.pressed ? 0.94 : 1;
         animate background { duration: Materials.motion-quick; easing: Materials.settle; }
@@ -196,7 +196,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         accessible-description: root.notification-preference == "none" ? @tr("Selected") : "";
         accessible-action-default => { root.change-notification("none"); }
         KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("none"); } }
-        border-radius: Spacing.radius-sm;
+        border-radius: Spacing.radius-control;
 
         HorizontalLayout {
             padding: Spacing.sm;

@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
@@ -38,7 +39,10 @@ export component MeshListItem inherits Rectangle {
 
     height: (root.collapsed ? Spacing.touch-target-min : root.touch ? Spacing.row-height-touch : max(56px, Spacing.row-height-desktop))
         + (root.menu-open ? Spacing.button-height : 0px);
-    background: root.selected ? Colors.row-selected : row-touch.has-hover ? Colors.surface-control-hover : Colors.surface-section;
+    border-radius: Spacing.radius-control;
+    background: root.selected ? Colors.tint-strong : row-touch.has-hover ? Colors.surface-control-hover : transparent;
+    border-width: keys.has-focus && Appearance.keyboard-focus-visible ? Spacing.stroke : 0px;
+    border-color: Colors.focus-ring;
     accessible-role: button;
     accessible-label: root.title + ", " + root.secondary;
     accessible-action-default => { root.clicked(); }
@@ -66,11 +70,11 @@ export component MeshListItem inherits Rectangle {
                 width: 40px; height: 40px;
                 border-radius: root.kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
                 background: root.kind == "private-channel" ? Colors.group-accent
-                    : root.kind == "dm" ? Colors.avatar-blue : Colors.tint-strong;
+                    : root.kind == "dm" ? Colors.avatar-blue : Colors.surface-control;
                 Image {
                     source: root.glyph; width: 20px; height: 20px;
                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                    colorize: root.kind == "private-channel" || root.kind == "dm" ? Colors.on-action : Colors.primary;
+                    colorize: root.kind == "private-channel" || root.kind == "dm" ? Colors.on-action : Colors.text-secondary;
                 }
                 if root.kind == "dm" && root.reachable: Rectangle {
                     width: 10px; height: 10px; x: parent.width - self.width; y: parent.height - self.height;
@@ -84,7 +88,7 @@ export component MeshListItem inherits Rectangle {
             HorizontalLayout {
                 spacing: Spacing.xs;
                 Text {
-                    text: root.title; color: Colors.text-primary; font-size: Typography.base;
+                    text: root.title; color: Colors.text-primary; font-size: Typography.sm;
                     font-weight: Typography.semibold; overflow: elide;
                     horizontal-stretch: 1; vertical-alignment: center;
                 }
@@ -97,7 +101,7 @@ export component MeshListItem inherits Rectangle {
                     Image { source: Icons.bell-off; width: 14px; height: 14px; colorize: Colors.text-muted; }
                 }
             }
-            Text { text: root.secondary; color: Colors.text-muted; font-size: Typography.sm; overflow: elide; wrap: no-wrap; }
+            Text { text: root.secondary; color: Colors.text-muted; font-size: Typography.xs; overflow: elide; wrap: no-wrap; }
         }
         VerticalLayout {
             alignment: center; spacing: Spacing.xs;

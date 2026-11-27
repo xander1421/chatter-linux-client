@@ -80,7 +80,7 @@ export component BlockedTab inherits VerticalLayout {
                 for user in root.blocked-users: Rectangle {
                     height: root.row-height;
                     background: blocked-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-md;
+                    border-radius: Spacing.radius-control;
 
                     // TouchArea first (behind) for hover detection
                     blocked-touch := TouchArea {}

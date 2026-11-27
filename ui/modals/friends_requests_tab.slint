@@ -107,7 +107,7 @@ export component RequestsTab inherits VerticalLayout {
                     for request in root.received-requests: Rectangle {
                         min-height: 124px * Appearance.text-grow;
                         background: recv-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
+                        border-radius: Spacing.radius-control;
 
                         // TouchArea first (behind) for hover detection
                         recv-touch := TouchArea {}
@@ -225,7 +225,7 @@ export component RequestsTab inherits VerticalLayout {
                     for request in root.sent-requests: Rectangle {
                         min-height: 124px * Appearance.text-grow;
                         background: sent-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
+                        border-radius: Spacing.radius-control;
 
                         // TouchArea first (behind) for hover detection
                         sent-touch := TouchArea {}
@@ -240,8 +240,8 @@ export component RequestsTab inherits VerticalLayout {
                                 if request.display-name == "Pending request" && !request.has-avatar: Rectangle {
                                     width: 40px;
                                     height: 40px;
-                                    border-radius: 20px;
-                                    background: Colors.primary.transparentize(0.7);
+                                    border-radius: Spacing.radius-full;
+                                    background: Colors.surface-control;
                                     Image {
                                         source: Icons.user;
                                         width: 22px;
@@ -351,7 +351,7 @@ export component RequestsTab inherits VerticalLayout {
                     for request in root.private-requests: Rectangle {
                         min-height: 124px * Appearance.text-grow;
                         background: priv-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
+                        border-radius: Spacing.radius-control;
 
                         // TouchArea first (behind) for hover detection
                         priv-touch := TouchArea {}
@@ -390,8 +390,8 @@ export component RequestsTab inherits VerticalLayout {
                                         Rectangle {
                                             width: 16px;
                                             height: 16px;
-                                            border-radius: 8px;
-                                            background: Colors.primary.with-alpha(0.2);
+                                            border-radius: Spacing.radius-control;
+                                            background: Colors.surface-control;
 
                                             Text {
                                                 text: "\u{1F512}";  // Private badge
@@ -515,7 +515,7 @@ export component RequestsTab inherits VerticalLayout {
                     for invite in root.group-invites: Rectangle {
                         min-height: (root.group-invite-error-id == invite.user-id && root.group-invite-error != "" ? 148px : 124px) * Appearance.text-grow;
                         background: gi-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
+                        border-radius: Spacing.radius-control;
 
                         gi-touch := TouchArea {}
 
@@ -655,7 +655,7 @@ export component RequestsTab inherits VerticalLayout {
                     for invite in root.channel-invites: Rectangle {
                         min-height: 124px * Appearance.text-grow;
                         background: ci-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
+                        border-radius: Spacing.radius-control;
 
                         ci-touch := TouchArea {}
 

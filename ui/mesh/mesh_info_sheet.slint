@@ -29,7 +29,7 @@ component InfoActionRow inherits Rectangle {
             alignment: center;
             horizontal-stretch: 1;
             min-width: 0px;
-            Text { text: root.title; color: root.destructive ? Colors.danger : root.muted ? Colors.text-primary : Colors.primary;
+            Text { text: root.title; color: root.destructive ? Colors.danger : Colors.text-primary;
                 font-size: Typography.base; font-weight: root.bold ? 700 : 600; overflow: elide;
                 horizontal-alignment: root.centered ? center : left; }
             if root.detail != "": Text { text: root.detail; color: Colors.text-muted;
@@ -78,7 +78,7 @@ export component MeshInfoSheet inherits Rectangle {
                 padding-left: Spacing.lg;
                 padding-right: Spacing.lg;
                 padding-bottom: Spacing.xl;
-                spacing: Spacing.lg;
+                spacing: Spacing.panel-gutter;
 
                 if !root.adding-members: VerticalLayout {
                     alignment: center;
@@ -88,13 +88,13 @@ export component MeshInfoSheet inherits Rectangle {
                         Rectangle {
                             width: 64px; height: 64px;
                             border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-lg : Spacing.radius-full;
-                            background: Colors.primary.with-alpha(0.16);
+                            background: Colors.surface-control;
                             Image {
                                 source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
                                 width: 28px; height: 28px;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
-                                colorize: Colors.primary;
+                                colorize: Colors.text-secondary;
                             }
                         }
                     }
@@ -114,8 +114,8 @@ export component MeshInfoSheet inherits Rectangle {
                     if MeshGlobal.private-removable-members.length > 0: Text { text: "MEMBERS"; color: Colors.text-muted; font-size: Typography.xs;
                         font-weight: 600; letter-spacing: 0.4px; }
                     if MeshGlobal.private-removable-members.length > 0: Rectangle {
-                        border-radius: Spacing.radius-md;
-                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-panel;
+                        background: Colors.surface-card;
                         VerticalLayout {
                             for member in MeshGlobal.private-removable-members: Rectangle {
                                 height: 60px;
@@ -178,8 +178,8 @@ export component MeshInfoSheet inherits Rectangle {
                         text: @tr("No devices nearby yet."); color: Colors.text-muted; font-size: Typography.sm;
                     }
                     if MeshGlobal.nearby-peers.length > 0: Rectangle {
-                        border-radius: Spacing.radius-md;
-                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-panel;
+                        background: Colors.surface-card;
                         clip: true;
                         VerticalLayout {
                             for peer[i] in MeshGlobal.nearby-peers: Rectangle {
@@ -239,7 +239,7 @@ export component MeshInfoSheet inherits Rectangle {
                         text: @tr("Invite sends the group key over the encrypted mesh link. QR shows a code the other person scans.");
                         color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     if MeshGlobal.private-invite-visible: Rectangle {
-                        height: 260px; border-radius: Spacing.radius-md; background: Colors.surface-section;
+                        height: 260px; border-radius: Spacing.radius-panel; background: Colors.surface-card;
                         Image { source: MeshGlobal.private-invite-image; width: 240px; height: 240px;
                             x: (parent.width - self.width) / 2; y: 10px; image-fit: contain; }
                     }
@@ -252,8 +252,8 @@ export component MeshInfoSheet inherits Rectangle {
                     for row in MeshGlobal.conversations: Rectangle {
                         visible: row.id == MeshGlobal.active-id;
                         height: self.visible ? 56px : 0px;
-                        border-radius: Spacing.radius-md;
-                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-panel;
+                        background: Colors.surface-card;
                         HorizontalLayout {
                             padding-left: Spacing.lg; padding-right: Spacing.lg;
                             Text { text: @tr("Mute"); color: Colors.text-primary; font-size: Typography.base;
@@ -295,8 +295,8 @@ export component MeshInfoSheet inherits Rectangle {
                 Rectangle {
                     min-height: root.confirm-kind == "member" ? 132px : 94px;
                     preferred-height: max(self.min-height, confirm-body.preferred-height);
-                    border-radius: Spacing.radius-md;
-                    background: Colors.surface-section;
+                    border-radius: Spacing.radius-panel;
+                    background: Colors.surface-card;
                     confirm-body := VerticalLayout {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         padding-top: Spacing.xs; padding-bottom: Spacing.xs;

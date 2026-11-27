@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // ChannelSettingsModal - Modal for viewing and editing channel settings
 
 import { KeyFocus } from "../components/key_focus.slint";
@@ -176,13 +177,14 @@ export component ChannelSettingsModal inherits Rectangle {
                 vertical-stretch: 0;
                 background: transparent;
 
-                settings-tabs := Rectangle {
+                settings-tabs := GlassSurface {
+                    elevation: 0;
+                    material-tint: Colors.surface-card;
                     x: Spacing.md;
                     y: Spacing.sm;
                     width: parent.width - Spacing.md * 2;
                     height: Spacing.touch-target-min;
-                    background: Colors.surface-control;
-                    border-radius: Spacing.radius-lg;
+                    border-radius: Spacing.radius-panel;
                     property <int> tab-count: root.has-access-pane ? 4 : 3;
 
                     Rectangle {
@@ -190,8 +192,8 @@ export component ChannelSettingsModal inherits Rectangle {
                         y: 4px;
                         width: (settings-tabs.width - 8px) / settings-tabs.tab-count;
                         height: settings-tabs.height - 8px;
-                        background: Colors.surface-section;
-                        border-radius: Spacing.radius-md;
+                        background: Colors.surface-card;
+                        border-radius: Spacing.radius-panel;
                         animate x { duration: Materials.motion-standard; easing: Materials.glide; }
                         animate width { duration: Materials.motion-standard; easing: Materials.glide; }
                     }
@@ -199,6 +201,7 @@ export component ChannelSettingsModal inherits Rectangle {
                     for tab[index] in root.has-access-pane ? [@tr("Info"), @tr("Members"), @tr("Access"), @tr("Alerts")] : [@tr("Info"), @tr("Members"), @tr("Alerts")]: Rectangle {
                         x: index * settings-tabs.width / settings-tabs.tab-count;
                         width: settings-tabs.width / settings-tabs.tab-count;
+                        border-radius: Spacing.radius-control;
                         height: settings-tabs.height;
                         transform-scale-x: section-touch.pressed ? 0.96 : 1;
                         transform-scale-y: section-touch.pressed ? 0.92 : 1;
@@ -271,8 +274,8 @@ export component ChannelSettingsModal inherits Rectangle {
                         // the layout then ran short and Create link overlapped
                         // the Join requests section (Access tab, 360dp phone).
                         width: parent.width;
-                        padding: Spacing.md;
-                        spacing: Spacing.lg;
+                        padding: Spacing.panel-gutter;
+                        spacing: Spacing.panel-gutter;
                         alignment: start;
 
                         if root.show-discard-confirm: VerticalLayout {
@@ -403,11 +406,10 @@ export component ChannelSettingsModal inherits Rectangle {
                                 color: Colors.warning; font-size: Typography.sm;
                             }
                             if !root.loading: Rectangle {
-                                background: Colors.surface-section;
-                                border-radius: Spacing.radius-lg;
+                                background: Colors.surface-card;
+                                border-radius: Spacing.radius-panel;
                                 VerticalLayout {
-                                    padding-left: Spacing.xs;
-                                    padding-right: Spacing.xs;
+                                    padding: Spacing.sm;
                                     if root.can-manage-members || root.members.length > 0: SettingsRow {
                                         touch: true;
                                         icon: Icons.users; title: @tr("Members");
@@ -463,8 +465,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                     font-size: Typography.sm; font-weight: Typography.medium; }
                                 Rectangle {
                                     height: manage-row.preferred-height;
-                                    background: Colors.surface-section;
-                                    border-radius: Spacing.radius-lg;
+                                    background: Colors.surface-card;
+                                    border-radius: Spacing.radius-panel;
                                     manage-row := SettingsRow {
                                         touch: true;
                                     icon: Icons.alert-triangle;
@@ -685,22 +687,36 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
 
                         // ========== Notifications Section ==========
-                        if root.active-section == "notifications": ChannelNotificationsSection {
-                            ai-enabled <=> root.ai-enabled;
-                            is-muted <=> root.is-muted;
-                            is-private-group: root.is-private-group;
-                            notification-preference <=> root.notification-preference;
-                            change-notification(arg0) => { root.change-notification(arg0); }
-                            toggle-ai(arg0) => { root.toggle-ai(arg0); }
-                            toggle-mute(arg0) => { root.toggle-mute(arg0); }
+                        if root.active-section == "notifications": Rectangle {
+                            background: Colors.surface-card;
+                            border-radius: Spacing.radius-panel;
+                            VerticalLayout {
+                                padding: Spacing.sm;
+                                ChannelNotificationsSection {
+                                        ai-enabled <=> root.ai-enabled;
+                                        is-muted <=> root.is-muted;
+                                        is-private-group: root.is-private-group;
+                                        notification-preference <=> root.notification-preference;
+                                        change-notification(arg0) => { root.change-notification(arg0); }
+                                        toggle-ai(arg0) => { root.toggle-ai(arg0); }
+                                        toggle-mute(arg0) => { root.toggle-mute(arg0); }
+                                }
+                            }
                         }
 
                         // ========== Access Section ==========
                         // Everything here is shaped by chatter-core
                         // (`ChatterClient::channel_access_view`).
-                        if root.active-section == "access": ChannelAccessSection {
-                            channel-id: root.channel-id;
-                            link-needs-approval <=> root.link-needs-approval;
+                        if root.active-section == "access": Rectangle {
+                            background: Colors.surface-card;
+                            border-radius: Spacing.radius-panel;
+                            VerticalLayout {
+                                padding: Spacing.sm;
+                                ChannelAccessSection {
+                                        channel-id: root.channel-id;
+                                        link-needs-approval <=> root.link-needs-approval;
+                                }
+                            }
                         }
 
                         // ========== Danger Zone Section ==========
