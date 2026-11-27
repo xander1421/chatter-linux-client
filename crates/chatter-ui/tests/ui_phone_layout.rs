@@ -1739,45 +1739,52 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         (field_bottom() - short_keyboard_bottom - 100.0).abs() < 1.0,
         "short keyboard handover left a sticky spacer"
     );
-    // Back/cancel must release even when the keyboard request is refused.
-    click_element(w, "Emoji & GIF picker");
-    pump_size(w, PHONE_W, PHONE_H);
-    click_element(w, "Show keyboard");
-    i_slint_core::properties::ChangeTracker::run_change_handlers();
-    let reserved = field_bottom();
+    // The settled short IME becomes the next drawer's remembered height.
+    // Check that each cancellation starts with that reservation and restores
+    // the full no-IME position.
+    let unreserved = field_bottom();
+    let begin_refused_handover = || {
+        click_element(w, "Emoji & GIF picker");
+        settled_drawer(PHONE_W, PHONE_H);
+        click_element(w, "Show keyboard");
+        i_slint_core::properties::ChangeTracker::run_change_handlers();
+        assert!(
+            (unreserved - field_bottom() - 100.0).abs() < 1.0,
+            "refused keyboard request must hold the learned 100 px reservation"
+        );
+    };
+
+    begin_refused_handover();
     w.invoke_release_text_focus();
     i_slint_core::properties::ChangeTracker::run_change_handlers();
-    assert!(field_bottom() > reserved + 250.0);
-    // The production pause listener calls this cancellation boundary; it must
-    // also drop an outstanding reservation before navigation/backgrounding.
-    click_element(w, "Emoji & GIF picker");
-    pump_size(w, PHONE_W, PHONE_H);
-    click_element(w, "Show keyboard");
-    i_slint_core::properties::ChangeTracker::run_change_handlers();
-    let reserved = field_bottom();
+    assert!(
+        (field_bottom() - unreserved).abs() < 1.0,
+        "releasing text focus left a keyboard reservation"
+    );
+    // The production pause listener calls this cancellation boundary before
+    // backgrounding.
+    begin_refused_handover();
     w.invoke_cancel_composer_keyboard_handover();
     i_slint_core::properties::ChangeTracker::run_change_handlers();
-    assert!(field_bottom() > reserved + 250.0);
-    click_element(w, "Emoji & GIF picker");
-    pump_size(w, PHONE_W, PHONE_H);
-    click_element(w, "Show keyboard");
-    i_slint_core::properties::ChangeTracker::run_change_handlers();
-    let reserved = field_bottom();
+    assert!(
+        (field_bottom() - unreserved).abs() < 1.0,
+        "cancelling the handover left a keyboard reservation"
+    );
+    begin_refused_handover();
     w.global::<chatter_ui::ChatPane>()
         .set_channel_id("picker-handover-next".into());
     i_slint_core::properties::ChangeTracker::run_change_handlers();
-    assert!(field_bottom() > reserved + 250.0);
-    click_element(w, "Emoji & GIF picker");
-    pump_size(w, PHONE_W, PHONE_H);
-    click_element(w, "Show keyboard");
-    i_slint_core::properties::ChangeTracker::run_change_handlers();
-    let reserved = field_bottom();
+    assert!(
+        (field_bottom() - unreserved).abs() < 1.0,
+        "switching conversations left a keyboard reservation"
+    );
+    begin_refused_handover();
     slint::Timer::single_shot(std::time::Duration::from_millis(1600), || {
         slint::quit_event_loop().unwrap();
     });
     slint::run_event_loop().unwrap();
     assert!(
-        field_bottom() > reserved + 250.0,
+        (field_bottom() - unreserved).abs() < 1.0,
         "refused keyboard request left a sticky spacer"
     );
 }
