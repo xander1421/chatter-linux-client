@@ -1,0 +1,159 @@
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { ModalHostState } from "../app_modal_host_state.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component FirstFriend inherits Flickable {
+    in property <bool> touch;
+
+    private property <bool> private-mode: AnonMode.enabled;
+    private property <string> my-code: ModalHostState.friends-my-code;
+
+    function load-code() {
+        ModalHostState.friends-my-code = "";
+        ModalHostState.friends-show-qr = false;
+        ModalHostState.friends-generate-code(root.private-mode);
+    }
+
+    function add-code() {
+        if ModalHostState.friends-code-input != "" && !ModalHostState.friends-loading {
+            ModalHostState.friends-request-note = "";
+            ModalHostState.friends-connect-via-code(ModalHostState.friends-code-input);
+        }
+    }
+
+    init => { root.load-code(); }
+    changed private-mode => { root.load-code(); }
+    changed my-code => {
+        if root.my-code != "" {
+            ModalHostState.friends-generate-qr(root.private-mode);
+        }
+    }
+
+    viewport-height: max(self.height, content.preferred-height);
+    interactive: content.preferred-height > self.height;
+
+    content := VerticalLayout {
+        width: parent.width;
+        height: parent.viewport-height;
+        alignment: center;
+        cross-axis-alignment: center;
+        padding: Spacing.md;
+
+        Rectangle {
+            width: min(420px, root.width - 2 * Spacing.md);
+            background: Colors.surface;
+            border-radius: 12px;
+            accessible-role: groupbox;
+            accessible-label: @tr("Add your first friend");
+
+            VerticalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: @tr("Add your first friend");
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: @tr("Chatter has no phone-number lookup. Swap codes with someone you know.");
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 150px;
+                        height: 150px;
+                        border-radius: 8px;
+                        clip: true;
+                        background: Colors.fill-secondary;
+                        if ModalHostState.friends-show-qr && root.my-code != "": Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: ModalHostState.friends-qr-code-image;
+                            accessible-role: image;
+                            accessible-label: @tr("Friend code");
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Text {
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        text: root.my-code;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    Button {
+                        text: @tr("Copy");
+                        variant: "secondary";
+                        touch: root.touch;
+                        disabled: root.my-code == "";
+                        clicked => { ModalHostState.friends-copy-code(); }
+                    }
+                }
+                Text {
+                    text: @tr("Got theirs?");
+                    color: Colors.text-primary;
+                    font-size: Typography.base;
+                    font-weight: Typography.semibold;
+                }
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Input {
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        placeholder: @tr("Paste a code or link");
+                        text <=> ModalHostState.friends-code-input;
+                        caret-end-seq: ModalHostState.friends-code-caret-end-seq;
+                        edited => {
+                            if !ModalHostState.friends-loading { ModalHostState.friends-code-status = ""; }
+                        }
+                        accepted => { root.add-code(); }
+                    }
+                    Button {
+                        text: @tr("Add");
+                        touch: root.touch;
+                        disabled: ModalHostState.friends-code-input == "";
+                        loading: ModalHostState.friends-loading;
+                        clicked => { root.add-code(); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Button {
+                        text: @tr("Paste");
+                        variant: "secondary";
+                        touch: root.touch;
+                        clicked => { ModalHostState.friends-paste-code(); }
+                    }
+                    if root.touch: Button {
+                        text: @tr("Scan a code");
+                        variant: "secondary";
+                        touch: true;
+                        clicked => { ModalHostState.friends-scan-code(); }
+                    }
+                }
+                if ModalHostState.friends-code-status != "": Text {
+                    text: ModalHostState.friends-code-status;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
