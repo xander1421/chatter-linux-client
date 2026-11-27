@@ -560,6 +560,25 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             assert_attachment_strip_geometry(&w);
             assert!(composer_native_item(&w) == original_input);
         }
+        if !mobile {
+            let pane = w.global::<chatter_ui::ChatPane>();
+            pane.set_composer_reply_to_sender_name("Sender".into());
+            pane.set_composer_reply_preview("First line\nSecond line".into());
+            pane.set_composer_is_replying(true);
+            pump_size(&w, width, height);
+            assert_action_geometry(&w, true);
+            assert_attachment_strip_geometry(&w);
+            let strip = rect(&attachment_strip(&w));
+            let reply = rect(
+                &testing::ElementHandle::find_by_element_id(&w, "MessageComposer::reply-preview")
+                    .find(|e| e.size().height > 0.0)
+                    .expect("visible composer reply preview"),
+            );
+            assert!((reply.1 - strip.1 - strip.3 - 8.0).abs() < 0.5);
+            assert!(reply.3 > 20.0 && reply.3 < 48.0);
+            assert!((rect(&one(&w, "Remove attachment")).0 - strip.0).abs() < 0.5);
+            pane.set_composer_is_replying(false);
+        }
         w.global::<chatter_ui::ChatPane>()
             .set_composer_text("".into());
         w.global::<chatter_ui::ChatPane>()
@@ -2013,7 +2032,9 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
     let terminal = terminal_label.map(|label| rect(&one(w, label)));
     // Resting, the toggle sits one chrome inset in; raised, it pops out as a
     // free droplet flush with the shell's edge (08e7ca06).
-    let lead = if raised { 0.0 } else { 4.0 };
+    let mobile = w.get_is_mobile_platform();
+    let inset = if mobile { 4.0 } else { 8.0 };
+    let lead = if raised { 0.0 } else { inset };
     assert!(
         (ex - sx - lead).abs() < 0.5,
         "emoji toggle lead {} (raised={raised})",
@@ -2022,27 +2043,38 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
     assert!(ew >= 48.0 && eh >= 48.0);
     assert!(fx >= sx && fx + fw <= sx + sw + 0.5 && fy + fh <= sy + sh + 0.5);
     if raised {
-        assert!((fx - sx - 4.0).abs() < 0.5);
+        assert!((fx - sx - inset).abs() < 0.5);
         assert!(
-            (fw - (sw - 8.0 - 52.0)).abs() < 0.5,
+            (fw - (sw - 2.0 * inset - 52.0)).abs() < 0.5,
             "populated field must reserve the lower Send target and gap"
         );
-        // 4px bottom inset + 4px inter-shell gap + 4px field inset.
+        // The lifted control keeps its 4px bottom inset and 4px gap.
+        // The field starts at the platform's island inset.
         // Pending files and a reply each add their own row plus a gap between
         // the lifted controls and the field (message_composer.slint
         // raised-toolbar-height).
         let pane = w.global::<chatter_ui::ChatPane>();
-        let rows = if pane.get_pending_attachments().row_count() > 0 { 48.0 + 16.0 + 4.0 } else { 0.0 }
-            + if pane.get_composer_is_replying() {
-                56.0_f32.max(48.0 * w.global::<chatter_ui::Appearance>().get_text_grow()) + 4.0
-            } else {
-                0.0
-            };
+        let attachment_row = if mobile { 64.0 } else { 48.0 };
+        let gap = if mobile { 4.0 } else { 8.0 };
+        let mut rows = if pane.get_pending_attachments().row_count() > 0 {
+            attachment_row + gap
+        } else {
+            0.0
+        };
+        if pane.get_composer_is_replying() {
+            let reply = testing::ElementHandle::find_by_element_id(w, "MessageComposer::reply-preview")
+                .find(|e| e.size().height > 0.0)
+                .expect("visible composer reply preview");
+            let (_, y, _, height) = rect(&reply);
+            assert!((fy - y - height - gap - if mobile { inset } else { 0.0 }).abs() < 0.5);
+            rows += height + gap;
+        }
+        let expected_gap = 8.0 + inset + rows;
         assert!(
-            (fy - (ey + eh) - 12.0 - rows).abs() < 0.5,
+            (fy - (ey + eh) - expected_gap).abs() < 0.5,
             "field {} below the lifted row, want {}",
             fy - (ey + eh),
-            12.0 + rows
+            expected_gap
         );
         // The per-button and field `*-surface` shells were folded into one
         // liquid silhouette (4fd3d8ea): measure the controls themselves. The
@@ -2072,12 +2104,12 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             + if terminal.is_some() { 52.0 } else { 0.0 }
             + 4.0;
         assert!(
-            (fw - (sw - 8.0 - occupied)).abs() < 0.5,
+            (fw - (sw - 2.0 * inset - occupied)).abs() < 0.5,
             "empty field reserves hidden actions"
         );
     }
     if let Some((tx, ty, tw, th)) = terminal {
-        assert!((sx + sw - tx - tw - 4.0).abs() < 0.5);
+        assert!((sx + sw - tx - tw - inset).abs() < 0.5);
         assert!(tw >= 48.0 && th >= 48.0);
         if raised {
             assert!(
@@ -2105,7 +2137,7 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
         } else if let Some((tx, _, _, _)) = terminal {
             assert!((tx - ax - aw - 4.0).abs() < 0.5);
         } else {
-            assert!((sx + sw - ax - aw - 4.0).abs() < 0.5);
+            assert!((sx + sw - ax - aw - inset).abs() < 0.5);
         }
         assert!((ay - ey).abs() < 0.5 && aw >= 48.0 && ah >= 48.0);
         if raised {
@@ -2172,11 +2204,19 @@ fn assert_attachment_strip_geometry(w: &MainWindow) {
     let (x, y, width, height) = rect(&attachment_strip(w));
     let (_, ey, _, eh) = rect(&one(w, "Emoji & GIF picker"));
     let (_, fy, _, _) = rect(&one(w, "Message input"));
-    // The tray spans the glass island and insets its scroll contents by 8px.
-    // Its row starts one inset plus Spacing.xs below the lifted controls.
-    assert!((x - sx).abs() < 0.5 && (width - sw).abs() < 0.5);
-    assert!((y - ey - eh - 8.0).abs() < 0.5, "strip {} under the controls", y - ey - eh);
-    assert!((height - 64.0).abs() < 0.5, "attachment band height {height}");
+    let mobile = w.get_is_mobile_platform();
+    let inset = if mobile { 0.0 } else { 8.0 };
+    let band = if mobile { 64.0 } else { 48.0 };
+    assert!((x - sx - inset).abs() < 0.5 && (width - sw + 2.0 * inset).abs() < 0.5);
+    assert!(
+        (y - ey - eh - 8.0 - inset).abs() < 0.5,
+        "strip {} under the controls",
+        y - ey - eh
+    );
+    assert!(
+        (height - band).abs() < 0.5,
+        "attachment band height {height}"
+    );
     assert!(width > 0.0 && y + height < fy);
     let scroll = testing::ElementHandle::find_by_element_id(w, "ComposerAttachmentStrip::attachment-scroll")
         .find(|e| e.size().width > 0.0 && e.size().height > 0.0)

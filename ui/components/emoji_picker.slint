@@ -19,8 +19,7 @@ export struct EmojiData {
 
 export component EmojiPicker inherits GlassSurface {
     material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
-    border-width: root.draw-surface ? Spacing.stroke : 0px;
-    border-color: Colors.border;
+    popup-rim: root.draw-surface;
     elevation: 4;
     border-radius: Spacing.radius-panel;
 
@@ -77,10 +76,10 @@ export component EmojiPicker inherits GlassSurface {
 
     // Forward focus to search
     forward-focus: search-input;
+    public function focus-search() { search-input.focus(); }
 
     // Only render when visible
     visible: root.show;
-    opacity: root.reveal-progress;
 
     // Picker container — responsive: never exceed parent width
     in property <length> max-picker-width: 280px;
@@ -100,6 +99,7 @@ export component EmojiPicker inherits GlassSurface {
     }
 
     VerticalLayout {
+        opacity: root.reveal-progress;
         padding: root.embedded ? Spacing.xs : Spacing.sm;
         spacing: root.embedded ? Spacing.xs : Spacing.sm;
 
@@ -109,7 +109,7 @@ export component EmojiPicker inherits GlassSurface {
             height: root.embedded ? 0px : Spacing.button-height;
             border-radius: Spacing.radius-control;
             background: transparent;
-            border-width: Spacing.stroke;
+            border-width: 1px;
             border-color: Colors.border;
 
             HorizontalLayout {
@@ -147,6 +147,14 @@ export component EmojiPicker inherits GlassSurface {
                         vertical-alignment: center;
                         text <=> root.search-query;
                         accessible-label: @tr("Search emoji");
+
+                        key-pressed(event) => {
+                            if event.text == Key.Escape {
+                                root.close();
+                                return accept;
+                            }
+                            return reject;
+                        }
 
                         edited => {
                             root.search-changed(self.text);

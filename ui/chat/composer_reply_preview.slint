@@ -4,7 +4,9 @@ import { Icons } from "../theme/icons.slint";
 import { MessageQuote } from "message_quote.slint";
 
 export component ComposerReplyPreview inherits Rectangle {
+    in property <bool> compact: false;
     in property <length> row-padding;
+    preferred-height: quote.preferred-height;
     in property <float> reply-reveal;
     in property <bool> reply-has-thumbnail;
     in property <image> reply-thumbnail;
@@ -16,23 +18,25 @@ export component ComposerReplyPreview inherits Rectangle {
     clip: true;
 
     HorizontalLayout {
-        padding-right: root.row-padding;
+        padding-right: root.compact ? 0px : root.row-padding;
         spacing: Spacing.sm;
 
-        MessageQuote {
+        quote := MessageQuote {
             composer-preview: true;
+            compact-composer-preview: root.compact;
             reply-to-sender-name: root.reply-to-sender;
             reply-to-preview: root.reply-to-preview;
             reply-to-has-thumbnail: root.reply-has-thumbnail;
             reply-to-thumbnail: root.reply-thumbnail;
             reply-to-thumbnail-width: 1;
             reply-to-thumbnail-height: 1;
-            thumbnail-max-height: 36px;
-            thumbnail-max-width: 36px;
+            thumbnail-max-height: root.compact ? 28px : 36px;
+            thumbnail-max-width: self.thumbnail-max-height;
         }
 
         HeaderButton {
-            width: Spacing.touch-target-min;
+            width: root.compact ? 28px : Spacing.touch-target-min;
+            glyph: root.compact ? 16px : Spacing.header-glyph;
             icon: Icons.x;
             label: @tr("Cancel reply");
             plain: true;

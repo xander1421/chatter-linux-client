@@ -325,7 +325,7 @@ fn composer_drawer_and_recording_have_usable_geometry() {
             .set_composer_emoji_search("".into());
         pump_at(&w, width, height);
         assert_eq!(search_value(), "");
-        // Opening a drawer leaves Back/Escape focused on desktop too.
+        // Escape closes the desktop search; touch forwards Back to the app.
         let backs = std::rc::Rc::new(std::cell::Cell::new(0));
         let capture = backs.clone();
         w.on_back_pressed(move || capture.set(capture.get() + 1));
@@ -333,11 +333,43 @@ fn composer_drawer_and_recording_have_usable_geometry() {
             .dispatch_event(slint::platform::WindowEvent::KeyPressed {
                 text: slint::platform::Key::Escape.into(),
             });
-        assert_eq!(
-            backs.get(),
-            1,
-            "drawer must retain a Back/Escape focus owner"
-        );
+        if mobile {
+            assert_eq!(backs.get(), 1, "drawer must retain a Back focus owner");
+        } else {
+            let pane = w.global::<chatter_ui::ChatPane>();
+            assert!(!pane.get_composer_emoji_picker_visible());
+
+            click(&w, "Emoji & GIF picker");
+            pump_at(&w, width, height);
+            let position = slint::LogicalPosition::new(cp.x + chat.size().width - 2.0, cp.y + 2.0);
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                    position,
+                    button: slint::platform::PointerEventButton::Left,
+                });
+            pump_at(&w, width, height);
+            assert!(!pane.get_composer_emoji_picker_visible());
+
+            click(&w, "Emoji & GIF picker");
+            pump_at(&w, width, height);
+            w.invoke_insert_composer_emoji("😀".into());
+            pump_at(&w, width, height);
+            pane.on_send(|_| false);
+            click(&w, "Send message");
+            assert!(pane.get_composer_emoji_picker_visible());
+            pane.on_send(|_| true);
+            click(&w, "Send message");
+            assert!(!pane.get_composer_emoji_picker_visible());
+            assert!(pane.get_composer_text().is_empty());
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+            assert_eq!(pane.get_composer_text().as_str(), "x");
+        }
         w.global::<chatter_ui::ChatPane>()
             .set_composer_emoji_picker_visible(false);
         w.global::<chatter_ui::ChatPane>()

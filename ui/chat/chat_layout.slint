@@ -2,6 +2,7 @@ import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { GifPicker, GifData } from "../components/gif_picker.slint";
 import { AttachSheet } from "attach_sheet.slint";
 import { Icons } from "../theme/icons.slint";
+import { InputPolicy } from "../theme/input_policy.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Button } from "../components/button.slint";
 // Main chat layout component
@@ -143,6 +144,10 @@ export component ChatLayout inherits Rectangle {
         : min(340px, (root.height + root.keyboard-inset) * 0.48);
     private property <bool> drawer-visible: (root.emoji-picker-visible || root.gif-picker-visible)
         && !root.selection-mode && root.composer-notice == "";
+    function dismiss-picker() {
+        root.emoji-picker-visible = false;
+        root.gif-picker-visible = false;
+    }
     private property <bool> instant-drawer-handover: false;
     changed drawer-visible => {
         if root.drawer-visible {
@@ -762,9 +767,9 @@ export component ChatLayout inherits Rectangle {
                 root.composer-keyboard-requested(root.drawer-height);
             }
             input-dismissed => { root.composer-focus-released(); }
+            dismiss-picker => { root.dismiss-picker(); }
             input-focused => {
-                root.emoji-picker-visible = false;
-                root.gif-picker-visible = false;
+                root.dismiss-picker();
                 root.composer-input-focused();
             }
             mention-triggered(query) => {
@@ -788,18 +793,19 @@ export component ChatLayout inherits Rectangle {
         }
     }
 
-    // Desktop: a click on the conversation closes the popover like any menu.
-    // Chrome stays live: the emoji button toggles and the input closes it.
-    if root.drawer-visible && !root.mobile: TouchArea {
-        z: 1;
-        x: 0;
-        y: top-chrome.height;
-        width: root.width;
-        height: max(0px, root.height - top-chrome.height - bottom-chrome.height);
-        clicked => {
-            root.emoji-picker-visible = false;
-            root.gif-picker-visible = false;
-            root.composer-focus-released();
+    private property <length> drawer-x: Spacing.panel-gutter;
+    private property <length> drawer-width: max(0px, root.mobile
+        ? root.width - 2 * root.drawer-x : min(root.width - 2 * root.drawer-x, 420px));
+    private property <length> desktop-drawer-y: bottom-chrome.y - Spacing.xs - root.drawer-space;
+    private property <int> desktop-press-serial: InputPolicy.desktop-press.serial;
+    changed desktop-press-serial => {
+        // Composer controls handle their own clicks, including Send and Close picker.
+        if !root.mobile && root.drawer-visible
+            && !InputPolicy.press-within(root.absolute-position.x + root.drawer-x,
+                root.absolute-position.y + root.desktop-drawer-y, root.drawer-width, root.drawer-space)
+            && !InputPolicy.press-within(composer.absolute-position.x, composer.absolute-position.y,
+                composer.width, composer.height) {
+            root.dismiss-picker();
         }
     }
 
@@ -816,7 +822,7 @@ export component ChatLayout inherits Rectangle {
         // later: focus() from init, inside the opening click, did not stick.
         Timer {
             interval: 1ms;
-            running: !root.mobile;
+            running: !root.mobile && root.drawer-visible;
             triggered => { self.running = false; drawer-search.focus(); }
         }
         // Touch: the whole pane width, docked under the composer where the
@@ -825,19 +831,18 @@ export component ChatLayout inherits Rectangle {
         // conversation — the input stays pinned at the bottom and nothing
         // reserves a row beside it (RC87). No wider than a picker needs:
         // across a 1600px pane two GIF tiles were 10:1 strips (RC86).
-        x: Spacing.panel-gutter;
-        width: max(0px, root.mobile ? root.width - 2 * self.x : min(root.width - 2 * self.x, 420px));
-        y: root.mobile ? root.height - Spacing.sm - root.drawer-occupied-height
-            : root.height - bottom-chrome.height - Spacing.xs - root.drawer-space;
+        x: root.drawer-x;
+        width: root.drawer-width;
+        y: root.mobile ? root.height - Spacing.sm - root.drawer-occupied-height : root.desktop-drawer-y;
         height: root.mobile ? root.drawer-occupied-height : root.drawer-space;
-        opacity: root.drawer-visible ? 1 : 0;
+        // Touch retains its docked exit fade. Desktop glass samples the chat
+        // directly while the results animate in.
+        opacity: !root.mobile || root.drawer-visible ? 1 : 0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
         elevation: root.mobile ? 3 : 4;
         material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
         border-radius: Spacing.radius-panel;
-        border-width: Spacing.stroke;
-        border-color: Colors.border;
-        clip: true;
+        popup-rim: true;
         // Derive chrome from the independent drawer budget, never from
         // a layout's measured height. Keep room for embedded picker chrome
         // even when the IME leaves too little space for full touch targets.
@@ -885,7 +890,7 @@ export component ChatLayout inherits Rectangle {
                 height: picker-drawer.control-height;
                 border-radius: Spacing.radius-control;
                 background: transparent;
-                border-width: Spacing.stroke;
+                border-width: 1px;
                 border-color: Colors.border;
                 HorizontalLayout {
                     padding-left: Spacing.sm;
@@ -915,6 +920,14 @@ export component ChatLayout inherits Rectangle {
                             vertical-alignment: center;
                             accessible-label: @tr("Search emoji and GIFs");
                             changed has-focus => { root.drawer-search-focused = self.has-focus; }
+                            key-pressed(event) => {
+                                if event.text == Key.Escape && !root.mobile {
+                                    root.dismiss-picker();
+                                    composer.restore-input();
+                                    return accept;
+                                }
+                                return reject;
+                            }
                             edited => {
                                 if root.gif-picker-visible { root.gif-search = self.text; root.gif-search-changed(self.text); }
                                 else { root.emoji-search = self.text; root.emoji-search-changed(self.text); }
@@ -993,10 +1006,19 @@ export component ChatLayout inherits Rectangle {
                     x: index * (parent.width + Spacing.xs) / 2;
                     width: root.gifs-available ? (parent.width - Spacing.xs) / 2 : parent.width;
                     height: parent.height;
-                    background: current ? Colors.tint-strong
-                        : tab-touch.pressed ? Materials.pressed
-                        : tab-touch.has-hover ? Materials.hover : transparent;
-                    border-radius: Spacing.radius-md;
+                    border-radius: Spacing.radius-control;
+                    border-width: current ? 1px : 0px;
+                    border-color: Colors.border;
+                    Rectangle {
+                        x: 1px;
+                        y: self.x;
+                        width: max(0px, parent.width - 2 * self.x);
+                        height: max(0px, parent.height - 2 * self.y);
+                        border-radius: max(0px, parent.border-radius - self.x);
+                        background: current ? Colors.tint-strong
+                            : tab-touch.pressed ? Materials.pressed
+                            : tab-touch.has-hover ? Materials.hover : transparent;
+                    }
                     // `tab` is the repeater variable above, so the bare enum name resolves to that string.
                     accessible-role: AccessibleRole.tab;
                     accessible-label: tab;

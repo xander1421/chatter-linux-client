@@ -1,3 +1,4 @@
+import { InputPolicy } from "../theme/input_policy.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Button } from "../components/button.slint";
 import { KeyFocus } from "../components/key_focus.slint";
@@ -39,6 +40,7 @@ export component ThreadPanel inherits Rectangle {
     // Touch keeps the keyboard down until the field is tapped.
     in property <bool> touch: false;
     changed visible => {
+        if !root.visible { root.emoji-open = false; }
         root.entered = false;
         root.panel-progress = Appearance.reduce-motion && root.visible ? 1 : 0;
         if root.visible && !root.touch && !root.pinned-mode { composer.focus-reply-input(); }
@@ -706,6 +708,7 @@ export component ThreadPanel inherits Rectangle {
             remove-attachment(id) => { root.remove-attachment(id); }
             paste-image => { root.paste-image(); }
             emoji-clicked => { root.emoji-open = !root.emoji-open; }
+            dismiss-picker => { root.emoji-open = false; }
             input-focused => { root.emoji-open = false; }
             mention-triggered(query) => { root.mention-triggered(query); }
         }
@@ -717,19 +720,47 @@ export component ThreadPanel inherits Rectangle {
     private property <length> popup-bottom: composer.y - Spacing.panel-gutter;
     private property <length> popup-height: max(0px, root.popup-bottom - root.popup-top);
 
-    if root.emoji-open: EmojiPicker {
+    private property <length> picker-width: max(0px, min(280px, root.width - 2 * Spacing.panel-gutter));
+    private property <length> picker-height: min(320px, root.popup-height);
+    private property <length> picker-x: max(Spacing.panel-gutter, root.width - root.picker-width - Spacing.panel-gutter);
+    private property <length> picker-y: root.popup-bottom - root.picker-height;
+    private property <int> desktop-press-serial: InputPolicy.desktop-press.serial;
+    changed desktop-press-serial => {
+        if !root.touch && root.emoji-open
+            && !InputPolicy.press-within(root.absolute-position.x + root.picker-x,
+                root.absolute-position.y + root.picker-y, root.picker-width, root.picker-height)
+            && !InputPolicy.press-within(composer.absolute-position.x, composer.absolute-position.y,
+                composer.width, composer.height) {
+            root.emoji-open = false;
+        }
+    }
+
+    if root.emoji-open: thread-picker := EmojiPicker {
+        z: 2;
         show: true;
+        Timer {
+            interval: 1ms;
+            running: !root.touch;
+            triggered => { self.running = false; thread-picker.focus-search(); }
+        }
         touch: root.mobile;
-        x: max(Spacing.panel-gutter, root.width - self.width - Spacing.panel-gutter);
-        y: max(root.popup-top, root.popup-bottom - self.height);
-        max-picker-width: min(280px, root.width - 2 * Spacing.panel-gutter);
-        max-picker-height: min(320px, root.popup-height);
+        x: root.picker-x;
+        y: root.picker-y;
+        max-picker-width: root.picker-width;
+        max-picker-height: root.picker-height;
         emoji-list: root.emoji-list;
         selected-category <=> root.emoji-category;
         search-query <=> root.emoji-search;
         selected-skin-tone <=> root.emoji-skin-tone;
-        emoji-selected(emoji) => { composer.insert-emoji(emoji); root.emoji-open = false; }
-        close => { root.emoji-open = false; }
+        emoji-selected(emoji) => {
+            composer.insert-emoji(emoji);
+            root.emoji-open = false;
+            if !root.touch { composer.restore-input(); }
+        }
+        close => {
+            root.emoji-open = false;
+            if !root.touch { composer.restore-input(); }
+        }
         category-changed(category) => { root.emoji-category-changed(category); }
         search-changed(query) => { root.emoji-search-changed(query); }
         skin-tone-changed(tone) => { root.emoji-skin-tone-changed(tone); }

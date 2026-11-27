@@ -7,6 +7,7 @@ import { Icons } from "../theme/icons.slint";
 
 // Attachment chips sit on the composer island beneath the raised controls.
 export component ComposerAttachmentStrip inherits Rectangle {
+    in property <bool> compact: false;
     in property <length> attachment-chip-height;
     in property <float> strip-reveal;
     in property <bool> disabled;
@@ -20,12 +21,7 @@ export component ComposerAttachmentStrip inherits Rectangle {
     attachment-scroll := Flickable {
         width: 100%;
         height: 100%;
-        // The viewport is exactly the cards plus the add button, or
-        // the strip when that is wider: a strip that fits is centred
-        // in the gap, a longer one scrolls. The row was `start`-
-        // aligned (and the estimate below omitted the padding), so a
-        // single staged image sat hard left with dead space on the
-        // right (S9, RC88).
+        // Let longer rows scroll and keep the desktop row at the island inset.
         viewport-width: max(self.width, attachment-cards.preferred-width);
         viewport-height: self.height;
         interactive: true;
@@ -33,9 +29,9 @@ export component ComposerAttachmentStrip inherits Rectangle {
         attachment-cards := HorizontalLayout {
             width: attachment-scroll.viewport-width;
             height: attachment-scroll.viewport-height;
-            padding: Spacing.sm;
+            padding: root.compact ? 0px : Spacing.sm;
             spacing: Spacing.sm;
-            alignment: center;
+            alignment: root.compact ? start : center;
 
             for attachment in root.pending-attachments: Rectangle {
                 width: 180px;

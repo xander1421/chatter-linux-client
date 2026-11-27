@@ -6191,6 +6191,17 @@ fn secondary_chrome_exposes_its_shared_material() {
             "opaque chrome masks its glass shell"
         );
     }
+    let chat = include_str!("../../../ui/chat/chat_layout.slint");
+    let marker = "picker-drawer := GlassSurface {";
+    let drawer = block_around(chat, chat.find(marker).unwrap() + marker.len(), 1);
+    assert!(drawer.contains(
+        "material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;"
+    ));
+    assert!(drawer.contains("popup-rim: true;"));
+    assert!(drawer.contains("border-radius: Spacing.radius-panel;"));
+    assert!(drawer.contains("embedded: true;"));
+    let gif = include_str!("../../../ui/components/gif_picker.slint");
+    assert!(gif.contains("GifPicker inherits Rectangle"));
     let reaction = include_str!("../../../ui/chat/reaction_picker.slint");
     assert!(
         reaction.contains("draw-surface: false;"),

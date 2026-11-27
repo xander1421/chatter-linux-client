@@ -4,4 +4,11 @@ export global InputPolicy {
     // UIKit keyboard frames include the bottom home-indicator safe area.
     in property <bool> keyboard-includes-safe-area: false;
     callback dismiss-native-keyboard();
+
+    // Window-space press observed before child controls handle it.
+    in-out property <{ x: length, y: length, serial: int }> desktop-press;
+    public pure function press-within(x: length, y: length, width: length, height: length) -> bool {
+        return root.desktop-press.x >= x && root.desktop-press.x < x + width
+            && root.desktop-press.y >= y && root.desktop-press.y < y + height;
+    }
 }
