@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
@@ -39,9 +40,9 @@ export component SidebarHeader inherits Rectangle {
             y: (parent.height - self.height) / 2;
             clip: true;
             border-radius: root.mobile-mode ? Spacing.radius-lg : Spacing.radius-panel;
-            material-enabled: root.mobile-mode;
-            border-width: root.mobile-mode ? 0px : 1px;
-            border-color: Colors.border;
+            // Same glass as the sidebar cards (SavedCard): material on, card tint.
+            elevation: 0;
+            material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
             accessible-role: button;
             accessible-label: @tr("Search");
             accessible-enabled: !root.search-overlay-open;
@@ -88,19 +89,31 @@ export component SidebarHeader inherits Rectangle {
             }
         }
 
-        if !root.mobile-mode: HeaderButton {
+        // Create: the same glass tile as the cards, with the accent tint
+        // layered on the glass (as the rail's Create), not a flat fill.
+        if !root.mobile-mode: GlassSurface {
             width: 40px;
             height: self.width;
             y: (parent.height - self.height) / 2;
-            plain: true;
-            enabled: !root.search-overlay-open;
-            control-radius: Spacing.radius-panel;
-            control-fill: Colors.primary.with-alpha(0.16);
-            icon-color: Colors.primary;
-            glyph: 16px;
-            icon: Icons.plus;
-            label: @tr("Create");
-            clicked => { root.create-clicked(); }
+            border-radius: Spacing.radius-panel;
+            elevation: 0;
+            material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+            Rectangle {
+                border-radius: parent.border-radius;
+                background: Colors.tint-strong;
+            }
+            HeaderButton {
+                width: parent.width;
+                height: parent.height;
+                plain: true;
+                enabled: !root.search-overlay-open;
+                control-radius: Spacing.radius-panel;
+                icon-color: Colors.primary;
+                glyph: 16px;
+                icon: Icons.plus;
+                label: @tr("Create");
+                clicked => { root.create-clicked(); }
+            }
         }
     }
 
