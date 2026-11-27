@@ -65,11 +65,11 @@ export component AnonModePinModal inherits Rectangle {
             }
 
             Rectangle {
-                height: Spacing.button-height;
+                height: pin-input.height;
                 x: root.shake-step == 1 || root.shake-step == 3 ? -7px
                     : root.shake-step == 2 || root.shake-step == 4 ? 7px : 0px;
                 animate x { duration: Materials.feedback-duration; easing: Materials.spring; }
-                Input {
+                pin-input := Input {
                     inset-control: true;
                     width: 100%;
                     placeholder: @tr("PIN");

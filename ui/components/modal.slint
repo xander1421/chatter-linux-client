@@ -17,6 +17,7 @@ component ModalHeader inherits GlassSurface {
     in property <bool> full-screen;
     in property <bool> plain-header: false;
     in property <bool> root-screen;
+    in property <bool> padding-title: true;
     in property <bool> show-more;
     in property <bool> show-close;
     in property <string> title;
@@ -31,7 +32,7 @@ component ModalHeader inherits GlassSurface {
     height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
     HorizontalLayout {
         spacing: Spacing.header-action-gap;
-        padding-left: root.full-screen ? (root.root-screen ? Spacing.lg : Spacing.none) : Spacing.sm;
+        padding-left: root.full-screen ? (root.root-screen ? Spacing.lg : Spacing.none) : root.padding-title ? Spacing.sm : Spacing.none;
         // The row is as tall as its one control, so title and glyph
         // share a vertical centre at both densities.
 
@@ -72,6 +73,7 @@ export component Modal inherits Rectangle {
     in property <length> modal-width: 480px;
     in property <length> max-modal-height: 600px;
     in property <bool> fill-height: false;
+    in property <bool> dialog-card: false;
     in property <bool> full-screen: false;
     in property <bool> plain-header: false;
     // Full-screen lists extend behind the header and dock, with scroll insets.
@@ -113,13 +115,14 @@ export component Modal inherits Rectangle {
         modal-width: root.modal-width;
         max-modal-height: min(root.max-modal-height, root.viewport-height-cap);
         fill-height: root.fill-height;
+        dialog-card: root.dialog-card;
         full-screen: root.full-screen;
         allow-back-swipe: !root.root-screen;
         bottom-inset: root.floating-content ? 0px : root.bottom-inset;
         close => { root.close(); }
 
         modal-layout := VerticalLayout {
-            padding: root.full-screen || root.width < 520px ? Spacing.lg : Spacing.panel-gutter;
+            padding: root.dialog-card || root.full-screen || root.width < 520px ? Spacing.lg : Spacing.panel-gutter;
             padding-bottom: self.padding-top + (root.floating-content ? root.bottom-inset : Spacing.none);
             spacing: root.full-screen || root.width < 520px ? Spacing.md : Spacing.panel-gutter;
 
@@ -138,7 +141,8 @@ export component Modal inherits Rectangle {
                 // behind the header. A z on its definition cannot order siblings.
                 z: 1;
                 full-screen: root.full-screen;
-                plain-header: root.plain-header;
+                plain-header: root.plain-header || root.dialog-card;
+                padding-title: !root.dialog-card;
                 root-screen: root.root-screen;
                 show-more: root.show-more;
                 show-close: root.show-close;

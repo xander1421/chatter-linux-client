@@ -12,6 +12,7 @@ export component Button inherits Rectangle {
     in property <string> size: "medium"; // small, medium, large
     in property <bool> touch: false;
     in property <bool> selected: false;
+    in property <bool> outlined: false;
     in property <bool> hover-enabled: true;
     in property <string> label: root.text; // accessible name for icon-only buttons
     in property <bool> disabled: false;
@@ -40,7 +41,7 @@ export component Button inherits Rectangle {
     property <color> bg-color: {
         if disabled {
             variant == "primary" ? Colors.action-fill :
-            variant == "secondary" ? Colors.fill-secondary :
+            variant == "secondary" && !root.outlined ? Colors.fill-secondary :
             (variant == "destructive" || variant == "danger") ? root.destructive-fill :
             transparent
         } else if selected {
@@ -59,7 +60,7 @@ export component Button inherits Rectangle {
             Materials.hover
         } else {
             variant == "primary" ? Colors.action-fill :
-            variant == "secondary" ? Colors.fill-secondary :
+            variant == "secondary" && !root.outlined ? Colors.fill-secondary :
             (variant == "destructive" || variant == "danger") ? root.destructive-fill :
             transparent
         }
@@ -96,9 +97,8 @@ export component Button inherits Rectangle {
         border-radius: root.border-radius;
         background: root.bg-color;
         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
-        // Keyboard focus ring; nothing at rest.
-        border-width: keys.has-focus ? 2px : 0px;
-        border-color: Colors.focus-ring;
+        border-width: keys.has-focus ? 2px : root.outlined ? Spacing.stroke : 0px;
+        border-color: keys.has-focus ? Colors.focus-ring : Colors.border;
         animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
         // 38%: Material's disabled level, including both fill and content.
         opacity: root.disabled ? 0.38 : 1.0;

@@ -69,6 +69,8 @@ export component CreateSectionModal inherits Rectangle {
         show: root.show-modal;
         title: root.rename-mode ? @tr("Rename section") : @tr("New section");
         modal-width: 400px;
+        dialog-card: true;
+        show-close: false;
 
         close => {
             root.close();
@@ -87,6 +89,7 @@ export component CreateSectionModal inherits Rectangle {
                     max-width: Spacing.touch-target-min;
                     height: Spacing.touch-target-min;
                     variant: "secondary";
+                    outlined: true;
                     border-radius: Spacing.radius-control;
                     text: root.selected-emoji;
                     text-font-family: Typography.font-family-emoji;
@@ -108,20 +111,14 @@ export component CreateSectionModal inherits Rectangle {
             }
 
             // ── Inline emoji grid (shown when picker-open) ────────
-            grid-box := Rectangle {
-                height: root.picker-open ? 200px : 0px;
+            if root.picker-open: grid-box := Rectangle {
+                height: 200px;
                 background: Colors.surface-card;
                 border-radius: Spacing.radius-panel;
                 clip: true;
-                opacity: root.picker-open ? 1 : 0;
-                animate height { duration: Materials.motion-standard; easing: Materials.spring; }
-                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
 
-                // Columns are derived, not fixed at seven. Seven columns is a
-                // 324px row: fine inside the 400px card on a desktop, off the
-                // right edge of a 360dp phone, where ModalContainer caps the
-                // card at `viewport - 32px` and the last column was clipped.
-                property <int> grid-cols: max(4, Math.floor((self.width - Spacing.sm * 2) / Spacing.button-height));
+                // Reflow the grid as the card narrows.
+                property <int> grid-cols: max(1, Math.floor((self.width - Spacing.sm * 2) / Spacing.button-height));
 
                 Flickable {
                     viewport-height: Math.ceil(SectionEmojis.icons.length / grid-box.grid-cols) * Spacing.button-height + Spacing.sm * 2;
@@ -189,7 +186,6 @@ export component CreateSectionModal inherits Rectangle {
             // ── Footer buttons ────────────────────────────────────
             HorizontalLayout {
                 spacing: Spacing.md;
-                height: 40px;
 
                 // Spacer
                 Rectangle {
@@ -200,6 +196,7 @@ export component CreateSectionModal inherits Rectangle {
                     border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
+                    outlined: true;
                     clicked => { root.close(); }
                 }
 

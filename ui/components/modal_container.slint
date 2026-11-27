@@ -23,6 +23,7 @@ export component ModalContainer inherits Rectangle {
     // viewport) instead of hugging its content's preferred height. Use for
     // modals whose body should expand (e.g. settings with a scrollable panel).
     in property <bool> fill-height: false;
+    in property <bool> dialog-card: false;
     // Edge-to-edge instead of a centered card. A floating dialog is a desktop
     // shape: on a phone the same content wants the whole screen, the way every
     // native messenger presents Contacts or Settings. Drops the rounding,
@@ -41,7 +42,11 @@ export component ModalContainer inherits Rectangle {
     in property <string> accessible-title: @tr("Modal dialog");
 
     callback close();
-    property <bool> phone-sheet: !root.full-screen && root.width < 520px;
+    property <bool> phone-sheet: !root.full-screen && !root.dialog-card && root.width < 520px;
+    property <length> handle-height: root.phone-sheet ? 24px : 0px;
+    property <length> content-height: max(content.min-height, content.preferred-height);
+    property <length> height-cap: max(0px, min(root.max-modal-height,
+        root.height - (root.dialog-card ? 2 * Spacing.panel-gutter : 48px)));
     property <bool> phone-page: root.full-screen && root.width < 520px;
     property <length> drag-offset: 0px;
     animate drag-offset { duration: root.dragging ? 0ms : Materials.sheet-duration; easing: Materials.glide; }
@@ -164,8 +169,8 @@ export component ModalContainer inherits Rectangle {
             // straight to that cap so the body uses the available vertical space.
             height: root.full-screen ? root.height - root.bottom-inset
                 : root.fill-height
-                ? min(root.max-modal-height, root.height - 48px)
-                : min(content.preferred-height + (root.phone-sheet ? 24px : 0px), min(root.max-modal-height, root.height - 48px));
+                ? root.height-cap
+                : min(root.content-height + root.handle-height, root.height-cap);
 
             // Centering — round to nearest pixel to avoid sub-pixel text rendering
             x: root.phone-page ? root.width * (1 - root.page-progress)
@@ -180,7 +185,7 @@ export component ModalContainer inherits Rectangle {
             transform-origin: { x: self.width / 2, y: self.height / 2 };
 
             // Phone sheets retain their glass and rounded drag surface.
-            background: root.phone-page ? Materials.ambient : root.phone-sheet ? transparent : Colors.background;
+            background: root.phone-page ? Materials.ambient : root.phone-sheet ? transparent : root.dialog-card ? Colors.surface-card : Colors.background;
             border-radius: root.full-screen ? 0px : root.phone-sheet ? Spacing.radius-sheet : Spacing.radius-panel;
             border-width: root.full-screen || root.phone-sheet ? 0px : Spacing.stroke;
             border-color: Colors.border;
@@ -270,9 +275,9 @@ export component ModalContainer inherits Rectangle {
             // keep filling the card exactly as before: their content is laid
             // out to the card and brings its own scrolling.
             body := Flickable {
-                y: root.phone-sheet ? 24px : 0px;
+                y: root.handle-height;
                 width: parent.width;
-                height: parent.height - (root.phone-sheet ? 24px : 0px);
+                height: max(0px, parent.height - root.handle-height);
                 viewport-width: self.width;
                 viewport-height: content.height;
                 interactive: self.viewport-height > self.height;
@@ -287,7 +292,7 @@ export component ModalContainer inherits Rectangle {
                     // clipping its footer (New channel › Join, Cancel/Join).
                     height: root.full-screen ? body.height
                         : root.fill-height ? max(self.min-height, body.height)
-                        : max(self.preferred-height, body.height);
+                        : max(root.content-height, body.height);
                     // Keep the surface populated through its exit; the outer
                     // close shield blocks input while this content settles.
                     opacity: root.phone-page || root.phone-sheet ? 1 : root.page-progress;
