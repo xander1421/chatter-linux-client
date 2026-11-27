@@ -8,6 +8,8 @@ import { ChatRow, ChatRowData } from "chat_list.slint";
 import { SidebarCard, SidebarCards } from "card_types.slint";
 import { PinnedStrip } from "pinned_strip.slint";
 
+import { SidebarDragSource } from "card_drag.slint";
+
 export component ChatsCard inherits GlassSurface {
     in property <SidebarCard> card;
     in property <bool> touch: false;
@@ -84,15 +86,21 @@ export component ChatsCard inherits GlassSurface {
             }
         }
 
-        for row[index] in root.card.collapsed ? [] : root.card.rows: ChatRow {
-            data: row.chat-row;
-            card-mode: true;
-            mobile-mode: root.touch;
-            keyboard-highlight: root.highlighted-row == root.card.pinned.length + index;
-            clicked => { SidebarCards.open-row(row.conversation-id); }
-            pin-requested(pinned) => { root.pin-requested(row.conversation-id, pinned); }
-            context-menu-requested(x, y) => {
-                root.row-context-menu-requested(row.chat-row, x, y, self.absolute-position.y);
+        for row[index] in root.card.collapsed ? [] : root.card.rows: SidebarDragSource {
+            row-id: row.conversation-id;
+            source-card-id: root.card.id;
+            height: row-view.height;
+
+            row-view := ChatRow {
+                data: row.chat-row;
+                card-mode: true;
+                mobile-mode: root.touch;
+                keyboard-highlight: root.highlighted-row == root.card.pinned.length + index;
+                clicked => { SidebarCards.open-row(row.conversation-id); }
+                pin-requested(pinned) => { root.pin-requested(row.conversation-id, pinned); }
+                context-menu-requested(x, y) => {
+                    root.row-context-menu-requested(row.chat-row, x, y, self.absolute-position.y);
+                }
             }
         }
 
