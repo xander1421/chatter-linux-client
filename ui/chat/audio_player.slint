@@ -27,6 +27,7 @@ export component AudioPlayer inherits HorizontalLayout {
 
     // Slightly smaller variant for the reply/quote bubble
     in property <bool> compact: false;
+    in property <length> content-max-width: 228px;
 
     // Touch input. Press-and-hold is the touch route to the context menu;
     // on a pointer device right-click already is, and arming the timer there
@@ -40,7 +41,8 @@ export component AudioPlayer inherits HorizontalLayout {
     property <bool> is-this-playing: root.attachment-id != "" && root.attachment-id == root.current-playing-attachment-id;
     property <length> button-size: root.compact ? 28px : 40px;
     property <length> icon-size: root.compact ? 12px : 16px;
-    property <length> track-width: root.compact ? 160px : 180px;
+    property <length> track-width: min(root.compact ? 160px : 180px,
+        max(0px, root.content-max-width - root.button-size - root.spacing));
     property <float> displayed-progress: root.is-this-playing ? clamp(root.audio-progress, 0.0, 1.0) : 0.0;
     animate displayed-progress { duration: Materials.motion-quick; easing: Materials.settle; }
 
@@ -100,7 +102,7 @@ export component AudioPlayer inherits HorizontalLayout {
             height: 16px;
 
             HorizontalLayout {
-                spacing: Spacing.xs;
+                spacing: min(Spacing.xs, waveform.width / max(1, root.waveform.length * 2));
 
                 for bar[idx] in root.waveform: VerticalLayout {
                     horizontal-stretch: 1;
@@ -120,7 +122,7 @@ export component AudioPlayer inherits HorizontalLayout {
             Rectangle {
                 x: max(0px, min(parent.width - self.width, parent.width * root.displayed-progress - self.width / 2));
                 y: (parent.height - self.height) / 2;
-                width: waveform-touch.pressed ? 10px : 6px;
+                width: min(parent.width, waveform-touch.pressed ? 10px : 6px);
                 height: waveform-touch.pressed ? 10px : 6px;
                 border-radius: self.width / 2;
                 background: Colors.primary;
@@ -130,7 +132,7 @@ export component AudioPlayer inherits HorizontalLayout {
             }
 
             waveform-touch := HoldArea {
-                property <float> seek-pos: clamp(self.mouse-x / parent.width, 0.0, 1.0);
+                property <float> seek-pos: clamp(self.mouse-x / max(1px, parent.width), 0.0, 1.0);
                 mouse-cursor: pointer;
                 enabled-for-touch: root.mobile;
                 clicked => {
@@ -143,6 +145,7 @@ export component AudioPlayer inherits HorizontalLayout {
         }
 
         Text {
+            overflow: elide;
             text: root.is-download-failed ? @tr("Download failed · tap to retry") : (root.is-this-playing ? @tr("{0} / {1}", root.audio-elapsed, root.duration-display) : root.duration-display);
             color: root.is-download-failed ? Colors.primary : Colors.text-muted;
             font-size: Typography.xs;
