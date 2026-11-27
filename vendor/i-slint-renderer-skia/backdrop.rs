@@ -22,64 +22,100 @@ pub(crate) fn enabled() -> bool {
     })
 }
 
-// Apple "Liquid Glass" optical model ported to SkSL. A continuous-curvature
-// squircle (superellipse, n=4) defines the panel; its gradient gives the edge
-// normal; the bevel ring near the edge lenses (magnifies) the backdrop inward
-// along that normal, splits R/B for chromatic dispersion, and lifts a
-// Schlick-Fresnel specular rim toward a fixed key light. All effects fall to
-// zero in the flat interior, so the centre samples the backdrop unchanged and
-// refraction never needs pixels outside the layer. Displacement/dispersion
-// scale with `strength` (Materials.refraction); the rim is intrinsic so glass
-// reads as glass even at low refraction. Tuned on-device.
+// Optics adapted to SkSL from rust-glass (glass.wgsl and material.rs).
+// Copyright (c) 2026 Mohammad Amara. Upstream: Apache-2.0 OR MIT.
+// Used under MIT, reproduced in NOTICE-rust-glass.txt.
+// https://github.com/MasterKPG/rust-glass/tree/f0b1e9acf9245bb51bbe1883b26711e7fa5eb7a7
 const LENS_SOURCE: &str = r#"
 uniform shader source;
 uniform float2 size;
 uniform float radius;
 uniform float strength;
+uniform float bevelWidth;
+uniform float pinch;
 
-const float DISPERSION = 0.6;
+const float DISPERSION = 0.20;
+const float2 LIGHT = float2(-0.6, -0.8);
+
+float bevel(float depth, float width) {
+    float u = 1.0 - min(depth / width, 1.0);
+    return 1.0 - sqrt(max(1.0 - u * u, 0.0));
+}
+
+float lensShift(float depth) {
+    float inner = bevel(depth, bevelWidth);
+    float outer = bevel(depth, max(bevelWidth * 0.25, 1.0));
+    float shift = strength * bevelWidth * (0.32 * outer - 1.7 * inner);
+    // The raised shoulder is reserved for strong, clear lenses.
+    if (pinch > 0.0) {
+        float shoulder = sin(3.14159265 * min(depth / bevelWidth, 1.0));
+        shift += pinch * shoulder * shoulder;
+    }
+    return shift;
+}
 
 half4 main(float2 p) {
-    float2 hs = size * 0.5;
-    float2 c = p - hs;
-    float2 denom = max(hs, float2(1.0));
-    float2 q = abs(c) / denom;
-    // Superellipse (n=4) distance without pow: q^4 via mults, ^(1/4) via sqrt.
-    // 1 on the edge, <1 inside. n=4 is the Apple continuous-curvature corner.
-    float2 q2 = q * q;
-    float e = sqrt(sqrt(q2.x * q2.x + q2.y * q2.y));
-    float minHalf = min(hs.x, hs.y);
-    float sdf = (e - 1.0) * minHalf;                 // <0 inside, 0 on the edge
-    // Bevel ring: 1 at the visible edge, 0 in the flat interior, squared so the
-    // lensing/dispersion stay at the very edge.
-    float bevelW = max(radius, 12.0);
-    float bevel = smoothstep(-bevelW, 0.0, sdf);
-    float edge = bevel * bevel;
-    // Flat interior: the lens and dispersion contribute nothing here, so take
-    // the backdrop in a single sample and skip the normal, displacement and
-    // the 3-tap colour split entirely. This is the bulk of a wide surface.
-    if (edge < 0.004) {
-        return source.eval(p);
-    }
-    // Outward edge normal from the superellipse gradient (q^3 via mults).
-    float2 gv = sign(c) * (q2 * q) / denom;
-    float glen = length(gv);
-    float2 grad = glen > 1e-4 ? gv / glen : float2(0.0);
+    // Use the same rounded rectangle as the Slint clip, so the light and
+    // compressed image follow the visible outline even on wide bars.
+    float2 halfSize = size * 0.5;
+    float2 center = p - halfSize;
+    float2 inset = halfSize - abs(center);
+    float2 corner = radius - inset;
+    bool curved = corner.x > 0.0 && corner.y > 0.0;
+    float cornerLength = curved ? length(corner) : 0.0;
+    float depth = max(curved ? radius - cornerLength : min(inset.x, inset.y), 0.0);
     float2 lo = float2(0.5);
-    float2 hi = max(size - 0.5, float2(0.5));
-    // Edge lensing: pull the sample inward along the normal, magnifying content
-    // toward the rim.
-    float2 baseAt = clamp(p - grad * edge * strength * bevelW * 0.6, lo, hi);
-    // Cauchy-style dispersion: R bends less, B more, across the normal at the rim.
-    float2 off = grad * (DISPERSION * strength * edge * bevelW * 0.25);
-    half4 col;
-    col.r = source.eval(clamp(baseAt - off, lo, hi)).r;
-    col.g = source.eval(baseAt).g;
-    col.b = source.eval(clamp(baseAt + off, lo, hi)).b;
-    col.a = source.eval(baseAt).a;
-    // No shader rim: the thin 1px optical edge is drawn by GlassSurface
-    // (Materials.glass-edge). Apple's edge is a crisp hairline, not a glow.
-    return col;
+    float2 hi = max(size - 0.5, lo);
+    float2 at = p;
+    float2 normal = float2(0.0);
+    float facing = 0.0;
+    float shift = 0.0;
+    if (depth < bevelWidth) {
+        if (curved) {
+            normal = sign(center) * corner / cornerLength;
+        } else {
+            normal = corner.x > corner.y ? float2(sign(center.x), 0.0)
+                                         : float2(0.0, sign(center.y));
+        }
+        facing = dot(normal, LIGHT);
+        // A steep inward bend compresses the scene, then mirrors it at the
+        // outline. The shallower opposing ring softens that bend at the lip.
+        shift = lensShift(depth);
+        at = p + normal * shift;
+    }
+    half4 color = source.eval(clamp(at, lo, hi));
+    if (depth >= bevelWidth) {
+        return color;
+    }
+    float near = max(facing, 0.0);
+    float far = max(-facing, 0.0);
+    // Dispersion reverses where the light leaves the body.
+    float spread = shift * DISPERSION * mix(1.0, -0.55, smoothstep(0.0, 0.5, far));
+    if (abs(spread) > 0.35) {
+        float2 split = normal * spread;
+        color.r = source.eval(clamp(at + split, lo, hi)).r;
+        color.b = source.eval(clamp(at - split, lo, hi)).b;
+    }
+
+    // Light crossing the bevel darkens the near wall and fills the far
+    // wall. The reflected shadow carries the hue of the refracted scene.
+    half body = half(1.0 - smoothstep(0.0, bevelWidth, depth));
+    half shade = half(0.18 * near) * body * body;
+    half3 transmitted = min(color.rgb * color.rgb * 0.45, half3(color.a));
+    color.rgb = mix(color.rgb, transmitted, shade);
+    color.rgb = mix(color.rgb, half3(color.a), half(0.10 * far) * body * body);
+
+    // The near and far arcs catch light at different angles. A weak base
+    // keeps the rim continuous on the sides perpendicular to the light.
+    float line = (depth - 0.8) * 0.49;
+    float profile = max(1.0 - line * line, 0.0);
+    profile = profile * profile * profile;
+    float direction = 0.8 * near * near + far;
+    half rim = half(0.54 * mix(0.14, 1.0, direction) * profile);
+    half3 reflected = mix(half3(color.a), min(color.rgb * 1.5 + color.a * 0.15,
+                                             half3(color.a)), 0.25);
+    color.rgb = min(mix(color.rgb, reflected, rim), half3(color.a));
+    return color;
 }
 "#;
 
@@ -194,9 +230,17 @@ pub(crate) fn filter(
             down,
             low_bounds,
         );
+        // Cubic B-spline reconstruction smooths mid-radius blur. At quarter
+        // resolution the broad Gaussian already removes that detail, so keep
+        // the cheaper linear reconstruction for the wide chrome surfaces.
+        let sampling: skia_safe::SamplingOptions = if scale == 0.5 {
+            skia_safe::CubicResampler { b: 1.0, c: 0.0 }.into()
+        } else {
+            skia_safe::FilterMode::Linear.into()
+        };
         image_filters::matrix_transform(
             &skia_safe::Matrix::scale((1.0 / scale, 1.0 / scale)),
-            skia_safe::FilterMode::Linear,
+            sampling,
             blurred,
         )
     } else {
@@ -206,7 +250,7 @@ pub(crate) fn filter(
     // Saturation 1 + brightness 0 is an identity colour matrix: skip the pass
     // and its intermediate texture. Keep it only when it is the one stage that
     // materialises the backdrop source for a refraction-only filter (blur
-    // produced nothing). (Light mode is identity; dark-mode chrome darkens.)
+    // produced nothing).
     if saturation != 1.0 || brightness != 0.0 || result.is_none() {
         result = image_filters::color_filter(
             skia_safe::color_filters::matrix_row_major(&color_matrix(saturation, brightness), None),
@@ -228,10 +272,31 @@ pub(crate) fn filter(
         match effect {
             Ok(effect) => {
                 let mut builder = RuntimeShaderBuilder::new(effect);
-                builder.set_uniform_float("size", &[bounds.width(), bounds.height()]).ok()?;
-                builder.set_uniform_float("radius", &[radius]).ok()?;
-                builder.set_uniform_float("strength", &[refraction.clamp(0.0, 1.0)]).ok()?;
-                result = image_filters::runtime_shader(&builder, "source", result);
+                builder
+                    .set_uniform_float("size", &[bounds.width(), bounds.height()])
+                    .ok()?;
+                let strength = refraction.clamp(0.0, 1.0);
+                let half_short_side = bounds.width().min(bounds.height()) * 0.5;
+                let bevel_width = (half_short_side * 0.22).clamp(2.0, 24.0);
+                let pinch = (strength - 0.60).max(0.0) * bevel_width * 0.28;
+                builder
+                    .set_uniform_float("radius", &[radius.clamp(0.0, half_short_side)])
+                    .ok()?;
+                builder.set_uniform_float("strength", &[strength]).ok()?;
+                builder
+                    .set_uniform_float("bevelWidth", &[bevel_width])
+                    .ok()?;
+                builder.set_uniform_float("pinch", &[pinch]).ok()?;
+                // Include displaced samples even when Skia is filtering a
+                // partial damage region. The inset clip remains item-local.
+                let sample_radius = 2.04 * strength * bevel_width + pinch;
+                result = image_filters::runtime_shader_with_options(
+                    &builder,
+                    sample_radius,
+                    "source",
+                    result,
+                    false,
+                );
             }
             // Keep blur/colour working on Skia builds that reject the shader.
             Err(_) => {}
@@ -391,6 +456,171 @@ mod tests {
         assert_eq!(blur_downscale(31.9), 0.5);
         assert_eq!(blur_downscale(32.0), 0.25);
         assert_eq!(blur_downscale(126.0), 0.25); // chat chrome physical blur
+    }
+
+    fn render_lens(draw: impl FnOnce(&skia_safe::Canvas)) -> Vec<u8> {
+        let lens = filter(Rect::from_wh(128.0, 128.0), 0.0, 1.0, 0.0, 0.8, 28.0).unwrap();
+        render_backdrop(&lens, draw)
+    }
+
+    fn render_backdrop(filter: &ImageFilter, draw: impl FnOnce(&skia_safe::Canvas)) -> Vec<u8> {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((128, 128)).unwrap();
+        let bounds = Rect::from_wh(128.0, 128.0);
+        let canvas = surface.canvas();
+        draw(canvas);
+        canvas.save_layer(
+            &skia_safe::canvas::SaveLayerRec::default()
+                .bounds(&bounds)
+                .backdrop(filter)
+                .backdrop_tile_mode(skia_safe::TileMode::Clamp),
+        );
+        canvas.restore();
+        let mut pixels = vec![0; 128 * 128 * 4];
+        let info = skia_safe::ImageInfo::new(
+            (128, 128),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        assert!(surface.read_pixels(&info, &mut pixels, 128 * 4, (0, 0)));
+        pixels
+    }
+
+    #[test]
+    fn dispersion_reverses_on_the_far_wall() {
+        let pixels = render_lens(|canvas| {
+            for x in 0..128 {
+                let mut paint = skia_safe::Paint::default();
+                let gray = x as u8 * 2;
+                paint.set_color(skia_safe::Color::from_rgb(gray, gray, gray));
+                canvas.draw_rect(Rect::from_xywh(x as f32, 0.0, 1.0, 128.0), &paint);
+            }
+        });
+        // The ramp grows brighter from left to right. An inward shift
+        // changes sign between the two walls, so a reversing dispersion
+        // puts the brighter red sample on both sides.
+        for x in [1, 126] {
+            let i = (64 * 128 + x) * 4;
+            assert!(
+                pixels[i] > pixels[i + 2],
+                "red should sample farther right at x={x}"
+            );
+        }
+    }
+
+    #[test]
+    fn directional_rim_is_brighter_on_the_far_wall() {
+        let pixels = render_lens(|canvas| {
+            canvas.clear(skia_safe::Color::BLACK);
+        });
+        let red = |x: usize, y: usize| pixels[(y * 128 + x) * 4];
+        assert!(red(64, 127) > red(64, 0));
+        assert!(red(64, 127) > red(127, 64) + 10);
+        assert_eq!(red(64, 64), 0);
+    }
+
+    #[test]
+    fn bevel_shadow_carries_the_color_of_transmitted_light() {
+        let pixels = render_lens(|canvas| {
+            canvas.clear(skia_safe::Color::from_rgb(190, 95, 40));
+        });
+        let near = &pixels[(5 * 128 + 64) * 4..][..4];
+        assert!(near[0] < 190 && near[1] < 95);
+        assert!(u32::from(near[0]) * 95 > u32::from(near[1]) * 190);
+        assert_eq!(near[3], 255);
+    }
+
+    #[test]
+    fn quarter_circle_bevel_folds_at_the_lip_and_can_add_a_shoulder() {
+        // Exercise the actual SkSL profile without the light or backdrop.
+        let (profile, _) = LENS_SOURCE.split_once("half4 main").unwrap();
+        let source = format!(
+            "{profile}\nhalf4 main(float2 p) {{ return half4(0.5 + lensShift(p.x) / 64.0, 0, 0, 1); }}"
+        );
+        let effect = RuntimeEffect::make_for_shader(&source, None).unwrap();
+        let mut builder = RuntimeShaderBuilder::new(effect);
+        builder.set_uniform_float("bevelWidth", &[14.0]).unwrap();
+        builder.set_uniform_float("strength", &[0.8]).unwrap();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((16, 1)).unwrap();
+        let mut paint = skia_safe::Paint::default();
+        let info = skia_safe::ImageInfo::new(
+            (16, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut pixels = [0; 16 * 4];
+        let mut draw_profile = |builder: &RuntimeShaderBuilder| {
+            paint.set_shader(
+                builder
+                    .make_shader(&skia_safe::Matrix::new_identity())
+                    .unwrap(),
+            );
+            surface.canvas().draw_paint(&paint);
+            assert!(surface.read_pixels(&info, &mut pixels, 16 * 4, (0, 0)));
+            pixels
+        };
+        builder.set_uniform_float("pinch", &[0.0]).unwrap();
+        let plain = draw_profile(&builder);
+        builder.set_uniform_float("pinch", &[2.0]).unwrap();
+        let raised = draw_profile(&builder);
+        // Far inside the lens shift is zero, and at the lip it's inward.
+        assert_eq!(plain[15 * 4], 128);
+        assert!(plain[0] < plain[4] && plain[4] < plain[15 * 4]);
+        // The steep lip folds the image: a pixel nearer the edge samples
+        // farther inward than its immediate neighbor.
+        assert!(i32::from(plain[4]) - i32::from(plain[0]) > 4);
+        let u: f32 = 1.0 - 0.5 / 14.0;
+        let inner_only = -0.8 * 14.0 * 1.7 * (1.0 - (1.0 - u * u).sqrt());
+        let inner_only_pixel = (0.5 + inner_only / 64.0) * 255.0;
+        assert!(f32::from(plain[0]) > inner_only_pixel + 5.0);
+        assert!(raised[7 * 4] > plain[7 * 4] + 5);
+        assert_eq!(raised[15 * 4], plain[15 * 4]);
+    }
+
+    #[test]
+    fn half_resolution_blur_reconstructs_a_cubic_edge() {
+        let bounds = Rect::from_wh(128.0, 128.0);
+        let draw_step = |canvas: &skia_safe::Canvas| {
+            canvas.clear(skia_safe::Color::BLACK);
+            let mut paint = skia_safe::Paint::default();
+            paint.set_color(skia_safe::Color::WHITE);
+            canvas.draw_rect(Rect::from_xywh(64.0, 0.0, 64.0, 128.0), &paint);
+        };
+        let blur = filter(bounds, 8.0, 1.0, 0.0, 0.0, 0.0).unwrap();
+        let down = image_filters::matrix_transform(
+            &skia_safe::Matrix::scale((0.5, 0.5)),
+            skia_safe::FilterMode::Linear,
+            None,
+        );
+        let low = image_filters::blur(
+            (4.0, 4.0),
+            skia_safe::TileMode::Clamp,
+            down,
+            Rect::from_wh(64.0, 64.0),
+        );
+        let linear = image_filters::matrix_transform(
+            &skia_safe::Matrix::scale((2.0, 2.0)),
+            skia_safe::FilterMode::Linear,
+            low,
+        )
+        .unwrap();
+        let cubic_pixels = render_backdrop(&blur, draw_step);
+        let linear_pixels = render_backdrop(&linear, draw_step);
+        let red = |x: usize| (64 * 128 + x) * 4;
+        assert!((56..72).all(|x| cubic_pixels[red(x)] < cubic_pixels[red(x + 1)]));
+        assert!((48..80).any(|x| cubic_pixels[red(x)] != linear_pixels[red(x)]));
+    }
+
+    #[test]
+    fn vibrance_lift_increases_color_separation() {
+        let backdrop_color = skia_safe::Color::from_rgb(160, 100, 60);
+        let color = filter(Rect::from_wh(128.0, 128.0), 0.0, 1.08, 0.0, 0.0, 0.0).unwrap();
+        let pixels = render_backdrop(&color, |canvas| {
+            canvas.clear(backdrop_color);
+        });
+        assert!(pixels[0] > 160 && pixels[2] < 60);
+        assert_eq!(pixels[3], 255);
     }
 
     // CPU-raster timing benchmark for the glass backdrop pipeline. Not a GPU

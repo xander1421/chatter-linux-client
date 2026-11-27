@@ -41,7 +41,7 @@ export global Materials {
     // A light page shows through a faint tint, leaving the white glyph on
     // near-white: light mode needs the accent close to solid.
     out property <color> fab-accent: Appearance.dark ? #0f766e55 : #0f766ed9;
-    // The single optical edge is local to GlassSurface, never a row/card stroke.
+    // The opaque chrome edge is local to GlassSurface, never a row/card stroke.
     // Dark: a lit top-left arc that fades out. Light: white chrome on a light
     // page needs a faint cool-ink lower rim to keep its silhouette.
     out property <brush> glass-edge: Appearance.dark
@@ -52,10 +52,6 @@ export global Materials {
     out property <brush> specular: Appearance.dark
         ? @linear-gradient(170deg, #ffffff08 0%, #ffffff04 30%, #ffffff00 55%, #ffffff00 100%)
         : @linear-gradient(170deg, #ffffff18 0%, #ffffff00 45%, #ffffff00 100%);
-    // A soft internal falloff, not another stroke around the silhouette.
-    out property <brush> inner-shade: Appearance.dark
-        ? @linear-gradient(180deg, #00000000 0%, #00000000 78%, #00000014 100%)
-        : @linear-gradient(180deg, #00000000 0%, #00000000 82%, #1820200a 100%);
     out property <color> scrim: Appearance.dark ? #02050999 : #08111c40;
     // Media viewers sit on a dark backdrop in both themes, as every photo
     // viewer does; their text uses Colors.on-media. Light `Colors.overlay`
@@ -70,18 +66,13 @@ export global Materials {
     out property <length> blur-regular: 34px;
     out property <length> blur-thick: 38px;
     out property <length> blur-header: 42px;
-    // Neutral frost: no saturation lift. The lift (1.2) made the glass pick up
-    // and boost colour from content behind it (e.g. a magenta GIF read as a
-    // muddy brown-grey island — owner 2026-11-05). Apple's glass desaturates
-    // rather than boosts, so keep this neutral for a clean transparent look.
-    out property <float> saturation: 1.0;
+    // A small vibrance lift retains color in the blurred backdrop.
+    out property <float> saturation: 1.08;
     // Neutral in dark mode: the dark tint carries the material; no white lift
     // (that read too bright). Dark-mode glass is a dark translucent, not a frost.
     out property <float> chrome-brightness: Appearance.dark ? 0.0 : 0.0;
-    // Edge lensing strength (0..1). Kept LOW: Apple's frosted chrome shows a
-    // clean blur, not visible magnification/chromatic noise. The lens is for
-    // clear-glass elements, not the bars.
-    out property <float> refraction: 0.06;
+    // Confine visible refraction to the bevel so chrome stays readable.
+    out property <float> refraction: 0.4;
     out property <duration> feedback-duration: Appearance.reduce-motion ? 0ms : 100ms / Appearance.animation-speed;
     out property <duration> menu-duration: Appearance.reduce-motion ? 0ms : 180ms / Appearance.animation-speed;
     out property <duration> sheet-duration: Appearance.reduce-motion ? 0ms : 240ms / Appearance.animation-speed;
