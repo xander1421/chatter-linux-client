@@ -95,8 +95,8 @@ export component ProfileSafetyNumber inherits VerticalLayout {
         // wrapped number ran out of it over the buttons below.
         Rectangle {
             height: safety-number-content.preferred-height;
-            background: Colors.surface-section;
-            border-radius: Spacing.radius-md;
+            background: Colors.surface-card;
+            border-radius: Spacing.radius-panel;
             drop-shadow-blur: Elevation.card-blur;
             drop-shadow-offset-y: Elevation.card-offset;
             drop-shadow-color: Elevation.card-shadow;
@@ -124,6 +124,7 @@ export component ProfileSafetyNumber inherits VerticalLayout {
         }
 
         Button {
+            border-radius: Spacing.radius-control;
             text: root.verification-pending ? @tr("Updating verification…") : root.is-verified ? @tr("Clear verification") : @tr("Mark as verified");
             variant: root.is-verified ? "secondary" : "primary";
             loading: root.verification-pending;

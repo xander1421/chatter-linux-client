@@ -12,6 +12,8 @@ export global Colors {
     out property <color> action-hover: #076b63;
     out property <color> action-active: #065a54;
     out property <color> on-action: #ffffff;
+    // Keep the quiet zone light in both themes for QR scanners.
+    out property <color> qr-background: #ffffff;
     // Stable, dark initials fills: the uploaded avatar must match this preview
     // in either theme and keep white initials legible.
     out property <color> avatar-teal: #0f766e;
@@ -85,6 +87,8 @@ export global Colors {
     out property <color> away: Appearance.dark ? #f59e0b : #b45309;
     out property <color> dnd: Appearance.dark ? #ef4444 : #dc2626;
     out property <color> offline: Appearance.dark ? #6b7280 : #748393;
+
+    out property <color> qr-placeholder: #536061;
 
     // Borders and dividers
     out property <color> border: Appearance.dark ? #343b3c : #d4dada;

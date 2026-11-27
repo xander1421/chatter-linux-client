@@ -82,42 +82,21 @@ export component CreateSectionModal inherits Rectangle {
                 spacing: Spacing.sm;
 
                 // Emoji button — click to toggle picker
-                Rectangle {
-                    width: 44px;
-                    height: 44px;
-                    border-radius: Spacing.radius-md;
-                    border-width: root.picker-open ? Spacing.stroke : 0px;
-                    border-color: Colors.primary;
-                    background: emoji-touch.pressed ? Materials.pressed : emoji-touch.has-hover ? Colors.surface-hover : Colors.surface;
-                    transform-scale-x: emoji-touch.pressed ? 0.90 : 1;
-                    transform-scale-y: emoji-touch.pressed ? 0.90 : 1;
-                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
-                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-                    accessible-role: button;
-                    accessible-label: @tr("Section icon {}", root.selected-emoji);
-                    accessible-action-default => { root.picker-open = !root.picker-open; }
-                    KeyFocus { border-radius: parent.border-radius; activate => { root.picker-open = !root.picker-open; } }
-
-                    Text {
-                        accessible-role: none;
-                        text: root.selected-emoji;
-                        font-family: Typography.font-family-emoji;
-                        font-size: Typography.xl;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    emoji-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.picker-open = !root.picker-open;
-                        }
-                    }
+                Button {
+                    min-width: Spacing.touch-target-min;
+                    max-width: Spacing.touch-target-min;
+                    height: Spacing.touch-target-min;
+                    variant: "secondary";
+                    border-radius: Spacing.radius-control;
+                    text: root.selected-emoji;
+                    text-font-family: Typography.font-family-emoji;
+                    label: @tr("Section icon {}", root.selected-emoji);
+                    clicked => { root.picker-open = !root.picker-open; }
                 }
 
                 // Name input
                 name-input := Input {
+                    inset-control: true;
                     horizontal-stretch: 1;
                     placeholder: @tr("Section name");
                     text <=> root.section-name;
@@ -131,8 +110,8 @@ export component CreateSectionModal inherits Rectangle {
             // ── Inline emoji grid (shown when picker-open) ────────
             grid-box := Rectangle {
                 height: root.picker-open ? 200px : 0px;
-                background: Colors.inset;
-                border-radius: Spacing.radius-md;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
                 clip: true;
                 opacity: root.picker-open ? 1 : 0;
                 animate height { duration: Materials.motion-standard; easing: Materials.spring; }
@@ -160,7 +139,7 @@ export component CreateSectionModal inherits Rectangle {
                             y: Spacing.sm + self.grid-row * Spacing.button-height;
                             width: Spacing.button-height;
                             height: Spacing.button-height;
-                            border-radius: Spacing.radius-sm;
+                            border-radius: Spacing.radius-control;
                             background: icon == root.selected-emoji
                                 ? Colors.tint-strong
                                 : (icon-touch.pressed ? Materials.pressed : icon-touch.has-hover ? Materials.hover : transparent);
@@ -218,12 +197,14 @@ export component CreateSectionModal inherits Rectangle {
                 }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.close(); }
                 }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: root.loading ? "" :
                         (root.rename-mode ? @tr("Save") : @tr("Create"));
                     variant: "primary";

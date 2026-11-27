@@ -41,10 +41,10 @@ export component SearchResultItem inherits Rectangle {
     property <bool> hovered: touch.has-hover;
 
     height: max(Spacing.touch-target-min, 68px);
-    border-radius: Spacing.radius-md;
-    background: selected ? Colors.inset : (touch.pressed ? Materials.pressed : hovered ? Colors.surface-hover : Colors.surface);
+    border-radius: Spacing.radius-control;
+    background: selected ? Colors.tint-strong : (touch.pressed ? Materials.pressed : hovered ? Colors.surface-hover : Colors.surface);
     border-width: selected ? Spacing.stroke : 0px;
-    border-color: Colors.primary;
+    border-color: Colors.text-secondary;
     transform-scale-x: touch.pressed ? 0.975 : 1;
     transform-scale-y: touch.pressed ? 0.94 : 1;
     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
@@ -66,8 +66,8 @@ export component SearchResultItem inherits Rectangle {
         Rectangle {
             width: 40px;
             height: 40px;
-            border-radius: Spacing.radius-md;
-            background: root.has-icon ? transparent : Colors.primary.with-alpha(0.2);
+            border-radius: Spacing.radius-control;
+            background: root.has-icon ? transparent : Colors.surface-control;
             clip: true;
 
             if root.has-icon: Image {
@@ -79,7 +79,7 @@ export component SearchResultItem inherits Rectangle {
 
             if !root.has-icon: Text {
                 text: "#";
-                color: Colors.primary;
+                color: Colors.text-secondary;
                 font-size: Typography.lg;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -100,7 +100,7 @@ export component SearchResultItem inherits Rectangle {
                 Text {
                     accessible-role: none;
                     text: root.name;
-                    color: selected ? Colors.primary : Colors.text-primary;
+                    color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.semibold;
                     horizontal-stretch: 1;
@@ -109,7 +109,7 @@ export component SearchResultItem inherits Rectangle {
 
                 if root.joined: Text {
                     text: @tr("membership status" => "Joined");
-                    color: Colors.primary;
+                    color: Colors.text-secondary;
                     font-size: Typography.xs;
                     vertical-alignment: center;
                 }

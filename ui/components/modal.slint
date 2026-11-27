@@ -2,6 +2,7 @@ import { GlassSurface } from "glass_surface.slint";
 // Modal shell with one glass surface and shared header controls.
 // Uses ModalContainer to ensure proper sizing and centering (not full-screen)
 
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -23,12 +24,14 @@ component ModalHeader inherits GlassSurface {
     callback more-clicked();
 
     z: 1;
-    material-enabled: root.full-screen && !root.plain-header;
-    border-radius: root.full-screen && !root.plain-header ? self.height / 2 : 0px;
+    material-enabled: !root.plain-header;
+    border-width: root.full-screen || root.plain-header ? 0px : Spacing.stroke;
+    border-color: Colors.border;
+    border-radius: root.full-screen && !root.plain-header ? self.height / 2 : root.full-screen ? 0px : Spacing.radius-panel;
     height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
     HorizontalLayout {
         spacing: Spacing.header-action-gap;
-        padding-left: root.full-screen && root.root-screen ? Spacing.lg : Spacing.none;
+        padding-left: root.full-screen ? (root.root-screen ? Spacing.lg : Spacing.none) : Spacing.sm;
         // The row is as tall as its one control, so title and glyph
         // share a vertical centre at both densities.
 
@@ -42,7 +45,7 @@ component ModalHeader inherits GlassSurface {
         Text {
             text: root.title;
             color: Colors.text-primary;
-            font-size: Typography.lg;
+            font-size: root.full-screen ? Typography.lg : 14px * Appearance.text-scale;
             font-weight: Typography.semibold;
             vertical-alignment: center;
             horizontal-stretch: 1;
@@ -116,9 +119,9 @@ export component Modal inherits Rectangle {
         close => { root.close(); }
 
         modal-layout := VerticalLayout {
-            padding: Spacing.lg;
-            padding-bottom: Spacing.lg + (root.floating-content ? root.bottom-inset : Spacing.none);
-            spacing: Spacing.md;
+            padding: root.full-screen || root.width < 520px ? Spacing.lg : Spacing.panel-gutter;
+            padding-bottom: self.padding-top + (root.floating-content ? root.bottom-inset : Spacing.none);
+            spacing: root.full-screen || root.width < 520px ? Spacing.md : Spacing.panel-gutter;
 
             // Header row.
             //

@@ -47,7 +47,8 @@ export component SealedSenderIntroModal inherits Rectangle {
     }
 
     GlassSurface {
-        material-level: 3;
+        material-enabled: false;
+        background: Colors.background;
         elevation: 5;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
         transform-scale-x: root.show-modal && root.entered ? 100% : 94%;
@@ -59,7 +60,9 @@ export component SealedSenderIntroModal inherits Rectangle {
         height: max(200px, min(content-layout.preferred-height, min(640px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        border-radius: Spacing.radius-sheet;
+        border-radius: Spacing.radius-panel;
+        border-width: Spacing.stroke;
+        border-color: Colors.border;
 
         TouchArea {
             width: 100%;
@@ -156,6 +159,7 @@ export component SealedSenderIntroModal inherits Rectangle {
                 Rectangle { height: Spacing.sm; }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Got it");
                     variant: "primary";
                     disabled: !root.show-modal;

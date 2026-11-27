@@ -47,9 +47,12 @@ export struct MemoryGraphEdgeData {
 }
 
 export component JarvisMemoryModal inherits GlassSurface {
-    material-level: 3;
+    material-enabled: false;
+    background: Colors.background;
     elevation: 5;
-    border-radius: Spacing.radius-sheet;
+    border-radius: Spacing.radius-panel;
+    border-width: Spacing.stroke;
+    border-color: Colors.border;
     // Logical close is immediate; the sheet settles and fades before the
     // host unmounts it, with nothing inside it live meanwhile.
     in property <bool> show: true;
@@ -133,8 +136,8 @@ export component JarvisMemoryModal inherits GlassSurface {
                     row: 0;
                     col: 0;
                     horizontal-stretch: 1;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-md;
+                    background: Colors.surface-card;
+                    border-radius: Spacing.radius-panel;
 
                     VerticalLayout {
                         padding: Spacing.md;
@@ -199,8 +202,8 @@ export component JarvisMemoryModal inherits GlassSurface {
                     row: root.narrow ? 1 : 0;
                     col: root.narrow ? 0 : 1;
                     horizontal-stretch: 1;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-md;
+                    background: Colors.surface-card;
+                    border-radius: Spacing.radius-panel;
 
                     VerticalLayout {
                         padding: Spacing.md;

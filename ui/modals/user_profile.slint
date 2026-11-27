@@ -226,7 +226,7 @@ export component UserProfileModal inherits Rectangle {
             // screen. Left to its preferred height on a phone, the page ended
             // where its (under-measured) content did, and everything painted
             // below that edge was not hit-tested.
-            preferred-height: profile-header.height + page.preferred-height;
+            preferred-height: profile-header.height + page.preferred-height + (root.mobile-mode ? 0px : 2 * Spacing.panel-gutter);
             height: root.mobile-mode ? parent.height : self.preferred-height;
 
             // ── Top bar ───────────────────────────────────────────────
@@ -237,11 +237,12 @@ export component UserProfileModal inherits Rectangle {
             // EDGE is decided here, because that is a position in this layout.
             profile-header := GlassSurface {
                 z: 1;
-                x: root.mobile-mode ? Spacing.sm : 0px;
-                y: root.mobile-mode ? Spacing.sm : 0px;
+                x: Spacing.panel-gutter;
+                y: Spacing.panel-gutter;
                 width: parent.width - 2 * self.x;
-                material-enabled: root.mobile-mode;
-                border-radius: root.mobile-mode ? self.height / 2 : 0px;
+                border-width: root.mobile-mode ? 0px : Spacing.stroke;
+                border-color: Colors.border;
+                border-radius: root.mobile-mode ? self.height / 2 : Spacing.radius-panel;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
                 HorizontalLayout {
                     padding-left: Spacing.xs;
@@ -264,20 +265,17 @@ export component UserProfileModal inherits Rectangle {
                         // Once the large name has scrolled under the header: the
                         // body (inside an `if`) cannot be measured from here, so
                         // this uses the avatar plus the name row's height.
-                        visible: root.mobile-mode && !root.shared-page-open
-                            && -page-scroll.viewport-y >= root.avatar-size + Spacing.md + 40px;
-                        text: root.display-name;
+                        visible: !root.mobile-mode || (!root.shared-page-open
+                            && -page-scroll.viewport-y >= root.avatar-size + Spacing.md + 40px);
+                        text: root.shared-page-open ? root.shared-title : root.display-name;
                         color: Colors.text-primary;
                         font-size: Typography.sm;
-                        font-weight: Typography.medium;
+                        font-weight: Typography.semibold;
                         vertical-alignment: center;
-                        horizontal-alignment: center;
+                        horizontal-alignment: root.mobile-mode ? center : left;
                         horizontal-stretch: 1;
                         overflow: elide;
                     }
-
-                    if !root.mobile-mode: Rectangle { horizontal-stretch: 1; }
-
 
                     if !root.mobile-mode && !root.shared-page-open: DismissButton {
                         back: false;
@@ -289,7 +287,7 @@ export component UserProfileModal inherits Rectangle {
             // ── The page ──────────────────────────────────────────────
             page-scroll := Flickable {
                 x: 0;
-                y: root.mobile-mode ? 0px : profile-header.height;
+                y: root.mobile-mode ? 0px : profile-header.y + profile-header.height + Spacing.panel-gutter;
                 width: parent.width;
                 height: parent.height - self.y;
                 viewport-width: self.width;
@@ -458,7 +456,7 @@ export component UserProfileModal inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
                             height: more-content.preferred-height;
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             drop-shadow-blur: Elevation.card-blur;
                             drop-shadow-offset-y: Elevation.card-offset;
                             drop-shadow-color: Elevation.card-shadow;
@@ -484,8 +482,8 @@ export component UserProfileModal inherits Rectangle {
 
                         Rectangle {
                             height: timer-card.preferred-height;
-                            background: Colors.surface-section;
-                            border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card;
+                            border-radius: Spacing.radius-panel;
                             drop-shadow-blur: Elevation.card-blur;
                             drop-shadow-offset-y: Elevation.card-offset;
                             drop-shadow-color: Elevation.card-shadow;
@@ -551,6 +549,7 @@ export component UserProfileModal inherits Rectangle {
                         padding-right: Spacing.md;
 
                         Button {
+                            border-radius: Spacing.radius-control;
                             text: @tr("Edit profile");
                             variant: "primary";
                             clicked => { root.edit-profile(); }
@@ -571,6 +570,7 @@ export component UserProfileModal inherits Rectangle {
                         }
 
                         Button {
+                            border-radius: Spacing.radius-control;
                             text: @tr("Open blocked");
                             variant: "secondary";
                             clicked => { root.manage-blocked(); }
@@ -617,6 +617,7 @@ export component UserProfileModal inherits Rectangle {
                         // Core refuses friend requests in Anon Mode (they
                         // reveal the real identity), so the button is not shown.
                         Button {
+                            border-radius: Spacing.radius-control;
                             text: root.loading ? "" : @tr("Add friend");
                             variant: "secondary";
                             horizontal-stretch: 1;
@@ -632,7 +633,7 @@ export component UserProfileModal inherits Rectangle {
                         Text {
                             width: max(0px, parent.width - parent.padding-left);
                             text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                        Button { text: @tr("Retry shared content"); clicked => { root.shared-retry(); } }
+                        Button { border-radius: Spacing.radius-control; variant: "secondary"; text: @tr("Retry shared content"); clicked => { root.shared-retry(); } }
                     }
 
                     // Shared categories remain a compact card until one is opened.
@@ -640,7 +641,7 @@ export component UserProfileModal inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
                             height: shared-card.preferred-height;
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             drop-shadow-blur: Elevation.card-blur;
                             drop-shadow-offset-y: Elevation.card-offset;
                             drop-shadow-color: Elevation.card-shadow;
@@ -674,7 +675,7 @@ export component UserProfileModal inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
                             height: actions-card.preferred-height;
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             drop-shadow-blur: Elevation.card-blur;
                             drop-shadow-offset-y: Elevation.card-offset;
                             drop-shadow-color: Elevation.card-shadow;
@@ -703,9 +704,11 @@ export component UserProfileModal inherits Rectangle {
                     if root.shared-page-open: VerticalLayout {
                         spacing: Spacing.md;
                         padding-left: Spacing.md; padding-right: Spacing.md;
-                        Text { text: root.shared-title; color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
+                        if root.mobile-mode: Text { text: root.shared-title; color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
                         if root.shared-has-previous: Button {
+                            border-radius: Spacing.radius-control;
                             text: @tr("Load earlier");
+                            variant: "secondary";
                             clicked => { root.shared-load-previous(); }
                         }
                         if root.shared-tab == "photo" || root.shared-tab == "video" || root.shared-tab == "gif": ProfileSharedGrid {
@@ -717,7 +720,9 @@ export component UserProfileModal inherits Rectangle {
                             open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
                         }
                         if root.shared-has-more && !root.shared-loading: Button {
+                            border-radius: Spacing.radius-control;
                             text: @tr("Load more");
+                            variant: root.shared-error == "" ? "primary" : "secondary";
                             clicked => { root.shared-load-more(); }
                         }
                         if root.shared-loading: Text { text: @tr("Loading…"); color: Colors.text-muted; font-size: Typography.sm; }
@@ -759,12 +764,14 @@ export component UserProfileModal inherits Rectangle {
                 alignment: end;
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.confirm-remove = false; }
                 }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Delete contact");
                     variant: "destructive";
                     clicked => {
@@ -799,12 +806,14 @@ export component UserProfileModal inherits Rectangle {
                 alignment: end;
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
                     clicked => { root.confirm-block = false; }
                 }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Block");
                     variant: "destructive";
                     clicked => {
@@ -823,7 +832,7 @@ export component UserProfileModal inherits Rectangle {
         close => { edit-contact-modal.release-focus(); root.edit-contact-open = false; }
         VerticalLayout {
             spacing: Spacing.md;
-            Input { text <=> root.contact-draft; placeholder: @tr("Contact name"); control-height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height; }
+            Input { inset-control: true; text <=> root.contact-draft; placeholder: @tr("Contact name"); control-height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height; }
             HorizontalLayout {
                 spacing: Spacing.sm;
                 Button { text: @tr("Cancel"); variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; } }

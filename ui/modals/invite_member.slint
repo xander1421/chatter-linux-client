@@ -92,6 +92,7 @@ export component InviteMemberModal inherits Rectangle {
 
             // Search input
             Input {
+                inset-control: true;
                 vertical-stretch: 0;
                 placeholder: @tr("Search by name or username...");
                 text <=> root.search-text;
@@ -106,15 +107,15 @@ export component InviteMemberModal inherits Rectangle {
                 // went to the rows above it instead.
                 max-height: 100000px;
                 vertical-stretch: 1;
-                background: Colors.surface;
-                border-radius: Spacing.radius-md;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
 
                 Flickable {
                     viewport-height: user-list.preferred-height;
                     viewport-width: parent.width;
 
                     user-list := VerticalLayout {
-                        padding: Spacing.xs;
+                        padding: Spacing.sm;
 
                         for user[index] in root.users: Rectangle {
                             // Members and banned users can't be invited.
@@ -129,8 +130,8 @@ export component InviteMemberModal inherits Rectangle {
                             accessible-action-default => { if !unavailable { root.toggle-user(index); } }
                             KeyFocus { enabled: !parent.unavailable; border-radius: parent.border-radius; activate => { root.toggle-user(index); } }
                             background: unavailable ? transparent :
-                                (user-touch.pressed ? Materials.pressed : user-touch.has-hover ? Colors.surface-hover : transparent);
-                            border-radius: Spacing.radius-md;
+                                (user.selected ? Colors.tint-strong : user-touch.pressed ? Materials.pressed : user-touch.has-hover ? Colors.surface-hover : transparent);
+                            border-radius: Spacing.radius-control;
                             opacity: unavailable ? 0.5 : 1.0;
                             transform-scale-x: user-touch.pressed ? 0.97 : 1;
                             transform-scale-y: user-touch.pressed ? 0.94 : 1;
@@ -241,6 +242,7 @@ export component InviteMemberModal inherits Rectangle {
 
                 // Cancel button
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
 
@@ -251,6 +253,7 @@ export component InviteMemberModal inherits Rectangle {
 
                 // Invite button
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: root.loading ? "" :
                         (root.selected-count == 0 ? @tr("Invite") :
                          @tr("Invite {n} user" | "Invite {n} users" % root.selected-count));

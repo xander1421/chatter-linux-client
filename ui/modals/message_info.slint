@@ -1,5 +1,6 @@
 import { Modal } from "../components/modal.slint";
 import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
 export global MessageInfo {
@@ -14,15 +15,23 @@ export component MessageInfoModal inherits Modal {
     max-modal-height: 460px;
     fill-height: true;
 
-    VerticalLayout {
-        Flickable {
-            viewport-height: details.preferred-height;
-            details := Text {
-                width: parent.width;
-                text: MessageInfo.details;
-                wrap: word-wrap;
-                color: Colors.text-primary;
-                font-size: Typography.sm;
+    Rectangle {
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
+
+        VerticalLayout {
+            padding: Spacing.sm;
+
+            Flickable {
+                viewport-width: self.width;
+                viewport-height: details.preferred-height;
+                details := Text {
+                    width: parent.width;
+                    text: MessageInfo.details;
+                    wrap: word-wrap;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                }
             }
         }
     }

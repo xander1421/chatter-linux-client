@@ -54,8 +54,8 @@ export component FindTab inherits VerticalLayout {
         // ===== QR hero (tight) =====
         Rectangle {
             vertical-stretch: 0;
-            background: Colors.surface;
-            border-radius: Spacing.radius-lg;
+            background: Colors.surface-card;
+            border-radius: Spacing.radius-panel;
             drop-shadow-blur: Elevation.card-blur;
             drop-shadow-offset-y: Elevation.card-offset;
             drop-shadow-color: Elevation.card-shadow;
@@ -72,7 +72,7 @@ export component FindTab inherits VerticalLayout {
                     Rectangle {
                         width: 236px;
                         height: 236px;
-                        background: white;
+                        background: Colors.qr-background;
                         border-radius: Spacing.radius-md;
                         Image {
                             source: root.qr-code-image;
@@ -84,7 +84,7 @@ export component FindTab inherits VerticalLayout {
                         }
                         if !root.show-qr || root.my-code == "": Text {
                             text: "…";
-                            color: #999;
+                            color: Colors.qr-placeholder;
                             font-size: Typography.xl;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
@@ -105,14 +105,16 @@ export component FindTab inherits VerticalLayout {
         // sheet so the code goes straight into another app. Copy is the quiet
         // fallback.
         Button {
+            border-radius: Spacing.radius-control;
             touch: root.mobile-mode;
             horizontal-stretch: 1;
             text: @tr("Share my code");
-            variant: "primary";
+            variant: root.code-input == "" ? "primary" : "secondary";
             clicked => { root.share-code(); }
         }
 
         Button {
+            border-radius: Spacing.radius-control;
             touch: root.mobile-mode;
             horizontal-stretch: 1;
             text: @tr("Copy my code");
@@ -121,6 +123,7 @@ export component FindTab inherits VerticalLayout {
         }
 
         if root.can-scan: Button {
+            border-radius: Spacing.radius-control;
             touch: root.mobile-mode;
             horizontal-stretch: 1;
             text: @tr("Scan a code");
@@ -130,6 +133,7 @@ export component FindTab inherits VerticalLayout {
 
         // Add someone by their code — input on its own line, actions beneath it.
         Input {
+            inset-control: true;
             horizontal-stretch: 1;
             placeholder: @tr("Paste a code or link");
             text <=> root.code-input;
@@ -140,6 +144,7 @@ export component FindTab inherits VerticalLayout {
         HorizontalLayout {
             spacing: Spacing.sm;
             Button {
+                border-radius: Spacing.radius-control;
                 touch: root.mobile-mode;
                 horizontal-stretch: 1;
                 text: @tr("Paste");
@@ -147,10 +152,11 @@ export component FindTab inherits VerticalLayout {
                 clicked => { root.paste-code(); }
             }
             Button {
+                border-radius: Spacing.radius-control;
                 touch: root.mobile-mode;
                 horizontal-stretch: 1;
                 text: @tr("Add");
-                variant: "primary";
+                variant: root.code-input == "" ? "secondary" : "primary";
                 loading: root.loading;
                 clicked => { root.connect-via-code(root.code-input); }
             }

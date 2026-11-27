@@ -26,12 +26,21 @@ export component LicensesModal inherits Rectangle {
             vertical-stretch: 1;
             for block in root.notices: VerticalLayout {
                 width: lv.visible-width;
-                padding-bottom: Spacing.md;
-                Text {
-                    text: block;
-                    wrap: word-wrap;
-                    color: Colors.text-primary;
-                    font-size: Typography.xs;
+                padding-bottom: Spacing.panel-gutter;
+                Rectangle {
+                    height: notice.preferred-height;
+                    background: Colors.surface-card;
+                    border-radius: Spacing.radius-panel;
+
+                    notice := VerticalLayout {
+                        padding: Spacing.sm;
+                        Text {
+                            text: block;
+                            wrap: word-wrap;
+                            color: Colors.text-primary;
+                            font-size: Typography.xs;
+                        }
+                    }
                 }
             }
         }

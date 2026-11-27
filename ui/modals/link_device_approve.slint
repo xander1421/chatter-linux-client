@@ -77,6 +77,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                     }
 
                     if root.can-scan: Button {
+                        border-radius: Spacing.radius-control;
                         text: @tr("Scan QR code");
                         variant: "secondary";
                         disabled: root.approving;
@@ -84,6 +85,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                     }
 
                     Input {
+                        inset-control: true;
                         placeholder: @tr("chatter://link?uuid=…");
                         text <=> root.link-url;
                         disabled: root.approving;
@@ -92,8 +94,8 @@ export component LinkDeviceApproveModal inherits Rectangle {
 
                     // Preview panel — appears once parse succeeds
                     if root.preview-ready: Rectangle {
-                        background: Colors.surface-hover;
-                        border-radius: Spacing.radius-sm;
+                        background: Colors.surface-card;
+                        border-radius: Spacing.radius-panel;
                         transform-origin: { x: self.width / 2, y: 0px };
                         transform-scale-y: root.preview-entered ? 100% : 88%;
                         animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
@@ -144,6 +146,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                     }
 
                     Input {
+                        inset-control: true;
                         placeholder: @tr("Password or PIN");
                         password: true;
                         text <=> root.password;
@@ -177,12 +180,14 @@ export component LinkDeviceApproveModal inherits Rectangle {
             HorizontalLayout {
                 spacing: Spacing.sm;
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
                     disabled: root.approving;
                     clicked => { root.close(); }
                 }
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: root.approving ? "" : @tr("Authorize");
                     variant: "primary";
                     loading: root.approving;

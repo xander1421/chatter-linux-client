@@ -5776,8 +5776,8 @@ fn glass_material_is_chrome_only_with_one_optical_edge() {
         .1
         .as_str();
     assert!(
-        modal.contains("material-enabled: !root.full-screen;"),
-        "full-screen content is not a glass sheet"
+        modal.contains("material-enabled: root.phone-sheet;"),
+        "only phone sheets use glass on the modal shell"
     );
 }
 

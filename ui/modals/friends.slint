@@ -263,7 +263,7 @@ export component FriendsModal inherits Rectangle {
 
                 // ===== Add-friend sheet (opened by the contacts + FAB) =====
                 // Opaque backdrop so it covers the tab content underneath.
-                if root.showing-add: Rectangle { background: Materials.ambient; z: 4; TouchArea {} }
+                if root.showing-add: Rectangle { background: Colors.background; z: 4; TouchArea {} }
                 find-scroll := Flickable {
                     visible: root.showing-add;
                     z: 5;
