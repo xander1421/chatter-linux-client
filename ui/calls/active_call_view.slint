@@ -1,7 +1,7 @@
 import { VerificationEmoji } from "verification_emoji.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { IconAction } from "../components/icon_action.slint";
-import { Elevation } from "../theme/elevation.slint";
+import { Button } from "../components/button.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Active call view as a dock on top of the chat pane (Discord-style).
@@ -64,29 +64,19 @@ component ParticipantTile inherits Rectangle {
         clicked => { root.clicked(); }
     }
 
-    background: show-video && participant.is-video-enabled ? Colors.background : Colors.surface;
-    border-radius: 6px;
+    background: show-video && participant.is-video-enabled ? Colors.background : Colors.surface-card;
+    border-radius: Spacing.radius-panel;
     // Retain spatial continuity when the stage or picture-in-picture resizes.
     animate x { duration: Materials.motion-standard; easing: Materials.spring; }
     animate y { duration: Materials.motion-standard; easing: Materials.spring; }
     animate width { duration: Materials.motion-standard; easing: Materials.spring; }
     animate height { duration: Materials.motion-standard; easing: Materials.spring; }
-    // Border + outer glow drive the "is speaking" affordance — both animate
-    // between idle and active so the transition feels alive rather than a
-    // hard on/off flip. Uses the sidebar accent teal so "talking" matches the
-    // rest of the app's green instead of a one-off neon.
-    border-width: participant.is-speaking ? Spacing.stroke : 0px;
-    border-color: Colors.primary;
-    drop-shadow-blur: participant.is-speaking ? Elevation.halo-blur-strong : 0px;
-    drop-shadow-color: participant.is-speaking ? Colors.primary.with-alpha(0.6) : transparent;
-    drop-shadow-offset-x: 0px;
-    drop-shadow-offset-y: 0px;
+    // A neutral rim marks the current speaker on the video stage.
+    border-width: participant.is-speaking ? 2 * Spacing.stroke : 0px;
+    border-color: Colors.text-secondary;
     clip: true;
 
     animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
-    animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
-    animate drop-shadow-blur { duration: Materials.motion-quick; easing: Materials.settle; }
-    animate drop-shadow-color { duration: Materials.motion-quick; easing: Materials.settle; }
 
     // Preserve the entire camera or shared-screen frame at every tile size.
     if show-video && participant.is-video-enabled: Image {
@@ -134,8 +124,8 @@ component ParticipantTile inherits Rectangle {
         y: parent.height - 24px - root.bottom-clearance;
         width: 20px;
         height: 20px;
-        border-radius: 10px;
-        background: Colors.error.with-alpha(0.85);
+        border-radius: Spacing.radius-full;
+        background: Colors.surface-control;
 
         Image {
             source: Icons.mic-off;
@@ -143,7 +133,7 @@ component ParticipantTile inherits Rectangle {
             height: 12px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            colorize: Colors.on-error;
+            colorize: Colors.text-primary;
         }
     }
 
@@ -154,8 +144,8 @@ component ParticipantTile inherits Rectangle {
         y: Spacing.xs;
         width: 22px;
         height: 22px;
-        border-radius: 11px;
-        background: Colors.primary.with-alpha(0.85);
+        border-radius: Spacing.radius-full;
+        background: Colors.surface-control;
 
         Image {
             source: Icons.monitor;
@@ -278,23 +268,32 @@ export component ActiveCallView inherits Rectangle {
     property <length> controls-height: 48px;
     property <length> verification-height: call-data.is-encrypted ? 36px * Appearance.text-grow : 0px;
     property <length> call-header-height: max(button-size, 32px * Appearance.text-grow);
-    property <length> stage-inset: 0px;
-    property <length> overlay-bottom: controls-height + 3 * Spacing.sm;
+    in property <bool> compact-layout: root.is-mobile-platform;
+    property <length> frame-gutter: root.compact-layout ? 0px : Spacing.panel-gutter;
+    property <length> stage-inset: root.frame-gutter > 0px ? Spacing.panel-gutter : 0px;
+    property <length> chrome-gutter: Spacing.panel-gutter;
+    property <length> overlay-bottom: controls-height + 3 * root.chrome-gutter;
     property <length> voice-stage-height: tile-indices.length > 2 ? 200px : 140px;
     property <length> dock-height: spacious
         ? clamp(viewport-height * 0.60, 360px, 840px)
         : any-video ? clamp(viewport-height * 0.48, 320px, 560px)
-        : voice-stage-height + call-header-height + controls-height + Spacing.sm;
+        : voice-stage-height + call-header-height + controls-height + 3 * Spacing.panel-gutter;
     visible: show;
     min-height: show ? (fullscreen ? 0px : dock-height) : 0px;
     max-height: show ? (fullscreen ? 100000px : dock-height) : 0px;
     preferred-height: show ? dock-height : 0px;
-    background: Colors.surface.with-alpha(0.6);
+    background: Colors.background;
 
     if show: Rectangle {
-        width: 100%;
-        height: 100%;
+        x: root.frame-gutter;
+        y: root.frame-gutter;
+        width: parent.width - 2 * root.frame-gutter;
+        height: parent.height - 2 * root.frame-gutter;
         background: Colors.background;
+        border-radius: root.frame-gutter > 0px ? Spacing.radius-panel : 0px;
+        border-width: root.frame-gutter > 0px ? 1px : 0px;
+        border-color: Colors.border;
+        clip: true;
         // The video stage fills the call surface behind both overlay rows.
         Rectangle {
             accessible-role: groupbox;
@@ -312,8 +311,8 @@ export component ActiveCallView inherits Rectangle {
             for slot[idx] in [0, 1, 2, 3, 4, 5]: ParticipantTile {
                 property <int> source-index: idx < root.tile-indices.length ? root.tile-indices[idx] : -1;
                 property <int> columns: root.tile-indices.length >= 5 ? 3 : 2;
-                property <length> grid-width: (parent.width - 2 * root.stage-inset - (columns - 1) * Spacing.sm) / columns;
-                property <length> grid-height: (parent.height - 2 * root.stage-inset - Spacing.sm) / 2;
+                property <length> grid-width: (parent.width - 2 * root.chrome-gutter - (columns - 1) * Spacing.sm) / columns;
+                property <length> grid-height: (parent.height - 2 * root.chrome-gutter - Spacing.sm) / 2;
                 property <length> pip-height: pip-width * 0.62;
                 property <length> pip-width: clamp(parent.width * 0.24, 88px, 180px);
                 property <bool> full-stage: root.maximized-index >= 0 || root.tile-indices.length <= 1
@@ -340,8 +339,8 @@ export component ActiveCallView inherits Rectangle {
                 video-frame: source-index >= 0 && source-index == call-data.participants.length - 1 ? local-video-frame
                     : source-index >= 0 && remote-video-frames.length > source-index ? remote-video-frames[source-index] : local-video-frame;
                 bottom-clearance: full-stage ? root.overlay-bottom : 0px;
-                top-clearance: full-stage ? root.call-header-height : 0px;
-                border-radius: full-stage ? 0px : 6px;
+                top-clearance: full-stage ? root.call-header-height + root.chrome-gutter : 0px;
+                border-radius: full-stage && root.stage-inset == 0px ? 0px : Spacing.radius-panel;
                 is-local: source-index == call-data.participants.length - 1;
                 // Mobile + camera on: offer the front/back lens swap.
                 show-camera-swap: self.is-local && root.is-mobile-platform && root.is-video-enabled
@@ -366,10 +365,12 @@ export component ActiveCallView inherits Rectangle {
                 elevation: 0;
 
                 x: (parent.width - self.width) / 2;
-                y: root.call-header-height + Spacing.sm;
+                y: root.call-header-height + 2 * root.chrome-gutter;
                 width: Spacing.button-height * 2 + Spacing.xs * 3;
                 height: Spacing.button-height + Spacing.xs * 2;
-                border-radius: self.height / 2;
+                border-radius: Spacing.radius-panel;
+                border-width: 1px;
+                border-color: Colors.border;
 
                 HorizontalLayout {
                     padding-top: Spacing.xs;
@@ -386,7 +387,6 @@ export component ActiveCallView inherits Rectangle {
                             : @tr("Mute {} for you", call-data.participants[tile-indices[maximized-index]].display-name);
                         icon: call-data.participants[tile-indices[maximized-index]].is-audio-muted-locally
                                 ? Icons.mic-off : Icons.mic;
-                        active: call-data.participants[tile-indices[maximized-index]].is-audio-muted-locally;
                         clicked => {
                                 root.peer-audio-mute-toggle(
                                     call-data.participants[tile-indices[maximized-index]].user-id);
@@ -418,9 +418,11 @@ export component ActiveCallView inherits Rectangle {
 
                 x: (parent.width - self.width) / 2;
                 y: parent.height - root.overlay-bottom - Spacing.sm - self.height;
-                width: share-banner-row.preferred-width + Spacing.md * 2;
+                width: min(share-banner-row.preferred-width, parent.width - 2 * root.chrome-gutter);
                 height: Spacing.button-height + Spacing.sm;
-                border-radius: self.height / 2;
+                border-radius: Spacing.radius-panel;
+                border-width: 1px;
+                border-color: Colors.border;
 
                 share-banner-row := HorizontalLayout {
                     padding-left: Spacing.md;
@@ -432,54 +434,34 @@ export component ActiveCallView inherits Rectangle {
                         source: Icons.monitor;
                         width: 13px;
                         height: 13px;
-                        colorize: Colors.primary;
+                        colorize: Colors.text-secondary;
                         y: (parent.height - self.height) / 2;
                     }
 
                     Text {
                         text: @tr("Sharing your screen");
+                        overflow: elide;
                         font-size: Typography.xs;
                         color: Colors.text-primary;
                         vertical-alignment: center;
                     }
 
-                    Rectangle {
-                        width: stop-text.preferred-width + Spacing.sm * 2;
-                        height: Spacing.button-height;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: 10px;
-                        // Small text needs 4.5:1: white on `error` is 3.63:1 in
-                        // dark, so the label sits on the deeper red step.
-                        background: stop-touch.has-hover ? Colors.error-hover.darker(0.2) : Colors.error-hover;
-                        accessible-role: button;
-                        accessible-label: @tr("Stop screen sharing");
-                        accessible-action-default => { root.toggle-screen-share(); }
-                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-screen-share(); } }
-
-                        stop-text := Text {
-                            accessible-role: none;
-                            x: Spacing.sm;
-                            text: @tr("Stop");
-                            font-size: Typography.xs;
-                            font-weight: Typography.semibold;
-                            color: Colors.on-error;
-                            vertical-alignment: center;
-                        }
-
-                        stop-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.toggle-screen-share(); }
-                        }
+                    Button {
+                        text: @tr("Stop");
+                        label: @tr("Stop screen sharing");
+                        variant: "destructive";
+                        border-radius: Spacing.radius-control;
+                        clicked => { root.toggle-screen-share(); }
                     }
                 }
             }
 
             if root.call-data.participants.length > root.tile-indices.length: Rectangle {
                 x: parent.width - self.width - Spacing.sm;
-                y: Spacing.sm + Spacing.button-height + Spacing.xs;
+                y: root.call-header-height + 2 * root.chrome-gutter;
                 width: 64px;
                 height: Spacing.button-height;
-                border-radius: Spacing.radius-md;
+                border-radius: Spacing.radius-control;
                 background: Colors.overlay-heavy;
                 accessible-role: button;
                 accessible-label: @tr("Show all call participants");
@@ -499,11 +481,11 @@ export component ActiveCallView inherits Rectangle {
 
             if root.roster-open && root.call-data.participants.length > root.tile-indices.length: Rectangle {
                 x: parent.width - self.width - Spacing.sm;
-                y: Spacing.sm + Spacing.button-height * 2 + Spacing.xs * 2;
+                y: root.call-header-height + Spacing.button-height + 3 * root.chrome-gutter;
                 width: min(260px, parent.width - 2 * Spacing.sm);
                 height: min(320px, parent.height - self.y - Spacing.sm);
-                border-radius: Spacing.radius-md;
-                background: Colors.surface;
+                border-radius: Spacing.radius-panel;
+                background: Colors.surface-card;
                 clip: true;
 
                 Flickable {
@@ -511,10 +493,12 @@ export component ActiveCallView inherits Rectangle {
                     height: parent.height;
                     viewport-height: roster-list.preferred-height;
                     roster-list := VerticalLayout {
+                        padding: Spacing.sm;
                         spacing: Spacing.xxs;
                         for participant[index] in root.call-data.participants: Rectangle {
                             height: Spacing.list-row-height-touch;
-                            background: participant.user-id == root.pinned-id ? Colors.tint-strong : Colors.surface;
+                            background: participant.user-id == root.pinned-id ? Colors.tint-strong : transparent;
+                            border-radius: Spacing.radius-control;
                             accessible-role: button;
                             accessible-label: @tr("Pin {}", participant.display-name);
                             accessible-action-default => {
@@ -554,12 +538,15 @@ export component ActiveCallView inherits Rectangle {
         // This material is painted after the full-size stage: it overlays
         // the video without reserving a separate strip of layout space.
         GlassSurface {
-            y: 0px;
-            width: 100%;
+            x: root.chrome-gutter;
+            y: root.chrome-gutter;
+            width: parent.width - 2 * root.chrome-gutter;
             height: root.call-header-height;
             material-level: 3;
             elevation: 0;
-            show-edge: false;
+            border-radius: Spacing.radius-panel;
+            border-width: 1px;
+            border-color: Colors.border;
             accessible-role: groupbox;
             accessible-label: @tr("Call information");
             HorizontalLayout {
@@ -572,7 +559,8 @@ export component ActiveCallView inherits Rectangle {
                     accessible-value: self.text;
                     text: root.is-connecting ? @tr("Calling…") : root.format-duration(call-data.duration-seconds);
                     font-size: Typography.sm;
-                    color: Colors.text-secondary;
+                    font-weight: Typography.semibold;
+                    color: Colors.text-primary;
                     vertical-alignment: center;
                     horizontal-stretch: 0;
                     max-width: 76px;
@@ -644,7 +632,7 @@ export component ActiveCallView inherits Rectangle {
         // reserve this area so they remain visible above the toolbar.
         CallControls {
             x: (parent.width - self.width) / 2;
-            y: parent.height - self.height - Spacing.sm;
+            y: parent.height - self.height - root.chrome-gutter;
             // Seven separate 44px targets fill a 320px phone's row.
             width: 7 * 44px;
             height: controls-height;

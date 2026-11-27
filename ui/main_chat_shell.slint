@@ -258,6 +258,7 @@ export component MainChatShell inherits Rectangle {
                     visible: !chat-panel-area.thread-covers-chat;
 
                     AppCallDock {
+                        compact-layout: root.compact-layout;
                         active-call-data: CallView.active-call-data;
                         active-call-fullscreen <=> CallView.active-call-fullscreen;
                         active-call-visible: CallView.active-call-visible;

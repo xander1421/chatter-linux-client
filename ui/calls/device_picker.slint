@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
@@ -20,8 +21,8 @@ component DeviceItem inherits Rectangle {
 
     height: Spacing.list-row-height-touch;
     background: is-selected ? Colors.tint-strong :
-                touch.pressed ? Materials.pressed : touch.has-hover ? Materials.hover : Colors.surface;
-    border-radius: Spacing.radius-md;
+                touch.pressed ? Materials.pressed : touch.has-hover ? Materials.hover : transparent;
+    border-radius: Spacing.radius-control;
     accessible-role: button;
     accessible-label: name + (is-selected ? ", selected" : "");
     accessible-action-default => { root.clicked(); }
@@ -57,7 +58,8 @@ component DeviceItem inherits Rectangle {
 
             Text {
                 text: name;
-                font-size: Typography.sm;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 color: Colors.text-primary;
                 overflow: elide;
             }
@@ -136,8 +138,10 @@ export component DevicePicker inherits Rectangle {
                 : (parent.height - self.height) / 2) + (1 - root.card-arrival) * 28px,
             parent.height - self.height - Spacing.sm));
         width: min(420px, parent.width - 24px);
-        height: min(520px, min(parent.height - 32px, content.preferred-height + 80px));
-        border-radius: Spacing.radius-sheet;
+        height: min(520px, min(parent.height - 32px, device-list.preferred-height + Spacing.header-action-box + 3 * Spacing.panel-gutter));
+        border-radius: Spacing.radius-panel;
+        border-width: 1px;
+        border-color: Colors.border;
 
         // Prevent clicks from closing
         TouchArea {}
@@ -148,8 +152,8 @@ export component DevicePicker inherits Rectangle {
         Rectangle {
             visible: root.show;
             VerticalLayout {
-                padding: Spacing.lg;
-                spacing: Spacing.md;
+                padding: Spacing.panel-gutter;
+                spacing: Spacing.panel-gutter;
 
                 // Header — centered dialog, so X on the trailing edge at the
                 // shared header geometry (was a bespoke 16px glyph in a 32px
@@ -159,7 +163,7 @@ export component DevicePicker inherits Rectangle {
 
                     Text {
                         text: title;
-                        font-size: Typography.lg;
+                        font-size: Typography.sm;
                         font-weight: Typography.semibold;
                         color: Colors.text-primary;
                         vertical-alignment: center;
@@ -173,129 +177,140 @@ export component DevicePicker inherits Rectangle {
                     }
                 }
 
-                // Device list
-                content := Flickable {
+                // Device options are one card inside the picker.
+                Rectangle {
                     vertical-stretch: 1;
-                    viewport-height: device-list.preferred-height;
+                    background: Colors.surface-card;
+                    border-radius: Spacing.radius-panel;
+                    clip: true;
 
-                    device-list := VerticalLayout {
-                        spacing: Spacing.xs;
+                    Flickable {
+                        width: parent.width;
+                        height: parent.height;
+                        viewport-height: device-list.preferred-height;
 
-                        if root.linked-audio && picker-type != "screen": Text {
-                            text: @tr("Microphone and output change together. The check mark shows the active device.");
-                            font-size: Typography.sm;
-                            color: Colors.text-secondary;
-                            wrap: word-wrap;
-                        }
-
-                        // Audio input devices (microphones)
-                        if picker-type == "audio": VerticalLayout {
+                        device-list := VerticalLayout {
+                            padding: Spacing.sm;
                             spacing: Spacing.xs;
 
-                            for device[idx] in audio-devices: DeviceItem {
-                                name: device.name;
-                                icon: Icons.mic;
-                                is-selected: device.id == selected-audio-id;
-                                subtitle: device.is-default ? @tr("Default") : "";
-                                clicked => { root.audio-selected(device.id); }
-                            }
-
-                            if audio-devices.length == 0: Text {
-                                text: @tr("No microphones found");
+                            if root.linked-audio && picker-type != "screen": Text {
+                                text: @tr("Microphone and output change together. The check mark shows the active device.");
                                 font-size: Typography.sm;
                                 color: Colors.text-secondary;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        // Audio output devices (speakers/headphones)
-                        if picker-type == "audio_output": VerticalLayout {
-                            spacing: Spacing.xs;
-
-                            for device[idx] in audio-output-devices: DeviceItem {
-                                name: device.name;
-                                icon: Icons.volume-2;
-                                is-selected: device.id == selected-audio-output-id;
-                                subtitle: device.is-default ? @tr("Default") : "";
-                                clicked => { root.audio-output-selected(device.id); }
+                                wrap: word-wrap;
                             }
 
-                            if audio-output-devices.length == 0: Text {
-                                text: @tr("No speakers found");
-                                font-size: Typography.sm;
-                                color: Colors.text-secondary;
-                                horizontal-alignment: center;
-                            }
-                        }
+                            // Audio input devices (microphones)
+                            if picker-type == "audio": VerticalLayout {
+                                spacing: Spacing.xs;
 
-                        // Screen sources
-                        if picker-type == "screen": VerticalLayout {
-                            spacing: Spacing.xs;
+                                for device[idx] in audio-devices: DeviceItem {
+                                    name: device.name;
+                                    icon: Icons.mic;
+                                    is-selected: device.id == selected-audio-id;
+                                    subtitle: device.is-default ? @tr("Default") : "";
+                                    clicked => { root.audio-selected(device.id); }
+                                }
 
-                            // Check if this is portal mode (single source with id "0")
-                            if screen-monitors.length == 1 && screen-monitors[0].id == "0" && screen-windows.length == 0: VerticalLayout {
-                                spacing: Spacing.md;
-
-                                Text {
-                                    text: @tr("Click below to open the system screen picker");
+                                if audio-devices.length == 0: Text {
+                                    text: @tr("No microphones found");
                                     font-size: Typography.sm;
                                     color: Colors.text-secondary;
                                     horizontal-alignment: center;
-                                    wrap: word-wrap;
-                                }
-
-                                DeviceItem {
-                                    name: @tr("Share screen");
-                                    icon: Icons.monitor;
-                                    subtitle: @tr("Opens system dialog to select screen or window");
-                                    clicked => { root.screen-selected("0"); }
                                 }
                             }
 
-                            // Normal mode: show monitors and windows separately
-                            if screen-monitors.length != 1 || screen-monitors[0].id != "0" || screen-windows.length != 0: VerticalLayout {
+                            // Audio output devices (speakers/headphones)
+                            if picker-type == "audio_output": VerticalLayout {
                                 spacing: Spacing.xs;
 
-                                // Section: Monitors
-                                if screen-monitors.length > 0: Text {
-                                    text: @tr("Screens");
-                                    font-size: Typography.xs;
-                                    font-weight: Typography.semibold;
+                                for device[idx] in audio-output-devices: DeviceItem {
+                                    name: device.name;
+                                    icon: Icons.volume-2;
+                                    is-selected: device.id == selected-audio-output-id;
+                                    subtitle: device.is-default ? @tr("Default") : "";
+                                    clicked => { root.audio-output-selected(device.id); }
+                                }
+
+                                if audio-output-devices.length == 0: Text {
+                                    text: @tr("No speakers found");
+                                    font-size: Typography.sm;
                                     color: Colors.text-secondary;
-                                }
-
-                                for source[idx] in screen-monitors: DeviceItem {
-                                    name: source.name;
-                                    icon: Icons.monitor;
-                                    is-selected: source.id == selected-screen-id;
-                                    subtitle: source.width > 0
-                                        ? (source.is-primary ? @tr("{}x{} (Primary)", source.width, source.height) : source.width + "x" + source.height)
-                                        : (source.is-primary ? @tr("Primary") : "");
-                                    clicked => { root.screen-selected(source.id); }
-                                }
-
-                                // Section: Windows
-                                if screen-windows.length > 0: Text {
-                                    text: @tr("Windows");
-                                    font-size: Typography.xs;
-                                    font-weight: Typography.semibold;
-                                    color: Colors.text-secondary;
-                                }
-
-                                for source[idx] in screen-windows: DeviceItem {
-                                    name: source.name;
-                                    icon: Icons.monitor;
-                                    is-selected: source.id == selected-screen-id;
-                                    subtitle: source.width > 0 ? (source.width + "x" + source.height) : "";
-                                    clicked => { root.screen-selected(source.id); }
+                                    horizontal-alignment: center;
                                 }
                             }
 
-                            if screen-monitors.length == 0 && screen-windows.length == 0: Text {
-                                text: @tr("No screens or windows found");
-                                font-size: Typography.sm;
-                                color: Colors.text-secondary;
-                                horizontal-alignment: center;
+                            // Screen sources
+                            if picker-type == "screen": VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                // Check if this is portal mode (single source with id "0")
+                                if screen-monitors.length == 1 && screen-monitors[0].id == "0" && screen-windows.length == 0: VerticalLayout {
+                                    spacing: Spacing.md;
+
+                                    Text {
+                                        text: @tr("Click below to open the system screen picker");
+                                        font-size: Typography.sm;
+                                        color: Colors.text-muted;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                    }
+
+                                    DeviceItem {
+                                        name: @tr("Share screen");
+                                        icon: Icons.monitor;
+                                        subtitle: @tr("Opens system dialog to select screen or window");
+                                        clicked => { root.screen-selected("0"); }
+                                    }
+                                }
+
+                                // Normal mode: show monitors and windows separately
+                                if screen-monitors.length != 1 || screen-monitors[0].id != "0" || screen-windows.length != 0: VerticalLayout {
+                                    spacing: Spacing.xs;
+
+                                    // Section: Monitors
+                                    if screen-monitors.length > 0: Text {
+                                        text: @tr("Screens").to-uppercase();
+                                        font-size: 11px * Appearance.text-scale;
+                                        letter-spacing: self.font-size * 0.06;
+                                        font-weight: Typography.semibold;
+                                        color: Colors.text-muted;
+                                    }
+
+                                    for source[idx] in screen-monitors: DeviceItem {
+                                        name: source.name;
+                                        icon: Icons.monitor;
+                                        is-selected: source.id == selected-screen-id;
+                                        subtitle: source.width > 0
+                                            ? (source.is-primary ? @tr("{}x{} (Primary)", source.width, source.height) : source.width + "x" + source.height)
+                                            : (source.is-primary ? @tr("Primary") : "");
+                                        clicked => { root.screen-selected(source.id); }
+                                    }
+
+                                    // Section: Windows
+                                    if screen-windows.length > 0: Text {
+                                        text: @tr("Windows").to-uppercase();
+                                        font-size: 11px * Appearance.text-scale;
+                                        letter-spacing: self.font-size * 0.06;
+                                        font-weight: Typography.semibold;
+                                        color: Colors.text-muted;
+                                    }
+
+                                    for source[idx] in screen-windows: DeviceItem {
+                                        name: source.name;
+                                        icon: Icons.monitor;
+                                        is-selected: source.id == selected-screen-id;
+                                        subtitle: source.width > 0 ? (source.width + "x" + source.height) : "";
+                                        clicked => { root.screen-selected(source.id); }
+                                    }
+                                }
+
+                                if screen-monitors.length == 0 && screen-windows.length == 0: Text {
+                                    text: @tr("No screens or windows found");
+                                    font-size: Typography.sm;
+                                    color: Colors.text-secondary;
+                                    horizontal-alignment: center;
+                                }
                             }
                         }
                     }

@@ -527,23 +527,32 @@ export component ChatLayout inherits Rectangle {
         if !root.hide-header && root.conversation-kind == ConversationKind.channel
             && root.header-can-call && root.active-channel-call-id != "": Rectangle {
             width: 100%;
-            height: 48px;
-            background: Colors.surface-section;
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                Text {
-                    // A live call has at least its starter, so a 0 means the
-                    // count has not arrived, not an empty call.
-                    text: root.active-channel-call-participants > 0
-                        ? @tr("Call in progress · {n} participant" | "Call in progress · {n} participants" % root.active-channel-call-participants)
-                        : @tr("Call in progress");
-                    color: Colors.text-primary;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
+            height: 48px + 2 * Spacing.panel-gutter;
+
+            Rectangle {
+                x: Spacing.panel-gutter;
+                y: Spacing.panel-gutter;
+                width: parent.width - 2 * Spacing.panel-gutter;
+                height: parent.height - 2 * Spacing.panel-gutter;
+                border-radius: Spacing.radius-panel;
+                background: Colors.surface-card;
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.sm;
+                    Text {
+                        // A live call has at least its starter, so a 0 means the
+                        // count has not arrived, not an empty call.
+                        text: root.active-channel-call-participants > 0
+                            ? @tr("Call in progress · {n} participant" | "Call in progress · {n} participants" % root.active-channel-call-participants)
+                            : @tr("Call in progress");
+                        color: Colors.text-primary;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button { text: @tr("call action" => "Join"); border-radius: Spacing.radius-control; clicked => { root.join-channel-call(); } }
                 }
-                Button { text: @tr("call action" => "Join"); variant: "secondary"; clicked => { root.join-channel-call(); } }
             }
         }
 
