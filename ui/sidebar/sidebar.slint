@@ -18,7 +18,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
 import { ChatRow, ChatRowData } from "chat_list.slint";
-import { CustomSectionHeader, CustomSectionData, SidebarRowData } from "custom_section_list.slint";
+import { SectionHeader, CustomSectionData, SidebarRowData } from "section_card.slint";
 import { EmptyState } from "../components/empty_state.slint";
 import { ChatListSkeleton } from "../components/skeleton.slint";
 import { SidebarPane } from "../app_sidebar_pane.slint";
@@ -887,7 +887,7 @@ export component Sidebar inherits Rectangle {
                         }
                     }
                 }
-                if entry.kind == "section-header" && !root.desktop-rail: CustomSectionHeader {
+                if entry.kind == "section-header" && !root.desktop-rail: SectionHeader {
                     keyboard-highlight: parent.roving-highlight;
                     section-id: entry.section.section-id;
                     name: entry.section.name;

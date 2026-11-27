@@ -81,15 +81,16 @@ export component PrivateGroupListItem inherits Rectangle {
     // a flat mobile list where one row kind is 44px and its neighbours are 72px
     // reads as three lists spliced together.
     in property <bool> mobile-mode: false;
-    property <length> name-size: root.mobile-mode ? Typography.base : Typography.sm;
-    property <length> preview-size: root.mobile-mode ? Typography.sm : Typography.xs;
+    in property <bool> card-mode: false;
+    property <length> name-size: root.card-mode ? 13px * Appearance.text-scale : root.mobile-mode ? Typography.base : Typography.sm;
+    property <length> preview-size: root.card-mode ? Typography.xs : root.mobile-mode ? Typography.sm : Typography.xs;
     property <length> badge-size: root.mobile-mode ? 24px : 20px;
 
     // Collapsed rows are 48px so the 44px slot has breathing room above and
     // below. Expanded takes the shared row height at both densities — see the
     // DM row for why one number, not one per row kind.
     height: root.collapsed ? 48px : (root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop);
-    border-radius: Spacing.radius-md;
+    border-radius: root.card-mode ? Spacing.radius-control : Spacing.radius-md;
     clip: true;
 
     // Use purple accent for private groups
@@ -117,13 +118,13 @@ export component PrivateGroupListItem inherits Rectangle {
     // Collapsed, the state fill belongs to the slot below, not to a
     // full-width plate across the rail.
     background: root.collapsed ? transparent
-              : root.selected ? Colors.row-selected
+              : root.selected ? (root.card-mode ? Colors.primary.with-alpha(0.16) : Colors.row-selected)
               : root.press-active ? Colors.surface-control-hover
               : (!root.mobile-mode && touch.has-hover) ? Colors.row-hover
               : transparent;
 
     Rectangle {
-        opacity: root.selected && !root.collapsed ? 1 : 0;
+        opacity: root.selected && !root.collapsed && !root.card-mode ? 1 : 0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
         x: 0px;
         width: 2px;
@@ -145,7 +146,7 @@ export component PrivateGroupListItem inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Avatar {
-                size: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
+                size: root.card-mode ? 34px : root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
                 source: root.avatar-source;
                 name: root.name;
                 anonymous: true;
@@ -168,7 +169,7 @@ export component PrivateGroupListItem inherits Rectangle {
                     wrap: no-wrap;
                     color: Colors.text-primary;
                     font-size: root.name-size;
-                    font-weight: root.unread-count > 0 ? 600 : 500;
+                    font-weight: root.card-mode || root.unread-count > 0 ? 600 : 500;
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
