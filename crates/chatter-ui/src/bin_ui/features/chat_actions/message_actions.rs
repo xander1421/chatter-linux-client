@@ -136,10 +136,9 @@ pub fn wire_quote_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Gets sender name and preview text directly from the UI message model,
 /// which works for all message types (channels, DMs, anon DMs, anon groups).
 pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-
-    window.global::<crate::ChatPane>().on_reply_clicked(
+    let reply_handler = |in_thread| {
+        let weak_window = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
         move |sender_id: SharedString, timestamp_ns: SharedString| {
             let sender_id_str = sender_id.to_string();
             let timestamp_str = timestamp_ns.to_string();
@@ -153,53 +152,49 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             };
 
-            // Get reply info directly from the UI message model (works for all message types)
-            let thread_rows = w.global::<crate::ChatPane>().get_thread_replies();
-            let in_thread = w.global::<crate::ChatPane>().get_thread_panel_visible()
-                && thread_rows.iter().any(|row| row.sender_id.as_str() == sender_id_str
-                    && row.timestamp_ns.as_str() == timestamp_str);
-            let messages = if in_thread { thread_rows } else {
-                w.global::<crate::ChatPane>().get_messages()
+            let pane = w.global::<crate::ChatPane>();
+            let messages = if in_thread {
+                pane.get_thread_replies()
+            } else {
+                pane.get_messages()
             };
             let mut sender_name = String::new();
             let mut reply_preview = String::new();
             let mut reply_thumbnail = slint::Image::default();
             let mut reply_has_thumbnail = false;
 
-            for i in 0..messages.row_count() {
-                if let Some(m) = messages.row_data(i) {
-                    if m.sender_id.as_str() == sender_id_str
-                        && m.timestamp_ns.as_str() == timestamp_str
-                    {
-                        sender_name = m.sender_name.to_string();
+            let row = messages
+                .iter()
+                .find(|row| row.sender_id == sender_id && row.timestamp_ns == timestamp_ns);
+            if in_thread && row.is_none() {
+                return;
+            }
+            if let Some(m) = row {
+                sender_name = m.sender_name.to_string();
 
-                        let attachments = m.attachments;
-                        let mut preview_attachments = Vec::new();
-                        if m.has_attachments {
-                            for j in 0..attachments.row_count() {
-                                if let Some(att) = attachments.row_data(j) {
-                                    if att.is_image && !reply_has_thumbnail && att.has_thumbnail {
-                                        reply_thumbnail = att.thumbnail.clone();
-                                        reply_has_thumbnail = true;
-                                    }
-                                    preview_attachments.push(
-                                        chatter_core::client::preview::ActionPreviewAttachment {
-                                            is_image: att.is_image,
-                                            category: att.category.to_string(),
-                                            filename: att.filename.to_string(),
-                                        },
-                                    );
-                                }
+                let attachments = m.attachments;
+                let mut preview_attachments = Vec::new();
+                if m.has_attachments {
+                    for j in 0..attachments.row_count() {
+                        if let Some(att) = attachments.row_data(j) {
+                            if att.is_image && !reply_has_thumbnail && att.has_thumbnail {
+                                reply_thumbnail = att.thumbnail.clone();
+                                reply_has_thumbnail = true;
                             }
+                            preview_attachments.push(
+                                chatter_core::client::preview::ActionPreviewAttachment {
+                                    is_image: att.is_image,
+                                    category: att.category.to_string(),
+                                    filename: att.filename.to_string(),
+                                },
+                            );
                         }
-                        reply_preview = chatter_core::client::preview::message_action_preview(
-                            m.content.as_str(),
-                            &preview_attachments,
-                        );
-
-                        break;
                     }
                 }
+                reply_preview = chatter_core::client::preview::message_action_preview(
+                    m.content.as_str(),
+                    &preview_attachments,
+                );
             }
 
             if sender_name.is_empty() {
@@ -218,18 +213,24 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             if in_thread {
                 crate::bin_ui::features::thread::show_thread_reply_image(
-                    &w, &ui_ctx, reply, reply_has_thumbnail.then_some(reply_thumbnail),
+                    &w,
+                    &ui_ctx,
+                    reply,
+                    reply_has_thumbnail.then_some(reply_thumbnail),
                 );
             } else {
                 crate::bin_ui::features::chat::send_message::show_reply_image(
-                &w,
-                reply,
-                reply_has_thumbnail.then_some(reply_thumbnail),
-            );
+                    &w,
+                    reply,
+                    reply_has_thumbnail.then_some(reply_thumbnail),
+                );
             }
             tracing::debug!(has_thumbnail = %reply_has_thumbnail, "Reply mode activated");
-        },
-    );
+        }
+    };
+    let pane = window.global::<crate::ChatPane>();
+    pane.on_reply_clicked(reply_handler(false));
+    pane.on_thread_reply_clicked(reply_handler(true));
 }
 
 /// Wire react click callback.

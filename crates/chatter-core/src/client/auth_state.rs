@@ -280,6 +280,9 @@ impl ChatterClient {
     /// Select a conversation through the client so attachment trays and thread
     /// selection move together with the active conversation.
     pub fn select_conversation(&self, conversation: crate::state::ActiveConversation) {
+        if let Some(thread) = self.active_thread() {
+            self.set_thread_draft_reply(&thread.root_message_id, None);
+        }
         self.services
             .chat_state
             .set_active_conversation(conversation);

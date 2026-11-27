@@ -851,6 +851,32 @@ fn channel_settings_icon_picker_is_wired() {
     );
 }
 
+#[test]
+fn thread_reply_actions_focus_and_send_through_the_thread_composer() {
+    let panel = include_str!("../../../ui/app_thread_panel.slint");
+    let menu = include_str!("../../../ui/app_top_overlays.slint");
+    let composer = include_str!("../../../ui/chat/thread_panel.slint");
+    let actions = include_str!("../src/bin_ui/features/chat_actions/message_actions.rs");
+    let thread = include_str!("../src/bin_ui/features/thread.rs");
+    let core = include_str!("../../chatter-core/src/client/composer/mod.rs");
+
+    assert!(panel.contains("ChatPane.thread-reply-clicked(sender-id, timestamp-ns)"));
+    assert!(menu.contains(
+        "if root.context-menu-from-thread && !ChatPane.thread-pinned-mode {
+                ChatPane.thread-reply-clicked"
+    ));
+    assert!(actions.contains("pane.on_reply_clicked(reply_handler(false))"));
+    assert!(actions.contains("pane.on_thread_reply_clicked(reply_handler(true))"));
+    assert!(composer.contains("changed reply-focus-serial => { composer.focus-reply-input(); }"));
+    assert!(panel.contains("reply-focus-serial: ChatPane.thread-reply-focus-serial"));
+    assert!(panel.contains("return ChatPane.send-thread-reply(text)"));
+    assert!(thread.contains("begin_thread_composer_send(root, text)"));
+    assert!(thread.contains("send_thread_composer_message(&send, root)"));
+    assert!(core.contains("let reply = self.thread_draft_reply(&root);"));
+    assert!(core.contains("let quote = thread_quote_intent(send.reply.as_ref())?;"));
+    assert!(core.contains("Some(&root), vec![], false, if index == 0 { quote.as_ref() }"));
+}
+
 // ============================================================================
 // THREAD REPLY (RESOLVED): you can now START a thread from any message.
 //

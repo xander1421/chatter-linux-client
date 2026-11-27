@@ -113,6 +113,8 @@ export component ThreadPanel inherits Rectangle {
     in-out property <bool> is-editing: false;
     in-out property <string> edit-message-id: "";
     in property <string> reply-to-sender-name: "";
+    in property <int> reply-focus-serial: 0;
+    changed reply-focus-serial => { composer.focus-reply-input(); }
     in property <string> reply-preview: "";
     in property <bool> reply-has-thumbnail: false;
     in property <image> reply-thumbnail;

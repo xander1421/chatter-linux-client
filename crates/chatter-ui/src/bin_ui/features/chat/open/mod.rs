@@ -116,6 +116,7 @@ pub(crate) fn close_open_conversation(w: &MainWindow, ui_ctx: &Arc<ChatterClient
             .set_thread_root_message_id("".into());
         w.global::<crate::ChatPane>()
             .set_thread_composer_text("".into());
+        crate::bin_ui::features::thread::clear_thread_reply(w);
         w.global::<crate::ChatPane>().set_thread_panel_visible(false);
         w.global::<crate::ChatPane>().set_thread_pinned_mode(false);
         w.global::<crate::ChatPane>()

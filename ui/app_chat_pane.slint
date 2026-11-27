@@ -316,8 +316,6 @@ export global ChatPane {
     in-out property <bool> thread-composer-stash-held: false;
     in property <[PendingAttachmentData]> thread-pending-attachments: [];
     in-out property <bool> thread-composer-is-replying: false;
-    in-out property <string> thread-reply-to-sender: "";
-    in-out property <string> thread-reply-to-timestamp: "";
     in-out property <string> thread-reply-to-sender-name: "";
     in-out property <string> thread-reply-preview: "";
     in-out property <bool> thread-reply-has-thumbnail: false;
@@ -333,6 +331,8 @@ export global ChatPane {
     in-out property <string> thread-emoji-search: "";
     in-out property <int> thread-emoji-skin-tone: 0;
     callback close-thread-clicked();
+    in property <int> thread-reply-focus-serial: 0;
+    callback thread-reply-clicked(string, string);
     callback send-thread-reply(string) -> bool;
     callback thread-attachment-clicked();
     callback thread-remove-attachment(string);

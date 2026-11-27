@@ -7,6 +7,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::{ChatterClient, ComposerReply};
 use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::Message;
+use chatter_core::state::ThreadPanel;
 use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continuation};
 
 use super::chat::recompute_channel_continuations;
@@ -260,27 +261,13 @@ async fn add_thread_file(
     Ok(())
 }
 
-fn thread_composer_reply(w: &MainWindow) -> Option<ComposerReply> {
-    let pane = w.global::<crate::ChatPane>();
-    if !pane.get_thread_composer_is_replying() { return None; }
-    let reply = ComposerReply {
-        sender_id: pane.get_thread_reply_to_sender().to_string(),
-        timestamp: pane.get_thread_reply_to_timestamp().to_string(),
-        sender_name: pane.get_thread_reply_to_sender_name().to_string(),
-        preview: pane.get_thread_reply_preview().to_string(),
-        thumbnail: pane.get_thread_reply_has_thumbnail().then(|| pane.get_thread_reply_thumbnail().to_rgba8())
-            .flatten().map(|pixels| (pixels.as_bytes().to_vec(), pixels.width(), pixels.height())),
-    };
-    (!reply.sender_id.is_empty() && !reply.timestamp.is_empty()).then_some(reply)
-}
-
-pub(crate) fn show_thread_reply(w: &MainWindow, client: &ChatterClient, reply: ComposerReply) {
+fn show_thread_reply(w: &MainWindow, reply: ComposerReply) {
     let thumbnail = reply.thumbnail.as_ref().map(|(bytes, width, height)| {
         slint::Image::from_rgba8(
             slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(bytes, *width, *height),
         )
     });
-    show_thread_reply_image(w, client, reply, thumbnail);
+    render_thread_reply(w, reply, thumbnail);
 }
 
 pub(crate) fn show_thread_reply_image(
@@ -289,12 +276,31 @@ pub(crate) fn show_thread_reply_image(
     reply: ComposerReply,
     thumbnail: Option<slint::Image>,
 ) {
-    if let Some(thread) = client.active_thread() {
-        client.set_thread_draft_reply(&thread.root_message_id, Some(reply.clone()));
-    }
+    let Some(thread) = visible_thread(w, client) else {
+        return;
+    };
+    let mut reply = reply;
+    reply.thumbnail = thumbnail
+        .as_ref()
+        .and_then(slint::Image::to_rgba8)
+        .map(|pixels| (pixels.as_bytes().to_vec(), pixels.width(), pixels.height()));
+    client.set_thread_draft_reply(&thread.root_message_id, Some(reply.clone()));
+    render_thread_reply(w, reply, thumbnail);
     let pane = w.global::<crate::ChatPane>();
-    pane.set_thread_reply_to_sender(reply.sender_id.into());
-    pane.set_thread_reply_to_timestamp(reply.timestamp.into());
+    pane.set_thread_reply_focus_serial(pane.get_thread_reply_focus_serial().wrapping_add(1));
+}
+
+fn visible_thread(w: &MainWindow, client: &ChatterClient) -> Option<ThreadPanel> {
+    let pane = w.global::<crate::ChatPane>();
+    let thread = client.active_thread()?;
+    (pane.get_thread_panel_visible()
+        && !pane.get_thread_pinned_mode()
+        && pane.get_thread_root_message_id() == thread.root_message_id.to_string().as_str())
+    .then_some(thread)
+}
+
+fn render_thread_reply(w: &MainWindow, reply: ComposerReply, thumbnail: Option<slint::Image>) {
+    let pane = w.global::<crate::ChatPane>();
     pane.set_thread_reply_to_sender_name(reply.sender_name.into());
     pane.set_thread_reply_preview(reply.preview.into());
     pane.set_thread_reply_has_thumbnail(thumbnail.is_some());
@@ -302,11 +308,9 @@ pub(crate) fn show_thread_reply_image(
     pane.set_thread_composer_is_replying(true);
 }
 
-fn clear_thread_reply(w: &MainWindow) {
+pub(crate) fn clear_thread_reply(w: &MainWindow) {
     let pane = w.global::<crate::ChatPane>();
     pane.set_thread_composer_is_replying(false);
-    pane.set_thread_reply_to_sender("".into());
-    pane.set_thread_reply_to_timestamp("".into());
     pane.set_thread_reply_to_sender_name("".into());
     pane.set_thread_reply_preview("".into());
     pane.set_thread_reply_has_thumbnail(false);
@@ -428,20 +432,11 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak_window.upgrade() else { return false };
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
-            let Some(thread) = ui_ctx.active_thread() else {
+            let Some(thread) = visible_thread(&w, &ui_ctx) else {
                 return false;
             };
-            let reply = thread_composer_reply(&w);
-            let quote = super::chat::send_message::quote_intent(reply.as_ref());
-            if reply.is_some() && quote.is_none() {
-                w.set_toast_message(
-                    chatter_i18n::tr("The quoted message is unavailable.").into(),
-                );
-                w.set_toast_variant("error".into());
-                w.set_toast_visible(true);
-                return false;
-            }
-            let send = match ui_ctx.begin_thread_composer_send(thread.root_message_id, text, reply) {
+            let root = thread.root_message_id;
+            let send = match ui_ctx.begin_thread_composer_send(root, text) {
                 Ok(send) => send,
                 Err(message) => {
                     w.set_toast_message(message.into());
@@ -452,37 +447,35 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             let text = send.text.clone();
             if send.reply.is_some() {
-                ui_ctx.set_thread_draft_reply(&thread.root_message_id, None);
+                ui_ctx.set_thread_draft_reply(&root, None);
                 clear_thread_reply(&w);
             }
             render_thread_attachments(&w, &[]);
             // The panel cleared its composer on tap: the persisted draft goes
             // now, not after the autosave delay, so a restart cannot resend it.
             // A reply that then fails is given back below.
-            ui_ctx.set_thread_draft(&thread.root_message_id, "");
+            ui_ctx.set_thread_draft(&root, "");
             let session_revision = send.session_revision;
-            let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
+            let owner = HistoryOwner::thread(&ui_ctx, root, false);
             tokio::spawn(async move {
                 if !owner.is_current() {
                     // Not sent, but the draft is already cleared: give it back.
                     ui_ctx.park_failed_thread_composer_reply(
-                        &thread.root_message_id,
+                        &root,
                         &text,
                         send.reply.clone(),
                         session_revision,
                     );
                     for attachment in send.attachments {
                         ui_ctx.add_thread_pending_attachment_for(
-                            thread.root_message_id,
+                            root,
                             ui_ctx.chat_snapshot().attachment_revision,
                             attachment,
                         );
                     }
                     return;
                 }
-                let sent = ui_ctx.send_thread_composer_message(
-                    &send, thread.root_message_id, quote,
-                ).await;
+                let sent = ui_ctx.send_thread_composer_message(&send, root).await;
                 if let Err(error) = &sent {
                     tracing::error!(%error, "thread reply send failed");
                 }
@@ -491,14 +484,13 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let failed_reply = send.reply.clone();
                     for attachment in send.attachments {
                         ui_ctx.add_thread_pending_attachment_for(
-                            thread.root_message_id,
+                            root,
                             ui_ctx.chat_snapshot().attachment_revision,
                             attachment,
                         );
                     }
                     // The panel cleared its composer on tap. A reply that did not
                     // leave must say so and give the text back — it used to vanish.
-                    let root = thread.root_message_id;
                     let _ = slint::invoke_from_event_loop(move || {
                         if !ui_ctx.composer_session_is_current(session_revision) {
                             return;
@@ -529,7 +521,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
                             }
                             if let Some(reply) = ui_ctx.thread_draft_reply(&root) {
-                                show_thread_reply(&w, &ui_ctx, reply);
+                                show_thread_reply(&w, reply);
                             }
                             chatter_i18n::tr("Couldn't send your reply. Try again.")
                         } else {
@@ -559,8 +551,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 }
                 if let Some(msg) = sent_message {
-                    ui_ctx
-                        .update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
+                    ui_ctx.update_thread_reply_count(root, thread.reply_count + 1);
                     // Show our own reply in the panel immediately — the send path
                     // stores it locally but emits no MessageReceived event, so
                     // without this it only appeared after re-opening the thread.
@@ -569,7 +560,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .session_current_user_id()
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    let root_id = thread.root_message_id;
+                    let root_id = root;
                     let _ = slint::invoke_from_event_loop(move || {
                         if !owner.is_current() {
                             return;
@@ -614,7 +605,7 @@ fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &Mess
     pane.set_thread_composer_text(text.into());
     pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
     if let Some(reply) = ui_ctx.thread_draft_reply(root) {
-        show_thread_reply(w, ui_ctx, reply);
+        show_thread_reply(w, reply);
     }
     w.set_toast_message(
         chatter_i18n::tr("Your earlier reply that didn't send is back in the box.").into(),
@@ -976,7 +967,6 @@ pub fn load_thread_data(
                 .map(|id| id.to_string())
                 .unwrap_or_default();
             let draft = ui_ctx.thread_draft(&root_message_id);
-            let draft_reply = ui_ctx.thread_draft_reply(&root_message_id);
             let ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if !owner.is_current() {
@@ -1004,9 +994,6 @@ pub fn load_thread_data(
                         clear_thread_reply(&w);
                         w.global::<crate::ChatPane>().set_thread_mention_visible(false);
                         w.global::<crate::ChatPane>().set_thread_mention_query("".into());
-                        if let Some(reply) = draft_reply {
-                            show_thread_reply(&w, &ctx, reply);
-                        }
                         render_thread_attachments(&w, &ctx.thread_pending_attachments(&root_message_id));
                         // Nothing typed for this thread: a reply that failed
                         // behind newer text, if any, comes back into the box.

@@ -60,6 +60,7 @@ export component AppThreadPanel inherits Rectangle {
         mention-visible: ChatPane.thread-mention-visible;
         mention-selected-index <=> ChatPane.thread-mention-selected-index;
         is-replying: ChatPane.thread-composer-is-replying;
+        reply-focus-serial: ChatPane.thread-reply-focus-serial;
         is-editing <=> ChatPane.thread-composer-is-editing;
         edit-message-id <=> ChatPane.thread-composer-edit-message-id;
         reply-to-sender-name: ChatPane.thread-reply-to-sender-name;
@@ -91,8 +92,12 @@ export component AppThreadPanel inherits Rectangle {
         message-clicked(id) => { ChatPane.message-clicked(id); }
         menu-open: ChatPane.context-menu-visible || ChatPane.reaction-picker-visible;
         reply-clicked(sender-id, timestamp-ns) => {
-            ChatPane.reply-clicked(sender-id, timestamp-ns);
-            root.reply-focus-serial += 1;
+            if ChatPane.thread-pinned-mode {
+                ChatPane.reply-clicked(sender-id, timestamp-ns);
+                root.reply-focus-serial += 1;
+            } else {
+                ChatPane.thread-reply-clicked(sender-id, timestamp-ns);
+            }
         }
         quote-clicked(id) => { ChatPane.quote-clicked(id); }
         edit-last-requested => { ChatPane.thread-edit-last-requested(); }

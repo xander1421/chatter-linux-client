@@ -21,6 +21,21 @@ use crate::domain::anon_group::AnonGroupId;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::state::{ActiveConversation, PendingAttachment};
 
+fn thread_quote_intent(
+    reply: Option<&ComposerReply>,
+) -> Result<Option<crate::services::gateway::QuoteIntent>, String> {
+    reply
+        .map(|reply| {
+            let unavailable = || chatter_i18n::tr("The quoted message is unavailable.").to_string();
+            Ok(crate::services::gateway::QuoteIntent {
+                target_author_id: reply.sender_id.parse().map_err(|_| unavailable())?,
+                target_timestamp: reply.timestamp.parse().map_err(|_| unavailable())?,
+                target_preview: None,
+            })
+        })
+        .transpose()
+}
+
 /// The message being replied to, as the composer's reply bar holds it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ComposerReply {
@@ -513,12 +528,11 @@ impl ChatterClient {
         Ok(send)
     }
 
-    /// Freeze a thread composer without touching the main conversation's tray.
+    /// Freeze the active thread's reply target, text and attachments.
     pub fn begin_thread_composer_send(
         &self,
         root: MessageId,
         text: String,
-        reply: Option<ComposerReply>,
     ) -> Result<ComposerSend, String> {
         let thread = self.active_thread().filter(|thread| thread.root_message_id == root)
             .ok_or_else(|| "The thread changed. Nothing was sent.".to_string())?;
@@ -544,6 +558,8 @@ impl ChatterClient {
         if !self.composer_session_is_current(session_revision) {
             return Err("The account session changed. Nothing was sent.".into());
         }
+        let reply = self.thread_draft_reply(&root);
+        thread_quote_intent(reply.as_ref())?;
         let attachments = self.chat_state()
             .take_thread_attachments_for(root, chat.attachment_revision)
             .ok_or_else(|| "The thread changed. Nothing was sent.".to_string())?;
@@ -594,8 +610,8 @@ impl ChatterClient {
         &self,
         send: &ComposerSend,
         root: MessageId,
-        quote: Option<crate::services::gateway::QuoteIntent>,
     ) -> Result<crate::domain::message::Message, String> {
+        let quote = thread_quote_intent(send.reply.as_ref())?;
         if !self.composer_session_is_current(send.session_revision) {
             return Err("The account session changed. Nothing was sent.".into());
         }

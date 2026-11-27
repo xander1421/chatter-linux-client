@@ -8,6 +8,16 @@ impl ChatterClient {
     }
 
     pub fn open_thread(&self, channel: ChannelId, root: MessageId) {
+        let previous = self.active_thread();
+        if previous
+            .as_ref()
+            .is_none_or(|thread| thread.root_message_id != root)
+        {
+            if let Some(thread) = previous {
+                self.set_thread_draft_reply(&thread.root_message_id, None);
+            }
+            self.set_thread_draft_reply(&root, None);
+        }
         self.services.chat_state.open_thread(channel, root);
         // Opening the thread reads its replies, and with them its Activity row.
         if let Some(owner) = self.auth_snapshot().current_user_id {
@@ -18,6 +28,7 @@ impl ChatterClient {
     }
 
     pub fn close_thread(&self, root: MessageId) {
+        self.set_thread_draft_reply(&root, None);
         self.services.chat_state.close_thread(root);
     }
 

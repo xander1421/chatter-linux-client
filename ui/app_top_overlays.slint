@@ -342,8 +342,12 @@ export component AppTopOverlays inherits Rectangle {
         }
         reply-clicked(sender-id, timestamp-ns) => {
             ChatPane.context-menu-visible = false;
-            ChatPane.reply-message(sender-id, timestamp-ns);
-            root.reply-focus-serial += 1;
+            if root.context-menu-from-thread && !ChatPane.thread-pinned-mode {
+                ChatPane.thread-reply-clicked(sender-id, timestamp-ns);
+            } else {
+                ChatPane.reply-message(sender-id, timestamp-ns);
+                root.reply-focus-serial += 1;
+            }
         }
         edit-clicked(sender-id, timestamp-ns) => {
             ChatPane.context-menu-visible = false;
