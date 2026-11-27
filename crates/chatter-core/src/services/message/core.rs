@@ -26,6 +26,9 @@ pub(crate) const NO_TOR_ROUTE: &str = "No Tor route";
 pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
 pub(crate) const WAITING_FOR_ANONYMOUS_CREDENTIALS: &str = "Waiting for anonymous credentials";
+/// A private-group post held until this device learns the group's
+/// disappearing timer (`anon_group/messaging.rs` `post_hold_reason`).
+pub(crate) const WAITING_FOR_GROUP_SETTINGS: &str = "Waiting for group settings";
 pub(crate) const VERIFYING_KEY: &str = "Verifying key";
 /// A queued DM whose recipient rejected our UAK: it waits, sealed, for the
 /// recipient's next message to bring their new profile key.
@@ -253,13 +256,13 @@ impl MessageService {
             wrap.encode_to_vec()
         };
 
-        let private = require_encryption;
-        let previous_distribution = if private {
+        // Only a private channel encrypts (`channel_send_requires_encryption`).
+        let previous_distribution = if require_encryption {
+            if let Some(state) = &group_state {
+                self.rotate_if_holders_left(channel_id, state).await?;
+            }
             Some(self.create_sender_key_for_channel(channel_id).await?)
         } else {
-            if require_encryption {
-                self.distribute_sender_key_to_new_members(channel_id).await?;
-            }
             None
         };
 
@@ -273,15 +276,9 @@ impl MessageService {
             )
             .await?;
 
-        // If a new sender key was created, distribute SKDM to channel members
-        let private_distribution = if private {
-            skdm_opt.or(previous_distribution)
-        } else {
-            if let Some(skdm) = skdm_opt {
-                self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
-            }
-            None
-        };
+        // A rotated sender key rides with the anonymous post (group_send.rs);
+        // plaintext preparation never returns one.
+        let private_distribution = skdm_opt.or(previous_distribution);
 
         // Call server
         tracing::debug!(

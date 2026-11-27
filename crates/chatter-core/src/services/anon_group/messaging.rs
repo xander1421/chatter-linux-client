@@ -11,6 +11,9 @@ use crate::util::time::TimestampNanos;
 
 use super::{AnonGroupError, AnonGroupService};
 
+/// [`AnonGroupService::post_hold_reason`] while the group timer is unknown.
+const TIMER_UNKNOWN: &str = "group timer not yet known";
+
 impl AnonGroupService {
     /// Stamp a post with the group's disappearing timer (every member adopts
     /// it from there, so a lost timer update heals on the next post) and arm
@@ -38,6 +41,46 @@ impl AnonGroupService {
             .insert_armed(&id, timer.seconds)?;
         }
         Ok(())
+    }
+
+    /// Why a post from this device must wait, if it must: the owner has not
+    /// yet admitted our join, or we have not yet learned the group's timer
+    /// (a post stamped without it would never expire on any device).
+    fn post_hold_reason(
+        &self,
+        group_id: &AnonGroupId,
+        me: &crate::domain::UserId,
+    ) -> Result<Option<&'static str>, AnonGroupError> {
+        use crate::services::disappearing::{SecretChat, secret_chat_timer_known};
+        if self.anon_group_repo.awaiting_join_roster(group_id, me)? {
+            return Ok(Some("owner roster has not admitted local join"));
+        }
+        if !secret_chat_timer_known(&self.settings_repo, SecretChat::Group(*group_id)) {
+            return Ok(Some(TIMER_UNKNOWN));
+        }
+        Ok(None)
+    }
+
+    /// An incoming message may have taught us the group's timer: release the
+    /// posts that waited for it now, not on the next periodic pass.
+    pub(crate) async fn release_held_if_timer_learned(
+        &self,
+        group_id: &AnonGroupId,
+        timer_was_known: bool,
+    ) -> Result<(), AnonGroupError> {
+        use crate::services::disappearing::{SecretChat, secret_chat_timer_known};
+        if timer_was_known
+            || !secret_chat_timer_known(&self.settings_repo, SecretChat::Group(*group_id))
+        {
+            return Ok(());
+        }
+        self.retry_held_posts_for_group(group_id).await
+    }
+
+    /// Whether this device knows the group's disappearing timer.
+    pub(crate) fn group_timer_known(&self, group_id: &AnonGroupId) -> bool {
+        use crate::services::disappearing::{SecretChat, secret_chat_timer_known};
+        secret_chat_timer_known(&self.settings_repo, SecretChat::Group(*group_id))
     }
 
     fn retain_group_row(
@@ -381,20 +424,26 @@ impl AnonGroupService {
             inner_content.content.as_ref(),
             Some(content_v1::content::Content::DataMessage(_))
         );
-        if is_post
-            && self
-                .anon_group_repo
-                .awaiting_join_roster(group_id, &current_user)?
-        {
-            if let Some(message_id) = super::send_ledger::hold(
-                &self.message_service.database,
-                &ledger_key,
-                &group_id.to_string(),
-                &inner_content,
-            )? {
-                tracing::info!(%message_id, group_id = %group_id, "group post held awaiting owner roster");
+        if is_post && !releasing_held {
+            if let Some(reason) = self.post_hold_reason(group_id, &current_user)? {
+                if let Some(message_id) = super::send_ledger::hold(
+                    &self.message_service.database,
+                    &ledger_key,
+                    &group_id.to_string(),
+                    &inner_content,
+                )? {
+                    tracing::info!(%message_id, group_id = %group_id, reason, "group post held");
+                    if reason == TIMER_UNKNOWN {
+                        let id = message_id.parse().map_err(|_| {
+                            AnonGroupError::InvalidData("Invalid held group message ID".into())
+                        })?;
+                        self.message_service
+                            .finish_retry_row(&id, "sending", Some(crate::services::message::core::WAITING_FOR_GROUP_SETTINGS))
+                            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
+                    }
+                }
+                return Err(AnonGroupError::DeliveryUnconfirmed);
             }
-            return Err(AnonGroupError::DeliveryUnconfirmed);
         }
 
         let original_sent_at = if is_post && inner_content.timestamp != 0 {
@@ -850,13 +899,8 @@ impl AnonGroupService {
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
         let reason = if group.is_blocked() {
             Some("group blocked")
-        } else if self
-            .anon_group_repo
-            .awaiting_join_roster(group_id, &current)?
-        {
-            Some("owner roster has not admitted local join")
         } else {
-            None
+            self.post_hold_reason(group_id, &current)?
         };
         if let Some(reason) = reason {
             for (id, _) in posts {
@@ -864,7 +908,18 @@ impl AnonGroupService {
             }
             return Ok(());
         }
-        for (id, content) in posts {
+        for (id, mut content) in posts {
+            // Composed before the timer was known: stamp and arm it now, so
+            // every member expires it (the ledger key ignores the stamp).
+            let row = AnonGroupMessageId::from_string(id.clone());
+            let sent_at = content.timestamp;
+            self.apply_group_timer(group_id, &mut content, &row, sent_at)?;
+            let message_id: crate::domain::ids::MessageId = id.parse().map_err(|_| {
+                AnonGroupError::InvalidData("Invalid held group message ID".into())
+            })?;
+            self.message_service
+                .finish_retry_row(&message_id, "sending", None)
+                .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
             match self.send_message_impl(group_id, content, true).await {
                 Ok(()) => {
                     let message_id = id.parse().map_err(|_| {

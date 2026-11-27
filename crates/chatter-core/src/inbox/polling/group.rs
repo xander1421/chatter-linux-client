@@ -20,6 +20,36 @@ use crate::inbox::events::InboxEvent;
 use crate::inbox::handlers::DomainEvent;
 use crate::storage::MessageRepository;
 
+/// A group-mailbox post that opened to a desynced pairwise session.
+///
+/// Policy: no DecryptionErrorMessage report goes back to the poster, the same
+/// rule as a private channel's post in the device inbox
+/// (`polling/device/sealed.rs`). The report is a sealed deposit into the
+/// poster's own device inbox (`server_dm/recovery.rs`) right after this fetch,
+/// so its destination and timing would name the anonymous poster to the
+/// server. Sender anonymity wins over availability: this path does not heal
+/// the session, the ciphertext is lost either way, and the group gets a
+/// delivery-issue marker before the envelope is drained.
+pub(crate) fn group_desync_decision(
+    group_id: ChannelId,
+    sender_id: crate::domain::UserId,
+    envelope_ts_ns: u64,
+    message_repo: &Arc<MessageRepository>,
+    domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
+) -> AckDecision {
+    ack_policy::record_marker_then_ack(
+        message_repo,
+        domain_tx,
+        MarkerTarget {
+            conversation_id: group_id,
+            conversation_type: ConversationType::Channel,
+            peer_id: Some(sender_id),
+            envelope_ts_ns,
+        },
+        ack_policy::FailureMarker::DeliveryIssue,
+    )
+}
+
 /// Decide what to do with a group-mailbox envelope whose decrypt failed.
 ///
 /// The marker lands in the GROUP's conversation, not a DM: that is where the
@@ -357,67 +387,39 @@ async fn process_sealed_sender_group_message(
                 "Group mailbox message stored (no UI event)"
             );
         }
-        // The pairwise session with this member is desynced. Same self-heal
-        // as the device inbox (polling/device.rs): the InboxEventProcessor
-        // ships the DecryptionErrorMessage back to the sending device.
-        SealedSenderResult::DecryptionErrorNeedsReport {
-            sender_id,
-            sender_device_id,
-            dem_serialized,
-            ..
-        } => {
+        // The pairwise session with this member is desynced. No repair report:
+        // see `group_desync_decision`.
+        SealedSenderResult::DecryptionErrorNeedsReport { sender_id, .. } => {
             tracing::warn!(
                 group_id = %group_id,
                 message_id = %message_id,
                 sender_id = %sender_id,
-                sender_device_id,
-                "Session desync on group mailbox path — dispatching DecryptionErrorMessage report to sender"
+                "Session desync on group mailbox path; repair report suppressed"
             );
-            let _ = event_tx.send(InboxEvent::DmDecryptionErrorNeedsReport {
-                peer_id: sender_id,
-                peer_device_id: sender_device_id,
-                dem_serialized,
-            });
-            // The report heals the SESSION; this ciphertext is dead, so it
-            // is the one arm below that is a LOSS rather than a handled
-            // outcome. Mark it in the group, then drain.
-            return ack_policy::record_marker_then_ack(
-                message_repo,
-                domain_tx,
-                MarkerTarget {
-                    conversation_id: group_id,
-                    conversation_type: ConversationType::Channel,
-                    peer_id: Some(sender_id),
-                    envelope_ts_ns,
-                },
-                ack_policy::FailureMarker::DeliveryIssue,
-            );
+            return group_desync_decision(group_id, sender_id, envelope_ts_ns, message_repo, domain_tx);
         }
-        // A member's retry request that arrived here rather than in the
-        // device inbox is answered all the same.
-        SealedSenderResult::ResendRequested {
-            peer_id,
-            peer_device_id,
-            timestamp_ms,
-        } => {
-            let _ = event_tx.send(InboxEvent::GroupResendRequested {
-                peer_id,
-                peer_device_id,
-                timestamp_ms,
-            });
+        // A retry request that arrives through a group mailbox is not
+        // answered: the answer (the resent post, or a NullMessage) is a
+        // deposit into the requester's device inbox right after this fetch,
+        // which links this device to the anonymous post. Honest clients send
+        // no such request here (`group_desync_decision`). The session the
+        // request names is still healed.
+        SealedSenderResult::ResendRequested { peer_id, peer_device_id, .. } => {
+            tracing::info!(group_id = %group_id, %peer_id, peer_device_id,
+                "Retry request via group mailbox not answered");
         }
         SealedSenderResult::SessionHealed {
             peer_id,
             peer_device_id,
             archived,
-            timestamp_ms,
+            ..
         } => {
             tracing::info!(
                 group_id = %group_id,
                 message_id = %message_id,
                 peer_id = %peer_id,
                 archived,
-                "DecryptionErrorMessage processed via group mailbox path"
+                "DecryptionErrorMessage via group mailbox: session healed, no resend"
             );
             if let Some(tx) = domain_tx {
                 let _ = tx.send(DomainEvent::DmSessionHealed {
@@ -426,11 +428,6 @@ async fn process_sealed_sender_group_message(
                     archived,
                 });
             }
-            let _ = event_tx.send(InboxEvent::DmResendRequested {
-                peer_id,
-                peer_device_id,
-                timestamp_ms,
-            });
         }
         // SKDMs ride the device inbox (sealed sender), not the group mailbox;
         // if one lands here the key is still installed by the gateway. There is

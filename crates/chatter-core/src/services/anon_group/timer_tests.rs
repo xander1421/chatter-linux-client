@@ -240,3 +240,58 @@ async fn a_join_ack_tells_the_joiner_the_groups_timer_once() {
     assert!(again.is_empty(), "same version: no second notice, got {again:?}");
     assert_eq!(jsvc.get_messages_asc(&joiner.group_id, None, 50).unwrap().len(), 1);
 }
+
+/// A joiner that has not yet learned the group's timer holds its post, and
+/// stamps and arms it with the timer once it arrives. The ledger identity
+/// ignores the stamp, so release finds the same retained row.
+#[tokio::test]
+async fn a_joiners_post_waits_for_the_timer_and_is_armed_at_release() {
+    use crate::services::disappearing::secret_chat_timer_known;
+    let f = fixture(AnonGroupRole::Member);
+    let svc = f.client.anon_groups();
+    let chat = SecretChat::Group(f.group_id);
+    assert!(!secret_chat_timer_known(&svc.settings_repo, chat));
+
+    let (row, sent_at) = svc.send_text(&f.group_id, "early").await.unwrap();
+    let held = super::send_ledger::held_posts(&svc.message_service.database, &f.group_id.to_string()).unwrap();
+    assert_eq!(held.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), [row.as_str()]);
+    let ephemeral = EphemeralRepository::new(svc.settings_repo.database().clone());
+    let id = row.as_str().parse().unwrap();
+    assert!(ephemeral.get(&id).unwrap().is_none(), "nothing to arm before the timer is known");
+    // The bubble says why it waits.
+    let stored = svc.message_service.message_repo.get(&id).unwrap().unwrap();
+    assert_eq!(
+        crate::services::message::display_delivery_status(&stored.delivery_status, stored.failure_reason.as_deref()),
+        "waiting-group-settings"
+    );
+
+    // Released while the timer is still unknown: it keeps waiting.
+    svc.retry_held_posts_for_group(&f.group_id).await.unwrap();
+    assert_eq!(super::send_ledger::held_posts(&svc.message_service.database, &f.group_id.to_string()).unwrap().len(), 1);
+
+    // Learning the timer releases the held post at once (the inbox
+    // processor calls this after every group message). No server here:
+    // release stamps and arms it, clears the waiting reason, and delivery
+    // then stays pending.
+    let was_known = svc.group_timer_known(&f.group_id);
+    svc.process_incoming_content(&f.group_id, &f.owner, &timer_update_content(timer(30, 2), 1_000))
+        .unwrap();
+    assert!(secret_chat_timer_known(&svc.settings_repo, chat));
+    let _ = svc.release_held_if_timer_learned(&f.group_id, was_known).await;
+    let armed = ephemeral.get(&id).unwrap().expect("armed at release");
+    assert_eq!(armed.ttl.as_secs(), 30);
+    let stored = svc.message_service.message_repo.get(&id).unwrap().unwrap();
+    assert_ne!(stored.failure_reason.as_deref(), Some(crate::services::message::core::WAITING_FOR_GROUP_SETTINGS));
+
+    let me = svc.current_user_id().unwrap().to_string();
+    let (_, unstamped) = &held[0];
+    let mut stamped = unstamped.clone();
+    if let Some(Kind::DataMessage(data)) = stamped.content.as_mut() {
+        stamp_timer(data, timer(30, 2));
+    }
+    assert_eq!(stamped.timestamp, sent_at);
+    assert_eq!(
+        super::send_ledger::key(&me, &f.group_id.to_string(), unstamped),
+        super::send_ledger::key(&me, &f.group_id.to_string(), &stamped),
+    );
+}

@@ -671,6 +671,12 @@ msgstr "{} ha abbandonato il canale"
 msgid "{} is no longer a member"
 msgstr "{} non è più membro"
 
+msgid "Not delivered to {}: no registered device"
+msgstr "Non consegnato a {}: nessun dispositivo registrato"
+
+msgid "has no registered device"
+msgstr "non ha dispositivi registrati"
+
 #: crates/chatter-core/src/domain/message/system.rs:167
 msgid "{} created the channel"
 msgstr "{} ha creato il canale"
@@ -3373,6 +3379,9 @@ msgstr "Password errata. Riprova."
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:161
 msgid "Your session ended. Sign in again before deleting your account."
 msgstr "La sessione è terminata. Accedi di nuovo prima di eliminare l'account."
+
+msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
+msgstr "Impossibile uscire da {} canale/i privato/i, quindi il tuo account non è stato eliminato. Controlla la connessione e riprova."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."

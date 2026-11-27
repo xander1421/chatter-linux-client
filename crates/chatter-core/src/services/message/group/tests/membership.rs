@@ -72,7 +72,6 @@
         }
     }
 
-    #[cfg(feature = "dev-trust-root")]
     mod private_wire_fixture {
         use crate::domain::UserId;
         use chatter_proto::chat_v1 as pb;
@@ -154,7 +153,6 @@
 
     }
 
-    #[cfg(feature = "dev-trust-root")]
     #[tokio::test]
     async fn private_submit_fetches_bundles_anonymously_only_when_needed() {
         use chatter_proto::chat_v1 as pb;
@@ -579,7 +577,7 @@
     /// A device whose registration id is unknown lacks our key, and an
     /// SKDM deposit without one is not recorded as held.
     #[tokio::test]
-    async fn device_without_registration_id_is_never_a_holder() {
+    async fn device_without_registration_id_still_lacks_the_key_but_is_recorded() {
         let t = two_members();
         let alice = t.alice.messages();
         let (channel, bob) = (t.channel_id, t.bob_id.to_string());
@@ -590,13 +588,10 @@
         let mut outcome = reached(&[(1, 101)]);
         outcome.registration_ids.clear();
         alice.record_sender_key_holders(&channel, &bob, &outcome);
-        assert!(
-            alice
-                .signal_service
-                .sender_key_holders(&channel)
-                .unwrap()
-                .is_empty()
-        );
+        let held = alice.signal_service.sender_key_holders(&channel).unwrap();
+        // Recorded for removal checks under 0, which matches no session.
+        assert_eq!(held, [(bob.clone(), 1, 0)].into());
+        assert!(lacks_sender_key(&held, &bob, &[(1, Some(101))], false));
     }
 
     /// Our own device list, as `own_device_ids` would have fetched it.
@@ -704,6 +699,63 @@
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// A device the server reports gone (revoked or unlinked) rotates every
+    /// channel where it holds our current key, whichever send noticed it.
+    #[tokio::test]
+    async fn a_removed_holder_device_rotates_the_channel_key() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        let other = ChannelId::new();
+        store_session(&t.alice, t.bob_id, 2, 202).await;
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(2, 202)]));
+        alice.record_sender_key_holders(&other, &bob, &reached(&[(1, 101)]));
+
+        // Identified (DM) and private-post reconciliation both route here.
+        let mut auth = alice.auth_client();
+        alice.signal_service.reconcile_devices(&mut auth, &bob, &[], &[2], &[]).await.unwrap();
+        assert!(alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
+        assert!(!alice.signal_service.check_and_clear_rotation_needed(&other).unwrap(), "device 2 never held this key");
+
+        // Extra devices only: nothing is fetched from the source.
+        let mut source = crate::services::signal::PreKeySource::Identified(&mut auth);
+        let extra = chatter_proto::chat_v1::MismatchedDevices { extra_devices: vec![1], ..Default::default() };
+        alice.signal_service.reconcile_private_post_devices(&mut source, &bob, &extra).await.unwrap();
+        assert!(alice.signal_service.check_and_clear_rotation_needed(&other).unwrap());
+    }
+
+    /// A holder of our current key that a post no longer addresses rotates
+    /// the key: a device gone, or a device id reused by a new install (new
+    /// registration id). A holder recorded without a registration (0) is
+    /// matched by device.
+    #[tokio::test]
+    async fn a_holder_that_is_no_longer_addressed_rotates_the_key() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(1, 101), (2, 202)]));
+        let me = alice.signal_service.get_our_address().unwrap();
+        let current = |devices: &[(u32, u32)]| -> std::collections::HashSet<(String, u32, u32)> {
+            devices.iter().map(|&(d, r)| (bob.clone(), d, r))
+                .chain([(me.name().to_owned(), u32::from(me.device_id()), 42)])
+                .collect()
+        };
+        let rotates = |devices: &[(u32, u32)]| {
+            let marked = alice.signal_service.rotate_if_holders_gone(&channel, &current(devices)).unwrap();
+            assert_eq!(marked, alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
+            marked
+        };
+        assert!(!rotates(&[(1, 101), (2, 202)]), "every holder addressed");
+        assert!(rotates(&[(1, 101)]), "device 2 is gone");
+        assert!(rotates(&[(1, 101), (2, 909)]), "device 2 is a new install under the reused id");
+
+        let mut unknown = reached(&[(3, 0)]);
+        unknown.registration_ids.clear();
+        alice.record_sender_key_holders(&channel, &bob, &unknown);
+        assert!(!rotates(&[(1, 101), (2, 202), (3, 555)]), "an unknown registration matches by device");
+        assert!(rotates(&[(1, 101), (2, 202)]));
     }
 
     /// A new key has reached nobody: rotation clears every holder. The old

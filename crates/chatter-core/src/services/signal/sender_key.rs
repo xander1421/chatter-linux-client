@@ -311,8 +311,10 @@ impl SignalService {
     // as new. Stored as comma-separated `user.device.registration_id`; an
     // entry in any other shape is not recognized.
 
+    const HOLDERS_PREFIX: &str = "sender_key_delivered:";
+
     fn sender_key_holders_key(channel_id: &ChannelId) -> String {
-        format!("sender_key_delivered:{}", channel_id)
+        format!("{}{channel_id}", Self::HOLDERS_PREFIX)
     }
 
     /// Devices that have received an SKDM for our CURRENT sender key.
@@ -362,6 +364,72 @@ impl SignalService {
             .delete(&Self::sender_key_holders_key(channel_id))
             .map_err(ServiceError::Storage)?;
         Ok(())
+    }
+
+    /// `removed` devices of `user_id` are gone from the server (revoked or
+    /// unlinked) but may still hold our current sender key. Every channel
+    /// where one of them is a holder rotates before its next post, as a
+    /// roster removal does.
+    pub(crate) fn rotate_after_device_removal(
+        &self,
+        user_id: &str,
+        removed: &[u32],
+    ) -> Result<(), ServiceError> {
+        if removed.is_empty() {
+            return Ok(());
+        }
+        let prefix = Self::HOLDERS_PREFIX;
+        let channels: Vec<String> = {
+            let conn = self.settings_repo.database().read_connection().map_err(ServiceError::Storage)?;
+            let mut stmt = conn
+                .prepare("SELECT key FROM settings WHERE key LIKE ?1 || '%'")
+                .map_err(|e| ServiceError::Storage(e.into()))?;
+            let rows = stmt
+                .query_map([prefix], |row| row.get::<_, String>(0))
+                .map_err(|e| ServiceError::Storage(e.into()))?;
+            rows.collect::<Result<_, _>>().map_err(|e| ServiceError::Storage(e.into()))?
+        };
+        for key in channels {
+            let Ok(channel_id) = key[prefix.len()..].parse::<ChannelId>() else { continue };
+            if self
+                .sender_key_holders(&channel_id)?
+                .iter()
+                .any(|(u, d, _)| u == user_id && removed.contains(d))
+            {
+                tracing::info!(%channel_id, user_id, ?removed, "Removed device held our sender key: rotation required");
+                self.mark_channel_for_rotation(&channel_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `current` is every `(user, device, registration id)` a post to the
+    /// channel addresses now (0: registration unknown). A holder of our
+    /// current key outside it was removed or replaced: device ids are reused
+    /// (server `devices.go`), so a relinked device under an old id with a new
+    /// registration is a different install and does not count as the holder.
+    /// Marks the channel for rotation (Signal-Desktop
+    /// `removedFromMemberDevices`). Our own sending device is never a holder.
+    pub(crate) fn rotate_if_holders_gone(
+        &self,
+        channel_id: &ChannelId,
+        current: &std::collections::HashSet<(String, u32, u32)>,
+    ) -> Result<bool, ServiceError> {
+        let ours = self.get_our_address()?;
+        let ours = (ours.name().to_owned(), u32::from(ours.device_id()));
+        let gone: Vec<SenderKeyHolder> = self
+            .sender_key_holders(channel_id)?
+            .into_iter()
+            .filter(|(user, device, registration)| {
+                (user.clone(), *device) != ours && !holder_present(current, user, *device, *registration)
+            })
+            .collect();
+        if gone.is_empty() {
+            return Ok(false);
+        }
+        tracing::info!(%channel_id, ?gone, "Sender-key holder no longer addressed: rotation required");
+        self.mark_channel_for_rotation(channel_id)?;
+        Ok(true)
     }
 
     /// Mark a channel as needing sender key rotation.
@@ -438,6 +506,21 @@ impl SignalService {
 
 /// One device holding our current sender key: `(user, device, registration id)`.
 pub type SenderKeyHolder = (String, u32, u32);
+
+/// A holder recorded without a registration id (0) is matched by device;
+/// any other by device and registration id.
+fn holder_present(
+    current: &std::collections::HashSet<(String, u32, u32)>,
+    user: &str,
+    device: u32,
+    registration: u32,
+) -> bool {
+    if registration == 0 {
+        current.iter().any(|(u, d, _)| u == user && *d == device)
+    } else {
+        current.contains(&(user.to_owned(), device, registration))
+    }
+}
 
 fn parse_holder(entry: &str) -> Option<SenderKeyHolder> {
     let mut parts = entry.rsplitn(3, '.');

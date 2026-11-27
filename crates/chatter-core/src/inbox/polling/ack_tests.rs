@@ -449,6 +449,34 @@ fn group_transient_failure_is_not_acked() {
     );
 }
 
+/// A desynced pairwise session on a group-mailbox post is marked and drained,
+/// and the loop never dispatches the repair report: that report is a deposit
+/// into the poster's own device inbox, which would name the anonymous poster.
+#[test]
+fn group_mailbox_sends_no_repair_report_or_resend_to_a_member() {
+    let (_d, repo) = repo();
+    let group = ChannelId::new();
+    let decision =
+        super::group::group_desync_decision(group, UserId::new(), 1_777_000_000_000_000_000, &repo, None);
+    assert_eq!(decision, AckDecision::Ack);
+    assert_eq!(
+        markers(&repo, &group, ConversationType::Channel),
+        vec![SystemMessage::DeliveryIssue]
+    );
+    // The report event is what makes the inbox processor deposit to the
+    // poster (`services/inbox_processor/protocol.rs`); this loop must not emit it.
+    // Nor does it answer a retry request: the resend or NullMessage would be
+    // a deposit from the poster to the requester's device inbox.
+    let source = include_str!("group.rs");
+    for event in [
+        "InboxEvent::DmDecryptionErrorNeedsReport",
+        "InboxEvent::GroupResendRequested",
+        "InboxEvent::DmResendRequested",
+    ] {
+        assert!(!source.contains(event), "group mailbox emits {event}");
+    }
+}
+
 // ===========================================================================
 // LOOP 4 — anonymous DM mailboxes (`polling::anon_dm`)
 //

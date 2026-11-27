@@ -86,6 +86,8 @@ pub(crate) struct FakeBackend {
     pub server: Arc<FakeServer>,
     pub directory: HashMap<String, KeyBytes>,
     pub rotations: parking_lot::Mutex<Vec<ChannelId>>,
+    /// When set, every `changes` call waits here first.
+    pub changes_gate: parking_lot::Mutex<Option<Arc<tokio::sync::Barrier>>>,
 }
 
 #[async_trait]
@@ -108,6 +110,10 @@ impl LogBackend for FakeBackend {
         from: u64,
         _: &[u8],
     ) -> Result<pb::GetChannelChangesResponse, NetworkError> {
+        let gate = self.changes_gate.lock().clone();
+        if let Some(gate) = gate {
+            gate.wait().await;
+        }
         let log = self.server.log.lock();
         let from = from.max(1) as usize;
         Ok(pb::GetChannelChangesResponse {
@@ -193,6 +199,7 @@ pub(crate) fn device_on(
         server: server.clone(),
         directory: directory(people),
         rotations: Default::default(),
+        changes_gate: Default::default(),
     });
     let log = Arc::new(MembershipLog::new(
         backend.clone(),

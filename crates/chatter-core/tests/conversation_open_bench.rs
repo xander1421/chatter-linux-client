@@ -103,6 +103,7 @@ fn build_corpus() -> Corpus {
                     encryption_iv: None,
                     created_at: chrono::Utc::now(),
                     secret_chat: false,
+                    private_channel: None,
                 };
                 attachments.insert(&att).unwrap();
                 msg.attachments = vec![att_id];

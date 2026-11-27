@@ -3,8 +3,7 @@
 //!
 //! - An SKDM carries the sender's CURRENT iteration, so it unlocks only
 //!   messages encrypted after it was built — the reason the send path hands
-//!   the key to new members BEFORE encrypting (`services/message/group.rs`,
-//!   `distribute_sender_key_to_new_members`).
+//!   the key to new members BEFORE encrypting (`services/message/group_send.rs`).
 //! - Processing the same SKDM twice is harmless.
 //! - Rotating OUR key must not delete the keys other members sent us.
 

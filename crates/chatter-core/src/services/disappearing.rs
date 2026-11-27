@@ -252,6 +252,14 @@ pub fn secret_chat_state(settings: &SettingsRepository, chat: SecretChat) -> DmT
         })
 }
 
+/// Whether this device has learned the chat's timer: it created the chat,
+/// changed the timer, or adopted one a member stated. A private-group joiner
+/// has not until the owner's timer update or a stamped post arrives.
+#[must_use]
+pub fn secret_chat_timer_known(settings: &SettingsRepository, chat: SecretChat) -> bool {
+    settings.get::<DmTimer>(&chat.key()).ok().flatten().is_some()
+}
+
 /// Install the one-day default timer when a secret chat (1:1 or private
 /// group) is first created.
 pub fn initialize_secret_chat_timer(

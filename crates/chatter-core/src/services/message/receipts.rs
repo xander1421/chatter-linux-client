@@ -51,6 +51,8 @@ pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>
         && failure_reason == Some(super::core::WAITING_FOR_ANONYMOUS_CREDENTIALS)
     {
         "waiting-anonymous-credentials"
+    } else if status == "sending" && failure_reason == Some(super::core::WAITING_FOR_GROUP_SETTINGS) {
+        "waiting-group-settings"
     } else if status == "failed" && failure_reason == Some(super::core::SHIELD_WAITING_FOR_TOKENS) {
         "parked"
     } else if status == "sending" && failure_reason == Some(super::core::DELIVERY_UNCONFIRMED) {

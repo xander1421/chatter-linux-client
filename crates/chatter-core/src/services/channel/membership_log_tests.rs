@@ -631,3 +631,17 @@ async fn no_state_and_not_named_replays_from_genesis() {
     );
     assert!(seen.applied.lock().iter().all(|a| a.backfill));
 }
+
+/// List-time catch-up fetches channels side by side: three fetches that each
+/// wait for the other two complete only if they run concurrently.
+#[tokio::test]
+async fn catch_up_all_fetches_channels_concurrently() {
+    let a = who(1);
+    let server = Arc::new(FakeServer::default());
+    let (log, backend, _db) = device(&a, &server, &[&a]);
+    *backend.changes_gate.lock() = Some(Arc::new(tokio::sync::Barrier::new(3)));
+    let ids = [channel_id(), channel_id(), channel_id()];
+    tokio::time::timeout(std::time::Duration::from_secs(5), log.catch_up_all(ids))
+        .await
+        .expect("catch-ups ran one at a time");
+}

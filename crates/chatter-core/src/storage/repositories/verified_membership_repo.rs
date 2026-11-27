@@ -555,6 +555,10 @@ mod tests {
         metadata.config.require_encryption = false;
         channels.save_remote(metadata.clone()).unwrap();
         assert_eq!(channels.routing_type(&channel).unwrap(), None);
+        // Unsigned Private metadata is no route either.
+        let private = Channel::new(ChannelId::new(), "p".into(), ChannelType::Private, owner);
+        channels.save_remote(private.clone()).unwrap();
+        assert_eq!(channels.routing_type(&private.id).unwrap(), None);
 
         let identity = KeyPair::generate(&mut rand::rng());
         let (signed, verified) = change(

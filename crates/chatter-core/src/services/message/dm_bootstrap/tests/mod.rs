@@ -112,7 +112,6 @@ pub(in crate::services::message) async fn cache_device(
 // Local-only protocol fixture: generates a real sender/server certificate
 // under the repository's published development root. Never uses a keyring,
 // deployment key, live server, device or credential.
-#[cfg(feature = "dev-trust-root")]
 fn fixture_sender_certificate(
     client: &ChatterClient,
     me: UserId,
@@ -153,7 +152,6 @@ fn fixture_sender_certificate(
     cert
 }
 
-#[cfg(feature = "dev-trust-root")]
 pub(in crate::services::message) fn cache_fixture_sender_certificate(
     client: &ChatterClient,
     me: UserId,
@@ -177,7 +175,6 @@ pub(in crate::services::message) fn cache_fixture_sender_certificate(
     cert
 }
 
-#[cfg(feature = "dev-trust-root")]
 pub(in crate::services::message) async fn open_fixture_sealed(
     remote: &mut libsignal_protocol::InMemSignalProtocolStore,
     alice: &ProtocolAddress,

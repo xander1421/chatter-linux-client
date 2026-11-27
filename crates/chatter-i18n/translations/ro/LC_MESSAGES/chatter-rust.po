@@ -678,6 +678,12 @@ msgstr "{} a ieșit de pe canal"
 msgid "{} is no longer a member"
 msgstr "{} nu mai este membru"
 
+msgid "Not delivered to {}: no registered device"
+msgstr "Nelivrat către {}: niciun dispozitiv înregistrat"
+
+msgid "has no registered device"
+msgstr "nu are niciun dispozitiv înregistrat"
+
 #: crates/chatter-core/src/domain/message/system.rs:167
 msgid "{} created the channel"
 msgstr "{} a creat canalul"
@@ -3398,6 +3404,9 @@ msgstr "Parolă incorectă. Încearcă din nou."
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:161
 msgid "Your session ended. Sign in again before deleting your account."
 msgstr "Sesiunea s-a încheiat. Conectează-te din nou înainte să ștergi contul."
+
+msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
+msgstr "Nu s-a putut părăsi {} canal(e) privat(e), așa că contul tău nu a fost șters. Verifică conexiunea și încearcă din nou."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."

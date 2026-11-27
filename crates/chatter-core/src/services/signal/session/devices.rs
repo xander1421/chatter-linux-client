@@ -55,8 +55,10 @@ impl SignalService {
         ).await
     }
 
-    /// Reuse admitted sessions for a private-channel send. The anonymous
-    /// submit reports missing or stale devices for reconciliation.
+    /// Key-verification gate for a private-channel send: a known peer
+    /// identity must be sendable on the current KT route, and no KT job may
+    /// block a bundle lookup. Fetches no bundle; discovery is
+    /// [`Self::require_group_device_sessions`].
     pub(crate) fn require_group_device_ready(&self, recipient_id: &str) -> Result<(), ServiceError> {
         if let Some(key) = self.get_peer_identity(recipient_id)? {
             self.require_private_post_key(recipient_id, &key)?;
@@ -356,6 +358,7 @@ impl SignalService {
         extra: &[u32],
         stale: &[u32],
     ) -> Result<(), ServiceError> {
+        self.rotate_after_device_removal(recipient_id, extra)?;
         for &device_id in extra.iter().chain(stale).chain(missing) {
             self.actor
                 .archive_session_for_resend(recipient_id.to_string(), device_id, None)
@@ -447,6 +450,7 @@ impl SignalService {
                 return Err(crate::error::NetworkError::InvalidRequest("invalid private device mismatch".into()).into());
             }
         }
+        self.rotate_after_device_removal(recipient, &devices.extra_devices)?;
         for &device in devices.extra_devices.iter().chain(&devices.stale_devices).chain(&devices.missing_devices) {
             if is_echo(device) {
                 let (key, _) = self.private_echo_key()?;

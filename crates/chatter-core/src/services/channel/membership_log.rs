@@ -50,6 +50,8 @@ pub const KT_CACHE_TTL: Duration = Duration::from_secs(600);
 const PAGE: i32 = 100;
 /// Upper bound on pages one catch-up reads (100 changes each).
 const MAX_PAGES: usize = 1000;
+/// Channels [`MembershipLog::catch_up_all`] fetches at once.
+const CATCH_UP_CONCURRENCY: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LogError {
@@ -317,6 +319,20 @@ impl MembershipLog {
         let lock = self.lock_for(channel_id);
         let _guard = lock.lock().await;
         self.catch_up_locked(channel_id, &[]).await
+    }
+
+    /// [`Self::catch_up`] for several channels at once, each still
+    /// serialised by its own lock. A failure stays with its channel: logged,
+    /// and that channel keeps no route until a later catch-up succeeds.
+    pub async fn catch_up_all(&self, channel_ids: impl IntoIterator<Item = ChannelId>) {
+        use futures::StreamExt;
+        futures::stream::iter(channel_ids)
+            .for_each_concurrent(CATCH_UP_CONCURRENCY, |id| async move {
+                if let Err(error) = self.catch_up(&id).await {
+                    tracing::debug!(channel_id = %id, %error, "Could not verify channel routing type");
+                }
+            })
+            .await;
     }
 
     async fn catch_up_locked(

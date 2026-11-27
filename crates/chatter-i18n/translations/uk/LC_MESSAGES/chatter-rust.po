@@ -677,6 +677,12 @@ msgstr "{} вийшов(-ла) з каналу"
 msgid "{} is no longer a member"
 msgstr "{} більше не в каналі"
 
+msgid "Not delivered to {}: no registered device"
+msgstr "Не доставлено {}: немає зареєстрованих пристроїв"
+
+msgid "has no registered device"
+msgstr "немає зареєстрованих пристроїв"
+
 #: crates/chatter-core/src/domain/message/system.rs:167
 msgid "{} created the channel"
 msgstr "{} створив(-ла) канал"
@@ -3393,6 +3399,9 @@ msgstr "Неправильний пароль. Спробуйте ще раз."
 msgid "Your session ended. Sign in again before deleting your account."
 msgstr ""
 "Ваш сеанс завершився. Увійдіть знову, перш ніж видаляти обліковий запис."
+
+msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
+msgstr "Не вдалося вийти з приватних каналів: {}. Обліковий запис не видалено. Перевірте з’єднання та спробуйте ще раз."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."
