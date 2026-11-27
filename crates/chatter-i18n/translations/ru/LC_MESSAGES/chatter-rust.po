@@ -4164,3 +4164,7 @@ msgstr "Ключ безопасности этого контакта не яв�
 
 msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
 msgstr "Диалог выбора файлов недоступен. Проверьте, что портал выбора файлов установлен и запущен."
+
+#: crates/chatter-core/src/client/sidebar.rs:120
+msgid "Chats"
+msgstr "Чаты"

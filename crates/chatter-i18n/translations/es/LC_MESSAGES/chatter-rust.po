@@ -4187,3 +4187,7 @@ msgstr "No se pudo confiar en la clave de seguridad de este contacto."
 
 msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
 msgstr "El selector de archivos no está disponible. Comprueba que haya un portal de selección de archivos instalado y en ejecución."
+
+#: crates/chatter-core/src/client/sidebar.rs:120
+msgid "Chats"
+msgstr "Chats"
