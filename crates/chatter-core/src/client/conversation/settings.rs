@@ -51,7 +51,7 @@ impl ConversationHandle {
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }?;
         // A plain mute or unmute is open-ended: drop any timed mute's end.
-        if let Some(key) = self.mute_until_key() {
+        if let Some(key) = mute_until_key(&self.conversation) {
             self.client
                 .channels()
                 .settings_repo
@@ -61,25 +61,11 @@ impl ConversationHandle {
         Ok(())
     }
 
-    /// Where a timed mute's end (Unix seconds) is kept, beside the
-    /// `conv.muted.*` flag. Anon groups mute through their status and have
-    /// no timed mute.
-    fn mute_until_key(&self) -> Option<String> {
-        match &self.conversation {
-            ActiveConversation::AnonDm(id) => Some(format!("conv.muted_until.anon_dm.{id}")),
-            ActiveConversation::ServerDm { peer_id } => {
-                Some(format!("conv.muted_until.server_dm.{peer_id}"))
-            }
-            ActiveConversation::Channel(id) => Some(format!("conv.muted_until.channel.{id}")),
-            _ => None,
-        }
-    }
-
     /// Mute for `seconds`, or for good with `None` (Signal's 1 hour / 8 hours
     /// / 1 day / Always). The mute lapses on its own once the time has passed.
     pub fn mute_for(&self, seconds: Option<u64>) -> ConversationResult {
         self.mute_conversation(true)?;
-        if let (Some(seconds), Some(key)) = (seconds, self.mute_until_key()) {
+        if let (Some(seconds), Some(key)) = (seconds, mute_until_key(&self.conversation)) {
             let until = chrono::Utc::now().timestamp().saturating_add(seconds as i64);
             self.client
                 .channels()
@@ -90,58 +76,11 @@ impl ConversationHandle {
         Ok(())
     }
 
-    /// Whether a timed mute on this conversation has run out.
-    fn mute_lapsed(&self) -> bool {
-        self.mute_until_key()
-            .and_then(|key| self.client.channels().settings_repo.get_i64(&key).ok().flatten())
-            .is_some_and(|until| chrono::Utc::now().timestamp() >= until)
-    }
-
     /// Read this conversation's persisted mute state (the inverse of
     /// [`Self::mute_conversation`]). Reads exactly the same store the setter
     /// wrote — the group status for anon groups, otherwise the settings key. Defaults to `false` (unmuted) when nothing has been persisted.
     pub fn is_muted(&self) -> Result<bool, ConversationError> {
-        let flagged = match &self.conversation {
-            ActiveConversation::AnonDm(id) => {
-                let key = format!("conv.muted.anon_dm.{}", id);
-                Ok(self
-                    .client
-                    .channels()
-                    .settings_repo
-                    .get_bool(&key)
-                    .map_err(|e| ConversationError::Other(e.to_string()))?
-                    .unwrap_or(false))
-            }
-            ActiveConversation::AnonGroup(id) => Ok(self
-                .client
-                .anon_groups()
-                .get_group(id)
-                .map_err(|e| ConversationError::Other(e.to_string()))?
-                .map(|g| g.status == crate::domain::anon_group::AnonGroupStatus::Muted)
-                .unwrap_or(false)),
-            ActiveConversation::ServerDm { peer_id } => {
-                let key = format!("conv.muted.server_dm.{}", peer_id);
-                Ok(self
-                    .client
-                    .channels()
-                    .settings_repo
-                    .get_bool(&key)
-                    .map_err(|e| ConversationError::Other(e.to_string()))?
-                    .unwrap_or(false))
-            }
-            ActiveConversation::Channel(channel_id) => {
-                let key = format!("conv.muted.channel.{}", channel_id);
-                Ok(self
-                    .client
-                    .channels()
-                    .settings_repo
-                    .get_bool(&key)
-                    .map_err(|e| ConversationError::Other(e.to_string()))?
-                    .unwrap_or(false))
-            }
-            ActiveConversation::None => Err(ConversationError::NoConversation),
-        }?;
-        Ok(flagged && !self.mute_lapsed())
+        self.client.read_conversation_mute(&self.conversation)
     }
 
     /// Local alert preference for a channel or private group. The server's
@@ -631,5 +570,68 @@ impl ConversationHandle {
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
+    }
+}
+
+/// Where a timed mute's end (Unix seconds) is kept, beside the
+/// `conv.muted.*` flag. Anon groups mute through their status and have
+/// no timed mute.
+fn mute_until_key(conversation: &ActiveConversation) -> Option<String> {
+    match conversation {
+        ActiveConversation::AnonDm(id) => Some(format!("conv.muted_until.anon_dm.{id}")),
+        ActiveConversation::ServerDm { peer_id } => {
+            Some(format!("conv.muted_until.server_dm.{peer_id}"))
+        }
+        ActiveConversation::Channel(id) => Some(format!("conv.muted_until.channel.{id}")),
+        _ => None,
+    }
+}
+
+impl ChatterClient {
+    pub(crate) fn read_conversation_mute(
+        &self,
+        conversation: &ActiveConversation,
+    ) -> Result<bool, ConversationError> {
+        let flagged = match conversation {
+            ActiveConversation::AnonDm(id) => {
+                let key = format!("conv.muted.anon_dm.{}", id);
+                Ok(self
+                    .channels()
+                    .settings_repo
+                    .get_bool(&key)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .unwrap_or(false))
+            }
+            ActiveConversation::AnonGroup(id) => Ok(self
+                .anon_groups()
+                .get_group(id)
+                .map_err(|e| ConversationError::Other(e.to_string()))?
+                .map(|g| g.status == crate::domain::anon_group::AnonGroupStatus::Muted)
+                .unwrap_or(false)),
+            ActiveConversation::ServerDm { peer_id } => {
+                let key = format!("conv.muted.server_dm.{}", peer_id);
+                Ok(self
+                    .channels()
+                    .settings_repo
+                    .get_bool(&key)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .unwrap_or(false))
+            }
+            ActiveConversation::Channel(channel_id) => {
+                let key = format!("conv.muted.channel.{}", channel_id);
+                Ok(self
+                    .channels()
+                    .settings_repo
+                    .get_bool(&key)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .unwrap_or(false))
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }?;
+        let lapsed = flagged
+            && mute_until_key(conversation)
+                .and_then(|key| self.channels().settings_repo.get_i64(&key).ok().flatten())
+                .is_some_and(|until| chrono::Utc::now().timestamp() >= until);
+        Ok(flagged && !lapsed)
     }
 }

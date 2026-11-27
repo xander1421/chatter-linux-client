@@ -173,6 +173,18 @@ impl SectionRepository {
         Ok(())
     }
 
+    pub(crate) fn toggle_current_expansion(&self, id: &SectionId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE custom_sections SET is_expanded = NOT is_expanded, updated_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!("Section {} not found", id)));
+        }
+        Ok(())
+    }
+
     /// Set how a section's conversations are ordered.
     pub fn set_sort_mode(&self, id: &SectionId, mode: SectionSortMode) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -193,6 +205,41 @@ impl SectionRepository {
     // ========================================================================
     // Membership operations
     // ========================================================================
+
+    /// File or unfile a conversation in one transaction. An invalid destination
+    /// leaves its previous membership intact.
+    pub(crate) fn set_membership(
+        &self,
+        conversation_id: &str,
+        destination: Option<(&SectionId, &ConversationType)>,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM section_memberships WHERE conversation_id = ?1",
+            [conversation_id],
+        )?;
+        if let Some((section_id, kind)) = destination {
+            let rows = tx.execute(
+                "INSERT INTO section_memberships (section_id, conversation_id, conversation_type, added_at)
+                 SELECT id, ?2, ?3, ?4 FROM custom_sections WHERE id = ?1",
+                params![
+                    section_id.to_string(),
+                    conversation_id,
+                    kind.as_str(),
+                    Utc::now().to_rfc3339(),
+                ],
+            )?;
+            if rows == 0 {
+                return Err(StorageError::NotFound(format!(
+                    "Section {} not found",
+                    section_id
+                )));
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
 
     /// Add a conversation to a section.
     pub fn add_to_section(

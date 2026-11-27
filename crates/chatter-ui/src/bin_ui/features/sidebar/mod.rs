@@ -38,6 +38,189 @@ thread_local! {
     static SIDEBAR_INDEX: std::cell::RefCell<SidebarIndex> = Default::default();
 }
 
+#[derive(Default)]
+struct CardRefresh {
+    client: std::sync::Weak<ChatterClient>,
+    owner: Option<(u64, bool)>,
+    pending: bool,
+    dirty: bool,
+    generation: u64,
+}
+
+thread_local! {
+    static CARD_REFRESH: std::cell::RefCell<CardRefresh> = Default::default();
+}
+
+/// Coalesce repeated refreshes while the runtime reads the card snapshot.
+/// The owner also changes on Shield transitions, which must clear old rows
+/// before work using the new visibility policy can finish.
+fn refresh_sidebar_cards(window: &MainWindow, client: &Arc<ChatterClient>) {
+    let auth = client.auth_snapshot();
+    let owner = auth
+        .current_user_id
+        .map(|_| (auth.session_revision, client.anon_mode_enabled()));
+    let (changed_owner, generation) = CARD_REFRESH.with(|state| {
+        let mut state = state.borrow_mut();
+        let changed_owner = state.owner != owner;
+        if changed_owner {
+            state.owner = owner;
+            state.generation += 1;
+            state.pending = false;
+            state.dirty = false;
+        }
+        if state.pending {
+            state.dirty = true;
+            return (changed_owner, None);
+        }
+        state.pending = owner.is_some();
+        (changed_owner, owner.map(|_| state.generation))
+    });
+    if changed_owner {
+        window
+            .global::<crate::SidebarCards>()
+            .set_cards(Default::default());
+    }
+    let (Some((revision, shield)), Some(generation)) = (owner, generation) else {
+        return;
+    };
+    let client = client.clone();
+    let weak = window.as_weak();
+    tokio::spawn(async move {
+        let cards = client.sidebar_cards();
+        let avatar_generation = crate::bin_ui::decode_cache::thumbnail_generation();
+        for bytes in cards
+            .iter()
+            .flat_map(|card| card.pinned.iter().chain(&card.rows))
+            .filter_map(|row| row.chat_row.avatar_bytes.as_deref())
+        {
+            crate::bin_ui::decode_cache::avatar_guarded(bytes, avatar_generation);
+        }
+        run_ui!(weak, |w| {
+            let dirty = CARD_REFRESH.with(|state| {
+                let mut state = state.borrow_mut();
+                if state.generation != generation {
+                    return None;
+                }
+                state.pending = false;
+                Some(std::mem::take(&mut state.dirty))
+            });
+            let Some(dirty) = dirty else { return };
+            if !client.session_is_current(revision) || client.anon_mode_enabled() != shield {
+                refresh_sidebar_cards(&w, &client);
+                return;
+            }
+            apply_sidebar_cards(&w, &client, cards);
+            if dirty {
+                refresh_sidebar_cards(&w, &client);
+            }
+        });
+    });
+}
+
+fn apply_sidebar_cards(
+    window: &MainWindow,
+    client: &ChatterClient,
+    cards: Vec<chatter_core::client::sidebar::SidebarCard>,
+) {
+    use crate::bin_ui::converters::ChatRowExt;
+    use chatter_core::client::sidebar::{SidebarCardKind, SidebarCardRow, SidebarCardRowKind};
+    use slint::{Model, ModelRc, VecModel};
+
+    let active = client.active_conversation();
+    let saved_selected = client.active_conversation_type()
+        == Some(chatter_core::domain::message::ConversationType::SavedMessages);
+    let row_model = |rows: Vec<SidebarCardRow>| {
+        ModelRc::new(VecModel::from(
+            rows.into_iter()
+                .map(|row| {
+                    let mut chat_row = row.chat_row.to_slint();
+                    chat_row.timestamp = row.time_label.clone().into();
+                    chat_row.is_selected = if row.kind == SidebarCardRowKind::Saved {
+                        saved_selected
+                    } else {
+                        row_is_active(&active, chat_row.conversation_type, &row.conversation_id)
+                    };
+                    crate::SidebarCardRow {
+                        conversation_id: row.conversation_id.into(),
+                        kind: match row.kind {
+                            SidebarCardRowKind::Dm => "dm",
+                            SidebarCardRowKind::PrivateGroup => "private_group",
+                            SidebarCardRowKind::Channel => "channel",
+                            SidebarCardRowKind::Saved => "saved",
+                        }
+                        .into(),
+                        name: row.name.into(),
+                        short_name: row.short_name.into(),
+                        preview: row.preview.into(),
+                        time_label: row.time_label.into(),
+                        unread: row.unread as i32,
+                        muted: row.muted,
+                        online: row.online,
+                        locked: row.locked,
+                        avatar_source: chat_row.avatar_source.clone(),
+                        has_avatar: chat_row.has_avatar,
+                        initials: chat_row.initials.clone(),
+                        chat_row,
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ))
+    };
+
+    let global = window.global::<crate::SidebarCards>();
+    let model = global.get_cards();
+    let old_cards: Vec<_> = model.iter().collect();
+    let cards: Vec<_> = cards
+        .into_iter()
+        .map(|card| {
+            let pinned = row_model(card.pinned);
+            let rows = row_model(card.rows);
+            let mut next = crate::SidebarCard {
+                id: card.id.into(),
+                kind: match card.kind {
+                    SidebarCardKind::Saved => "saved",
+                    SidebarCardKind::Chats => "chats",
+                    SidebarCardKind::Section => "section",
+                }
+                .into(),
+                title: card.title.into(),
+                emoji: card.emoji.unwrap_or_default().into(),
+                collapsed: card.collapsed,
+                unread: card.unread as i32,
+                pinned,
+                rows,
+            };
+            if let Some(old) = old_cards.iter().find(|old| old.id == next.id) {
+                if old.pinned.iter().eq(next.pinned.iter()) {
+                    next.pinned = old.pinned.clone();
+                }
+                if old.rows.iter().eq(next.rows.iter()) {
+                    next.rows = old.rows.clone();
+                }
+            }
+            next
+        })
+        .collect();
+    let keep = cards.len();
+    if let Some(vec) = model
+        .as_any()
+        .downcast_ref::<VecModel<crate::SidebarCard>>()
+    {
+        for (index, card) in cards.into_iter().enumerate() {
+            match vec.row_data(index) {
+                Some(old) if old != card => vec.set_row_data(index, card),
+                Some(_) => {}
+                None => vec.push(card),
+            }
+        }
+        while vec.row_count() > keep {
+            vec.remove(vec.row_count() - 1);
+        }
+    } else {
+        global.set_cards(ModelRc::new(VecModel::from(cards)));
+    }
+}
+
 fn index_sidebar(window: &MainWindow) {
     use slint::Model;
     let pane = window.global::<crate::SidebarPane>();
@@ -235,6 +418,10 @@ pub(crate) fn refresh_flat_rows(window: &MainWindow) {
         pane.set_flat_rows(ModelRc::new(VecModel::from(rows)));
     }
     index_sidebar(window);
+    let client = CARD_REFRESH.with(|state| state.borrow().client.upgrade());
+    if let Some(client) = client {
+        refresh_sidebar_cards(window, &client);
+    }
 }
 
 /// Clear only the marked incarnation: a newer message may promote the same row
@@ -279,6 +466,7 @@ fn settle_arrivals(
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    CARD_REFRESH.with(|state| state.borrow_mut().client = Arc::downgrade(ui_ctx));
     let focus_window = window.as_weak();
     window.global::<crate::SidebarPane>().on_sidebar_focus_target(move |current, move_by, mobile, shield, requests, desktop_rail| {
         use slint::Model;
@@ -601,6 +789,7 @@ pub(crate) fn refresh_section_member(window: &MainWindow, client: &Arc<ChatterCl
 /// UI thread: this is called for every received message, and a reconnect
 /// burst used to stall the UI on one rebuild per message.
 pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    refresh_sidebar_cards(window, ui_ctx);
     use slint::Model;
     if window
         .global::<crate::SidebarPane>()
@@ -696,6 +885,7 @@ pub fn apply_thread_reply_badges(
             }
         }
     }
+    refresh_sidebar_cards(window, ui_ctx);
     let foldered = SIDEBAR_INDEX.with(|slot| slot.borrow().foldered.contains(&key));
     if !found && foldered { sections::refresh_member(window, ui_ctx, &key); }
     if !found && !foldered {
@@ -721,6 +911,7 @@ fn update_sidebar_row(
     use chatter_core::state::ActiveConversation;
     use slint::Model;
 
+    refresh_sidebar_cards(window, ui_ctx);
     let key = match conversation {
         ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
         ActiveConversation::Channel(id) => id.to_string(),
@@ -924,7 +1115,7 @@ impl SavedPreview {
         }
     }
 
-    pub(crate) fn apply(self, window: &MainWindow, client: &ChatterClient) {
+    pub(crate) fn apply(self, window: &MainWindow, client: &Arc<ChatterClient>) {
         if !client.session_is_current(self.revision) {
             return;
         }
@@ -941,10 +1132,21 @@ impl SavedPreview {
         let pane = window.global::<crate::SidebarPane>();
         pane.set_saved_preview(self.preview.into());
         pane.set_saved_time(self.time.into());
+        refresh_sidebar_cards(window, client);
     }
 }
 
 pub(crate) fn clear_saved_messages(window: &MainWindow) {
+    CARD_REFRESH.with(|state| {
+        let mut state = state.borrow_mut();
+        state.owner = None;
+        state.pending = false;
+        state.dirty = false;
+        state.generation += 1;
+    });
+    window
+        .global::<crate::SidebarCards>()
+        .set_cards(Default::default());
     let pane = window.global::<crate::SidebarPane>();
     pane.set_saved_preview("".into());
     pane.set_saved_time("".into());
@@ -1084,6 +1286,7 @@ pub(crate) fn conversation_removed(
 /// not wait on that sync: after entering Shield it runs over a cold Tor link,
 /// and the channel rows Shield hides stayed listed until Tor connected.
 pub fn refresh_chat_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    refresh_sidebar_cards(window, ui_ctx);
     let weak = slint::ComponentHandle::as_weak(window);
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
