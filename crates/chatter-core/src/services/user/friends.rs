@@ -64,9 +64,11 @@ impl UserService {
         // key; only they can decrypt. Always sent — it carries OUR profile key
         // so the recipient can render our real name + avatar before accepting.
         // The optional note rides inside the same envelope.
-        let envelope = self
-            .encrypt_friend_request_envelope(friend_id, note.map(str::trim).unwrap_or(""))
-            .await?;
+        let envelope = tokio::select! {
+            biased;
+            _ = route.cancelled() => return Err(UserError::ForbiddenInAnonMode),
+            result = self.encrypt_friend_request_envelope(friend_id, note.map(str::trim).unwrap_or("")) => result?,
+        };
 
         let mut user_client = self.user_client();
         if route.is_cancelled() {
@@ -121,12 +123,6 @@ impl UserService {
     ) -> Result<Vec<u8>, UserError> {
         use crate::crypto::ecies;
 
-        let profile_key = crate::services::profile_visibility::shareable_profile_key(
-            &self.settings_repo,
-            &self.user_repo,
-            recipient,
-        );
-
         // All-devices fetch: the identity key is account-wide, but a peer's
         // live device ids are unknown here (device 1 may be a retired
         // install), so never name one.
@@ -160,6 +156,12 @@ impl UserService {
             }
         })
         .await?;
+
+        let profile_key = crate::services::profile_visibility::shareable_profile_key(
+            &self.settings_repo,
+            &self.user_repo,
+            recipient,
+        );
 
         let mut plaintext = Vec::with_capacity(1 + 32 + note.len());
         plaintext.push(u8::from(profile_key.is_some()));
