@@ -1,17 +1,6 @@
 import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { Materials } from "../theme/materials.slint";
-// Sidebar — plain conversation content with shared chrome materials.
-//
-// Layout (top to bottom):
-//   1. Search bar — inset surface
-//   2. Scrollable content with flat/inset list items
-//   3. Bottom bar — glass surface
-//
-// Neo depth separation: sidebar surface is raised from background,
-// with an explicit right-edge highlight. Internal elements use
-// inset (search, selected items) and glass (bottom bar) surfaces.
-
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -20,7 +9,7 @@ import { Typography } from "../theme/typography.slint";
 import { SidebarCardRow as PhonePinnedRow } from "card_types.slint";
 import { PinnedStrip } from "pinned_strip.slint";
 import { ChatRow, ChatRowData } from "chat_list.slint";
-import { SectionHeader, CustomSectionData, SidebarRowData } from "section_card.slint";
+import { SectionHeader, CustomSectionData, SidebarRowData, SectionCard } from "section_card.slint";
 import { EmptyState } from "../components/empty_state.slint";
 import { ChatListSkeleton } from "../components/skeleton.slint";
 import { SidebarPane } from "../app_sidebar_pane.slint";
@@ -33,6 +22,11 @@ import { SidebarFooter } from "sidebar_footer.slint";
 import { SidebarRail } from "sidebar_rail.slint";
 import { SidebarHeader } from "sidebar_header.slint";
 import { ActivityBell } from "../activity/activity_bell.slint";
+import { KeyFocus } from "../components/key_focus.slint";
+import { SidebarCard, SidebarCardRow, SidebarCards } from "card_types.slint";
+import { ChatsCard } from "chats_card.slint";
+import { SavedCard } from "saved_card.slint";
+import { SidebarCardDropTarget, SidebarNewSectionDropZone } from "card_drag.slint";
 
 export { ChatRowData, CustomSectionData, SidebarRowData }
 
@@ -43,6 +37,56 @@ component ListView inherits Flickable {
     out property <length> visible-height: self.height;
     out property <length> visible-width: self.width;
     @children
+}
+
+component SidebarUtilityLink inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <int> count;
+    in property <length> text-size;
+    callback opened();
+
+    border-radius: Spacing.radius-control;
+    background: link-touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.count > 0 ? root.label + " · " + root.count : root.label;
+    accessible-action-default => { root.opened(); }
+    HorizontalLayout {
+        padding-left: Spacing.panel-gutter;
+        padding-right: Spacing.panel-gutter;
+        spacing: Spacing.sm;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: Spacing.lg;
+                height: self.width;
+                colorize: Colors.text-secondary;
+            }
+        }
+        Text {
+            text: root.label;
+            font-size: root.text-size;
+            color: Colors.text-secondary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if root.count > 0: Text {
+            text: root.count;
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            vertical-alignment: center;
+        }
+    }
+    KeyFocus {
+        border-radius: root.border-radius;
+        activate => { root.opened(); }
+    }
+    link-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.opened(); }
+    }
 }
 
 export component Sidebar inherits Rectangle {
@@ -63,16 +107,13 @@ export component Sidebar inherits Rectangle {
     in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SidebarRowData]> flat-rows: [];
-    // What a screen reader says for the keyboard-focused row: the internal
-    // kind ("saved", "friends") was read out for the quick links.
+    // Screen-reader labels for the legacy phone and archive lists.
     pure function row-label(row: SidebarRowData) -> string {
         if row.kind == "chat" || row.kind == "section-chat" || row.kind == "archived-chat" {
             return row.chat.display-name;
         }
         if row.kind == "section-header" { return row.section.name; }
         if row.kind == "saved" { return root.saved-label; }
-        if row.kind == "friends" { return AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); }
-        if row.kind == "calls" { return @tr("Calls"); }
         if row.kind == "requests" { return @tr("Requests"); }
         if row.kind == "search" { return @tr("Search"); }
         if row.kind == "channel-actions" { return @tr("Create"); }
@@ -92,6 +133,108 @@ export component Sidebar inherits Rectangle {
     in-out property <bool> collapsed: false;
     private property <bool> card-rail: root.collapsed && !root.mobile-mode;
     property <bool> desktop-rail: root.collapsed && !root.touch;
+    private property <bool> expanded-cards: !root.mobile-mode && !root.collapsed;
+    private property <length> card-top-clearance: root.top-row-height
+        + (DesktopChrome.macos ? Spacing.panel-gutter : 2 * Spacing.panel-gutter);
+    private property <length> expanded-frame-inset: max(0px, Spacing.panel-gutter - DesktopChrome.frame-inset);
+    private property <bool> show-card-list: root.expanded-cards && !root.archive-open && root.active-tab != "mesh";
+    private property <int> focused-card-index: 0;
+    // The Saved action and every other card header use the -1 slot.
+    private property <int> focused-card-row: -1;
+    private property <SidebarCard> focused-card: SidebarCards.cards[root.focused-card-index];
+    private property <SidebarCardRow> focused-card-item: root.focused-card-row < 0
+        ? { } : root.focused-card-row < root.focused-card.pinned.length
+            ? root.focused-card.pinned[root.focused-card-row]
+            : root.focused-card.rows[root.focused-card-row - root.focused-card.pinned.length];
+    private property <length> card-viewport-y: 0px;
+    private property <int> last-card-index: SidebarCards.cards.length - 1;
+    private property <int> focused-card-last-row: root.last-card-row(root.focused-card);
+    changed focused-card-last-row => {
+        root.focused-card-row = min(root.focused-card-row, root.focused-card-last-row);
+    }
+    changed last-card-index => {
+        if root.focused-card-index > root.last-card-index { root.reset-card-focus(); }
+    }
+    pure function last-card-row(card: SidebarCard) -> int {
+        return card.collapsed || card.kind == "saved" ? -1
+            : card.pinned.length + card.rows.length - 1;
+    }
+    function reset-card-focus() {
+        root.focused-card-index = 0;
+        root.focused-card-row = -1;
+        root.card-viewport-y = 0px;
+    }
+    function reveal-card-focus(card-top: length, list-height: length, viewport-height: length) {
+        let card = root.focused-card;
+        let line-height = Spacing.row-height-desktop + Spacing.xxs;
+        let header-height = Spacing.xxl + Spacing.xs + Spacing.xxs;
+        let pinned-height = card.pinned.length > 0
+            ? 34px + Spacing.md + Typography.xs * 1.4 + Spacing.xxs : 0px;
+        let pinned = root.focused-card-row < card.pinned.length;
+        let row-offset = root.focused-card-row < 0 ? 0px
+            : pinned ? header-height
+            : header-height + pinned-height + (root.focused-card-row - card.pinned.length) * line-height;
+        let focus-height = root.focused-card-row < 0 && card.kind != "saved" ? header-height
+            : pinned && root.focused-card-row >= 0 ? pinned-height : line-height;
+        let top = card-top + row-offset + root.card-viewport-y;
+        if top < 0px {
+            root.card-viewport-y = min(0px, root.card-viewport-y - top);
+        } else if top + focus-height > list-height {
+            root.card-viewport-y = max(list-height - viewport-height,
+                root.card-viewport-y - (top + focus-height - list-height));
+        }
+    }
+    function step-card-focus(step: int) {
+        if root.last-card-index < 0 { return; }
+        if step == -2 {
+            root.reset-card-focus();
+        } else if step == 2 {
+            root.focused-card-index = root.last-card-index;
+            root.focused-card-row = root.last-card-row(root.focused-card);
+        } else if step == 1 {
+            if root.focused-card-row < root.last-card-row(root.focused-card) {
+                root.focused-card-row += 1;
+            } else if root.focused-card-index < root.last-card-index {
+                root.focused-card-index += 1;
+                root.focused-card-row = -1;
+            }
+        } else if root.focused-card-row >= 0 {
+            root.focused-card-row -= 1;
+        } else if root.focused-card-index > 0 {
+            root.focused-card-index -= 1;
+            root.focused-card-row = root.last-card-row(root.focused-card);
+        }
+    }
+    function activate-card-focus() {
+        if root.last-card-index < 0 { return; }
+        if root.focused-card.kind == "saved" {
+            root.saved-messages-clicked();
+        } else if root.focused-card-row < 0 || root.focused-card.collapsed {
+            SidebarCards.toggle-collapsed(root.focused-card.id);
+        } else if !root.focused-card.collapsed && root.focused-card-item.conversation-id != "" {
+            SidebarCards.open-row(root.focused-card-item.conversation-id);
+        }
+    }
+    pure function section-sort-mode(index: int, section-id: string) -> string {
+        let offset = SidebarCards.cards[0].kind == "saved" ? 2 : 1;
+        let section = root.custom-sections[index - offset];
+        return section.section-id == section-id ? section.sort-mode : "recent";
+    }
+    function card-row-menu(row: ChatRowData, card-id: string, x: length, y: length, row-y: length) {
+        SidebarPane.anchor-card-row-menu(row, card-id, x, y, row-y - root.absolute-position.y);
+        root.row-context-menu-opened(row.conversation-id, row.conversation-type);
+        SidebarPane.row-context-menu-open = true;
+    }
+    function open-card-focus-menu() {
+        let x = root.absolute-position.x + root.width / 2;
+        let y = root.absolute-position.y + root.height / 2;
+        if root.focused-card-row >= 0 && !root.focused-card.collapsed && root.focused-card-item.conversation-id != "" {
+            root.card-row-menu(root.focused-card-item.chat-row, root.focused-card.id, x, y, y);
+        } else if root.focused-card.kind == "section" && root.focused-card-row < 0 {
+            SidebarPane.open-card-section-menu(root.focused-card.id,
+                root.section-sort-mode(root.focused-card-index, root.focused-card.id), x, y);
+        }
+    }
     changed desktop-rail => {
         if (sidebar-keys.has-focus) { root.focus-step(-2); }
     }
@@ -133,7 +276,7 @@ export component Sidebar inherits Rectangle {
         if (now-visible != root.requests-row-was-visible) {
             // A row inserted above the visible conversations must not move
             // the content already under the user's finger.
-            if (root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
+            if (!root.show-card-list && root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
                     ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
                     : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm))) {
                 central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
@@ -192,8 +335,6 @@ export component Sidebar inherits Rectangle {
             if (entry.kind != "chat" && entry.kind != "section-chat" && entry.kind != "archived-chat") { return; }
         }
         if (entry.kind == "saved") { root.saved-messages-clicked(); }
-        else if (entry.kind == "friends") { root.friends-clicked(); }
-        else if (entry.kind == "calls") { root.calls-clicked(); }
         else if (entry.kind == "requests") {
             root.message-requests-clicked(); root.group-invites-clicked();
             root.channel-invites-clicked(); root.friend-requests-clicked();
@@ -339,30 +480,11 @@ export component Sidebar inherits Rectangle {
          : root.mobile-mode ? root.mobile-width
          : DesktopChrome.macos ? DesktopChrome.sidebar-width : Spacing.sidebar-width;
     visible: !root.hidden;
-    // Neo 2.0: sidebar is a raised surface with right-edge highlight.
-    // In Anon Mode, slightly shift the surface tint toward primary so the
-    // user has a constant visual cue the mode is active.
-    // Same reasoning as the lists inside it: a phone shows this panel full
-    // screen, so it is the page: transparent, so the window's ambient wash
-    // (Materials.ambient) shows through. Desktop keeps the raised-panel tone
-    // that separates it from the chat column beside it.
-    // On touch layouts, let the page show through the rounded glass chrome.
-    // An opaque full-height backing fills the header/footer corner cutouts.
-    background: root.touch || root.card-rail ? transparent
+    background: root.expanded-cards || root.card-rail || root.touch || root.mobile-mode ? transparent
               : AnonMode.enabled ? Colors.primary.with-alpha(0.08)
-              : root.mobile-mode ? transparent
               : Colors.surface;
-    // The pinned header and footer are chrome-radius glass flush with the
-    // panel's edges, so the panel's own corners must curve with them: square,
-    // the opaque surface filled the notch outside each rounded corner. Not
-    // on a phone, where the panel is the (transparent) page.
-    border-radius: root.mobile-mode ? Spacing.none : DesktopChrome.frame-inset > 0px ? DesktopChrome.panel-radius : Spacing.radius-chrome;
-    // No `border-width` here: this is a right-EDGE highlight in intent and
-    // Slint's border draws all four sides. On a phone that traced a hairline
-    // rectangle around the whole display; on desktop it now also ran a line
-    // across the top of the title row, right under the traffic lights. The
-    // edge is drawn explicitly below instead, on the one side that means
-    // something. The shadow has nothing to cast onto on a phone either.
+    border-radius: root.expanded-cards || root.mobile-mode ? Spacing.none
+        : DesktopChrome.frame-inset > 0px ? DesktopChrome.panel-radius : Spacing.radius-chrome;
 
     // No animation on a phone: the list is full width there, and animating
     // from the pre-resize width drew a half-width first frame at launch.
@@ -388,7 +510,7 @@ export component Sidebar inherits Rectangle {
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
         central-scroll := ListView {
-            visible: root.active-tab != "mesh" || root.desktop-rail;
+            visible: !root.show-card-list && (root.active-tab != "mesh" || root.desktop-rail);
             width: root.width;
             height: root.height;
             immediate-child-press: true;
@@ -629,90 +751,6 @@ export component Sidebar inherits Rectangle {
                         }
                         clicked => { root.saved-messages-clicked(); }
                     }
-                }
-
-                // Visible in BOTH modes. In shield mode it's the entry to add an
-                // ANON contact via private code (the modal is private-only there);
-                // labelled "Add Contact" to avoid implying the server friend list.
-                //
-                // Hidden on mobile: the bottom tab bar's Contacts tab opens the
-                // very same modal, and two permanent entry points to one screen
-                // is the duplication that made the phone layout read as two
-                // navigation systems at once.
-
-                if entry.kind == "friends" && !root.mobile-mode && !root.collapsed: Rectangle {
-                    height: root.quick-link-height;
-                    Rectangle {
-                        x: Spacing.xs;
-                        width: parent.width - 2 * self.x;
-                        height: parent.height;
-                        border-radius: Spacing.radius-md;
-                        background: friends-touch.pressed ? Colors.surface-control-hover
-                            : friends-touch.has-hover ? Colors.surface-hover : transparent;
-                        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
-                    }
-                    accessible-role: list-item;
-                    accessible-label: AnonMode.enabled ? @tr("Add contact") : @tr("Friends");
-                    accessible-action-default => { root.friends-clicked(); }
-                    border-width: parent.roving-highlight ? 2px : 0px;
-                    border-color: Colors.focus-ring;
-                    HorizontalLayout {
-                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
-                            HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
-                        }
-                        Text { text: AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                    }
-                    friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
-                }
-
-                // Calls — the call history screen. On a phone the tab bar's
-                // Calls tab is the entry (hidden here for the same reason as
-                // Friends); on a two-pane tablet or desktop there is no tab
-                // bar, and this row is the only way in.
-
-                if entry.kind == "calls" && !root.mobile-mode && !root.collapsed: Rectangle {
-                    height: root.quick-link-height;
-                    Rectangle {
-                        x: Spacing.xs;
-                        width: parent.width - 2 * self.x;
-                        height: parent.height;
-                        border-radius: Spacing.radius-md;
-                        background: calls-touch.pressed ? Colors.surface-control-hover
-                            : calls-touch.has-hover ? Colors.surface-hover : transparent;
-                        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
-                    }
-                    accessible-role: list-item;
-                    accessible-label: root.missed-call-count > 0 ? @tr("Calls, {} missed", root.missed-call-count) : @tr("Calls");
-                    border-width: parent.roving-highlight ? 2px : 0px;
-                    border-color: Colors.focus-ring;
-                    accessible-action-default => { root.calls-clicked(); }
-                    HorizontalLayout {
-                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
-                            HorizontalLayout { alignment: center; Image { source: Icons.phone; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
-                        }
-                        Text { text: @tr("Calls"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
-                        if root.missed-call-count > 0: VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Rectangle {
-                                width: self.height + (root.missed-call-count > 9 ? 4px : 0px);
-                                height: Spacing.badge-md;
-                                border-radius: self.height / 2;
-                                background: Colors.error-hover;
-                                Text {
-                                    text: root.missed-call-count > 9 ? "9+" : root.missed-call-count;
-                                    color: Colors.on-error;
-                                    font-size: Typography.xs2;
-                                    font-weight: 700;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                    width: 100%;
-                                    height: 100%;
-                                }
-                            }
-                        }
-                    }
-                    calls-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calls-clicked(); } }
                 }
 
                 // REQUESTS entry point — one calm row, not four competing
@@ -960,6 +998,97 @@ export component Sidebar inherits Rectangle {
                 }
             }
         }
+        if root.show-card-list: card-scroll := Flickable {
+            x: root.expanded-frame-inset;
+            y: root.card-top-clearance;
+            width: max(0px, root.width - self.x - Spacing.panel-gutter);
+            height: max(0px, root.height - self.y - Spacing.xxxl - root.expanded-frame-inset - Spacing.panel-gutter);
+            viewport-height: max(self.height, card-column.preferred-height);
+            viewport-y <=> root.card-viewport-y;
+            immediate-child-press: true;
+            drag-axis-lock: root.touch;
+
+            card-column := VerticalLayout {
+                width: parent.width;
+                spacing: Spacing.panel-gutter;
+
+                for card[index] in SidebarCards.cards: card-slot := Rectangle {
+                    height: card-content.preferred-height;
+                    property <bool> current: root.focused-card-index == index;
+                    property <bool> highlighted: self.current && sidebar-keys.has-focus && Appearance.keyboard-focus-visible;
+                    property <int> reveal-row: self.current ? root.focused-card-row : -2;
+                    changed reveal-row => {
+                        if self.current && sidebar-keys.has-focus {
+                            let top = self.absolute-position.y - card-scroll.absolute-position.y - root.card-viewport-y;
+                            root.reveal-card-focus(top, card-scroll.height, card-scroll.viewport-height);
+                        }
+                    }
+                    card-content := VerticalLayout {
+                        if card.kind == "saved": SavedCard {
+                            preview: card.rows[0].preview;
+                            time-label: card.rows[0].time-label;
+                            selected: root.saved-open;
+                            roving: true;
+                            roving-highlight: card-slot.highlighted;
+                            border-radius: Spacing.radius-panel;
+                            opened => { root.saved-messages-clicked(); }
+                        }
+                        if card.kind == "chats": ChatsCard {
+                            card: card;
+                            touch: root.touch;
+                            empty-text: root.chat-rows-loading ? "" : @tr("Friends you add appear here.");
+                            header-highlight: card-slot.highlighted && (root.focused-card-row < 0 || card.collapsed);
+                            highlighted-row: card-slot.highlighted ? root.focused-card-row : -1;
+                            pin-requested(id, pinned) => { root.set-conversation-pinned(id, pinned); }
+                            row-context-menu-requested(row, x, y, row-y) => {
+                                root.card-row-menu(row, card.id, x, y, row-y);
+                            }
+                        }
+                        if card.kind == "section": SectionCard {
+                            card: card;
+                            touch: root.touch;
+                            header-highlight: card-slot.highlighted && (root.focused-card-row < 0 || card.collapsed);
+                            highlighted-row: card-slot.highlighted ? root.focused-card-row : -1;
+                            pin-requested(id, pinned) => { root.set-conversation-pinned(id, pinned); }
+                            header-context-menu-requested(x, y) => {
+                                SidebarPane.open-card-section-menu(card.id, root.section-sort-mode(index, card.id), x, y);
+                            }
+                            row-context-menu-requested(row, x, y, row-y) => {
+                                root.card-row-menu(row, card.id, x, y, row-y);
+                            }
+                        }
+                    }
+                    if card.kind != "saved": SidebarCardDropTarget {
+                        card-id: card.id;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                }
+
+                if root.archived-rows.length > 0: SidebarUtilityLink {
+                    height: root.quick-link-height;
+                    label: @tr("Archived chats");
+                    icon: Icons.folder;
+                    count: root.archived-rows.length;
+                    text-size: root.quick-link-text-size;
+                    opened => { root.archive-view-changed(true); }
+                }
+                if root.total-pending-requests > 0: SidebarUtilityLink {
+                    height: root.quick-link-height;
+                    label: @tr("Requests");
+                    icon: Icons.user-plus;
+                    count: root.total-pending-requests;
+                    text-size: root.quick-link-text-size;
+                    opened => {
+                        root.message-requests-clicked();
+                        root.group-invites-clicked();
+                        root.channel-invites-clicked();
+                        root.friend-requests-clicked();
+                    }
+                }
+                if SidebarCards.dragging: SidebarNewSectionDropZone {}
+            }
+        }
         if root.active-tab == "mesh" && MeshGlobal.enabled && !root.desktop-rail: Flickable {
             width: root.width;
             height: root.height;
@@ -975,6 +1104,13 @@ export component Sidebar inherits Rectangle {
             }
         }
         if !root.collapsed && root.active-tab != "mesh": SidebarHeader {
+            x: root.expanded-cards ? root.expanded-frame-inset
+                : root.mobile-mode ? Spacing.sm : 0px;
+            y: root.expanded-cards && !DesktopChrome.macos ? Spacing.panel-gutter : 0px;
+            width: root.expanded-cards ? root.width - self.x - Spacing.panel-gutter
+                : root.width - 2 * self.x;
+            border-radius: root.expanded-cards ? Spacing.radius-panel
+                : root.mobile-mode ? Spacing.radius-lg : Spacing.radius-chrome;
             panel-width: root.width;
             top-row-height: root.top-row-height;
             quick-link-inset: root.quick-link-inset;
@@ -1005,12 +1141,31 @@ export component Sidebar inherits Rectangle {
             height: 1px;
             focus-on-click: false;
             enabled: !root.card-rail && !root.touch && (root.active-tab == "chats" || root.desktop-rail) && !root.hidden;
-            changed has-focus => { if (self.has-focus) { root.focus-step(-2); } }
+            changed has-focus => {
+                if self.has-focus {
+                    if root.show-card-list { root.reset-card-focus(); }
+                    else { root.focus-step(-2); }
+                }
+            }
             accessible-role: list;
-            accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0
+            accessible-label: root.show-card-list && root.last-card-index >= 0
+                ? root.focused-card-row < 0 || root.focused-card.collapsed
+                    ? (root.focused-card.kind == "saved" ? root.saved-label : root.focused-card.title)
+                    : root.focused-card-item.chat-row.accessible-label-text
+                : root.flat-rows.length > root.focus-index && root.focus-index >= 0
                 ? root.row-label(root.flat-rows[root.focus-index])
                 : @tr("Conversations");
             key-pressed(event) => {
+                if root.show-card-list {
+                    if event.text == Key.UpArrow { root.step-card-focus(-1); return accept; }
+                    if event.text == Key.DownArrow { root.step-card-focus(1); return accept; }
+                    if event.text == Key.Home { root.step-card-focus(-2); return accept; }
+                    if event.text == Key.End { root.step-card-focus(2); return accept; }
+                    if event.text == Key.Return || event.text == Key.Space { root.activate-card-focus(); return accept; }
+                    if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) {
+                        root.open-card-focus-menu(); return accept;
+                    }
+                }
                 if (event.text == Key.UpArrow) { root.focus-step(-1); return accept; }
                 if (event.text == Key.DownArrow) { root.focus-step(1); return accept; }
                 if (event.text == Key.Home) { root.focus-step(-2); return accept; }
@@ -1080,8 +1235,10 @@ export component Sidebar inherits Rectangle {
         }
 
         if !root.mobile-mode: SidebarFooter {
-            panel-width: root.width;
-            panel-height: root.height;
+            x: root.expanded-cards ? root.expanded-frame-inset : 0px;
+            panel-width: root.expanded-cards ? root.width - self.x - Spacing.panel-gutter : root.width;
+            panel-height: root.height - (root.expanded-cards ? root.expanded-frame-inset : 0px);
+            border-radius: root.expanded-cards ? Spacing.radius-panel : Spacing.radius-chrome;
             collapsed: root.collapsed;
             touch: root.touch;
             mesh-available: MeshGlobal.enabled;
@@ -1113,14 +1270,7 @@ export component Sidebar inherits Rectangle {
             tab-selected(tab) => { root.tab-selected(tab); }
         }
 
-        // 7. BOTTOM UTILITY BAR — shared chrome material.
-        // Desktop only. On mobile its last occupant (the shield) moved up onto
-        // the search row, and what remained was a translucent grey strip across
-        // the foot of the list holding nothing — visible as a lighter rectangle
-        // above the floating dock.
-
     }
-
     if root.card-rail: SidebarRail {
         width: root.width;
         height: root.height;
@@ -1135,9 +1285,5 @@ export component Sidebar inherits Rectangle {
         focus-composer => { root.focus-composer(); }
         row-context-menu-opened(row) => { root.row-context-menu-opened(row.conversation-id, row.conversation-type); }
     }
-
-    // Right edge — the seam against the chat column. Desktop only: on a phone
-    // this panel is the whole screen and has no column beside it.
-
 
 }
