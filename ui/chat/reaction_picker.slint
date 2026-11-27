@@ -71,7 +71,7 @@ export component ReactionPicker inherits Rectangle {
         }
     }
 
-    // Picker container — Neo convex popup with strong shadow
+    // Reaction picker card
     picker-shell := GlassSurface {
         enter-distance: 20px;
         enter-duration: Materials.motion-standard;
@@ -82,15 +82,17 @@ export component ReactionPicker inherits Rectangle {
         animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
         animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
-        material-level: 3;
-        elevation: 4;
+        material-enabled: false;
+        background: Colors.surface-card;
+        border-width: Spacing.stroke;
+        border-color: Colors.border;
 
         x: max(Spacing.sm, min(root.position-x, parent.width - self.width - Spacing.sm));
         y: max(Spacing.sm, min(root.position-y + self.entrance-offset,
             root.bottom-limit - self.height - Spacing.sm));
         width: min(320px, parent.width - Spacing.xxl);
         height: max(0px, min(400px, root.bottom-limit - Spacing.xxxl));
-        border-radius: Spacing.radius-xl;
+        border-radius: Spacing.radius-panel;
 
         // Block backdrop clicks when clicking picker
         TouchArea {
@@ -132,14 +134,14 @@ export component ReactionPicker inherits Rectangle {
                             height: root.quick-target;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            border-radius: Spacing.radius-sm;
-                            background: quick-area.pressed ? Materials.pressed : quick-area.has-hover ? Colors.background : transparent;
+                            border-radius: Spacing.radius-control;
+                            background: quick-area.pressed ? Colors.surface-control-hover : quick-area.has-hover ? Colors.surface-control : transparent;
                             transform-scale-x: quick-area.pressed ? 88% : 100%;
                             transform-scale-y: quick-area.pressed ? 88% : 100%;
                             animate transform-scale-x { duration: quick-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                             animate transform-scale-y { duration: quick-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                             border-width: keys.has-focus ? Spacing.stroke : 0px;
-                            border-color: Colors.primary;
+                            border-color: Colors.focus-ring;
                             accessible-role: button;
                             accessible-label: @tr("React with {}", QuickReactions.names[index]);
                             accessible-action-default => {
@@ -186,7 +188,7 @@ export component ReactionPicker inherits Rectangle {
                 }
             }
 
-            // Divider — neo edge
+            // Separate quick reactions from the full picker.
             Rectangle {
                 height: Spacing.stroke;
                 background: Colors.divider;
@@ -194,7 +196,7 @@ export component ReactionPicker inherits Rectangle {
 
             // EmojiPicker
             picker := EmojiPicker {
-                // The outer reaction panel already supplies the material.
+                // The outer reaction card supplies the fill and rim.
                 material-enabled: false;
                 touch: root.touch;
                 max-picker-width: picker-shell.width;
