@@ -162,6 +162,9 @@ export global Colors {
     out property <color> selected-indicator: Appearance.dark ? #64ddcc : #0f766e;
     out property <color> tint-weak: primary.with-alpha(0.10);
     out property <color> tint-strong: primary.with-alpha(0.20);
+    // Immersive phone media keeps a dark surround in both themes.
+    out property <color> media-background: #000000;
+    out property <color> media-chrome: #101010e8;
     // Text drawn straight on Materials.scrim-media (a media viewer's
     // backdrop, dark in both themes).
     out property <color> on-media: #eff2f2;

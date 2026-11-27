@@ -51,9 +51,9 @@ export component ImageViewer inherits Rectangle {
     // AccessKit adapter, Android bridge, i-slint-core window.rs).
     accessible-role: groupbox;
     accessible-id: root.show ? "modal-overlay" : "";
-    private property <bool> compact-layout: root.width < 600px;
     // Touch platform: the media actions take the 48px Android minimum.
     in property <bool> touch: false;
+    property <bool> phone-layout: root.touch && root.width < 600px;
     property <length> action-size: (root.touch ? Spacing.touch-target-min : Spacing.button-height) * Appearance.text-grow;
     // Properties
     in property <bool> show: false;
@@ -217,7 +217,7 @@ export component ImageViewer inherits Rectangle {
     }
     Rectangle {
         width: 100%; height: 100%;
-        background: root.touch ? #000000 : Materials.scrim-media;
+        background: root.phone-layout ? Colors.media-background : Colors.background;
         opacity: root.arrival * (1.0 - root.dismiss-progress * 0.82);
     }
 
@@ -229,11 +229,22 @@ export component ImageViewer inherits Rectangle {
         }
     }
 
+    if !root.phone-layout: Rectangle {
+        x: Spacing.panel-gutter;
+        y: Spacing.panel-gutter;
+        width: max(0px, root.width - 2 * Spacing.panel-gutter);
+        height: max(0px, root.height - 2 * Spacing.panel-gutter);
+        border-radius: Spacing.radius-panel;
+        border-width: 1px;
+        border-color: Colors.border;
+        opacity: root.arrival * (1.0 - root.dismiss-progress);
+    }
+
     // The image owns the layout. Chrome is anchored to its fitted bounds,
     // with an overlay fallback for portrait media that reaches the safe edge.
     viewer-area := Rectangle {
-        x: root.touch ? 0px : root.compact-layout ? Spacing.sm : Spacing.xl;
-        y: root.touch ? 0px : root.compact-layout ? Spacing.sm : Spacing.xl;
+        x: root.phone-layout ? 0px : 2 * Spacing.panel-gutter;
+        y: root.phone-layout ? 0px : 2 * Spacing.panel-gutter;
         width: root.width - 2 * self.x;
         height: root.height - 2 * self.y;
         clip: true;
@@ -386,20 +397,24 @@ export component ImageViewer inherits Rectangle {
     property <length> chrome-width: min(viewer-area.width, max(300px, root.chrome-fit-width));
     property <length> chrome-x: viewer-area.x + (viewer-area.width - root.chrome-width) / 2;
     property <length> chrome-top: (viewer-area.height - root.chrome-fit-height) / 2;
-    property <length> header-y: max(viewer-area.y, viewer-area.y + root.chrome-top - 48px * Appearance.text-grow - Spacing.sm);
-    property <length> footer-y: min(root.height - root.action-size - viewer-area.y,
+    property <length> header-height: (root.touch ? 64px : 48px) * Appearance.text-grow;
+    property <length> footer-height: root.action-size + (root.touch ? 28px * Appearance.text-grow : 0px);
+    property <length> header-y: max(viewer-area.y, viewer-area.y + root.chrome-top - root.header-height - Spacing.panel-gutter);
+    property <length> footer-y: min(root.height - root.footer-height - viewer-area.y,
         viewer-area.y + root.chrome-top + root.chrome-fit-height + Spacing.sm);
     property <float> chrome-alpha: root.chrome-visible ? 1.0 : 0.0;
     animate chrome-alpha { duration: Materials.motion-quick; easing: Materials.settle; }
 
     GlassSurface {
-        x: root.touch ? 0px : root.chrome-x;
-        y: root.touch ? 0px : root.header-y + root.visual-dismiss-offset - (1.0 - root.arrival) * 12px;
-        width: root.touch ? root.width : root.chrome-width;
-        height: root.touch ? 64px * Appearance.text-grow : 48px * Appearance.text-grow;
-        material-enabled: !root.touch;
-        background: root.touch ? #101010e8 : transparent;
-        border-radius: root.touch ? 0px : Spacing.radius-lg;
+        x: root.phone-layout ? 0px : root.chrome-x;
+        y: root.phone-layout ? 0px : root.header-y + root.visual-dismiss-offset - (1.0 - root.arrival) * 12px;
+        width: root.phone-layout ? root.width : root.chrome-width;
+        height: root.header-height;
+        material-enabled: !root.phone-layout;
+        background: root.phone-layout ? Colors.media-chrome : transparent;
+        border-radius: root.phone-layout ? 0px : Spacing.radius-panel;
+        border-width: root.phone-layout ? 0px : 1px;
+        border-color: Colors.border;
         opacity: root.chrome-alpha * root.arrival;
         visible: root.chrome-visible || self.opacity > 0;
         TouchArea { width: 100%; height: 100%; }
@@ -414,9 +429,9 @@ export component ImageViewer inherits Rectangle {
                 horizontal-stretch: 1;
                 height: parent.height;
                 alignment: center;
-                if root.touch: Text { text: root.sender; overflow: elide; color: Colors.on-media; font-size: Typography.base; font-weight: Typography.medium; }
-                if root.touch: Text { text: root.datetime; overflow: elide; color: Colors.on-media-muted; font-size: Typography.xs; }
-                if !root.touch: Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
+                if root.touch: Text { text: root.sender; overflow: elide; color: root.phone-layout ? Colors.on-media : Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
+                if root.touch: Text { text: root.datetime; overflow: elide; color: root.phone-layout ? Colors.on-media-muted : Colors.text-muted; font-size: Typography.xs; }
+                if !root.touch: Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
                 if !root.touch && root.size-display != "": Text { text: root.size-display; color: Colors.text-muted; font-size: Typography.xs; }
             }
             if !root.touch: DismissButton { clicked => { root.request-close(); } }
@@ -424,12 +439,14 @@ export component ImageViewer inherits Rectangle {
     }
 
     if root.caption != "": Rectangle {
-        x: root.touch ? 0px : root.chrome-x;
-        y: footer.y - self.height - (root.touch ? 0px : Spacing.xs);
-        width: root.touch ? root.width : root.chrome-width;
+        x: root.phone-layout ? 0px : root.chrome-x;
+        y: footer.y - self.height - (root.phone-layout ? 0px : Spacing.xs);
+        width: root.phone-layout ? root.width : root.chrome-width;
         height: min(caption-text.preferred-height, 4 * Typography.base * 1.4) + 2 * Spacing.sm;
-        background: #101010e8;
-        border-radius: root.touch ? 0px : Spacing.radius-lg;
+        background: root.phone-layout ? Colors.media-chrome : Colors.surface-card;
+        border-radius: root.phone-layout ? 0px : Spacing.radius-panel;
+        border-width: root.phone-layout ? 0px : 1px;
+        border-color: Colors.border;
         opacity: root.chrome-alpha * root.arrival;
         visible: root.chrome-visible || self.opacity > 0;
         TouchArea { width: 100%; height: 100%; }
@@ -439,7 +456,7 @@ export component ImageViewer inherits Rectangle {
             width: parent.width - 2 * Spacing.md;
             height: parent.height - 2 * Spacing.sm;
             text: root.caption;
-            color: Colors.on-media;
+            color: root.phone-layout ? Colors.on-media : Colors.text-primary;
             font-size: Typography.base;
             wrap: word-wrap;
             overflow: elide;
@@ -447,13 +464,15 @@ export component ImageViewer inherits Rectangle {
     }
 
     footer := GlassSurface {
-        x: root.touch ? 0px : root.chrome-x;
-        y: root.touch ? root.height - self.height : root.footer-y + root.visual-dismiss-offset + (1.0 - root.arrival) * 12px;
-        width: root.touch ? root.width : root.chrome-width;
-        height: root.touch ? root.action-size + 28px * Appearance.text-grow : root.action-size;
-        material-enabled: !root.touch;
-        background: root.touch ? #101010e8 : transparent;
-        border-radius: root.touch ? 0px : Spacing.radius-lg;
+        x: root.phone-layout ? 0px : root.chrome-x;
+        y: root.phone-layout ? root.height - self.height : root.footer-y + root.visual-dismiss-offset + (1.0 - root.arrival) * 12px;
+        width: root.phone-layout ? root.width : root.chrome-width;
+        height: root.footer-height;
+        material-enabled: !root.phone-layout;
+        background: root.phone-layout ? Colors.media-chrome : transparent;
+        border-radius: root.phone-layout ? 0px : Spacing.radius-panel;
+        border-width: root.phone-layout ? 0px : 1px;
+        border-color: Colors.border;
         visible: root.chrome-visible || self.opacity > 0;
         opacity: root.chrome-alpha * root.arrival;
         TouchArea { width: 100%; height: 100%; }
@@ -479,7 +498,7 @@ export component ImageViewer inherits Rectangle {
                 width: parent.width;
                 height: 24px * Appearance.text-grow;
                 text: root.filename + (root.size-display != "" ? " · " + root.size-display : "");
-                color: Colors.on-media-muted;
+                color: root.phone-layout ? Colors.on-media-muted : Colors.text-muted;
                 font-size: Typography.xs;
                 overflow: elide;
                 horizontal-alignment: center;

@@ -60,7 +60,7 @@ export component VideoPlayer inherits Rectangle {
     background: transparent;
     Rectangle {
         width: 100%; height: 100%;
-        background: Materials.scrim-media;
+        background: root.touch && root.compact-layout ? Materials.scrim-media : Colors.background;
         opacity: root.arrival;
     }
 
@@ -69,10 +69,21 @@ export component VideoPlayer inherits Rectangle {
         clicked => { root.close(); }
     }
 
+    if !root.touch || !root.compact-layout: Rectangle {
+        x: Spacing.panel-gutter;
+        y: Spacing.panel-gutter;
+        width: max(0px, root.width - 2 * Spacing.panel-gutter);
+        height: max(0px, root.height - 2 * Spacing.panel-gutter);
+        border-radius: Spacing.radius-panel;
+        border-width: 1px;
+        border-color: Colors.border;
+        opacity: root.arrival;
+    }
+
     // The frame owns the layout, as in the image viewer.
     viewer-area := Rectangle {
-        x: root.compact-layout ? Spacing.sm : Spacing.xl;
-        y: root.compact-layout ? Spacing.sm : Spacing.xl;
+        x: root.touch && root.compact-layout ? Spacing.sm : 2 * Spacing.panel-gutter;
+        y: root.touch && root.compact-layout ? Spacing.sm : 2 * Spacing.panel-gutter;
         width: root.width - 2 * self.x;
         height: root.height - 2 * self.y;
         property <length> fit-width: root.frame.width <= 0 || root.frame.height <= 0
@@ -92,11 +103,11 @@ export component VideoPlayer inherits Rectangle {
             if !root.is-playing: Rectangle {
                 width: 80px;
                 height: 80px;
-                border-radius: 40px;
-                background: #06101db8;
+                border-radius: Spacing.radius-full;
+                background: Colors.media-chrome;
                 Text {
                     text: "\u{25B6}";  // Play triangle
-                    color: #ffffff;
+                    color: Colors.on-media;
                     font-size: 32px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -119,7 +130,9 @@ export component VideoPlayer inherits Rectangle {
         width: root.chrome-width;
         height: 48px * Appearance.text-grow;
         material-enabled: true;
-        border-radius: Spacing.radius-lg;
+        border-radius: Spacing.radius-panel;
+        border-width: 1px;
+        border-color: Colors.border;
         opacity: root.arrival;
         TouchArea { width: 100%; height: 100%; }
         HorizontalLayout {
@@ -129,7 +142,7 @@ export component VideoPlayer inherits Rectangle {
             VerticalLayout {
                 horizontal-stretch: 1;
                 alignment: center;
-                Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
+                Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
             }
             DismissButton { clicked => { root.close(); } }
         }
@@ -140,7 +153,9 @@ export component VideoPlayer inherits Rectangle {
         y: root.footer-y + (1.0 - root.arrival) * 12px;
         width: root.chrome-width;
         height: root.footer-height;
-        border-radius: Spacing.radius-lg;
+        border-radius: Spacing.radius-panel;
+        border-width: 1px;
+        border-color: Colors.border;
         opacity: root.arrival;
         TouchArea { width: 100%; height: 100%; }
         VerticalLayout {
@@ -161,8 +176,8 @@ export component VideoPlayer inherits Rectangle {
                     horizontal-stretch: 1;
                     Rectangle {
                         height: 6px;
-                        background: Colors.surface-hover;
-                        border-radius: 3px;
+                        background: Colors.surface-control;
+                        border-radius: Spacing.radius-full;
                         accessible-role: slider;
                         accessible-label: @tr("Video position");
                         accessible-value: Math.round(root.progress * 100) + " percent";
@@ -196,14 +211,14 @@ export component VideoPlayer inherits Rectangle {
                             animate width { duration: Materials.motion-quick; easing: Materials.settle; }
                             height: 100%;
                             background: Colors.primary;
-                            border-radius: 3px;
+                            border-radius: Spacing.radius-full;
                         }
                         Rectangle {
                             x: max(0px, min(parent.width - self.width, parent.width * clamp(root.progress, 0.0, 1.0) - self.width / 2));
                             y: -5px;
                             width: 16px;
                             height: 16px;
-                            border-radius: 8px;
+                            border-radius: Spacing.radius-full;
                             background: Colors.primary;
                             visible: root.touch || progress-touch.has-hover || progress-touch.pressed;
                         }
