@@ -1,7 +1,6 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
-import { Elevation } from "../theme/elevation.slint";
 import { IconAction } from "../components/icon_action.slint";
 
 export component MessageActions inherits Rectangle {
@@ -51,10 +50,10 @@ export component MessageActions inherits Rectangle {
     action-btns := Rectangle {
         height: root.btn + Spacing.xxs * 2;
         width: (root.can-thread ? 4 : 3) * root.btn + (root.can-thread ? 5 : 4) * Spacing.xxs;
-        background: Colors.surface-raised;
-        border-radius: Spacing.radius-md;
-        border-width: Elevation.rim-width;
-        border-color: Elevation.raised-rim;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
+        border-width: Spacing.stroke;
+        border-color: Colors.border;
 
         HorizontalLayout {
             padding: Spacing.xxs;
@@ -64,6 +63,7 @@ export component MessageActions inherits Rectangle {
             // Reply button
             IconAction {
                 label: @tr("Reply to message");
+                visual-size: Spacing.button-height - Spacing.sm;
                 icon: Icons.reply;
                 clicked => {
                         root.reply-clicked(root.sender-id, root.timestamp-ns);
@@ -73,6 +73,7 @@ export component MessageActions inherits Rectangle {
             // React button
             react-btn := IconAction {
                 label: @tr("Add reaction");
+                visual-size: Spacing.button-height - Spacing.sm;
                 icon: Icons.smile;
                 clicked => {
                         root.react-clicked(root.sender-id, root.timestamp-ns,
@@ -87,6 +88,7 @@ export component MessageActions inherits Rectangle {
             // so a message with no replies could never START a thread.
             if root.can-thread: thread-btn := IconAction {
                 label: @tr("Reply in thread");
+                visual-size: Spacing.button-height - Spacing.sm;
                 icon: Icons.message-circle;
                 clicked => {
                         root.thread-clicked(root.message-id);
@@ -96,6 +98,7 @@ export component MessageActions inherits Rectangle {
             // More button
             more-btn := IconAction {
                 label: @tr("More message actions");
+                visual-size: Spacing.button-height - Spacing.sm;
                 icon: Icons.more-horizontal;
                 clicked => {
                         root.request-menu(more-btn.absolute-position.x,

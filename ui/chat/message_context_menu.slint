@@ -60,10 +60,10 @@ component QuickReaction inherits Rectangle {
     transform-scale-y: root.shown ? 100% : 64%;
     animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms / Appearance.animation-speed; }
     animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms / Appearance.animation-speed; }
-    border-radius: Spacing.touch-target-min / 2;
-    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
+    border-radius: Spacing.radius-control;
+    background: touch.pressed ? Colors.surface-control-hover : touch.has-hover ? Colors.surface-control : transparent;
     border-width: keys.has-focus ? Spacing.stroke : 0px;
-    border-color: Colors.primary;
+    border-color: Colors.focus-ring;
     accessible-role: button;
     accessible-label: @tr("React with {}", root.name);
     accessible-action-default => { root.clicked(); }
@@ -133,14 +133,14 @@ component MenuItem inherits Rectangle {
     callback focused(int, length, length);
 
     height: Spacing.touch-target-min;
-    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
+    background: touch.pressed ? Colors.surface-control-hover : touch.has-hover ? Colors.surface-control : transparent;
     transform-scale-x: touch.pressed ? 97% : 100%;
     transform-scale-y: touch.pressed ? 94% : 100%;
     animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
     animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-    border-radius: Spacing.radius-sm;
+    border-radius: Spacing.radius-control;
     border-width: keys.has-focus ? Spacing.stroke : 0px;
-    border-color: Colors.primary;
+    border-color: Colors.focus-ring;
     accessible-role: button;
     accessible-label: root.label;
     accessible-action-default => { root.clicked(); }
@@ -181,14 +181,15 @@ component MenuItem inherits Rectangle {
                 source: icon;
                 width: 20px;
                 height: 20px;
-                colorize: destructive ? Colors.error : Colors.text-secondary;
+                colorize: destructive ? Colors.danger : Colors.text-secondary;
             }
         }
 
         Text {
             text: label;
-            color: destructive ? Colors.error : Colors.text-primary;
-            font-size: Typography.sm;
+            color: destructive ? Colors.danger : Colors.text-primary;
+            font-size: 13px * Appearance.text-scale;
+            font-weight: Typography.semibold;
             vertical-alignment: center;
         }
     }
@@ -330,7 +331,7 @@ export component MessageContextMenu inherits Rectangle {
         height: max(0px, root.visible-bubble-bottom - self.y);
         border-radius: Spacing.radius-bubble;
         border-width: Spacing.stroke;
-        border-color: Colors.primary.with-alpha(0.65);
+        border-color: Colors.border;
     }
 
     // Menu container - positioned at the anchor (press point / click point).
@@ -348,8 +349,10 @@ export component MessageContextMenu inherits Rectangle {
         animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
         animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
-        material-level: 3;
-        elevation: 4;
+        material-enabled: false;
+        background: Colors.surface-card;
+        border-width: Spacing.stroke;
+        border-color: Colors.border;
 
         // The layout carries its own padding; adding it again here left an
         // empty band under "Delete for Me".
@@ -394,7 +397,7 @@ export component MessageContextMenu inherits Rectangle {
                 : self.has-bubble-anchor
                     ? (self.flip-up ? self.room-above : self.room-below)
                     : self.bottom-limit - self.top-limit));
-        border-radius: Spacing.radius-xl;
+        border-radius: Spacing.radius-panel;
 
         // Block backdrop clicks on menu
         TouchArea { }

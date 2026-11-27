@@ -6109,13 +6109,16 @@ fn secondary_chrome_exposes_its_shared_material() {
         "only the jump capsule floats over the list"
     );
     assert!(list.contains("export component MessageScrollPill inherits GlassSurface {"));
-    // The date and unread chips, and the history-retry notice that reuses
-    // the unread chip (41464d63), are a plain tinted fill, never a backdrop
-    // sample per row (glass_surface.slint:1).
+    // Timeline chips use flat fills. Dates use the muted control token.
+    let separators = include_str!("../../../ui/chat/message_row_separators.slint");
+    let (_, date) = separators
+        .split_once("export component DateSeparator")
+        .unwrap();
+    assert!(date.contains("background: Colors.surface-control;"));
     assert_eq!(
         list.matches("background: Materials.regular;").count(),
-        3,
-        "date, unread and history-retry chips"
+        2,
+        "unread and history-retry chips"
     );
     assert!(!list.contains("Colors.action-fill.with-alpha(0.97)"));
     let profile = include_str!("../../../ui/modals/user_profile.slint");

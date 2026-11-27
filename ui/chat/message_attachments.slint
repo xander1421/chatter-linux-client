@@ -73,7 +73,7 @@ export component MessageAttachments inherits VerticalLayout {
         width: root.media-width;
         property <AlbumRect> last-tile: root.album-rect(min(root.album-count, 10) - 1, min(root.album-count, 10), self.width, Spacing.xxs);
         height: self.last-tile.y + self.last-tile.height;
-        background: Colors.bubble-inset;
+        // The bubble paints through the 2 px gaps and clips the outer corners.
         clip: true;
 
         for attachment in root.attachments: Rectangle {
@@ -84,7 +84,7 @@ export component MessageAttachments inherits VerticalLayout {
             y: self.in-album ? self.tile.y : 0px;
             width: self.in-album ? self.tile.width : 0px;
             height: self.in-album ? self.tile.height : 0px;
-            background: Colors.surface-hover;
+            background: Colors.surface-control;
             clip: true;
 
             // Placeholder under the thumbnail; the thumbnail fades in over it as
@@ -161,7 +161,7 @@ export component MessageAttachments inherits VerticalLayout {
                 width: 22px;
                 height: 22px;
                 border-radius: 11px;
-                background: #00000099;
+                background: Colors.overlay-heavy;
                 Image {
                     source: Icons.x;
                     width: 12px;
@@ -183,7 +183,7 @@ export component MessageAttachments inherits VerticalLayout {
             x: parent.width - self.width - Spacing.sm;
             y: parent.height - self.height - Spacing.sm;
             border-radius: Spacing.radius-full;
-            background: #00000073;
+            background: Colors.surface-card;
             album-stamp-content := MessageFooter {
                 x: Spacing.sm; y: Spacing.xs;
                 width: self.preferred-width; height: self.preferred-height;
@@ -354,7 +354,7 @@ export component MessageAttachments inherits VerticalLayout {
                 width: 28px;
                 height: 28px;
                 border-radius: 14px;
-                background: #00000099;
+                background: Colors.overlay-heavy;
                 Image {
                     source: Icons.x;
                     width: 14px;
@@ -375,7 +375,7 @@ export component MessageAttachments inherits VerticalLayout {
                 x: parent.width - self.width - Spacing.sm;
                 y: parent.height - self.height - Spacing.sm;
                 border-radius: Spacing.radius-full;
-                background: #00000073;
+                background: Colors.surface-card;
 
                 stamp-content := MessageFooter {
                     x: Spacing.sm;
@@ -656,7 +656,7 @@ export component MessageAttachments inherits VerticalLayout {
                 width: 24px;
                 height: 24px;
                 border-radius: 12px;
-                background: #00000099;
+                background: Colors.overlay-heavy;
                 Image {
                     source: Icons.x;
                     width: 12px;

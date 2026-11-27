@@ -442,7 +442,7 @@ export component MessageItem inherits Rectangle {
         padding-right: Spacing.sm;
         spacing: root.is-continuation ? Spacing.xxs : Spacing.xs;
 
-        // System message (centered, no bubble)
+        // System message (centered, muted timeline text)
         if root.is-system && !root.is-call: Rectangle {
             width: 100%;
             height: system-text.preferred-height + Spacing.sm;
@@ -451,8 +451,8 @@ export component MessageItem inherits Rectangle {
                 width: 100%;
                 text: root.content;
                 color: Colors.text-muted;
-                font-size: Typography.sm;
-                font-italic: true;
+                font-size: Typography.xs;
+                vertical-alignment: center;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -645,17 +645,9 @@ export component MessageItem inherits Rectangle {
                         }
                     }
 
-                    // Send progress: a thin line along the bubble's bottom edge
-                    // while this message is on its way, red once it is not
-                    // going. On the bubble, so it says which message is in
-                    // flight and never moves the composer; a 2px line, so the
-                    // bubble keeps its final height from the first frame. Core
-                    // reports no byte progress for an upload, so the sending
-                    // sweep is indeterminate and only the state is real:
-                    // sending / landed (line gone, tick) / failed.
+                    // Pending sends use an indeterminate line. Failures use the footer status.
                     if root.is-own && !root.mesh-delivery
-                        && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor" || root.delivery-status == "failed"): send-line := Rectangle {
-                        property <bool> failed: root.delivery-status == "failed";
+                        && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor"): Rectangle {
                         // Inset past the bottom corners' curve so the line
                         // never pokes out of the rounded fill.
                         x: root.r-round;
@@ -666,22 +658,20 @@ export component MessageItem inherits Rectangle {
                         clip: true;
                         // Reduce animations: the line is a solid, still
                         // "Sending" mark — same state, no sweep, no tick.
-                        background: failed ? Colors.error
-                            : Appearance.reduce-motion ? Colors.primary
-                            : Colors.primary.transparentize(0.8);
+                        background: Appearance.reduce-motion ? Colors.text-secondary : Colors.border;
                         accessible-role: progress-indicator;
-                        accessible-label: failed ? @tr("Not sent") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
+                        accessible-label: root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
 
                         // One sweep per 1.4s; `animation-tick` only ticks while
                         // this element exists, i.e. while a send is pending
                         // and the user has not asked for reduced motion (then
                         // the element is never created, so nothing ticks).
-                        if !send-line.failed && !Appearance.reduce-motion: Rectangle {
+                        if !Appearance.reduce-motion: Rectangle {
                             width: parent.width * 0.35;
                             x: (parent.width + self.width) * (Math.mod(animation-tick(), 1400ms / Appearance.animation-speed) / (1400ms / Appearance.animation-speed)) - self.width;
                             height: parent.height;
                             border-radius: parent.border-radius;
-                            background: Colors.primary;
+                            background: Colors.text-secondary;
                         }
                     }
 
