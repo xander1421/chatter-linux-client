@@ -37,9 +37,10 @@ use crate::services::svr_backup_service::SvrBackupError;
 pub enum KeyRecoveryNeed {
     /// No PIN was supplied, so the SVR backup was never even attempted.
     NoPinProvided,
-    /// The backup exists but did not decrypt. Overwhelmingly a wrong PIN: the
-    /// PIN is the only input to the key that opens it.
+    /// The server rejected the PIN-derived backup identifier.
     WrongPin { remaining_attempts: Option<u32> },
+    /// The identifier matched, but the backup could not be decrypted or parsed.
+    UnreadableBackup,
     /// The account has no SVR backup at all. The original identity key is
     /// genuinely unrecoverable, so a new one is the only way forward — but the
     /// user has to choose it, because their contacts will see the change.
@@ -70,9 +71,11 @@ impl KeyRecoveryNeed {
             // A PIN that was never entered, entered wrongly, or that the
             // server is currently refusing to check — all still lead back to
             // the real key.
-            Self::NoPinProvided | Self::WrongPin { .. } | Self::RateLimited | Self::Unavailable => {
-                true
-            }
+            Self::NoPinProvided
+            | Self::WrongPin { .. }
+            | Self::UnreadableBackup
+            | Self::RateLimited
+            | Self::Unavailable => true,
             // There is nothing left to recover from.
             Self::NoBackup | Self::BackupDestroyed | Self::StaleBackup => false,
         }
@@ -99,6 +102,7 @@ impl KeyRecoveryNeed {
             } => chatter_i18n::tr(
                 "That PIN did not unlock your key backup. Check the PIN and try again.",
             ),
+            Self::UnreadableBackup => chatter_i18n::tr("Your key backup could not be read."),
             Self::NoBackup => chatter_i18n::tr(
                 "No key backup was found for this account. Your previous conversations cannot be recovered. You can start over with new encryption keys — your contacts will be asked to verify you again.",
             ),
@@ -127,19 +131,16 @@ pub fn classify_restore_failure(err: &SvrBackupError) -> KeyRecoveryNeed {
         // all; a backup under a different PIN-derived id is PERMISSION_DENIED
         // (`WrongPin`). OPEN-ITEMS §114.
         SvrBackupError::BackupNotFound => KeyRecoveryNeed::NoBackup,
-        // The server says the PIN-derived id does not match, or the backup was
-        // found and did not decrypt: either way the PIN is wrong.
         SvrBackupError::WrongPin { remaining_attempts } => KeyRecoveryNeed::WrongPin {
             remaining_attempts: *remaining_attempts,
         },
-        SvrBackupError::Crypto(_) => KeyRecoveryNeed::WrongPin {
-            remaining_attempts: None,
-        },
+        SvrBackupError::UnreadableBackup(_) => KeyRecoveryNeed::UnreadableBackup,
         SvrBackupError::BackupDestroyed => KeyRecoveryNeed::BackupDestroyed,
         SvrBackupError::RateLimited => KeyRecoveryNeed::RateLimited,
-        SvrBackupError::Network(_) | SvrBackupError::Storage(_) | SvrBackupError::Generic(_) => {
-            KeyRecoveryNeed::Unavailable
-        }
+        SvrBackupError::Crypto(_)
+        | SvrBackupError::Network(_)
+        | SvrBackupError::Storage(_)
+        | SvrBackupError::Generic(_) => KeyRecoveryNeed::Unavailable,
     }
 }
 
@@ -149,23 +150,12 @@ mod tests {
     use crate::error::{CryptoError, NetworkError, StorageError};
 
     #[test]
-    fn a_wrong_pin_never_authorises_a_new_identity() {
-        // The single most dangerous misclassification: a typo must not be
-        // allowed to look like "this account has no backup", because the
-        // response to that is to mint a key and abandon the real one.
-        let need = classify_restore_failure(&SvrBackupError::Crypto(CryptoError::Protocol(
+    fn unreadable_backup_never_reports_a_wrong_pin_or_authorises_a_reset() {
+        let need = classify_restore_failure(&SvrBackupError::UnreadableBackup(CryptoError::Protocol(
             "decrypt failed".into(),
         )));
-        assert_eq!(
-            need,
-            KeyRecoveryNeed::WrongPin {
-                remaining_attempts: None
-            }
-        );
-        assert!(
-            need.is_retryable(),
-            "a wrong PIN leaves the original key recoverable — minting over it destroys the account"
-        );
+        assert_eq!(need, KeyRecoveryNeed::UnreadableBackup);
+        assert!(need.is_retryable());
     }
 
     #[test]
@@ -233,6 +223,7 @@ mod tests {
     fn every_need_says_something_actionable() {
         for need in [
             KeyRecoveryNeed::NoPinProvided,
+            KeyRecoveryNeed::UnreadableBackup,
             KeyRecoveryNeed::WrongPin {
                 remaining_attempts: None,
             },

@@ -76,9 +76,7 @@ const DEVICE_CONFIGURATION_SETTINGS: &[&str] = &[
 pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(), StorageError> {
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
-    for table in DEVICE_CONFIGURATION_TABLES {
-        tx.execute(&format!("DELETE FROM {table}"), [])?;
-    }
+    clear_device_configuration_tables(&tx)?;
     for key in DEVICE_CONFIGURATION_SETTINGS {
         tx.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
     }
@@ -98,6 +96,30 @@ pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(),
         ],
     )?;
     tx.commit()?;
+    Ok(())
+}
+
+fn clear_device_configuration_tables(tx: &Transaction<'_>) -> Result<(), StorageError> {
+    for table in DEVICE_CONFIGURATION_TABLES {
+        tx.execute(&format!("DELETE FROM {table}"), [])?;
+    }
+    Ok(())
+}
+
+/// Discard protocol state bound to an unpublished identity while keeping
+/// the provisional sign-in, the account's KT baseline, and message history.
+pub(crate) fn clear_staged_device_crypto(tx: &Transaction<'_>) -> Result<(), StorageError> {
+    clear_device_configuration_tables(tx)?;
+    tx.execute("DELETE FROM remote_identities", [])?;
+    for key in [
+        keys::PROFILE_KEY_NEXT,
+        keys::PROFILE_KEY_ROTATION_PENDING,
+        keys::SENDER_CERTIFICATE,
+        keys::SENDER_CERTIFICATE_REFRESH_AFTER,
+        keys::SENDER_CERTIFICATE_SERVER_KEY_ID,
+    ] {
+        tx.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+    }
     Ok(())
 }
 

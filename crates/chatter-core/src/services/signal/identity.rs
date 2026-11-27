@@ -260,9 +260,13 @@ impl SignalService {
         auth_client: &mut AuthClient,
         device_id: u32,
     ) -> Result<(), ServiceError> {
+        // An identity restore can leave a bundle on the server whose
+        // prekeys have been discarded locally.
+        let has_signed_prekey = self.key_store.get_latest_signed_prekey_created_at()?.is_some();
         ensure_device_bundle_with(
             auth_client,
             device_id,
+            has_signed_prekey,
             AuthClient::get_pre_key_stats,
             async |client| self.publish_device_bundle(client).await,
         )
@@ -480,6 +484,7 @@ impl SignalService {
 async fn ensure_device_bundle_with<T>(
     client: &mut T,
     device_id: u32,
+    has_signed_prekey: bool,
     status: impl AsyncFn(
         &mut T,
         u32,
@@ -497,7 +502,7 @@ async fn ensure_device_bundle_with<T>(
         }
         Ok(reply.available_count > 0)
     };
-    if ready(status(client, device_id).await?)? {
+    if has_signed_prekey && ready(status(client, device_id).await?)? {
         return Ok(());
     }
     publish(client).await?;
@@ -517,15 +522,17 @@ mod bundle_tests {
 
     #[tokio::test]
     async fn sign_in_uses_the_own_device_status_before_and_after_publication() {
-        for (counts, expected_calls, confirmed) in [
-            (vec![80], vec!["status"], true),
-            (vec![0, 80], vec!["status", "publish", "status"], true),
-            (vec![0, 0], vec!["status", "publish", "status"], false),
+        for (has_signed_prekey, counts, expected_calls, confirmed) in [
+            (true, vec![80], vec!["status"], true),
+            (true, vec![0, 80], vec!["status", "publish", "status"], true),
+            (true, vec![0, 0], vec!["status", "publish", "status"], false),
+            (false, vec![80], vec!["publish", "status"], true),
         ] {
             let mut server = (std::collections::VecDeque::from(counts), Vec::new());
             let result = ensure_device_bundle_with(
                 &mut server,
                 7,
+                has_signed_prekey,
                 async |server, device_id| {
                     assert_eq!(device_id, 7);
                     server.1.push("status");

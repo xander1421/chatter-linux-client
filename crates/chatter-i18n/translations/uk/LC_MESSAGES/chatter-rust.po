@@ -1157,6 +1157,10 @@ msgstr ""
 "Цей PIN не відкрив резервну копію ключів. Перевірте PIN і спробуйте ще раз."
 
 #: crates/chatter-core/src/services/key_recovery.rs
+msgid "Your key backup could not be read."
+msgstr "Не вдалося прочитати резервну копію ключів."
+
+#: crates/chatter-core/src/services/key_recovery.rs
 msgid "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again."
 msgid_plural "That PIN did not unlock your key backup. {n} attempts remaining. Check your current PIN before trying again."
 msgstr[0] "Цей PIN-код не розблокував резервну копію ключів. Залишилася {n} спроба. Перевірте чинний PIN-код перед наступною спробою."

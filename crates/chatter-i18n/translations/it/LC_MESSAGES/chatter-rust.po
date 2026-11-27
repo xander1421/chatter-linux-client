@@ -1151,6 +1151,10 @@ msgstr ""
 "Quel PIN non ha sbloccato il backup delle chiavi. Controlla il PIN e riprova."
 
 #: crates/chatter-core/src/services/key_recovery.rs
+msgid "Your key backup could not be read."
+msgstr "Impossibile leggere il backup delle chiavi."
+
+#: crates/chatter-core/src/services/key_recovery.rs
 msgid "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again."
 msgid_plural "That PIN did not unlock your key backup. {n} attempts remaining. Check your current PIN before trying again."
 msgstr[0] "Questo PIN non ha sbloccato il backup delle chiavi. Rimane {n} tentativo. Controlla il PIN attuale prima di riprovare."

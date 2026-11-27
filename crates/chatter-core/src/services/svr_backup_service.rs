@@ -34,6 +34,10 @@ pub enum SvrBackupError {
     #[error("crypto error: {0}")]
     Crypto(#[from] CryptoError),
 
+    /// The backup identifier matched, but the returned ciphertext could not be read.
+    #[error("unreadable key backup")]
+    UnreadableBackup(#[source] CryptoError),
+
     /// gRPC network error.
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
@@ -526,11 +530,8 @@ impl SvrBackupService {
         }
 
         // 4. Decrypt
-        let payload = decrypt_backup(&result.encrypted_backup, svr_secret).map_err(|_| {
-            SvrBackupError::WrongPin {
-                remaining_attempts: Some(result.remaining_attempts as u32),
-            }
-        })?;
+        let payload = decrypt_backup(&result.encrypted_backup, svr_secret)
+            .map_err(SvrBackupError::UnreadableBackup)?;
 
         // 5. Store server version locally for future increments
         self.settings.set(SVR_BACKUP_VERSION_KEY, &result.version)?;

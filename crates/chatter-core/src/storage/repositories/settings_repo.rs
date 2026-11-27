@@ -357,10 +357,18 @@ impl SettingsRepository {
     ///
     /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
     pub fn set_bytes(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
-        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+        let conn = self.db.connection()?;
+        Self::set_bytes_with_connection(&conn, key, value)
+    }
 
+    pub(crate) fn set_bytes_with_connection(
+        conn: &rusqlite::Connection,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), StorageError> {
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         let encoded = BASE64.encode(value);
-        self.set(key, &encoded)
+        Self::set_with_connection(conn, key, &encoded)
     }
 
     // ========================================================================
