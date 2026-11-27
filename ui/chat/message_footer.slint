@@ -199,13 +199,15 @@ export component MessageFooter inherits HorizontalLayout {
             // that queue's flush failed: a word, not a tick —
             // neither has reached the server, and "failed"
             // must never read as delivered.
-            if root.is-own && !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor" || root.delivery-status == "upload-queued"): Text {
-                text: root.delivery-status == "upload-queued" ? @tr("queued") : root.delivery-status == "waiting-tor" ? @tr("waiting for Tor") : @tr("sending");
+            // A plain send shows only the bubble's progress line (owner
+            // 2026-11-27); words remain for the states that need explaining.
+            if root.is-own && !root.mesh-delivery && (root.delivery-status == "waiting-tor" || root.delivery-status == "upload-queued"): Text {
+                text: root.delivery-status == "upload-queued" ? @tr("queued") : @tr("waiting for Tor");
                 color: root.meta-color;
                 font-size: Typography.xs;
                 font-italic: true;
                 accessible-role: text;
-                accessible-label: root.delivery-status == "upload-queued" ? @tr("Queued behind an earlier send; upload has not started") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
+                accessible-label: root.delivery-status == "upload-queued" ? @tr("Queued behind an earlier send; upload has not started") : @tr("Waiting for Tor");
             }
 
             if root.is-own && !root.mesh-delivery && (root.delivery-status == "verifying-key" || root.delivery-status == "key-not-verified" || root.delivery-status == "identity-changed" || root.delivery-status == "waiting-anonymous-credentials" || root.delivery-status == "waiting-group-settings"): Text {
