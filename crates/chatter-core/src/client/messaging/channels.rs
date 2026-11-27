@@ -207,23 +207,10 @@ impl ChatterClient {
         }
         match self.lookup_by_username(trimmed).await {
             Ok(Some(user_id)) if !cands.iter().any(|c| c.user_id == user_id) => {
-                match self.get_user_profile(&user_id).await {
-                    Ok(profile) => cands.push(InviteCandidate {
-                        user_id,
-                        display_name: profile.display_name,
-                        username: self
-                            .known_username(&user_id)
-                            .unwrap_or_else(|| trimmed.to_string()),
-                        avatar_bytes: profile.avatar_bytes.unwrap_or_default(),
-                        // A non-contact found by exact username; if already a
-                        // member or banned, the invite RPC rejects it server-side.
-                        already_member: false,
-                        banned: false,
-                    }),
-                    Err(e) => {
-                        tracing::warn!(error = %e, %user_id, "lookup hit but profile fetch failed")
-                    }
-                }
+                let username = self
+                    .known_username(&user_id)
+                    .unwrap_or_else(|| trimmed.to_string());
+                cands.push(InviteCandidate::found_by_username(user_id, username));
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, query = %trimmed, "username lookup failed"),
