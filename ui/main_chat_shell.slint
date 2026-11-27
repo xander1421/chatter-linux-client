@@ -504,7 +504,8 @@ export component MainChatShell inherits Rectangle {
                 // flashed the two-pane placeholder on every phone open.
                 if !CallView.active-call-fullscreen && ChatPane.channel-name == "" && !ChatPane.loading-messages: Rectangle {
                     vertical-stretch: 1;
-                    background: Colors.background;
+                    background: root.show-first-friend ? Colors.surface : Colors.background;
+                    border-radius: root.show-first-friend ? 12px : 0px;
                     if root.show-first-friend: FirstFriend {
                         width: parent.width;
                         height: parent.height;
