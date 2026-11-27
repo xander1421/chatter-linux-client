@@ -273,6 +273,10 @@ export component SidebarRail inherits Rectangle {
         }
         scroll := Flickable {
             vertical-stretch: 1;
+            // Take all spare height so Expand sits at the bottom of the rail
+            // (owner's 4C/5E mockup), not right under the last card.
+            min-height: 0px;
+            max-height: 100000px;
             viewport-width: self.width;
             viewport-height: stack.preferred-height;
             changed viewport-y => { root.hover-hint = ""; }
