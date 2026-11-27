@@ -1,3 +1,5 @@
+import { Appearance } from "../theme/appearance.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 import { ModalContainer } from "../components/modal_container.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
@@ -33,10 +35,10 @@ component NearbyPeerRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Rectangle { width: 40px; height: 40px; border-radius: Spacing.radius-full;
-                background: Colors.tint-strong;
+                background: Colors.surface-control;
                 Image { source: Icons.user; width: Spacing.button-icon; height: Spacing.button-icon;
                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                    colorize: Colors.primary; }
+                    colorize: Colors.text-secondary; }
             }
         }
         VerticalLayout { horizontal-stretch: 1; alignment: center;
@@ -70,28 +72,46 @@ export component MeshSetupSheet inherits Rectangle {
         fill-height: true;
         close => { root.close(); }
         VerticalLayout {
-            padding-left: Spacing.lg; padding-right: Spacing.lg;
-            padding-top: Spacing.md; padding-bottom: Spacing.xl;
-            spacing: Spacing.md;
-            HorizontalLayout {
-                height: Spacing.touch-target-min;
-                                Text { text: @tr("Mesh settings"); color: Colors.text-primary; font-size: Typography.lg;
-                    font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
-                Button { text: @tr("Done"); variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
+            padding: Spacing.panel-gutter;
+            spacing: Spacing.panel-gutter;
+            GlassSurface {
+                height: Spacing.touch-target-min + 2 * Spacing.xxs;
+                border-radius: Spacing.radius-panel;
+                elevation: 0;
+                HorizontalLayout {
+                    padding: Spacing.xxs;
+                    spacing: Spacing.xs;
+                    Text {
+                        text: @tr("Mesh settings");
+                        color: Colors.text-primary;
+                        font-size: 14px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    Button {
+                        text: @tr("Done");
+                        variant: "ghost";
+                        touch: root.touch;
+                        border-radius: Spacing.radius-control;
+                        clicked => { root.close(); }
+                    }
+                }
             }
             Flickable {
                 width: 100%; vertical-stretch: 1;
                 viewport-height: setup-content.preferred-height;
                 setup-content := VerticalLayout {
                     width: parent.width;
-                    spacing: Spacing.lg;
+                    spacing: Spacing.panel-gutter;
                     padding-bottom: Spacing.xl;
                     if MeshGlobal.pending-private-id != "": VerticalLayout {
                         spacing: Spacing.sm;
-                        Text { text: "INVITATION"; color: Colors.text-muted; font-size: Typography.xs;
-                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Text { text: "INVITATION"; color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold; letter-spacing: self.font-size * 0.06; }
                         Rectangle {
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             VerticalLayout { padding: Spacing.md; spacing: Spacing.sm;
                                 Text {
                                     width: parent.width;
@@ -112,15 +132,15 @@ export component MeshSetupSheet inherits Rectangle {
                     }
                     VerticalLayout {
                         spacing: Spacing.sm;
-                        Text { text: "RADIO"; color: Colors.text-muted; font-size: Typography.xs;
-                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Text { text: "RADIO"; color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold; letter-spacing: self.font-size * 0.06; }
                         Text {
                             width: parent.width;
                             text: @tr("While Mesh is on, nearby devices that connect over Bluetooth may see your device name. You can change it in system settings.");
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
                         }
                         Rectangle {
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             VerticalLayout {
                                 ToggleRow {
                                     checked <=> MeshGlobal.mesh-on;
@@ -159,7 +179,7 @@ export component MeshSetupSheet inherits Rectangle {
                         }
                     }
                     Rectangle {
-                        background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                        background: Colors.surface-card; border-radius: Spacing.radius-panel;
                         VerticalLayout {
                             public-chat-row := ToggleRow {
                                 checked <=> MeshGlobal.public-chat;
@@ -189,8 +209,8 @@ export component MeshSetupSheet inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.sm;
                         Text { text: @tr("Mesh nickname"); color: Colors.text-muted; font-size: Typography.xs;
-                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
-                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            font-weight: Typography.semibold; letter-spacing: self.font-size * 0.06; }
+                        Rectangle { background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
                                 Input { placeholder: @tr("Nickname"); text <=> root.name-draft;
                                     control-height: Spacing.touch-target-min; horizontal-stretch: 1;
@@ -211,7 +231,7 @@ export component MeshSetupSheet inherits Rectangle {
                         font-size: Typography.sm; wrap: word-wrap; }
                     VerticalLayout {
                         spacing: Spacing.sm;
-                        Rectangle { height: erase-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                        Rectangle { height: erase-row.preferred-height; background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             erase-row := SettingsRow { icon: Icons.trash; title: @tr("Erase Mesh data…"); destructive: true;
                                 touch: root.touch; show-chevron: false; clicked => { root.confirming-wipe = true; } }
                         }
@@ -228,7 +248,7 @@ export component MeshSetupSheet inherits Rectangle {
             y: parent.height - self.preferred-height - Spacing.lg;
             spacing: Spacing.sm;
             Rectangle { height: wipe-action.preferred-height;
-                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                background: Colors.surface-card; border-radius: Spacing.radius-panel;
                 wipe-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
                     Text {
                         width: parent.width;
@@ -239,7 +259,7 @@ export component MeshSetupSheet inherits Rectangle {
                 }
             }
             Rectangle { height: wipe-cancel.preferred-height;
-                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                background: Colors.surface-card; border-radius: Spacing.radius-panel;
                 wipe-cancel := VerticalLayout { padding: Spacing.sm;
                     Button { text: @tr("Cancel"); variant: "ghost"; touch: root.touch;
                         clicked => { root.confirming-wipe = false; } }

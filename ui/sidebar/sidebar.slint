@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { Materials } from "../theme/materials.slint";
@@ -137,6 +138,7 @@ export component Sidebar inherits Rectangle {
     private property <length> card-top-clearance: root.top-row-height
         + (DesktopChrome.macos ? Spacing.panel-gutter : 2 * Spacing.panel-gutter);
     private property <length> expanded-frame-inset: max(0px, Spacing.panel-gutter - DesktopChrome.frame-inset);
+    private property <bool> framed-archive: root.expanded-cards && root.archive-open;
     private property <bool> show-card-list: root.expanded-cards && !root.archive-open && root.active-tab != "mesh";
     private property <int> focused-card-index: 0;
     // The Saved action and every other card header use the -1 slot.
@@ -509,10 +511,22 @@ export component Sidebar inherits Rectangle {
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
+        if root.framed-archive: Rectangle {
+            x: root.expanded-frame-inset;
+            y: root.card-top-clearance;
+            width: root.width - self.x - Spacing.panel-gutter;
+            height: max(0px, root.height - self.y - Spacing.panel-gutter);
+            border-radius: Spacing.radius-panel;
+            border-width: Spacing.stroke;
+            border-color: Colors.border;
+            background: Colors.background;
+        }
         central-scroll := ListView {
             visible: !root.show-card-list && (root.active-tab != "mesh" || root.desktop-rail);
-            width: root.width;
-            height: root.height;
+            x: root.framed-archive ? root.expanded-frame-inset + Spacing.panel-gutter : 0px;
+            y: root.framed-archive ? root.card-top-clearance + Spacing.panel-gutter : 0px;
+            width: root.framed-archive ? root.width - self.x - 2 * Spacing.panel-gutter : root.width;
+            height: root.framed-archive ? max(0px, root.height - self.y - 2 * Spacing.panel-gutter) : root.height;
             immediate-child-press: true;
             // Leave predominantly horizontal swipes to the nested pinned strip.
             drag-axis-lock: root.mobile-mode;
@@ -522,8 +536,9 @@ export component Sidebar inherits Rectangle {
                 changed roving-highlight => {
                     if (self.roving-highlight) {
                         let top = self.absolute-position.y - central-scroll.absolute-position.y;
-                        if (top < root.top-row-height) {
-                            central-scroll.viewport-y = min(0px, central-scroll.viewport-y + root.top-row-height - top);
+                        let obscured = root.framed-archive ? 0px : root.top-row-height;
+                        if (top < obscured) {
+                            central-scroll.viewport-y = min(0px, central-scroll.viewport-y + obscured - top);
                         } else if (top + self.height > central-scroll.height) {
                             central-scroll.viewport-y = max(central-scroll.height - central-scroll.viewport-height,
                                 central-scroll.viewport-y - (top + self.height - central-scroll.height));
@@ -535,18 +550,24 @@ export component Sidebar inherits Rectangle {
                 spacing: Spacing.none;
                 // The pinned title and the floating footer stay outside the
                 // virtualized content; only their scroll clearance is a row.
-                padding-top: idx == 0
+                padding-top: idx == 0 && !root.framed-archive
                     ? (root.collapsed ? (DesktopChrome.macos ? max(0px, root.titlebar-height - 2 * Spacing.sm) : root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
                         + (root.mobile-mode ? Spacing.none : Spacing.sm)
                     : Spacing.none;
-                padding-bottom: entry.kind == "bottom"
+                padding-bottom: root.framed-archive && (entry.kind == "archive-back" || entry.kind == "archived-chat")
+                    ? Spacing.panel-gutter
+                    : entry.kind == "bottom" && !root.framed-archive
                     ? (root.mobile-mode
                         ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
                         : (root.collapsed ? root.rail-footer-height : Spacing.button-height)
                             + Spacing.md)
                     : Spacing.none;
-                if !root.desktop-rail && (entry.kind == "archive-entry" || entry.kind == "archive-back"): Rectangle {
+                if !root.desktop-rail && (entry.kind == "archive-entry" || entry.kind == "archive-back"): GlassSurface {
                     height: root.quick-link-height;
+                    border-radius: root.framed-archive ? Spacing.radius-panel : 0px;
+                    material-enabled: root.framed-archive;
+                    show-edge: root.framed-archive;
+                    elevation: 0;
                     accessible-role: button;
                     accessible-label: entry.kind == "archive-back" ? @tr("Back to chats") : @tr("Archived chats");
                     accessible-action-default => { root.archive-view-changed(entry.kind == "archive-entry"); }
@@ -582,7 +603,7 @@ export component Sidebar inherits Rectangle {
                             text: entry.kind == "archive-back" ? @tr("Archived chats") : @tr("Archived");
                             font-weight: entry.kind == "archive-back" ? Typography.semibold : Typography.normal;
                             color: Colors.text-primary;
-                            font-size: root.quick-link-text-size;
+                            font-size: root.framed-archive ? 14px * Appearance.text-scale : root.quick-link-text-size;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                         }
@@ -924,10 +945,14 @@ export component Sidebar inherits Rectangle {
                 }
                 if entry.kind == "archived-chat" || (entry.kind == "chat"
                     && !(root.mobile-mode && root.phone-pinned.length > 0 && entry.chat.is-pinned)): Rectangle {
-                    height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs;
+                    height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop)
+                        + (root.framed-archive ? 2 * Spacing.sm : Spacing.xxs);
+                    border-radius: root.framed-archive ? Spacing.radius-panel : 0px;
+                    background: root.framed-archive ? Colors.surface-card : transparent;
                     chat-row := ChatRow {
-                        x: Spacing.xs;
-                        width: parent.width - 2 * Spacing.xs;
+                        x: root.framed-archive ? Spacing.sm : Spacing.xs;
+                        width: parent.width - 2 * self.x;
+                        card-mode: root.framed-archive;
                         data: entry.chat;
                         collapsed: root.collapsed;
                         mobile-mode: root.touch;

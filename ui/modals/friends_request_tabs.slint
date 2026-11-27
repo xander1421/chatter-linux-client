@@ -66,9 +66,10 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "received";
 
             accessible-action-default => { root.requests-sub-tab = "received"; }
-            KeyFocus { activate => { root.requests-sub-tab = "received"; } }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.requests-sub-tab = "received"; } }
             width: root.recv-w;
-            background: recv-tab-touch.has-hover ? Materials.hover : transparent;
+            border-radius: Spacing.radius-control;
+            background: root.requests-sub-tab == "received" ? Colors.tint-strong : recv-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
                 HorizontalLayout {
@@ -83,10 +84,6 @@ export component RequestTabs inherits Flickable {
                     }
                 }
 
-                Rectangle {
-                    height: 2px;
-                    background: root.requests-sub-tab == "received" ? Colors.primary : transparent;
-                }
             }
 
             recv-tab-touch := TouchArea {
@@ -108,9 +105,10 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "sent";
 
             accessible-action-default => { root.requests-sub-tab = "sent"; }
-            KeyFocus { activate => { root.requests-sub-tab = "sent"; } }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.requests-sub-tab = "sent"; } }
             width: root.sent-w;
-            background: sent-tab-touch.has-hover ? Materials.hover : transparent;
+            border-radius: Spacing.radius-control;
+            background: root.requests-sub-tab == "sent" ? Colors.tint-strong : sent-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
                 HorizontalLayout {
@@ -125,10 +123,6 @@ export component RequestTabs inherits Flickable {
                     }
                 }
 
-                Rectangle {
-                    height: 2px;
-                    background: root.requests-sub-tab == "sent" ? Colors.primary : transparent;
-                }
             }
 
             sent-tab-touch := TouchArea {
@@ -150,9 +144,10 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "private";
 
             accessible-action-default => { root.requests-sub-tab = "private"; }
-            KeyFocus { activate => { root.requests-sub-tab = "private"; } }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.requests-sub-tab = "private"; } }
             width: root.priv-w;
-            background: priv-tab-touch.has-hover ? Materials.hover : transparent;
+            border-radius: Spacing.radius-control;
+            background: root.requests-sub-tab == "private" ? Colors.tint-strong : priv-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
                 HorizontalLayout {
@@ -167,10 +162,6 @@ export component RequestTabs inherits Flickable {
                     }
                 }
 
-                Rectangle {
-                    height: 2px;
-                    background: root.requests-sub-tab == "private" ? Colors.primary : transparent;
-                }
             }
 
             priv-tab-touch := TouchArea {
@@ -192,7 +183,7 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "groups";
 
             accessible-action-default => { root.requests-sub-tab = "groups"; }
-            KeyFocus { activate => { root.requests-sub-tab = "groups"; } }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.requests-sub-tab = "groups"; } }
             width: root.grp-w;
             background: groups-tab-touch.has-hover ? Materials.hover : transparent;
 
@@ -209,10 +200,6 @@ export component RequestTabs inherits Flickable {
                     }
                 }
 
-                Rectangle {
-                    height: 2px;
-                    background: root.requests-sub-tab == "groups" ? Colors.primary : transparent;
-                }
             }
 
             groups-tab-touch := TouchArea {
@@ -234,7 +221,7 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "channels";
 
             accessible-action-default => { root.requests-sub-tab = "channels"; }
-            KeyFocus { activate => { root.requests-sub-tab = "channels"; } }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.requests-sub-tab = "channels"; } }
             width: root.chan-w;
             background: channels-tab-touch.has-hover ? Materials.hover : transparent;
 
@@ -251,10 +238,6 @@ export component RequestTabs inherits Flickable {
                     }
                 }
 
-                Rectangle {
-                    height: 2px;
-                    background: root.requests-sub-tab == "channels" ? Colors.primary : transparent;
-                }
             }
 
             channels-tab-touch := TouchArea {

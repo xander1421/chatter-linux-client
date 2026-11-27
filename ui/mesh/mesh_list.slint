@@ -1,3 +1,5 @@
+import { Appearance } from "../theme/appearance.slint";
+import { Button } from "../components/button.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -20,7 +22,7 @@ export component MeshList inherits Rectangle {
     height: content.preferred-height;
     background: transparent;
     content := VerticalLayout {
-        spacing: Spacing.lg;
+        spacing: Spacing.panel-gutter;
         if root.collapsed: Rectangle {
             height: Spacing.touch-target-min;
             border-radius: Spacing.radius-md;
@@ -28,7 +30,7 @@ export component MeshList inherits Rectangle {
             Image {
                 source: Icons.radio; width: Spacing.button-icon; height: Spacing.button-icon;
                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                colorize: MeshGlobal.mesh-on ? Colors.primary : Colors.text-muted;
+                colorize: Colors.text-muted;
             }
             rail-touch := TouchArea {
                 mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Mesh setup");
@@ -36,7 +38,7 @@ export component MeshList inherits Rectangle {
             }
         }
         if !root.collapsed: VerticalLayout {
-            spacing: Spacing.lg;
+            spacing: Spacing.panel-gutter;
             HorizontalLayout {
                 padding-left: Spacing.lg; padding-right: Spacing.sm; spacing: Spacing.xs;
                 Text {
@@ -45,21 +47,21 @@ export component MeshList inherits Rectangle {
                 }
             }
             VerticalLayout {
-                padding-left: Spacing.lg; padding-right: Spacing.lg;
+                padding-left: Spacing.panel-gutter; padding-right: Spacing.panel-gutter;
                 Rectangle {
                     height: status-content.preferred-height;
-                    border-radius: Spacing.radius-lg; background: Colors.surface-section;
+                    border-radius: Spacing.radius-panel; background: Colors.surface-card;
                     status-content := VerticalLayout {
-                        padding: Spacing.md; spacing: Spacing.sm;
+                        padding: Spacing.sm; spacing: Spacing.sm;
                         HorizontalLayout {
                             spacing: Spacing.md;
                             Rectangle {
                                 width: 40px; height: 40px; border-radius: Spacing.radius-full;
-                                background: Colors.tint-weak;
+                                background: Colors.surface-control;
                                 Image {
                                     source: Icons.radio; width: 20px; height: 20px;
                                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                    colorize: Colors.primary;
+                                    colorize: Colors.text-secondary;
                                 }
                             }
                             VerticalLayout {
@@ -87,12 +89,12 @@ export component MeshList inherits Rectangle {
                 }
             }
             if MeshGlobal.pending-private-id != "": VerticalLayout {
-                padding-left: Spacing.lg; padding-right: Spacing.lg;
+                padding-left: Spacing.panel-gutter; padding-right: Spacing.panel-gutter;
                 Rectangle {
                     height: invitation-content.preferred-height;
-                    border-radius: Spacing.radius-lg; background: Colors.surface-section;
+                    border-radius: Spacing.radius-panel; background: Colors.surface-card;
                     invitation-content := VerticalLayout {
-                        padding: Spacing.md; spacing: Spacing.md;
+                        padding: Spacing.sm; spacing: Spacing.md;
                         Text {
                             text: @tr("{0} invited you to {1}", MeshGlobal.pending-private-peer, MeshGlobal.pending-private-name);
                             color: Colors.text-primary; font-size: Typography.sm;
@@ -100,71 +102,68 @@ export component MeshList inherits Rectangle {
                         }
                         HorizontalLayout {
                             spacing: Spacing.sm;
-                            Rectangle {
-                                height: Spacing.button-height; horizontal-stretch: 1;
-                                border-radius: Spacing.radius-md;
-                                background: decline-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
-                                Text { text: @tr("Decline"); color: Colors.text-secondary; font-size: Typography.sm;
-                                    horizontal-alignment: center; vertical-alignment: center; }
-                                decline-touch := TouchArea {
-                                    mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Decline mesh invitation");
-                                    clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); }
-                                }
+                            Button {
+                                text: @tr("Decline");
+                                label: @tr("Decline mesh invitation");
+                                variant: "secondary";
+                                touch: root.touch;
+                                horizontal-stretch: 1;
+                                border-radius: Spacing.radius-control;
+                                clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); }
                             }
-                            Rectangle {
-                                height: Spacing.button-height; horizontal-stretch: 1;
-                                border-radius: Spacing.radius-md; background: Colors.action-fill;
-                                Text { text: @tr("Join"); color: Colors.on-action; font-size: Typography.sm;
-                                    font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
-                                TouchArea {
-                                    mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("Join mesh invitation");
-                                    clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); }
-                                }
+                            Button {
+                                text: @tr("Join");
+                                label: @tr("Join mesh invitation");
+                                variant: "primary";
+                                touch: root.touch;
+                                horizontal-stretch: 1;
+                                border-radius: Spacing.radius-control;
+                                clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); }
                             }
                         }
                     }
                 }
             }
             if MeshGlobal.conversations.length == 0: VerticalLayout {
-                padding-left: Spacing.lg; padding-right: Spacing.lg;
+                padding-left: Spacing.panel-gutter; padding-right: Spacing.panel-gutter;
                 spacing: Spacing.md; alignment: center;
                 Rectangle {
                     width: 64px; height: 64px; border-radius: Spacing.radius-full;
-                    background: Colors.tint-weak;
+                    background: Colors.surface-control;
                     Image {
                         source: Icons.message-circle; width: 30px; height: 30px;
                         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                        colorize: Colors.primary;
+                        colorize: Colors.text-secondary;
                     }
                 }
                 Text { text: @tr("No mesh conversations"); color: Colors.text-primary;
-                    font-size: Typography.base; font-weight: Typography.semibold; horizontal-alignment: center; }
+                    font-size: 14px * Appearance.text-scale; font-weight: Typography.semibold; horizontal-alignment: center; }
                 Text {
                     text: @tr("Create a private group or pair a contact in Mesh settings.");
-                    color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; wrap: word-wrap; }
-                Rectangle {
-                    height: Spacing.button-height; border-radius: Spacing.radius-md;
-                    background: Colors.action-fill;
-                    Text { text: @tr("New group"); color: Colors.on-action; font-size: Typography.sm;
-                        font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
-                    TouchArea {
-                        mouse-cursor: pointer; accessible-role: button; accessible-label: @tr("New mesh group");
-                        clicked => { MeshGlobal.open-sheet("mesh-compose"); }
-                    }
+                    color: Colors.text-muted; font-size: Typography.xs; horizontal-alignment: center; wrap: word-wrap; }
+                Button {
+                    text: @tr("New group");
+                    label: @tr("New mesh group");
+                    variant: "primary";
+                    touch: root.touch;
+                    border-radius: Spacing.radius-control;
+                    clicked => { MeshGlobal.open-sheet("mesh-compose"); }
                 }
             }
             if MeshGlobal.conversations.length > 0: VerticalLayout {
-                spacing: Spacing.lg;
+                spacing: Spacing.panel-gutter;
                 if MeshGlobal.group-conversations.length > 0: VerticalLayout {
-                    padding-left: Spacing.lg; padding-right: Spacing.lg; spacing: Spacing.sm;
+                    padding-left: Spacing.panel-gutter; padding-right: Spacing.panel-gutter; spacing: Spacing.sm;
                     Text {
-                        text: @tr("GROUPS"); color: Colors.text-muted; font-size: Typography.xs;
+                        text: @tr("GROUPS"); color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                        letter-spacing: self.font-size * 0.06;
                         font-weight: Typography.semibold;
                     }
                     Rectangle {
-                        border-radius: Spacing.radius-lg; clip: true;
-                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-panel; clip: true;
+                        background: Colors.surface-card;
                         VerticalLayout {
+                            padding: Spacing.sm;
                             for item[i] in MeshGlobal.group-conversations: MeshListItem {
                                 title: item.title; kind: item.kind; scope: item.scope;
                                 timestamp: item.timestamp; unread-count: item.unread-count;
@@ -180,15 +179,17 @@ export component MeshList inherits Rectangle {
                     }
                 }
                 if MeshGlobal.channel-conversations.length > 0: VerticalLayout {
-                    padding-left: Spacing.lg; padding-right: Spacing.lg; spacing: Spacing.sm;
+                    padding-left: Spacing.panel-gutter; padding-right: Spacing.panel-gutter; spacing: Spacing.sm;
                     Text {
-                        text: @tr("CHANNELS"); color: Colors.text-muted; font-size: Typography.xs;
+                        text: @tr("CHANNELS"); color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                        letter-spacing: self.font-size * 0.06;
                         font-weight: Typography.semibold;
                     }
                     Rectangle {
-                        border-radius: Spacing.radius-lg; clip: true;
-                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-panel; clip: true;
+                        background: Colors.surface-card;
                         VerticalLayout {
+                            padding: Spacing.sm;
                             for item[i] in MeshGlobal.channel-conversations: MeshListItem {
                                 title: item.title; kind: item.kind; scope: item.scope;
                                 timestamp: item.timestamp; unread-count: item.unread-count;
@@ -204,15 +205,17 @@ export component MeshList inherits Rectangle {
                     }
                 }
                 if MeshGlobal.dm-conversations.length > 0: VerticalLayout {
-                    padding-left: Spacing.lg; padding-right: Spacing.lg; spacing: Spacing.sm;
+                    padding-left: Spacing.panel-gutter; padding-right: Spacing.panel-gutter; spacing: Spacing.sm;
                     Text {
-                        text: @tr("DIRECT MESSAGES"); color: Colors.text-muted; font-size: Typography.xs;
+                        text: @tr("DIRECT MESSAGES"); color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                        letter-spacing: self.font-size * 0.06;
                         font-weight: Typography.semibold;
                     }
                     Rectangle {
-                        border-radius: Spacing.radius-lg; clip: true;
-                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-panel; clip: true;
+                        background: Colors.surface-card;
                         VerticalLayout {
+                            padding: Spacing.sm;
                             for item[i] in MeshGlobal.dm-conversations: MeshListItem {
                                 title: item.title; kind: item.kind; scope: item.scope;
                                 timestamp: item.timestamp; unread-count: item.unread-count;

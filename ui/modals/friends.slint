@@ -164,7 +164,7 @@ export component FriendsModal inherits Rectangle {
         }
 
         VerticalLayout {
-            spacing: Spacing.md;
+            spacing: Spacing.panel-gutter;
             vertical-stretch: 1;
 
             // Main tab bar — Neo. Same box height as the dismissal control in
@@ -173,16 +173,14 @@ export component FriendsModal inherits Rectangle {
             // Hidden inside the Add sheet: there it is its own screen (own
             // title + back chevron), not a tab of Contacts.
             if !root.showing-add: GlassSurface {
-                material-enabled: root.mobile-mode;
+                material-enabled: true;
                 elevation: 0;
                 z: 1;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
-                // Segmented control, concentric with its shell (the same
-                // rule as the Calls tabs): the tabs sit `chrome-inset` inside
-                // the glass pill and the selected one is filled at
-                // `radius-chrome-inner`, so its fill follows the shell's
-                // curve instead of sticking square out past the rounded ends.
+                border-radius: Spacing.radius-panel;
+                material-tint: Colors.surface-card;
+
                 HorizontalLayout {
                     padding: Spacing.chrome-inset;
 
@@ -192,7 +190,7 @@ export component FriendsModal inherits Rectangle {
                         { id: "blocked", label: @tr("Blocked") }
                     ]: Rectangle {
                         horizontal-stretch: 1;
-                        border-radius: Spacing.radius-chrome-inner;
+                        border-radius: Spacing.radius-control;
                         background: root.active-tab == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
                         transform-origin: { x: self.width / 2, y: self.height / 2 };
                         transform-scale-x: tab-touch.pressed ? 96% : 100%;
@@ -232,13 +230,10 @@ export component FriendsModal inherits Rectangle {
                 }
             }
 
-            if !root.showing-add: Rectangle {
-                height: 1px;
-                background: Colors.divider;
-            }
-
-            // Content area
+            // Contact list card. The add sheet keeps its own surface.
             Rectangle {
+                background: root.showing-add || root.mobile-mode ? transparent : Colors.surface-card;
+                border-radius: Spacing.radius-panel;
                 // On a floating card, let Add Friend's full content determine
                 // the card height. The shared Modal caps it at the viewport and
                 // scrolls its body when that content is taller than the cap.

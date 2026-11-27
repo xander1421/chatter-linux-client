@@ -1,3 +1,5 @@
+import { Appearance } from "../theme/appearance.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { ModalContainer } from "../components/modal_container.slint";
 import { ActivityGlobal } from "activity_global.slint";
@@ -42,7 +44,7 @@ component ActivityFeedRow inherits Rectangle {
     in property <bool> touch: false;
     property <color> tint: root.kind == "server" ? Colors.warning
         : root.kind == "server-ok" ? Colors.success
-        : root.kind == "missed-call" ? Colors.error : root.kind == "update" ? Colors.info : Colors.primary;
+        : root.kind == "missed-call" ? Colors.error : root.kind == "update" ? Colors.info : Colors.text-secondary;
     property <image> glyph: root.kind == "mention" ? Icons.megaphone
         : root.kind == "reply" || root.kind == "thread" ? Icons.reply
         : root.kind == "reaction" ? Icons.smile
@@ -53,13 +55,14 @@ component ActivityFeedRow inherits Rectangle {
         : root.kind == "server" ? Icons.alert-triangle
         : root.kind == "server-ok" ? Icons.check : Icons.download;
     height: root.touch ? 76px : 68px;
+    border-radius: Spacing.radius-control;
     background: row-touch.has-hover ? Colors.surface-control-hover : transparent;
     HorizontalLayout {
         padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
         VerticalLayout { alignment: center;
             Rectangle {
                 width: 40px; height: 40px; border-radius: Spacing.radius-md;
-                background: root.tint.with-alpha(0.14);
+                background: Colors.surface-control;
                 Image { source: root.glyph; width: 20px; height: 20px;
                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                     colorize: root.tint; }
@@ -67,8 +70,8 @@ component ActivityFeedRow inherits Rectangle {
         }
         VerticalLayout { alignment: center; horizontal-stretch: 1; min-width: 0px;
             Text { text: root.title; color: Colors.text-primary; font-size: Typography.sm;
-                font-weight: root.unread ? Typography.semibold : Typography.medium; overflow: elide; }
-            if root.preview != "": Text { text: root.preview; color: Colors.text-secondary;
+                font-weight: Typography.semibold; overflow: elide; }
+            if root.preview != "": Text { text: root.preview; color: Colors.text-muted;
                 font-size: Typography.xs; overflow: elide; }
         }
         VerticalLayout { alignment: center; spacing: Spacing.xs;
@@ -119,47 +122,53 @@ export component ActivitySheet inherits Rectangle {
         fill-height: true;
         close => { root.close(); }
         VerticalLayout {
-            padding-left: Spacing.lg; padding-right: Spacing.lg;
-            padding-top: Spacing.md; padding-bottom: Spacing.xl;
-            spacing: Spacing.md;
-            HorizontalLayout {
-                height: Spacing.touch-target-min;
-                Rectangle {
-                    width: 90px; height: Spacing.touch-target-min;
-                    accessible-role: button; accessible-label: @tr("Close activity");
-                    accessible-action-default => { root.close(); }
-                    KeyFocus { border-radius: parent.border-radius; activate => { root.close(); } }
-                    Text { text: @tr("Done"); color: Colors.primary; font-size: Typography.base;
-                        vertical-alignment: center; }
-                    TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
-                }
-                Text { text: @tr("Activity"); color: Colors.text-primary; font-size: Typography.lg;
-                    font-weight: Typography.semibold; horizontal-alignment: center;
-                    vertical-alignment: center; horizontal-stretch: 1; }
-                Rectangle {
-                    width: 90px; height: Spacing.touch-target-min;
-                    accessible-role: button; accessible-label: @tr("Mark all read");
-                    accessible-enabled: ActivityGlobal.unread-count > 0;
-                    accessible-action-default => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } }
-                    KeyFocus { border-radius: parent.border-radius; activate => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } } }
-                    Text { text: @tr("Mark all read"); color: ActivityGlobal.unread-count > 0 ? Colors.primary : Colors.text-muted;
-                        width: parent.width; wrap: word-wrap;
-                        font-size: Typography.xs; font-weight: Typography.semibold;
-                        horizontal-alignment: right; vertical-alignment: center; }
-                    TouchArea { enabled: ActivityGlobal.unread-count > 0; mouse-cursor: pointer;
-                        clicked => { ActivityGlobal.mark-all-read(); } }
+            padding: Spacing.panel-gutter;
+            spacing: Spacing.panel-gutter;
+            GlassSurface {
+                height: Spacing.touch-target-min + 2 * Spacing.xxs;
+                border-radius: Spacing.radius-panel;
+                elevation: 0;
+                HorizontalLayout {
+                    padding: Spacing.xxs;
+                    spacing: Spacing.xs;
+                    Button {
+                        text: @tr("Done");
+                        label: @tr("Close activity");
+                        variant: "ghost";
+                        touch: root.touch;
+                        border-radius: Spacing.radius-control;
+                        clicked => { root.close(); }
+                    }
+                    Text {
+                        text: @tr("Activity");
+                        color: Colors.text-primary;
+                        font-size: 14px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: @tr("Mark all read");
+                        disabled: ActivityGlobal.unread-count == 0;
+                        variant: self.disabled ? "ghost" : "primary";
+                        touch: root.touch;
+                        border-radius: Spacing.radius-control;
+                        clicked => { ActivityGlobal.mark-all-read(); }
+                    }
                 }
             }
             Flickable {
                 width: 100%; vertical-stretch: 1;
                 viewport-height: activity-content.preferred-height;
                 activity-content := VerticalLayout {
-                    width: parent.width; spacing: Spacing.lg; padding-bottom: Spacing.xl;
+                    width: parent.width; spacing: Spacing.panel-gutter; padding-bottom: Spacing.panel-gutter;
                     VerticalLayout { spacing: Spacing.xs;
-                        Text { text: @tr("STATUS"); color: Colors.text-muted; font-size: Typography.xs;
-                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
-                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg; clip: true;
+                        Text { text: @tr("STATUS"); color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold; letter-spacing: self.font-size * 0.06; }
+                        Rectangle { background: Colors.surface-card; border-radius: Spacing.radius-panel; clip: true;
                             VerticalLayout {
+                                padding: Spacing.sm;
                                 StatusRow { title: @tr("Server"); value: root.server-value; touch: root.touch;
                                     tint: root.server-unreachable || root.connection-status == "failed" || root.connection-status == "disconnected"
                                         ? Colors.error : root.connection-status == "connected" ? Colors.success : Colors.warning; }
@@ -191,8 +200,8 @@ export component ActivitySheet inherits Rectangle {
                         }
                     }
                     VerticalLayout { spacing: Spacing.xs;
-                        Text { text: @tr("ACTIVITY"); color: Colors.text-muted; font-size: Typography.xs;
-                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Text { text: @tr("ACTIVITY"); color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold; letter-spacing: self.font-size * 0.06; }
                         if ActivityGlobal.loading: Text {
                             text: @tr("Loading activity…"); color: Colors.text-muted;
                             font-size: Typography.sm; horizontal-alignment: center;
@@ -207,24 +216,25 @@ export component ActivitySheet inherits Rectangle {
                             alignment: center; spacing: Spacing.sm; height: 160px;
                             HorizontalLayout { alignment: center;
                                 Rectangle { width: 52px; height: 52px; border-radius: Spacing.radius-full;
-                                    background: Colors.primary.with-alpha(0.14);
+                                    background: Colors.surface-control;
                                     Image { source: Icons.bell; width: 24px; height: 24px;
                                         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                        colorize: Colors.primary; }
+                                        colorize: Colors.text-muted; }
                                 }
                             }
-                            Text { text: @tr("No activity yet"); color: Colors.text-primary; font-size: Typography.base;
+                            Text { text: @tr("No activity yet"); color: Colors.text-primary; font-size: 14px * Appearance.text-scale;
                                 font-weight: Typography.semibold; horizontal-alignment: center; }
                             Text { text: @tr("Mentions, replies, and updates will appear here.");
-                                color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
+                                color: Colors.text-muted; font-size: Typography.xs; horizontal-alignment: center; }
                         }
                         for item[i] in ActivityGlobal.items: VerticalLayout {
                             spacing: Spacing.none;
                             if i == 0 || item.section != ActivityGlobal.items[i - 1].section: Text {
-                                text: item.section; color: Colors.text-muted; font-size: Typography.xs;
+                                text: item.section.to-uppercase(); color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                                letter-spacing: self.font-size * 0.06;
                                 font-weight: Typography.semibold; height: 28px; vertical-alignment: center; }
-                            Rectangle { height: feed-row.height; background: Colors.surface-section; border-radius: Spacing.radius-md; clip: true;
-                                feed-row := ActivityFeedRow { item-id: item.id; kind: item.kind; title: item.title;
+                            Rectangle { height: feed-row.height + 2 * Spacing.sm; background: Colors.surface-card; border-radius: Spacing.radius-panel; clip: true;
+                                feed-row := ActivityFeedRow { x: Spacing.sm; y: Spacing.sm; width: parent.width - 2 * Spacing.sm; item-id: item.id; kind: item.kind; title: item.title;
                                     preview: item.preview; time-label: item.time-label; unread: item.unread; touch: root.touch; }
                             }
                         }

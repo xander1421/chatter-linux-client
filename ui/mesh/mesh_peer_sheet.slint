@@ -1,3 +1,5 @@
+import { Appearance } from "../theme/appearance.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // A local contact card for a self-asserted mesh identity.
 import { ModalContainer } from "../components/modal_container.slint";
 import { Button } from "../components/button.slint";
@@ -36,7 +38,7 @@ component PeerAction inherits Rectangle {
             border-radius: Spacing.radius-full;
             background: action-touch.pressed ? Colors.tint-strong : Colors.tint-weak;
             Image { source: root.icon; width: Spacing.button-icon; height: Spacing.button-icon;
-                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
         }
         Text { text: root.caption; color: Colors.primary; font-size: Typography.xs;
             horizontal-alignment: center; horizontal-stretch: 1; overflow: elide; }
@@ -62,21 +64,39 @@ export component MeshPeerSheet inherits Rectangle {
         fill-height: true;
         close => { root.close(); }
         VerticalLayout {
-            padding-left: Spacing.lg; padding-right: Spacing.lg;
-            padding-top: Spacing.md; padding-bottom: Spacing.xl;
-            spacing: Spacing.md;
-            HorizontalLayout {
-                height: Spacing.touch-target-min;
-                                Text { text: @tr("Contact"); color: Colors.text-primary; font-size: Typography.lg;
-                    font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
-                Button { text: @tr("Done"); variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
+            padding: Spacing.panel-gutter;
+            spacing: Spacing.panel-gutter;
+            GlassSurface {
+                height: Spacing.touch-target-min + 2 * Spacing.xxs;
+                border-radius: Spacing.radius-panel;
+                elevation: 0;
+                HorizontalLayout {
+                    padding: Spacing.xxs;
+                    spacing: Spacing.xs;
+                    Text {
+                        text: @tr("Contact");
+                        color: Colors.text-primary;
+                        font-size: 14px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    Button {
+                        text: @tr("Done");
+                        variant: "ghost";
+                        touch: root.touch;
+                        border-radius: Spacing.radius-control;
+                        clicked => { root.close(); }
+                    }
+                }
             }
             Flickable {
                 width: 100%; vertical-stretch: 1;
                 viewport-height: peer-content.preferred-height;
                 peer-content := VerticalLayout {
                     width: parent.width;
-                    spacing: Spacing.lg;
+                    spacing: Spacing.panel-gutter;
                     padding-bottom: Spacing.xl;
                     VerticalLayout {
                         alignment: center; spacing: Spacing.sm;
@@ -84,10 +104,10 @@ export component MeshPeerSheet inherits Rectangle {
                             alignment: center;
                             Rectangle {
                                 width: 72px; height: 72px; border-radius: Spacing.radius-full;
-                                background: Colors.tint-strong;
+                                background: Colors.surface-control;
                                 Image { source: Icons.user; width: 34px; height: 34px;
                                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                    colorize: Colors.primary; }
+                                    colorize: Colors.text-secondary; }
                             }
                         }
                         Text { text: MeshGlobal.sheet-peer-name; color: Colors.text-primary;
@@ -119,10 +139,10 @@ export component MeshPeerSheet inherits Rectangle {
                     }
                     if root.verify-open: VerticalLayout {
                         spacing: Spacing.sm;
-                        Text { text: "VERIFY"; color: Colors.text-muted; font-size: Typography.xs;
-                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Text { text: "VERIFY"; color: Colors.text-muted; font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold; letter-spacing: self.font-size * 0.06; }
                         if MeshGlobal.sheet-comparison-code != "": Rectangle {
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             VerticalLayout { padding: Spacing.lg; spacing: Spacing.sm;
                                 Text {
                                     width: parent.width;
@@ -137,7 +157,7 @@ export component MeshPeerSheet inherits Rectangle {
                             }
                         }
                         Rectangle {
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             VerticalLayout {
                                 SettingsRow { icon: Icons.image; title: @tr("Show my QR code"); touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
@@ -166,7 +186,7 @@ export component MeshPeerSheet inherits Rectangle {
                             }
                         }
                         if MeshGlobal.binding-qr-visible: Rectangle {
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             height: 240px;
                             Rectangle {
                                 width: 220px; height: 220px; background: white;
@@ -178,7 +198,7 @@ export component MeshPeerSheet inherits Rectangle {
                             }
                         }
                         Rectangle {
-                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
                                 Input { placeholder: @tr("Paste their QR code"); text <=> root.qr-text;
                                     control-height: Spacing.touch-target-min; horizontal-stretch: 1;
@@ -198,8 +218,8 @@ export component MeshPeerSheet inherits Rectangle {
                     if MeshGlobal.private-invitable-channels.length > 0: VerticalLayout {
                         spacing: Spacing.sm;
                         Text { text: @tr("ADD TO GROUP"); color: Colors.text-muted; font-size: Typography.xs;
-                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
-                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            font-weight: Typography.semibold; letter-spacing: self.font-size * 0.06; }
+                        Rectangle { background: Colors.surface-card; border-radius: Spacing.radius-panel;
                             VerticalLayout {
                                 for channel[i] in MeshGlobal.private-invitable-channels: Rectangle {
                                     height: root.touch ? Spacing.list-row-height-touch : Spacing.button-height;
@@ -255,7 +275,7 @@ export component MeshPeerSheet inherits Rectangle {
                         }
                     }
                     if MeshGlobal.private-invite-visible: Rectangle {
-                        background: Colors.surface-section; border-radius: Spacing.radius-lg; height: 300px;
+                        background: Colors.surface-card; border-radius: Spacing.radius-panel; height: 300px;
                         Image { source: MeshGlobal.private-invite-image; width: 280px; height: 280px;
                             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             image-fit: contain; }
@@ -264,12 +284,12 @@ export component MeshPeerSheet inherits Rectangle {
                         visible: MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage
                             && member.peer-id == MeshGlobal.sheet-peer-id;
                         height: self.visible ? Spacing.touch-target-min : 0px;
-                        background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                        background: Colors.surface-card; border-radius: Spacing.radius-panel;
                         SettingsRow { icon: Icons.trash; title: @tr("Remove from {}", MeshGlobal.active-title);
                             destructive: true; show-chevron: false; touch: root.touch;
                             clicked => { MeshGlobal.private-remove-pending = MeshGlobal.sheet-peer-id; } }
                     }
-                    Rectangle { height: block-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                    Rectangle { height: block-row.preferred-height; background: Colors.surface-card; border-radius: Spacing.radius-panel;
                         block-row := SettingsRow { icon: Icons.slash; title: MeshGlobal.sheet-peer-blocked ? @tr("Unblock") : @tr("Block");
                             destructive: !MeshGlobal.sheet-peer-blocked; show-chevron: false; touch: root.touch;
                             clickable: MeshGlobal.sheet-peer-id != "";
@@ -291,7 +311,7 @@ export component MeshPeerSheet inherits Rectangle {
             y: parent.height - self.preferred-height - Spacing.lg;
             spacing: Spacing.sm;
             Rectangle { height: remove-action.preferred-height;
-                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                background: Colors.surface-card; border-radius: Spacing.radius-panel;
                 remove-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
                     Text {
                         width: parent.width;
@@ -303,7 +323,7 @@ export component MeshPeerSheet inherits Rectangle {
                 }
             }
             Rectangle { height: remove-cancel.preferred-height;
-                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                background: Colors.surface-card; border-radius: Spacing.radius-panel;
                 remove-cancel := VerticalLayout { padding: Spacing.sm;
                     Button { text: @tr("Cancel"); variant: "ghost"; touch: root.touch;
                         clicked => { MeshGlobal.private-remove-pending = ""; } }
