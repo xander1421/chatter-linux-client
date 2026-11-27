@@ -5763,6 +5763,17 @@ fn glass_material_is_chrome_only_with_one_optical_edge() {
         .1
         .as_str();
     assert!(glass.contains("Appearance.glass-effects"));
+    let popup = include_str!("../../../ui/components/popup_surface.slint");
+    assert!(popup.contains("PopupSurface inherits GlassSurface"));
+    assert!(popup.contains("Appearance.glass-effects ? Materials.regular : Colors.surface-card"));
+    assert!(popup.contains("popup-rim: true;"));
+    assert!(glass.contains("border-width: root.popup-rim ? 1px :"));
+    assert!(glass.contains("border-color: root.popup-rim ? Colors.border"));
+
+    let menu = include_str!("../../../ui/chat/message_context_menu.slint");
+    assert!(menu.contains("menu-container := PopupSurface {"));
+    let picker_action = menu.split_once("picker-action := IconAction {").unwrap().1;
+    assert!(picker_action.split_once("clicked =>").unwrap().0.contains("outlined: true;"));
     assert!(glass.contains("Appearance.reduce-motion"));
     assert!(
         !glass.contains("iteration-count"),

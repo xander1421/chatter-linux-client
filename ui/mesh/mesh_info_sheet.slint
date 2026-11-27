@@ -19,8 +19,8 @@ component InfoActionRow inherits Rectangle {
     in property <bool> bold: false;
     callback clicked();
     height: detail == "" ? 52px : 60px;
-    border-radius: Spacing.radius-md;
-    background: row-touch.has-hover ? Colors.surface-control-hover : Colors.surface-section;
+    border-radius: Spacing.radius-control;
+    background: row-touch.has-hover ? Colors.surface-control : transparent;
     HorizontalLayout {
         padding-left: Spacing.lg;
         padding-right: Spacing.lg;
@@ -121,7 +121,8 @@ export component MeshInfoSheet inherits Rectangle {
                         VerticalLayout {
                             for member in MeshGlobal.private-removable-members: Rectangle {
                                 height: 60px;
-                                background: member-touch.has-hover ? Colors.surface-control-hover : Colors.surface-section;
+                                border-radius: Spacing.radius-control;
+                                background: member-touch.has-hover ? Colors.surface-control : transparent;
                                 HorizontalLayout {
                                     padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
                                     Avatar { size: 38px; name: member.display-name; }
@@ -204,7 +205,10 @@ export component MeshInfoSheet inherits Rectangle {
                                         alignment: center;
                                         Rectangle {
                                             width: 40px; height: 30px; border-radius: Spacing.radius-full;
-                                            background: qr-touch.pressed ? Colors.surface-control-hover : Colors.surface-control;
+                                            border-width: 1px;
+                                            border-color: Colors.border;
+                                            background: qr-touch.pressed ? Colors.surface-control-hover
+                                                : qr-touch.has-hover ? Colors.surface-control : transparent;
                                             Text { text: "QR"; color: Colors.primary; font-size: Typography.xs; font-weight: 600;
                                                 horizontal-alignment: center; vertical-alignment: center; }
                                             qr-touch := TouchArea {

@@ -1,3 +1,4 @@
+import { PopupSurface } from "../components/popup_surface.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -29,7 +30,10 @@ component AttachTile inherits Rectangle {
                 width: root.touch ? 60px : 52px;
                 height: self.width;
                 border-radius: self.width / 2;
-                background: root.tint.with-alpha(tile-touch.pressed ? 0.34 : 0.22);
+                border-width: 1px;
+                border-color: Colors.border;
+                background: tile-touch.pressed ? Colors.surface-control-hover
+                    : tile-touch.has-hover ? Colors.surface-control : transparent;
                 animate background { duration: Materials.motion-quick; easing: Materials.glide; }
                 Image {
                     source: root.icon;
@@ -56,17 +60,12 @@ component AttachTile inherits Rectangle {
 // Telegram/iOS-style bottom sheet for picking an attachment source. The parent
 // positions it (docked to the bottom on a phone) and draws the backdrop; this
 // is just the card and its tiles.
-export component AttachSheet inherits Rectangle {
+export component AttachSheet inherits PopupSurface {
     in property <bool> touch;
     in property <bool> gallery-only: false;
     // Fires the Android source index (see AttachTile).
     callback source(int);
 
-    background: Colors.surface;
-    border-top-left-radius: Spacing.radius-lg;
-    border-top-right-radius: Spacing.radius-lg;
-    border-width: 1px;
-    border-color: Colors.divider;
     height: content.preferred-height;
 
     content := VerticalLayout {

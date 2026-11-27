@@ -1,5 +1,6 @@
 // One material per chrome group. Never instantiate in a message or list row.
 // Tint alpha is local to the fill: labels and hit targets stay opaque.
+import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -14,6 +15,7 @@ component GlassMaterial inherits Rectangle {
     in property <color> material-tint;
     in property <int> elevation;
     in property <bool> highlighted;
+    in property <bool> popup-rim: false;
     in property <bool> show-edge;
     in property <float> darkening: 1.0;
     in property <bool> opaque;
@@ -73,16 +75,17 @@ component GlassMaterial inherits Rectangle {
     }
     // The shader draws the resting edge on glass. Keep the animated interaction
     // highlight and the hairline for flat floating and opaque chrome.
-    if root.show-edge && ((root.material-enabled && (Appearance.glass-effects || root.elevation >= 3))
-        || (!root.material-enabled && root.opaque)): Rectangle {
-        x: Materials.glass-edge-width / 2;
+    if root.popup-rim || (root.show-edge && ((root.material-enabled && (Appearance.glass-effects || root.elevation >= 3))
+        || (!root.material-enabled && root.opaque))): Rectangle {
+        x: root.popup-rim ? 0px : Materials.glass-edge-width / 2;
         y: self.x;
-        width: max(0px, root.width - Materials.glass-edge-width);
-        height: max(0px, root.height - Materials.glass-edge-width);
-        border-radius: max(0px, root.border-radius - Materials.glass-edge-width / 2);
-        border-width: Materials.glass-edge-width;
-        border-color: Appearance.glass-effects || root.opaque ? Materials.glass-edge : Elevation.flat-rim;
-        opacity: root.highlighted || root.opaque ? 1.0 : Appearance.glass-effects ? 0.0 : 0.72;
+        width: max(0px, root.width - 2 * self.x);
+        height: max(0px, root.height - 2 * self.y);
+        border-radius: max(0px, root.border-radius - self.x);
+        border-width: root.popup-rim ? 1px : Materials.glass-edge-width;
+        border-color: root.popup-rim ? Colors.border
+            : Appearance.glass-effects || root.opaque ? Materials.glass-edge : Elevation.flat-rim;
+        opacity: root.popup-rim || root.highlighted || root.opaque ? 1.0 : Appearance.glass-effects ? 0.0 : 0.72;
         animate opacity { duration: Materials.motion-standard; easing: Materials.spring; }
     }
 }
@@ -100,6 +103,7 @@ export component GlassSurface inherits Rectangle {
     in property <bool> backdrop-paused: false;
     // Light catches the existing optical edge on interactive glass controls.
     in property <bool> highlighted: false;
+    in property <bool> popup-rim: false;
     in property <bool> show-edge: true;
     // Scales the chrome backdrop darkening; chat chrome uses Materials.chat-darkening.
     in property <float> darkening: 1.0;
@@ -136,6 +140,7 @@ export component GlassSurface inherits Rectangle {
         elevation: root.elevation;
         highlighted: root.highlighted;
         show-edge: root.show-edge;
+        popup-rim: root.popup-rim;
         darkening: root.darkening;
         opaque: root.opaque;
     }

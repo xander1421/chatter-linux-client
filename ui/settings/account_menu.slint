@@ -26,9 +26,9 @@ export component MenuRow inherits Rectangle {
     callback clicked();
 
     height: Spacing.list-row-height-touch;
-    border-radius: root.card-row ? Spacing.radius-control : 0px;
+    border-radius: Spacing.radius-control;
     background: touch.pressed ? Materials.pressed
-        : touch.has-hover ? Colors.surface-hover : transparent;
+        : touch.has-hover ? Colors.surface-control : transparent;
     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
     accessible-role: button;
     accessible-label: root.label;
@@ -71,7 +71,7 @@ export component MenuRow inherits Rectangle {
     if keys.has-focus: Rectangle {
         border-width: Spacing.stroke;
         border-color: Colors.focus-ring;
-        border-radius: root.card-row ? Spacing.radius-control : Spacing.radius-md;
+        border-radius: Spacing.radius-control;
     }
 }
 
@@ -233,7 +233,7 @@ export component AccountMenu inherits Rectangle {
                                 accessible-checked: Appearance.dark;
                                 accessible-action-default => { root.set-night-mode(!root.dark-palette); }
                                 background: night-touch.pressed ? Materials.pressed
-                                    : night-touch.has-hover ? Colors.surface-hover : transparent;
+                                    : night-touch.has-hover ? Colors.surface-control : transparent;
                                 animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                                 HorizontalLayout {
                                     padding-left: Spacing.md;

@@ -1,8 +1,8 @@
+import { PopupSurface } from "popup_surface.slint";
 import { Button } from "button.slint";
 import { Avatar } from "avatar.slint";
 import { IconAction } from "icon_action.slint";
 import { Materials } from "../theme/materials.slint";
-import { GlassSurface } from "glass_surface.slint";
 // Unified search — full-window overlay palette.
 // Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
 //
@@ -473,16 +473,12 @@ export component UnifiedSearch inherits Rectangle {
     }
 
     // Palette panel — near top, centered.
-    palette := Rectangle {
-        background: Colors.background;
-        border-width: 1px;
-        border-color: Colors.border;
+    palette := PopupSurface {
 
         x: root.source-x + ((root.width - root.panel-width) / 2 - root.source-x) * root.open-progress;
         y: root.source-y + (max(Spacing.panel-gutter, min(42px, parent.height * 0.04)) - root.source-y) * root.open-progress;
         width: min(root.source-width, root.panel-width) + (root.panel-width - min(root.source-width, root.panel-width)) * root.shape-progress;
         height: Spacing.touch-target-min + (parent.height - 2 * self.y - Spacing.touch-target-min) * root.shape-progress;
-        border-radius: Spacing.radius-panel;
         clip: true;
 
         // Swallow clicks so they don't reach the backdrop.
@@ -494,7 +490,7 @@ export component UnifiedSearch inherits Rectangle {
             padding: Spacing.panel-gutter;
             spacing: Spacing.panel-gutter;
 
-            GlassSurface {
+            Rectangle {
                 height: Spacing.touch-target-min + 2 * Spacing.sm;
                 border-radius: Spacing.radius-panel;
                 border-width: 1px;
@@ -705,7 +701,7 @@ export component UnifiedSearch inherits Rectangle {
                 Rectangle {
                     // Grows to its label, like the date chip: translated sort names are longer.
                     width: max(94px, min(170px, sort-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
-                    background: sort-touch.pressed ? Materials.pressed : root.sort-order != "relevance" ? Colors.tint-strong : Colors.surface-control;
+                    background: sort-touch.pressed ? Materials.pressed : root.sort-order != "relevance" ? Colors.tint-strong : sort-touch.has-hover ? Colors.surface-control : transparent;
                     border-width: Spacing.stroke; border-color: Colors.border;
                     accessible-role: button; accessible-label: root.sort-order == "relevance" ? @tr("Sort: relevance") : root.sort-order == "newest" ? @tr("Sort: newest") : root.sort-order == "oldest" ? @tr("Sort: oldest") : @tr("Sort: largest");
                     accessible-action-default => { root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance"; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
@@ -722,7 +718,7 @@ export component UnifiedSearch inherits Rectangle {
                 Rectangle {
                     // Grows to a chosen range ("27 Oct – 28 Oct"), like From/In.
                     width: max(90px, min(170px, date-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
-                    background: date-touch.pressed ? Materials.pressed : root.date-filter != "any" ? Colors.tint-strong : Colors.surface-control;
+                    background: date-touch.pressed ? Materials.pressed : root.date-filter != "any" ? Colors.tint-strong : date-touch.has-hover ? Colors.surface-control : transparent;
                     border-width: Spacing.stroke; border-color: Colors.border;
                     accessible-role: button; accessible-label: root.date-filter == "any" ? @tr("Date filter: any") : root.date-filter == "today" ? @tr("Date filter: today") : root.date-filter == "week" ? @tr("Date filter: week") : root.date-filter == "month" ? @tr("Date filter: month") : root.date-filter == "year" ? @tr("Date filter: year") : @tr("Date filter: {}", root.date-filter);
                     accessible-action-default => { root.date-sheet-open = true; root.calendar-shift(0); }
@@ -744,7 +740,7 @@ export component UnifiedSearch inherits Rectangle {
                         ? max(self.base-width, min(200px, picker-chip-label.preferred-width + Spacing.touch-target-min + Spacing.lg))
                         : self.base-width;
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
-                    background: chip-touch.pressed ? Materials.pressed : self.chip-set ? Colors.tint-strong : Colors.surface-control;
+                    background: chip-touch.pressed ? Materials.pressed : self.chip-set ? Colors.tint-strong : chip-touch.has-hover ? Colors.surface-control : transparent;
                     border-width: Spacing.stroke; border-color: Colors.border;
                     accessible-role: button; accessible-label: kind == "from" ? @tr("Filter by sender") : @tr("Filter by conversation");
                     accessible-action-default => { root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, ""); }
@@ -892,7 +888,6 @@ export component UnifiedSearch inherits Rectangle {
             Rectangle {
                 vertical-stretch: 1;
                 min-height: 40px + 2 * Spacing.sm;
-                background: Colors.surface-card;
                 border-radius: Spacing.radius-panel;
 
                 Flickable {
@@ -1111,16 +1106,12 @@ export component UnifiedSearch inherits Rectangle {
         opacity: self.reveal;
         width: 100%; height: 100%; background: Materials.scrim;
         TouchArea { enabled: root.date-sheet-open; clicked => { root.date-sheet-open = false; } }
-        GlassSurface {
-            material-level: 3; elevation: 4;
-            border-width: 1px;
-            border-color: Colors.border;
+        PopupSurface {
             x: (parent.width - self.width) / 2;
             y: max(0px, min(parent.height - self.height - Spacing.md
                 + (1 - date-layer.reveal) * 48px, parent.height - self.height));
             width: min(420px, max(0px, parent.width - 2 * Spacing.panel-gutter));
             height: min(548px, parent.height - 24px);
-            border-radius: Spacing.radius-panel;
             transform-origin: { x: self.width / 2, y: self.height };
             transform-scale-x: 94% + date-layer.reveal * 6%;
             transform-scale-y: 94% + date-layer.reveal * 6%;
@@ -1143,7 +1134,7 @@ export component UnifiedSearch inherits Rectangle {
                         : @tr("This year");
                     width: max(70px, choice-label.preferred-width + 20px);
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
-                    background: choice-touch.pressed ? Materials.pressed : choice-touch.has-hover ? Materials.hover : transparent;
+                    background: choice-touch.pressed ? Materials.pressed : choice-touch.has-hover ? Colors.surface-control : transparent;
                     accessible-role: button; accessible-label: choice-name;
                     accessible-action-default => {
                         root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
@@ -1171,6 +1162,7 @@ export component UnifiedSearch inherits Rectangle {
                 HorizontalLayout {
                     height: Spacing.touch-target-min;
                     IconAction {
+                        outlined: true;
                         icon: Icons.chevron-left;
                         label: @tr("Previous month");
                         enabled: root.date-sheet-open;
@@ -1178,6 +1170,7 @@ export component UnifiedSearch inherits Rectangle {
                     }
                     Text { text: root.calendar-month; color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center; }
                     IconAction {
+                        outlined: true;
                         icon: Icons.chevron-right;
                         label: @tr("Next month");
                         enabled: root.date-sheet-open;
@@ -1203,7 +1196,7 @@ export component UnifiedSearch inherits Rectangle {
                             && day.date > root.custom-start && day.date < root.custom-end;
                         background: self.range-end ? Colors.tint-strong
                             : self.in-range ? Colors.tint-weak
-                            : day-touch.pressed ? Materials.pressed : day-touch.has-hover ? Materials.hover : transparent;
+                            : day-touch.pressed ? Materials.pressed : day-touch.has-hover ? Colors.surface-control : transparent;
                         transform-origin: { x: self.width / 2, y: self.height / 2 };
                         transform-scale-x: day-touch.pressed ? 90% : 100%;
                         transform-scale-y: day-touch.pressed ? 90% : 100%;
@@ -1279,16 +1272,12 @@ export component UnifiedSearch inherits Rectangle {
         opacity: self.reveal;
         width: 100%; height: 100%; background: Materials.scrim;
         TouchArea { enabled: root.picker-mode != ""; clicked => { root.picker-mode = ""; } }
-        GlassSurface {
-            material-level: 3; elevation: 4;
-            border-width: 1px;
-            border-color: Colors.border;
+        PopupSurface {
             x: (parent.width - self.width) / 2;
             y: max(0px, min(parent.height - self.height - Spacing.md
                 + (1 - picker-layer.reveal) * 48px, parent.height - self.height));
             width: min(420px, max(0px, parent.width - 2 * Spacing.panel-gutter));
             height: min(560px, parent.height - 24px);
-            border-radius: Spacing.radius-panel;
             transform-origin: { x: self.width / 2, y: self.height };
             transform-scale-x: 94% + picker-layer.reveal * 6%;
             transform-scale-y: 94% + picker-layer.reveal * 6%;
@@ -1324,7 +1313,7 @@ export component UnifiedSearch inherits Rectangle {
                         for option in root.picker-options: Rectangle {
                             height: Spacing.touch-target-min + Spacing.xs;
                             border-radius: Spacing.radius-control;
-                            background: option-touch.pressed ? Materials.pressed : option-touch.has-hover ? Materials.hover : transparent;
+                            background: option-touch.pressed ? Materials.pressed : option-touch.has-hover ? Colors.surface-control : transparent;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale-x: option-touch.pressed ? 96% : 100%;
                             transform-scale-y: option-touch.pressed ? 96% : 100%;

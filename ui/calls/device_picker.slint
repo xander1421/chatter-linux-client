@@ -1,7 +1,7 @@
 import { Appearance } from "../theme/appearance.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
+import { PopupSurface } from "../components/popup_surface.slint";
 // Device picker modal for audio/video/screen selection
 
 import { Colors } from "../theme/colors.slint";
@@ -21,7 +21,7 @@ component DeviceItem inherits Rectangle {
 
     height: Spacing.list-row-height-touch;
     background: is-selected ? Colors.tint-strong :
-                touch.pressed ? Materials.pressed : touch.has-hover ? Materials.hover : transparent;
+                touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-control : transparent;
     border-radius: Spacing.radius-control;
     accessible-role: button;
     accessible-label: name + (is-selected ? ", selected" : "");
@@ -128,9 +128,7 @@ export component DevicePicker inherits Rectangle {
     }
 
     // Modal content
-    GlassSurface {
-        material-level: 3;
-        elevation: 4;
+    PopupSurface {
 
         x: (parent.width - self.width) / 2;
         y: max(Spacing.sm, min(
@@ -139,9 +137,6 @@ export component DevicePicker inherits Rectangle {
             parent.height - self.height - Spacing.sm));
         width: min(420px, parent.width - 24px);
         height: min(520px, min(parent.height - 32px, device-list.preferred-height + Spacing.header-action-box + 3 * Spacing.panel-gutter));
-        border-radius: Spacing.radius-panel;
-        border-width: 1px;
-        border-color: Colors.border;
 
         // Prevent clicks from closing
         TouchArea {}
@@ -177,11 +172,9 @@ export component DevicePicker inherits Rectangle {
                     }
                 }
 
-                // Device options are one card inside the picker.
+                // Scroll the device options within the popup.
                 Rectangle {
                     vertical-stretch: 1;
-                    background: Colors.surface-card;
-                    border-radius: Spacing.radius-panel;
                     clip: true;
 
                     Flickable {
@@ -190,7 +183,7 @@ export component DevicePicker inherits Rectangle {
                         viewport-height: device-list.preferred-height;
 
                         device-list := VerticalLayout {
-                            padding: Spacing.sm;
+                            padding: Spacing.xs;
                             spacing: Spacing.xs;
 
                             if root.linked-audio && picker-type != "screen": Text {

@@ -1,7 +1,7 @@
 import { IconAction } from "../components/icon_action.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
+import { PopupSurface } from "../components/popup_surface.slint";
 // Message context menu component
 //
 // The single surface a message hold (or a desktop right-click) opens:
@@ -339,7 +339,7 @@ export component MessageContextMenu inherits Rectangle {
     // Touch keeps the card clear of the pressed bubble. Desktop places the
     // full card by the pointer, flipping above it near the window bottom.
     // Both paths clamp to the usable vertical band and scroll if needed.
-    menu-container := GlassSurface {
+    menu-container := PopupSurface {
         enter-distance: self.flip-up ? -20px : 20px;
         enter-duration: Materials.motion-standard;
         shown: root.show;
@@ -348,11 +348,6 @@ export component MessageContextMenu inherits Rectangle {
         transform-scale-y: root.show ? 100% : 86%;
         animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
         animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-
-        material-enabled: false;
-        background: Colors.surface-card;
-        border-width: Spacing.stroke;
-        border-color: Colors.border;
 
         // The layout carries its own padding; adding it again here left an
         // empty band under "Delete for Me".
@@ -397,7 +392,6 @@ export component MessageContextMenu inherits Rectangle {
                 : self.has-bubble-anchor
                     ? (self.flip-up ? self.room-above : self.room-below)
                     : self.bottom-limit - self.top-limit));
-        border-radius: Spacing.radius-panel;
 
         // Block backdrop clicks on menu
         TouchArea { }
@@ -415,7 +409,7 @@ export component MessageContextMenu inherits Rectangle {
             menu-layout := VerticalLayout {
                 width: parent.width;
                 height: menu-container.menu-h;
-                padding: Spacing.sm;
+                padding: Spacing.xs;
                 spacing: Spacing.xxs;
 
                 // Quick-reaction row. This is the whole point of opening on hold:
@@ -488,6 +482,7 @@ export component MessageContextMenu inherits Rectangle {
                             label: @tr("More reactions and stickers");
                             // Emoji-sized chip; the 48px touch target stays.
                             visual-size: 32px;
+                            outlined: true;
                             clicked => {
                                 root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
                                 root.close();

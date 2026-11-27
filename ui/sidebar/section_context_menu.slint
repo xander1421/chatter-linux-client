@@ -1,5 +1,5 @@
 import { Materials } from "../theme/materials.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
+import { PopupSurface } from "../components/popup_surface.slint";
 // Section context menu for sidebar conversations — Neo 2.0
 //
 // Opened by right-click on desktop and by press-and-hold on touch (HoldArea
@@ -34,8 +34,8 @@ component MenuItem inherits Rectangle {
     callback focused(int, length, length);
 
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
-    border-radius: Spacing.radius-sm;
+    background: touch.has-hover ? Colors.surface-control : transparent;
+    border-radius: Spacing.radius-control;
     accessible-role: button;
     accessible-label: root.label;
     accessible-action-default => { root.clicked(); }
@@ -91,13 +91,13 @@ component MenuItem inherits Rectangle {
             width: 16px;
             height: 16px;
             y: (parent.height - self.height) / 2;
-            colorize: root.destructive ? Colors.error : Colors.text-secondary;
+            colorize: root.destructive ? Colors.danger : Colors.text-secondary;
             transform-rotation: root.icon-rotation;
         }
 
         Text {
             text: root.label;
-            color: root.destructive ? Colors.error : Colors.text-primary;
+            color: root.destructive ? Colors.danger : Colors.text-primary;
             font-size: Typography.sm;
             vertical-alignment: center;
             overflow: elide;
@@ -182,20 +182,16 @@ export component SectionHeaderContextMenu inherits Rectangle {
     }
 
     // Menu card
-    GlassSurface {
+    PopupSurface {
         enter-distance: 6px;
         shown: root.show;
-
-        material-level: 3;
-        elevation: 4;
 
         x: max(Spacing.md, min(root.position-x, parent.width - self.width - Spacing.md));
         y: max(Spacing.md, min(root.position-y + self.entrance-offset,
             parent.height - root.bottom-inset - self.height - Spacing.md));
         width: 220px;
-        height: max(0px, min(header-menu-layout.preferred-height + Spacing.sm * 2,
+        height: max(0px, min(header-menu-layout.preferred-height,
             parent.height - root.bottom-inset - 2 * Spacing.md));
-        border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu area
         TouchArea { }
@@ -208,7 +204,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             viewport-height: header-menu-layout.preferred-height;
             header-menu-layout := VerticalLayout {
                 width: parent.width;
-                padding: Spacing.sm;
+                padding: Spacing.xs;
                 spacing: Spacing.xxs;
 
             MenuItem {
@@ -512,20 +508,16 @@ export component SectionContextMenu inherits Rectangle {
     }
 
     // Menu card — Neo 2.0 strong popup surface
-    menu-container := GlassSurface {
+    menu-container := PopupSurface {
         enter-distance: 6px;
         shown: root.show;
-
-        material-level: 3;
-        elevation: 4;
 
         x: max(Spacing.md, min(root.position-x, parent.width - self.width - Spacing.md));
         y: root.menu-below ? root.target-row-y + root.target-row-height + Spacing.sm + self.entrance-offset
             : root.target-row-y - self.height - Spacing.sm + self.entrance-offset;
         width: 220px;
-        height: max(0px, min(menu-layout.preferred-height + Spacing.sm * 2,
+        height: max(0px, min(menu-layout.preferred-height,
             root.menu-below ? root.menu-space-below : root.menu-space-above));
-        border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu area
         TouchArea { }
@@ -573,7 +565,7 @@ export component SectionContextMenu inherits Rectangle {
             viewport-height: menu-layout.preferred-height;
             menu-layout := VerticalLayout {
                 width: parent.width;
-                padding: Spacing.sm;
+                padding: Spacing.xs;
                 spacing: Spacing.xxs;
 
             // Pin / Unpin — local-only, never synced to the server.
@@ -841,7 +833,7 @@ export component SectionContextMenu inherits Rectangle {
                     text: root.is-group
                         ? @tr("Leave this group? It is removed from this device.")
                         : @tr("Leave this channel? You won't get new messages.");
-                    color: Colors.error;
+                    color: Colors.danger;
                     font-size: Typography.xs;
                     wrap: word-wrap;
                 }

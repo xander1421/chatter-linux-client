@@ -1,4 +1,4 @@
-import { GlassSurface } from "../components/glass_surface.slint";
+import { PopupSurface } from "../components/popup_surface.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 // The chat header's ⋯ menu: Video call, Conversation settings and, on a
@@ -63,19 +63,15 @@ export component ChatHeaderMenu inherits Rectangle {
     // Taps outside the card close it and must not reach the chat under it.
     TouchArea { enabled: root.show; clicked => { root.close(); } }
 
-    menu-card := GlassSurface {
+    menu-card := PopupSurface {
         opacity: root.show ? 1 : 0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
-
-        material-level: 3;
-        elevation: 4;
 
         // Keep the menu aligned with its action; reveal it with a short settle.
         x: root.card-x;
         y: max(0px, root.card-y - 4px * (1 - root.menu-progress));
         width: root.card-width;
         height: root.card-height;
-        border-radius: Spacing.radius-xl;
         // Eat taps on the card's own padding.
         TouchArea { }
 
@@ -89,8 +85,7 @@ export component ChatHeaderMenu inherits Rectangle {
             height: 100%;
             clip: true;
             menu := VerticalLayout {
-                padding-top: Spacing.xs;
-                padding-bottom: Spacing.xs;
+                padding: Spacing.xs;
                 MenuRow { icon: Icons.search; label: @tr("Search in chat"); clicked => { if root.show { root.search(); } } }
                 if root.show-pinned: MenuRow { icon: Icons.pin; label: @tr("Pinned messages"); clicked => { if root.show { root.pinned(); } } }
                 if root.show-video-call: MenuRow { icon: Icons.video; label: @tr("Video call"); clicked => { if root.show { root.video-call(); } } }
