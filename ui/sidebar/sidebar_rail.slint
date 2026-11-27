@@ -22,6 +22,9 @@ component RailItem inherits Rectangle {
     in property <string> label;
     in property <string> emoji;
     in property <image> glyph;
+    in property <bool> is-conversation;
+    in property <bool> is-saved;
+    in property <bool> locked;
     in property <image> avatar-source;
     in property <string> initials;
     in property <int> unread;
@@ -52,14 +55,15 @@ component RailItem inherits Rectangle {
     }
 
     Rectangle {
-        private property <bool> is-avatar: root.emoji == "" && root.glyph.width == 0;
         width: 38px;
         height: self.width;
-        border-radius: self.is-avatar ? self.width / 2 : Spacing.radius-control;
-        background: !self.is-avatar && root.selected ? Colors.tint-strong
-            : root.hovered ? Colors.row-hover : transparent;
-        border-width: root.focused || (self.is-avatar && root.selected) ? 2px : 0px;
-        border-color: root.focused ? Colors.focus-ring : Colors.primary;
+        border-radius: root.is-conversation ? self.width / 2 : Spacing.radius-control;
+        background: root.is-saved && root.selected ? Colors.tint-strong
+            : (root.is-conversation || root.is-saved) && root.hovered ? Colors.row-hover : transparent;
+        border-width: root.focused || (root.is-conversation && root.selected) ? 2px
+            : root.selected ? 1px : 0px;
+        border-color: root.focused ? Colors.focus-ring
+            : root.is-conversation ? Colors.primary : Colors.border;
 
         if root.emoji != "": Text {
             text: root.emoji;
@@ -74,7 +78,7 @@ component RailItem inherits Rectangle {
             source: root.glyph;
             colorize: root.selected ? Colors.primary : Colors.text-secondary;
         }
-        if root.emoji == "" && root.glyph.width == 0: Avatar {
+        if root.is-conversation: Avatar {
             size: 34px;
             source: root.avatar-source;
             name: root.label;
@@ -82,6 +86,22 @@ component RailItem inherits Rectangle {
             accessible-role: none;
             show-presence: root.online;
             presence-color: Colors.online;
+        }
+        if root.locked: Rectangle {
+            width: 14px;
+            height: self.width;
+            x: parent.width - self.width;
+            y: parent.height - self.height;
+            border-radius: self.width / 2;
+            background: Colors.surface-card;
+            border-width: 1px;
+            border-color: Colors.border;
+            Image {
+                source: Icons.lock;
+                width: 9px;
+                height: self.width;
+                colorize: Colors.text-primary;
+            }
         }
         if root.unread > 0: Rectangle {
             width: max(16px, badge.preferred-width + Spacing.xs * 2);
@@ -117,12 +137,14 @@ component RailAvatar inherits RailItem {
     avatar-source: root.conversation.avatar-source;
     initials: root.conversation.initials;
     unread: root.conversation.muted ? 0 : root.conversation.unread;
-    glyph: root.conversation.kind == "saved" ? Icons.bookmark
-        : root.conversation.kind == "channel" && !root.conversation.has-avatar ? (root.conversation.locked ? Icons.lock : Icons.hash) : @image-url("");
+    is-saved: root.conversation.kind == "saved";
+    is-conversation: !root.is-saved;
+    locked: root.is-conversation && root.conversation.locked;
+    glyph: root.is-saved ? Icons.bookmark : @image-url("");
     accessible-item-selectable: true;
     accessible-item-selected: root.selected;
-    selected: root.conversation.kind == "saved" ? root.saved-open : root.conversation.chat-row.is-selected;
-    has-menu: root.conversation.kind != "saved";
+    selected: root.is-saved ? root.saved-open : root.conversation.chat-row.is-selected;
+    has-menu: !root.is-saved;
     activated => { SidebarCards.open-row(root.conversation.conversation-id); }
 }
 
@@ -261,8 +283,14 @@ export component SidebarRail inherits Rectangle {
         }
         RailSurface {
             height: root.action-height;
+            show-edge: false;
+            popup-rim: true;
             Rectangle {
-                border-radius: parent.border-radius;
+                x: 1px;
+                y: 1px;
+                width: parent.width - 2px;
+                height: parent.height - 2px;
+                border-radius: parent.border-radius - 1px;
                 background: Colors.tint-strong;
             }
             HeaderButton {
@@ -271,7 +299,7 @@ export component SidebarRail inherits Rectangle {
                 icon: Icons.plus;
                 label: @tr("Create");
                 touch: root.touch;
-                active: true;
+                icon-color: Colors.glass-accent;
                 plain: true;
                 clicked => { root.create(); }
             }
