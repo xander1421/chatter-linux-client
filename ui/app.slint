@@ -407,13 +407,8 @@ export component MainWindow inherits Window {
     callback toggle-anon-mode();              // sidebar button → Rust handler
     callback submit-anon-mode-pin(string);    // PIN modal submit → Rust verify
 
-    // Mobile (phone + tablet) paints the opaque OLED-black page canvas; the
-    // tablet's rounded panes sit on it and the phone is full-bleed single-pane.
-    // Desktop keeps the subtly tinted ambient gradient behind its glass chrome.
-    // (Was gated on !compact-layout, which left the phone on the grey ambient
-    // gradient — the owner wants true #000000 black on the phone.)
-    background: root.is-mobile-platform
-        ? Colors.background : Materials.ambient;
+    // Paint the OLED canvas behind the framed panes.
+    background: Colors.background;
 
     // ========== Responsive sidebar auto-collapse ==========
     // Auto-collapse sidebar on smaller screens (< 800px width)
@@ -797,8 +792,11 @@ export component MainWindow inherits Window {
             y: root.safe-area-top + root.desktop-top-inset + DesktopChrome.frame-inset;
 
             AuthPages {
-                width: parent.width;
-                height: parent.height;
+                x: root.compact-layout ? 0px : Spacing.panel-gutter;
+                y: self.x;
+                width: max(0px, parent.width - 2 * self.x);
+                height: max(0px, parent.height - 2 * self.y);
+                framed: !root.compact-layout;
                 account-free-surfaces : root.account-free-surfaces;
                 current-view : root.current-view;
                 exiting-view: view-transition.exiting-view;

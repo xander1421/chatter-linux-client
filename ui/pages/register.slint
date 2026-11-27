@@ -1,4 +1,6 @@
 import { KeyFocus } from "../components/key_focus.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { Materials } from "../theme/materials.slint";
 // Register page component with multi-step onboarding flow
 
@@ -92,13 +94,17 @@ export component RegisterPage inherits Rectangle {
     in property <bool> server-unreachable: false;
     in property <bool> account-free-surfaces: false;
 
-    background: Materials.ambient;
+    background: Colors.background;
 
     VerticalLayout {
-        // TopAppBar / Header (Task 2)
-        Rectangle {
+        padding: Spacing.panel-gutter;
+        spacing: Spacing.panel-gutter;
+
+        GlassSurface {
             height: 56px;
-            background: Colors.surface;
+            border-radius: Spacing.radius-panel;
+            border-width: 1px;
+            border-color: Colors.border;
             
             HorizontalLayout {
                 padding-left: Spacing.md;
@@ -116,7 +122,7 @@ export component RegisterPage inherits Rectangle {
                 Text {
                     text: @tr("Create account");
                     color: Colors.text-primary;
-                    font-size: Typography.lg;
+                    font-size: Typography.sm;
                     font-weight: Typography.semibold;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
@@ -132,16 +138,17 @@ export component RegisterPage inherits Rectangle {
             
             // Progress bar
             Rectangle {
-                y: parent.height - 2px;
+                x: Spacing.sm;
+                y: parent.height - Spacing.xs;
                 height: 2px;
-                width: 100%;
+                width: parent.width - 2 * self.x;
                 background: Colors.border;
                 
                 Rectangle {
                     x: 0;
                     height: 100%;
                     width: parent.width * (current-step / total-steps);
-                    background: Colors.primary;
+                    background: Colors.text-secondary;
                     animate width { duration: Materials.motion-standard; easing: Materials.glide; }
                 }
             }
@@ -156,14 +163,14 @@ export component RegisterPage inherits Rectangle {
             interactive: content.preferred-height > self.height;
 
             content := VerticalLayout {
-                padding: Spacing.lg;
+                padding: Spacing.sm;
                 spacing: Spacing.none;
                 cross-axis-alignment: center;
 
                 Rectangle {
-                    width: min(480px, flick.width - 2 * Spacing.lg);
-                    background: Colors.surface;
-                    border-radius: Spacing.radius-lg;
+                    width: min(480px, flick.width - 2 * Spacing.sm);
+                    background: Colors.surface-card;
+                    border-radius: Spacing.radius-panel;
                     transform-origin: { x: self.width / 2, y: 0px };
                     transform-scale-x: 96% + root.arrival * 4%;
                     transform-scale-y: 94% + root.arrival * 6%;
@@ -171,7 +178,7 @@ export component RegisterPage inherits Rectangle {
 
                     VerticalLayout {
                         spacing: Spacing.lg;
-                        padding: Spacing.lg;
+                        padding: Spacing.sm;
 
                         // On every step, so Shield is chosen before anything
                         // is sent — not discovered on the last page.
@@ -188,7 +195,7 @@ export component RegisterPage inherits Rectangle {
                         if error != "": Rectangle {
                             min-height: error-copy.preferred-height + Spacing.sm * 2;
                             background: Colors.error.with-alpha(0.1);
-                            border-radius: Spacing.radius-sm;
+                            border-radius: Spacing.radius-control;
                             error-copy := Text {
                                 x: Spacing.sm + root.error-nudge;
                                 y: Spacing.sm;
@@ -236,31 +243,18 @@ export component RegisterPage inherits Rectangle {
 
                                     VerticalLayout {
                                         alignment: center;
-                                        Rectangle {
-                                        width: 44px;
-                                        height: 44px;
-                                        border-radius: self.width / 2;
-                                        background: prev-touch.pressed ? Colors.inset : transparent;
-                                        accessible-role: button;
-                                        accessible-label: @tr("Previous avatar");
-                                        accessible-enabled: !root.loading && root.preset-count > 1;
-                                        accessible-action-default => {
-                                            root.select-default-avatar(Math.mod(root.selected-default-idx - 1 + root.preset-count, root.preset-count));
-                                        }
-                                        Image {
-                                            source: Icons.chevron-left;
-                                            width: 24px;
-                                            height: 24px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            colorize: Colors.text-secondary;
-                                        }
-                                        prev-touch := TouchArea {
+                                        HeaderButton {
+                                            width: Spacing.button-height;
+                                            plain: true;
+                                            control-radius: Spacing.radius-control;
+                                            height: self.width;
+                                            glyph: 24px;
+                                            icon: Icons.chevron-left;
+                                            label: @tr("Previous avatar");
                                             enabled: !root.loading && root.preset-count > 1;
                                             clicked => {
                                                 root.select-default-avatar(Math.mod(root.selected-default-idx - 1 + root.preset-count, root.preset-count));
                                             }
-                                        }
                                         }
                                     }
 
@@ -311,31 +305,18 @@ export component RegisterPage inherits Rectangle {
 
                                     VerticalLayout {
                                         alignment: center;
-                                        Rectangle {
-                                        width: 44px;
-                                        height: 44px;
-                                        border-radius: self.width / 2;
-                                        background: next-touch.pressed ? Colors.inset : transparent;
-                                        accessible-role: button;
-                                        accessible-label: @tr("Next avatar");
-                                        accessible-enabled: !root.loading && root.preset-count > 1;
-                                        accessible-action-default => {
-                                            root.select-default-avatar(Math.mod(root.selected-default-idx + 1, root.preset-count));
-                                        }
-                                        Image {
-                                            source: Icons.chevron-right;
-                                            width: 24px;
-                                            height: 24px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            colorize: Colors.text-secondary;
-                                        }
-                                        next-touch := TouchArea {
+                                        HeaderButton {
+                                            width: Spacing.button-height;
+                                            plain: true;
+                                            control-radius: Spacing.radius-control;
+                                            height: self.width;
+                                            glyph: 24px;
+                                            icon: Icons.chevron-right;
+                                            label: @tr("Next avatar");
                                             enabled: !root.loading && root.preset-count > 1;
                                             clicked => {
                                                 root.select-default-avatar(Math.mod(root.selected-default-idx + 1, root.preset-count));
                                             }
-                                        }
                                         }
                                     }
                                 }
@@ -346,6 +327,7 @@ export component RegisterPage inherits Rectangle {
                                 if root.has-avatar: HorizontalLayout {
                                     alignment: center;
                                     Button {
+                                        border-radius: Spacing.radius-control;
                                         text: @tr("Remove photo");
                                         variant: "secondary";
                                         disabled: root.loading;
@@ -356,6 +338,7 @@ export component RegisterPage inherits Rectangle {
 
                             // Display name
                             Input {
+                                inset-control: true;
                                 placeholder: @tr("Display name");
                                 text <=> root.display-name;
                                 disabled: root.loading;
@@ -370,6 +353,7 @@ export component RegisterPage inherits Rectangle {
                             // input and registration reports a clash
                             // (OPEN-ITEMS §82).
                             username-field := Input {
+                                inset-control: true;
                                 placeholder: @tr("Username");
                                 text <=> root.username;
                                 disabled: root.loading;
@@ -383,6 +367,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Button {
+                                border-radius: Spacing.radius-control;
                                 text: @tr("Continue");
                                 variant: "primary";
                                 disabled: display-name == "" || username == "" || root.username-error != "";
@@ -404,6 +389,7 @@ export component RegisterPage inherits Rectangle {
 
                             // Password
                             Input {
+                                inset-control: true;
                                 placeholder: @tr("Password");
                                 password: true;
                                 text <=> root.password;
@@ -449,6 +435,7 @@ export component RegisterPage inherits Rectangle {
 
                             // Confirm password
                             confirm-field := Input {
+                                inset-control: true;
                                 placeholder: @tr("Confirm password");
                                 password: true;
                                 text <=> root.confirm-password;
@@ -459,6 +446,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Button {
+                                border-radius: Spacing.radius-control;
                                 text: @tr("Continue");
                                 variant: "primary";
                                 disabled: password == "" || !passwords-match || password-strength < 2;
@@ -492,6 +480,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Input {
+                                inset-control: true;
                                 placeholder: @tr("Create a PIN (8+ characters)");
                                 password: true;
                                 text <=> root.pin;
@@ -530,6 +519,7 @@ export component RegisterPage inherits Rectangle {
 
                             // Confirm PIN
                             Input {
+                                inset-control: true;
                                 placeholder: @tr("Confirm PIN");
                                 password: true;
                                 text <=> root.confirm-pin;
@@ -540,6 +530,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Button {
+                                border-radius: Spacing.radius-control;
                                 text: @tr("Continue");
                                 variant: "primary";
                                 disabled: pin == "" || !pins-match || root.pin-error != "";
@@ -568,6 +559,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             if !AnonMode.enabled: Input {
+                                inset-control: true;
                                 placeholder: @tr("Direct server URL");
                                 text <=> root.server-url;
                                 disabled: root.loading;
@@ -599,6 +591,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Button {
+                                border-radius: Spacing.radius-control;
                                 text: loading ? "" : @tr("Create account");
                                 variant: "primary";
                                 loading: root.loading;

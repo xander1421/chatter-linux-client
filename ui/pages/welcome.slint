@@ -1,7 +1,4 @@
-import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
-// Welcome page — shown after first registration to guide new users
-
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -10,270 +7,135 @@ import { Button } from "../components/button.slint";
 
 export component WelcomePage inherits Rectangle {
     in property <string> display-name: "there";
+    in property <bool> touch;
 
     callback add-friends();
     callback browse-channels();
     callback get-started();
 
-    background: Materials.ambient;
+    background: Colors.background;
 
-    property <float> reveal: 0;
+    private property <float> reveal: 0;
     animate reveal { duration: Materials.motion-emphasized; easing: Materials.spring; }
     init => { root.reveal = 1; }
 
-    // Soft overlapping circles give the welcome card a living backdrop.
-    Rectangle {
-        width: min(parent.width * 0.8, 420px);
-        height: self.width;
-        x: (parent.width - self.width) / 2;
-        y: -self.height * 0.35 + root.reveal * 18px;
-        border-radius: self.width / 2;
-        background: Colors.primary.with-alpha(0.08);
-    }
-    Rectangle {
-        width: min(parent.width * 0.53, 270px);
-        height: self.width;
-        x: (parent.width - self.width) / 2 + 90px;
-        y: -self.height * 0.18 - root.reveal * 12px;
-        border-radius: self.width / 2;
-        background: Colors.info.with-alpha(0.09);
-    }
+    flick := Flickable {
+        width: 100%;
+        height: 100%;
+        viewport-height: max(self.height, content.preferred-height);
+        viewport-width: self.width;
+        interactive: content.preferred-height > self.height;
 
-    VerticalLayout {
-        alignment: center;
-        cross-axis-alignment: center;
-        spacing: Spacing.lg;
-        padding: Spacing.xl;
+        content := VerticalLayout {
+            height: flick.viewport-height;
+            alignment: center;
+            cross-axis-alignment: center;
+            spacing: Spacing.panel-gutter;
+            padding: Spacing.panel-gutter;
+            opacity: root.reveal;
 
-        // Keep layout stable while the copy rises from the hero.
-        Rectangle {
-            width: 100%;
-            height: Typography.xxxl * 1.5;
-            Text {
-                text: @tr("Welcome to Chatter!");
-                color: Colors.primary;
-                font-size: Typography.xxxl;
-                font-weight: Typography.bold;
-                horizontal-alignment: center;
-                width: 100%;
-                y: (1 - root.reveal) * 24px;
-                opacity: min(1, root.reveal * 1.6);
-            }
-        }
+            Rectangle {
+                width: min(400px, flick.width - 2 * Spacing.panel-gutter);
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
 
-        Text {
-            text: @tr("Hi {}, your account is ready.", root.display-name);
-            color: Colors.text-secondary;
-            font-size: Typography.lg;
-            horizontal-alignment: center;
-            opacity: min(1, max(0, (root.reveal - 0.2) * 1.5));
-        }
-
-        // Encryption badge
-        Rectangle {
-            width: min(360px, root.width - 2 * Spacing.xl);
-            height: 48px;
-            background: Colors.success.with-alpha(0.1);
-            border-radius: Spacing.radius-md;
-            opacity: min(1, max(0, (root.reveal - 0.35) * 1.7));
-
-            HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
-
-                Image {
-                    source: Icons.shield;
-                    width: 20px;
-                    height: 20px;
-                    colorize: Colors.success;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                Text {
-                    text: @tr("All messages are end-to-end encrypted");
-                    color: Colors.success;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        Rectangle { height: Spacing.md; }
-
-        // Getting started cards
-        Text {
-            text: @tr("Get started");
-            color: Colors.text-primary;
-            font-size: Typography.lg;
-            font-weight: Typography.semibold;
-            horizontal-alignment: center;
-        }
-
-        // Action cards
-        Rectangle {
-            width: min(400px, root.width - 2 * Spacing.xl);
-
-            VerticalLayout {
-                spacing: Spacing.sm;
-
-                // Add friends card
-                Rectangle {
-                    height: 56px;
-                    background: friends-touch.has-hover ? Colors.surface-hover : Colors.surface;
-                    border-radius: Spacing.radius-md;
-                    transform-scale-x: friends-touch.pressed ? 98% : 100%;
-                    transform-scale-y: friends-touch.pressed ? 94% : 100%;
-                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-                    accessible-role: button;
-                    accessible-label: @tr("Add friends");
-                    accessible-description: @tr("Find people you know on Chatter");
-                    accessible-action-default => { root.add-friends(); }
-                    KeyFocus { border-radius: parent.border-radius; activate => { root.add-friends(); } }
+                VerticalLayout {
+                    padding: Spacing.sm;
+                    spacing: Spacing.sm;
 
                     HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        spacing: Spacing.md;
-
-                        Rectangle {
-                            width: 36px;
-                            height: 36px;
-                            border-radius: 18px;
-                            background: Colors.primary.with-alpha(0.15);
-                            y: (parent.height - self.height) / 2;
-
-                            Image {
-                                source: Icons.user-plus;
-                                width: 18px;
-                                height: 18px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                colorize: Colors.primary;
-                            }
-                        }
-
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 1;
-
-                            Text {
-                                accessible-role: none;
-                                text: @tr("Add friends");
-                                color: Colors.text-primary;
-                                font-size: Typography.base;
-                                font-weight: Typography.medium;
-                            }
-
-                            Text {
-                                accessible-role: none;
-                                text: @tr("Find people you know on Chatter");
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
-                        }
-
+                        alignment: center;
                         Image {
-                            source: Icons.chevron-right;
-                            width: 16px;
-                            height: 16px;
-                            colorize: Colors.text-muted;
-                            y: (parent.height - self.height) / 2;
+                            source: Icons.shield;
+                            width: 20px;
+                            height: 20px;
+                            colorize: Colors.text-secondary;
+                            accessible-role: none;
                         }
                     }
+                    Text {
+                        text: @tr("Welcome to Chatter!");
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: @tr("Hi {}, your account is ready.", root.display-name);
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: @tr("All messages are end-to-end encrypted");
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
 
-                    friends-touch := TouchArea {
-                        mouse-cursor: pointer;
+            Rectangle {
+                width: min(400px, flick.width - 2 * Spacing.panel-gutter);
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
+
+                VerticalLayout {
+                    padding: Spacing.sm;
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: @tr("Get started").to-uppercase();
+                        color: Colors.text-muted;
+                        font-size: Typography.xxs;
+                        font-weight: Typography.semibold;
+                        letter-spacing: self.font-size * 0.06;
+                    }
+
+                    Button {
+                        text: @tr("Add friends");
+                        accessible-description: @tr("Find people you know on Chatter");
+                        icon: Icons.user-plus;
+                        variant: "secondary";
+                        border-radius: Spacing.radius-control;
+                        touch: root.touch;
                         clicked => { root.add-friends(); }
                     }
-                }
-
-                // Browse channels card
-                Rectangle {
-                    height: 56px;
-                    background: channels-touch.has-hover ? Colors.surface-hover : Colors.surface;
-                    border-radius: Spacing.radius-md;
-                    transform-scale-x: channels-touch.pressed ? 98% : 100%;
-                    transform-scale-y: channels-touch.pressed ? 94% : 100%;
-                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-                    accessible-role: button;
-                    accessible-label: @tr("Browse channels");
-                    accessible-description: @tr("Join public conversations");
-                    accessible-action-default => { root.browse-channels(); }
-                    KeyFocus { border-radius: parent.border-radius; activate => { root.browse-channels(); } }
-
-                    HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        spacing: Spacing.md;
-
-                        Rectangle {
-                            width: 36px;
-                            height: 36px;
-                            border-radius: 18px;
-                            background: Colors.primary.with-alpha(0.15);
-                            y: (parent.height - self.height) / 2;
-
-                            Image {
-                                source: Icons.hash;
-                                width: 18px;
-                                height: 18px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                colorize: Colors.primary;
-                            }
-                        }
-
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 1;
-
-                            Text {
-                                accessible-role: none;
-                                text: @tr("Browse channels");
-                                color: Colors.text-primary;
-                                font-size: Typography.base;
-                                font-weight: Typography.medium;
-                            }
-
-                            Text {
-                                accessible-role: none;
-                                text: @tr("Join public conversations");
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
-                        }
-
-                        Image {
-                            source: Icons.chevron-right;
-                            width: 16px;
-                            height: 16px;
-                            colorize: Colors.text-muted;
-                            y: (parent.height - self.height) / 2;
-                        }
+                    Text {
+                        text: @tr("Find people you know on Chatter");
+                        accessible-role: none;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
                     }
-
-                    channels-touch := TouchArea {
-                        mouse-cursor: pointer;
+                    Button {
+                        text: @tr("Browse channels");
+                        accessible-description: @tr("Join public conversations");
+                        icon: Icons.hash;
+                        variant: "secondary";
+                        border-radius: Spacing.radius-control;
+                        touch: root.touch;
                         clicked => { root.browse-channels(); }
                     }
+                    Text {
+                        text: @tr("Join public conversations");
+                        accessible-role: none;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    Button {
+                        text: @tr("Continue to Chatter");
+                        border-radius: Spacing.radius-control;
+                        touch: root.touch;
+                        clicked => { root.get-started(); }
+                    }
                 }
-            }
-        }
-
-        Rectangle { height: Spacing.lg; }
-
-        // Continue button
-        Rectangle {
-            width: min(400px, root.width - 2 * Spacing.xl);
-            height: continue-button.height;
-
-            continue-button := Button {
-                text: @tr("Continue to Chatter");
-                variant: "primary";
-                clicked => { root.get-started(); }
             }
         }
     }

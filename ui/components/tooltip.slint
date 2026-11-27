@@ -51,7 +51,7 @@ export component TooltipArea inherits Rectangle {
         elevation: 4;
 
         // Position based on placement
-        x: root.placement == "right" ? parent.width + 8px :
+        x: root.placement == "right" ? parent.width + Spacing.panel-gutter :
            root.placement == "bottom" ? (parent.width - self.width) / 2 :
            (parent.width - self.width) / 2;
         y: root.placement == "right" ? (parent.height - self.height) / 2 :
@@ -61,7 +61,9 @@ export component TooltipArea inherits Rectangle {
         width: Math.min(tt-text.preferred-width + Spacing.sm * 2, 200px);
         height: tt-text.preferred-height + Spacing.sm * 2;
 
-        border-radius: Spacing.radius-xl;
+        border-radius: Spacing.radius-control;
+        border-width: 1px;
+        border-color: Colors.border;
 
         tt-text := Text {
             x: Spacing.sm;

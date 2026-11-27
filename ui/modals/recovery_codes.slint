@@ -60,7 +60,9 @@ export component RecoveryCodesModal inherits Rectangle {
         height: max(200px, min(content-layout.preferred-height, min(760px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        border-radius: Spacing.radius-sheet;
+        border-radius: Spacing.radius-panel;
+        border-width: 1px;
+        border-color: Colors.border;
 
         // Block clicks from passing through
         TouchArea {
@@ -77,7 +79,7 @@ export component RecoveryCodesModal inherits Rectangle {
         Rectangle {
             visible: root.show-modal;
             content-layout := VerticalLayout {
-                padding: Spacing.lg;
+                padding: Spacing.sm;
                 spacing: Spacing.md;
 
                 // Title
@@ -124,8 +126,8 @@ export component RecoveryCodesModal inherits Rectangle {
                     // could never get shorter than all-codes-at-once, so on a
                     // short window the Continue button got clipped off-screen.
                     min-height: 120px;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-md;
+                    background: Colors.surface-card;
+                    border-radius: Spacing.radius-panel;
                     clip: true;
 
                     Flickable {
@@ -172,6 +174,7 @@ export component RecoveryCodesModal inherits Rectangle {
                     alignment: center;
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         text: @tr("Copy all");
                         variant: "secondary";
                         disabled: !root.show-modal;
@@ -216,6 +219,7 @@ export component RecoveryCodesModal inherits Rectangle {
 
                 // Continue button (disabled until checkbox checked)
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Continue");
                     variant: "primary";
                     disabled: !root.saved-confirmed || !root.show-modal;

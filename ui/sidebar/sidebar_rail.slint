@@ -51,11 +51,13 @@ component RailItem inherits Rectangle {
     }
 
     Rectangle {
+        private property <bool> is-avatar: root.emoji == "" && root.glyph.width == 0;
         width: 38px;
         height: self.width;
-        border-radius: self.width / 2;
-        background: root.hovered ? Colors.row-hover : transparent;
-        border-width: root.focused || root.selected ? 2px : 0px;
+        border-radius: self.is-avatar ? self.width / 2 : Spacing.radius-control;
+        background: !self.is-avatar && root.selected ? Colors.tint-strong
+            : root.hovered ? Colors.row-hover : transparent;
+        border-width: root.focused || (self.is-avatar && root.selected) ? 2px : 0px;
         border-color: root.focused ? Colors.focus-ring : Colors.primary;
 
         if root.emoji != "": Text {
@@ -236,8 +238,10 @@ export component SidebarRail inherits Rectangle {
     }
 
     VerticalLayout {
-        padding-top: root.top-inset;
-        padding-bottom: root.bottom-inset;
+        padding-top: max(root.top-inset, Spacing.panel-gutter);
+        padding-bottom: max(root.bottom-inset, Spacing.panel-gutter);
+        padding-left: Spacing.panel-gutter;
+        padding-right: Spacing.panel-gutter;
         spacing: Spacing.panel-gutter;
 
         RailSurface {
@@ -360,6 +364,8 @@ export component SidebarRail inherits Rectangle {
         width: min(hint.preferred-width + 2 * Spacing.sm, 200px);
         height: hint.preferred-height + 2 * Spacing.xs;
         border-radius: Spacing.radius-control;
+        border-width: 1px;
+        border-color: Colors.border;
         material-level: 3;
         elevation: 4;
         hint := Text {

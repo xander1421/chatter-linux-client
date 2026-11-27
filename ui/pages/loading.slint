@@ -10,7 +10,7 @@ export component LoadingPage inherits Rectangle {
     in property <string> message: @tr("Loading...");
     in property <string> secondary-message: "";
 
-    background: Materials.ambient;
+    background: Colors.background;
 
     // Centered content
     VerticalLayout {
@@ -43,7 +43,7 @@ export component LoadingPage inherits Rectangle {
                         width: 100px;
                         height: 14px;
                         border-radius: 7px;
-                        background: Colors.primary.with-alpha(0.16);
+                        background: Colors.surface-control;
                     }
                     for dot[i] in [0, 1, 2]: Rectangle {
                         width: 14px;
@@ -51,7 +51,7 @@ export component LoadingPage inherits Rectangle {
                         border-radius: 7px;
                         x: 35px + i * 21px;
                         y: 30px - 16px * max(0, Math.cos((parent.anim-progress - i * 0.28) * 360deg));
-                        background: Colors.primary;
+                        background: Colors.text-secondary;
                     }
                 }
 
@@ -59,15 +59,18 @@ export component LoadingPage inherits Rectangle {
                 Text {
                     text: root.message;
                     color: Colors.text-primary;
-                    font-size: Typography.lg;
+                    font-size: Typography.sm;
+                    font-weight: Typography.semibold;
+                    wrap: word-wrap;
                     horizontal-alignment: center;
                 }
 
                 // Secondary message (only shown if not empty)
                 if secondary-message != "": Text {
                     text: root.secondary-message;
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
                     horizontal-alignment: center;
                 }
             }

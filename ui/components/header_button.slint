@@ -6,7 +6,7 @@ import { Materials } from "../theme/materials.slint";
 // Back, close, ⋮, search, call, video, +, Shield, settings: every icon control
 // in every title row of the app is this component, so they all share one box
 // (Spacing.header-action-box / -touch), one glyph size (Spacing.header-glyph /
-// -touch), one hover/pressed treatment and a circular shared glass shell.
+// -touch), one hover/pressed treatment and a shared glass shell.
 //
 // The ROOT has no fixed height: in a layout it stretches to the row (never
 // shorter than the box) and draws the square box vertically centred, so the
@@ -37,6 +37,9 @@ export component HeaderButton inherits Rectangle {
     in property <bool> plain: false;
     // Forwarded to the glass shell; see GlassSurface.backdrop-paused.
     in property <bool> backdrop-paused: false;
+    // Rounded control tiles opt in. Other callers retain the circular shell.
+    in property <length> control-radius: Spacing.radius-full;
+    in property <brush> control-fill: transparent;
     // What is drawn, as opposed to what is tappable. The root box is always
     // the touch target; a row with lighter chrome around it (the sidebar
     // header's '+' and Shield beside 24px quick-link glyphs) draws a smaller
@@ -86,9 +89,9 @@ export component HeaderButton inherits Rectangle {
         height: self.width;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        border-radius: self.height / 2;
+        border-radius: min(root.control-radius, self.height / 2);
         background: touch-area.pressed && root.enabled ? Materials.pressed : touch-area.has-hover && root.enabled ? Materials.hover
-            : (root.active || keys.has-focus ? Colors.tint-strong : transparent);
+            : (root.active || keys.has-focus ? Colors.tint-strong : root.control-fill);
 
         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
 
