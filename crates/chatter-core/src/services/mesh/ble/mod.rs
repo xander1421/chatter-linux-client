@@ -15,7 +15,7 @@
 
 use std::cmp::Reverse;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chatter_mesh::codec;
 use chatter_mesh::dedup::MessageDeduplicator;
@@ -34,6 +34,7 @@ use chatter_mesh::tlv::file_stream::{
     FileChunk, FileChunkRequest, FileManifest, MAX_REQUESTED_CHUNKS,
 };
 use chatter_mesh::tlv::hex_encode;
+use chatter_mesh::tlv::pairing::PairingBeacon;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
 use chatter_mesh_link::announce::{
@@ -51,7 +52,7 @@ use chatter_mesh_link::scheduler::{
     DiscoveryDecision, ExistingConnectionState, MAX_CENTRAL_LINKS, PeripheralConnectionState,
     QueueDecision,
 };
-use chatter_mesh_link::{LinkEvent, LinkId, LinkRole, MeshLink};
+use chatter_mesh_link::{InboundLink, LinkEvent, LinkId, LinkRole, MeshLink};
 use chatter_mesh_noise::prekey::PrekeyBundle;
 use chatter_mesh_noise::sign::{sign_packet, verify_packet};
 use chatter_mesh_noise::{MeshIdentity, NoiseError};
@@ -64,7 +65,7 @@ use chatter_mesh_store::sync::{GossipSyncManager, SyncConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::chatter_hello::ChatterHello;
-use super::config::MeshConfig;
+use super::config::{ConnectionAdmission, MeshConfig};
 use super::events::{MeshEvent, MeshMessage};
 use super::file_stream::{
     CHUNK_REQUEST_QUIET_SECS, ChunkOutcome, FileStreamSpool, ManifestOutcome, OutboundTransfer,
@@ -162,7 +163,6 @@ pub struct BleRuntime {
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     radio: Arc<dyn MeshLink>,
-    recent_pairing_adverts: Arc<parking_lot::Mutex<links::RecentPairingAdverts>>,
     state: Arc<MeshState>,
     /// Read only, so a status event reports both transports rather than
     /// resetting the relay count to zero every time a link changes.
@@ -171,11 +171,17 @@ pub struct BleRuntime {
     private_group_identity: Arc<MeshIdentity>,
     rotation: Option<RadioRotation>,
     pairing_candidates: std::collections::BTreeMap<PeerId, (PeerId, u64)>,
-    pairing_exchanges: std::collections::BTreeMap<PeerId, pairing::PairingExchange>,
+    pairing_exchanges: std::collections::BTreeMap<LinkId, pairing::PairingExchange>,
     courier_claims: std::collections::BTreeMap<PeerId, std::collections::BTreeSet<[u8; 32]>>,
     beacon_cursor: usize,
     published_beacons: Vec<chatter_mesh::tlv::pairing::PairingBeacon>,
     config: Arc<MeshConfig>,
+    matched_scans: Arc<parking_lot::Mutex<admission::MatchedScans>>,
+    pairing_previews: Arc<parking_lot::Mutex<admission::PairingPreviews>>,
+    failed_pairing_proofs: admission::FailedPairingProofs,
+    pending_central: Option<(String, ConnectionAdmission)>,
+    central_admissions: std::collections::HashMap<LinkId, (String, ConnectionAdmission)>,
+    link_admission: std::collections::HashMap<LinkId, admission::LinkAdmission>,
     events: MeshEvents,
     router: Arc<RouterHandle>,
     gossip: GossipSyncManager,
@@ -208,7 +214,8 @@ pub struct BleRuntime {
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     prekey_ingress: std::collections::HashMap<LinkId, (u64, u32)>,
-    last_channel_presence_ms: u64,
+    next_channel_presence_ms: u64,
+    announce_jitter_permille: i64,
     last_private_rekey_ms: u64,
     /// Connect attempts run off the loop and report back here. Awaiting one
     /// inline froze every radio event, command and tick for up to the twenty
@@ -273,9 +280,6 @@ impl BleRuntime {
             storage,
             sealer,
             radio,
-            recent_pairing_adverts: Arc::new(parking_lot::Mutex::new(
-                links::RecentPairingAdverts::new(),
-            )),
             state,
             nostr_state,
             private_group_identity: identity.clone(),
@@ -287,6 +291,12 @@ impl BleRuntime {
             beacon_cursor: 0,
             published_beacons: Vec::new(),
             config,
+            matched_scans: Arc::default(),
+            pairing_previews: Arc::default(),
+            failed_pairing_proofs: Default::default(),
+            pending_central: None,
+            central_admissions: std::collections::HashMap::new(),
+            link_admission: std::collections::HashMap::new(),
             events,
             router,
             gossip,
@@ -311,7 +321,8 @@ impl BleRuntime {
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
             prekey_ingress: std::collections::HashMap::new(),
-            last_channel_presence_ms: 0,
+            next_channel_presence_ms: 0,
+            announce_jitter_permille: rand::random_range(-1_000..=1_000),
             last_private_rekey_ms: 0,
         }
     }
@@ -528,9 +539,8 @@ impl BleRuntime {
         if self.rotation_stopped() {
             return false;
         }
-        self.recent_pairing_adverts.lock().clear();
-        self.install_inbound_admission();
         self.published_beacons.clear();
+        self.install_inbound_admission();
         if !self.refresh_pairing_beacons() {
             return false;
         }
@@ -665,6 +675,12 @@ impl BleRuntime {
         if let Err(error) = &stopped {
             self.degraded(format!("the radio would not stop: {error}"));
         }
+        self.matched_scans.lock().clear();
+        *self.pairing_previews.lock() = Default::default();
+        self.pending_central = None;
+        self.central_admissions.clear();
+        self.link_admission.clear();
+        self.pairing_exchanges.clear();
         self.state.with(|state| {
             state.radio_running = false;
             state.sessions.clear();
@@ -672,6 +688,7 @@ impl BleRuntime {
             state.pending_bindings.clear();
             state.pairing_offers.clear();
             state.links.clear();
+            state.awaiting_pairing_proof.clear();
             state.address_of.clear();
             state.connecting.clear();
             state.max_write.clear();
@@ -701,8 +718,9 @@ impl BleRuntime {
     }
 }
 
+mod admission;
 mod announces;
-mod broadcasts;
+pub(super) mod broadcasts;
 mod commands;
 mod direct_messages;
 mod event_reporting;
@@ -911,10 +929,14 @@ fn link_seq(link: &LinkId) -> u64 {
 /// through the paced queue now, the same as `transmit`.
 async fn transmit_forwarded(
     state: &Arc<MeshState>,
+    config: &MeshConfig,
     packet: &BitchatPacket,
     ingress: &LinkId,
     group_links: Option<&[LinkId]>,
 ) {
+    if !broadcasts::allows_forwarding(config, packet) {
+        return;
+    }
     let padding = fragment::pads_ble_frame(packet.msg_type);
     let Ok(encoded) = codec::encode(packet, padding) else {
         return;
@@ -927,6 +949,9 @@ async fn transmit_forwarded(
     });
     if let Some(allowed) = group_links {
         links.retain(|candidate| allowed.contains(&candidate.id));
+    }
+    if !config.public_chat_enabled() {
+        links.retain(|link| state.is_paired_link(&link.id));
     }
     let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
         // Split horizon: never send a packet back down the link it arrived on —
@@ -961,13 +986,17 @@ async fn transmit_forwarded(
     for link in plan.selected.iter() {
         for frame in &frames {
             let admitted = state.with(|inner| {
-                inner.writes.enqueue(
+                if !broadcasts::allows_forwarding(config, packet) {
+                    return None;
+                }
+                Some(inner.writes.enqueue(
                     link,
                     frame.clone(),
                     write_priority,
                     PENDING_WRITE_BUFFER_CAP_BYTES,
-                )
+                ))
             });
+            let Some(admitted) = admitted else { return };
             if !matches!(admitted, WriteEnqueue::Enqueued { .. }) {
                 tracing::warn!(
                     target: "mesh::ble",

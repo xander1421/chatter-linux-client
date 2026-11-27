@@ -4002,3 +4002,15 @@ msgstr "Permite afișarea apelurilor primite pe ecranul de blocare."
 
 msgid "Not now"
 msgstr "Nu acum"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:557
+msgid "Mesh nickname updated."
+msgstr "Pseudonimul Mesh a fost actualizat."
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:576
+msgid "Could not change bridge mode: {}"
+msgstr "Modul punte nu a putut fi schimbat: {}"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
+msgid "Could not change nearby public chat: {}"
+msgstr "Chatul public din apropiere nu a putut fi schimbat: {}"

@@ -158,6 +158,7 @@ async fn the_disabled_mesh_has_no_identity_until_it_is_enabled() {
 #[test]
 fn sending_the_same_file_twice_allocates_different_stream_ids() {
     let service = service(Some(MockLink::shared()), None);
+    service.set_public_chat(true);
     let mut commands = service.ble.rebind();
     let file = tempfile::NamedTempFile::new().unwrap();
     file.as_file()
@@ -203,6 +204,7 @@ async fn the_mesh_can_be_stopped_and_started_again() {
         Some(factory),
         Some(Arc::new(LoopbackConnector::new()) as Arc<dyn RelayConnector>),
     );
+    service.set_public_chat(true);
 
     async fn settle() {
         tokio::task::yield_now().await;
@@ -290,6 +292,7 @@ async fn it_constructs_and_runs_with_no_radio_at_all() {
         None,
         Some(Arc::new(OfflineConnector) as Arc<dyn RelayConnector>),
     );
+    service.set_public_chat(true);
     service.start().await.expect("start");
     assert!(matches!(
         service.send_room("hello"),
@@ -297,7 +300,39 @@ async fn it_constructs_and_runs_with_no_radio_at_all() {
     ));
     assert!(matches!(service.announce_now(), Err(MeshError::NoRadio)));
     // The Nostr half still works.
+    service.set_bridge_mode(true);
     assert!(service.join_geohash("u4pruy").is_ok());
+    service.shutdown().await;
+}
+
+#[tokio::test]
+async fn relay_connections_follow_the_explicit_bridge_setting() {
+    let service = service(None, Some(Arc::new(LoopbackConnector::new())));
+    service.start().await.unwrap();
+    assert!(matches!(
+        service.join_geohash("u4pruy"),
+        Err(MeshError::BridgeModeDisabled)
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(service.status().connected_relays, 0);
+
+    let wait_for_relay_count = |connected| {
+        let service = &service;
+        async move {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while (service.status().connected_relays > 0) != connected {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("relay status follows bridge mode");
+        }
+    };
+
+    service.set_bridge_mode(true);
+    wait_for_relay_count(true).await;
+    service.set_bridge_mode(false);
+    wait_for_relay_count(false).await;
     service.shutdown().await;
 }
 
@@ -305,6 +340,7 @@ async fn it_constructs_and_runs_with_no_radio_at_all() {
 async fn it_constructs_and_runs_with_no_relay_connector() {
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
     service.start().await.expect("start");
     assert!(matches!(
         service.join_geohash("u4pruy"),
@@ -322,6 +358,7 @@ async fn it_constructs_and_runs_with_no_relay_connector() {
 async fn empty_messages_never_reach_the_wire() {
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
     assert!(matches!(
         service.send_room("   "),
         Err(MeshError::EmptyContent)
@@ -373,6 +410,7 @@ async fn a_file_over_one_packet_is_chunked_rather_than_refused_or_truncated() {
     // that delivers it, and this is where that decision is made.
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
 
     let path = temp_file("chunk-me.bin", MAX_SINGLE_PACKET_FILE_BYTES + 1);
     assert!(
@@ -393,6 +431,7 @@ async fn a_file_over_the_time_cap_is_refused_because_nobody_would_wait_for_it() 
     // byte is read.
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
 
     let path = sparse_file("far-too-big.bin", MAX_STREAMED_FILE_BYTES as u64 + 1);
     match service.send_file(&path) {
@@ -428,6 +467,7 @@ async fn an_empty_file_never_reaches_the_wire() {
     // empty file is airtime spent on a packet nobody can accept.
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
     let path = temp_file("empty.bin", 0);
     assert!(matches!(
         service.send_file(&path),
@@ -442,6 +482,7 @@ async fn a_file_that_is_not_there_says_so_with_its_path() {
     // directory — and without the path the message cannot tell them apart.
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
     match service.send_file(std::path::Path::new("/nonexistent/nope.bin")) {
         Err(MeshError::FileIo { path, .. }) => {
             assert_eq!(path, "/nonexistent/nope.bin");
@@ -458,6 +499,7 @@ async fn a_sent_file_lands_in_the_room_as_a_broadcast_and_not_as_sent() {
     // claims an arrival from a recipient the message never had.
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
     service.start().await.expect("start");
     let path = temp_file("note.bin", 32);
 
@@ -486,6 +528,7 @@ async fn a_sent_file_lands_in_the_room_as_a_broadcast_and_not_as_sent() {
 #[tokio::test]
 async fn sending_a_file_with_no_radio_fails_instead_of_queueing_forever() {
     let service = service(None, None);
+    service.set_public_chat(true);
     let path = temp_file("note.bin", 32);
     assert!(matches!(service.send_file(&path), Err(MeshError::NoRadio)));
 }
@@ -583,8 +626,40 @@ async fn a_sent_dm_is_on_disk_by_the_time_send_returns() {
 }
 
 #[tokio::test]
+async fn public_chat_is_disabled_by_default_independently_of_mesh() {
+    let service = service(Some(MockLink::shared() as Arc<dyn MeshLink>), None);
+    service.start().await.unwrap();
+    assert!(!service.public_chat_enabled());
+    assert!(service.conversations().unwrap().is_empty());
+    assert!(
+        service
+            .timeline
+            .conversation_for(&MeshConversation::Room.conversation_id())
+            .is_none()
+    );
+    assert!(matches!(
+        service.send_room("hello"),
+        Err(MeshError::PublicChatDisabled)
+    ));
+    assert!(matches!(
+        service.join_channel("local"),
+        Err(MeshError::PublicChatDisabled)
+    ));
+    assert!(matches!(
+        service.send_channel("local", "hello"),
+        Err(MeshError::PublicChatDisabled)
+    ));
+    assert!(matches!(
+        service.send_file(std::path::Path::new("example.txt")),
+        Err(MeshError::PublicChatDisabled)
+    ));
+    service.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_public_room_is_a_conversation_before_anything_has_happened() {
     let service = service(None, None);
+    service.set_public_chat(true);
     let conversations = service.conversations().expect("conversations");
     assert_eq!(conversations.len(), 1, "just the public room");
     assert_eq!(conversations[0].conversation_type, ConversationType::Mesh);
@@ -599,6 +674,7 @@ async fn the_public_room_is_a_conversation_before_anything_has_happened() {
 async fn a_dm_shows_up_in_the_sidebar_once_it_has_been_used() {
     let radio = MockLink::shared();
     let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
+    service.set_public_chat(true);
     let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
     service.send_dm(&peer, "hello").await.expect("routed");
 

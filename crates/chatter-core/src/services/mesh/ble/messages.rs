@@ -30,7 +30,7 @@ impl BleRuntime {
         // A `Message` addressed to one recipient is a legacy private message. We
         // do not carry those — private traffic is Noise-encrypted — and showing
         // it as public chat would put a message meant for one person in the room.
-        if !packet.is_broadcast() {
+        if !self.config.public_chat_enabled() || !packet.is_broadcast() {
             return false;
         }
         let Ok(content) = core::str::from_utf8(&packet.payload) else {
@@ -158,7 +158,7 @@ impl BleRuntime {
     }
 
     pub(super) fn on_channel_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) -> bool {
-        if !packet.is_broadcast() {
+        if !self.config.public_chat_enabled() || !packet.is_broadcast() {
             return false;
         }
         let presence = chatter_mesh::channel::decode_presence(&packet.payload);

@@ -9,14 +9,13 @@ import { MeshListItem } from "mesh_list_item.slint";
 export component MeshList inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> touch: false;
-    property <string> device-count: @tr("{n} device nearby" | "{n} devices nearby" % MeshGlobal.peer-count);
     property <string> relay-count: @tr("{n} relay" | "{n} relays" % MeshGlobal.relay-count);
     property <string> status-title: !MeshGlobal.mesh-on ? @tr("Mesh off")
         : MeshGlobal.radio-down == "bluetooth-off" ? @tr("Bluetooth off") : @tr("Mesh on");
     property <string> status-detail: !MeshGlobal.mesh-on ? @tr("Radio off · {n} relay" | "Radio off · {n} relays" % MeshGlobal.relay-count)
         : MeshGlobal.radio-down == "bluetooth-off" ? @tr("Bluetooth is off · {n} relay" | "Bluetooth is off · {n} relays" % MeshGlobal.relay-count)
         : !MeshGlobal.radio-running ? @tr("Radio unavailable · {n} relay" | "Radio unavailable · {n} relays" % MeshGlobal.relay-count)
-        : root.device-count + " · " + root.relay-count;
+        : root.relay-count;
 
     height: content.preferred-height;
     background: transparent;
@@ -126,47 +125,6 @@ export component MeshList inherits Rectangle {
                     }
                 }
             }
-            if MeshGlobal.nearby-peers.length > 0: VerticalLayout {
-                spacing: Spacing.sm;
-                HorizontalLayout {
-                    padding-left: Spacing.lg;
-                    Text {
-                        text: @tr("NEARBY"); color: Colors.text-muted; font-size: Typography.xs;
-                        font-weight: Typography.semibold;
-                    }
-                }
-                Flickable {
-                    height: 80px;
-                    viewport-width: nearby-row.preferred-width + Spacing.lg * 2;
-                    nearby-row := HorizontalLayout {
-                        x: Spacing.lg; spacing: Spacing.md;
-                        for peer[index] in MeshGlobal.nearby-peers: VerticalLayout {
-                            width: 80px; spacing: Spacing.xs; alignment: start;
-                            HorizontalLayout { alignment: center; Rectangle {
-                                width: 52px; height: 52px; border-radius: Spacing.radius-full;
-                                background: Math.mod(index, 3) == 0 ? Colors.avatar-teal
-                                    : Math.mod(index, 3) == 1 ? Colors.avatar-blue : Colors.avatar-purple;
-                                Text {
-                                    text: peer.name.to-uppercase();
-                                    width: 16px; height: 28px;
-                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                    color: Colors.on-action; font-size: Typography.xxl;
-                                    font-weight: Typography.semibold; overflow: clip;
-                                }
-                                TouchArea {
-                                    mouse-cursor: pointer; accessible-role: button;
-                                    accessible-label: @tr("Open nearby mesh peer {}", peer.name);
-                                    clicked => { MeshGlobal.open-peer(peer.id); }
-                                }
-                            } }
-                            Text {
-                                text: peer.name; width: 80px; color: Colors.text-secondary;
-                                font-size: Typography.xs; overflow: elide; horizontal-alignment: center;
-                            }
-                        }
-                    }
-                }
-            }
             if MeshGlobal.conversations.length == 0: VerticalLayout {
                 padding-left: Spacing.lg; padding-right: Spacing.lg;
                 spacing: Spacing.md; alignment: center;
@@ -182,7 +140,7 @@ export component MeshList inherits Rectangle {
                 Text { text: @tr("No mesh conversations"); color: Colors.text-primary;
                     font-size: Typography.base; font-weight: Typography.semibold; horizontal-alignment: center; }
                 Text {
-                    text: @tr("Create a group or start a nearby conversation.");
+                    text: @tr("Create a private group or pair a contact in Mesh settings.");
                     color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; wrap: word-wrap; }
                 Rectangle {
                     height: Spacing.button-height; border-radius: Spacing.radius-md;

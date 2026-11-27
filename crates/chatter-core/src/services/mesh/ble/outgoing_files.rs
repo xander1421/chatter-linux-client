@@ -8,6 +8,9 @@ impl BleRuntime {
     /// transmit, then mirror locally — because the mesh has no server echo, so
     /// the local copy *is* the message.
     pub async fn broadcast_file(&mut self, message_id: &str, file: &BitchatFilePacket) {
+        if !self.config.public_chat_enabled() {
+            return;
+        }
         let now_ms = now_millis();
         let nickname = self.config.nickname();
         let payload = match file.encode() {
@@ -99,6 +102,9 @@ impl BleRuntime {
         manifest: FileManifest,
         path: std::path::PathBuf,
     ) {
+        if !self.config.public_chat_enabled() {
+            return;
+        }
         let now_ms = now_millis();
         let now_s = now_secs();
         let nickname = self.config.nickname();
@@ -213,6 +219,9 @@ impl BleRuntime {
     /// whole file: the loop is also the only thing servicing link events, and a
     /// 16 MiB transfer emitted in one pass would leave the mesh deaf for minutes.
     pub(super) async fn pump_streamed_files(&mut self, now_s: u64) {
+        if !self.config.public_chat_enabled() {
+            return;
+        }
         if self.files_out.is_empty() {
             return;
         }
@@ -344,6 +353,9 @@ impl BleRuntime {
     /// earliest now and the rest next round rather than emitting a request that
     /// would have to be fragmented to fit.
     pub(super) async fn request_missing_chunks(&mut self, now_s: u64) {
+        if !self.config.public_chat_enabled() {
+            return;
+        }
         let stalled = self
             .files_in
             .stalled(now_s, CHUNK_REQUEST_QUIET_SECS, MAX_REQUESTED_CHUNKS);

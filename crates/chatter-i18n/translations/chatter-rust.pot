@@ -3443,3 +3443,15 @@ msgstr ""
 
 msgid "Not now"
 msgstr ""
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:557
+msgid "Mesh nickname updated."
+msgstr ""
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:576
+msgid "Could not change bridge mode: {}"
+msgstr ""
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
+msgid "Could not change nearby public chat: {}"
+msgstr ""

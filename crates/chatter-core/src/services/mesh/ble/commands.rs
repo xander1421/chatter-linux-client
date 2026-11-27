@@ -16,6 +16,11 @@ impl BleRuntime {
                     .is_some_and(|peer| peer.signing_public_key.is_some());
             (announced, state.links.is_noise_authenticated(link, claimed))
         });
+        if !self.config.public_chat_enabled()
+            && (!authenticated || !self.state.paired_session(claimed))
+        {
+            return;
+        }
         if !announced && !authenticated {
             return;
         }
@@ -28,7 +33,10 @@ impl BleRuntime {
             .handle_request_sync(claimed, &request, now_secs());
         let mut public_messages = std::collections::HashMap::<_, Vec<_>>::new();
         for send in &sends {
-            if !authenticated && send.packet.message_type() == Some(MessageType::Message) {
+            if !authenticated
+                && self.config.public_chat_enabled()
+                && send.packet.message_type() == Some(MessageType::Message)
+            {
                 public_messages
                     .entry(send.packet.sender_id)
                     .or_default()
@@ -38,6 +46,14 @@ impl BleRuntime {
         let requester = claimed.to_routing_bytes();
         for send in &sends {
             let kind = send.packet.message_type();
+            if kind == Some(MessageType::Announce)
+                && !matches!(
+                    AnnouncementPacket::carries_pairing_beacon(&send.packet.payload),
+                    Ok(false)
+                )
+            {
+                continue;
+            }
             if !authenticated && kind != Some(MessageType::Message) {
                 // An unproven requester gets a contact-free author key only
                 // when it verifies some history included in this response.
@@ -97,24 +113,18 @@ impl BleRuntime {
     pub(super) async fn on_command(&mut self, command: BleCommand) {
         match command {
             BleCommand::BindingProof { peer, bytes } => {
-                let sealed = self
-                    .state
-                    .with(|state| state.sessions.encrypt(&peer, &bytes));
-                if let Ok(ciphertext) = sealed {
-                    let packet = self.build_packet(
-                        MessageType::NoiseEncrypted,
-                        Some(&peer),
-                        ciphertext,
-                        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-                    );
-                    self.transmit(&packet, Some(&peer), None).await;
+                if bytes.starts_with(super::super::account_identity::PAIRING_RECEIPT_MAGIC) {
+                    self.refresh_pairing_beacons();
                 }
+                self.send_private_control(&peer, &bytes).await;
             }
             BleCommand::OpenSession { peer } => {
                 if self.state.can_open_session_to(&peer)
                     && (!self.state.has_session(&peer) || !self.state.can_write_to(&peer))
                 {
                     self.start_handshake(&peer).await;
+                } else if self.state.has_session(&peer) && self.state.can_write_to(&peer) {
+                    self.send_chatter_hello(&peer).await;
                 }
             }
             BleCommand::EnsureSigningBinding { peer } => {

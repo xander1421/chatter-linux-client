@@ -91,12 +91,18 @@ impl MeshService {
 
     /// Every mesh conversation, shaped for the unified sidebar.
     ///
-    /// The public room, every joined geohash cell, and every mesh DM — already
-    /// ordered and counted. The caller renders this list; it filters nothing and
-    /// derives nothing, and in particular it does not go looking for a server
-    /// record of any of these conversations, because there is none.
+    /// Only include public BLE conversations while nearby public chat is enabled.
     pub fn conversations(&self) -> Result<Vec<UnifiedConversation>, MeshError> {
-        Ok(self.timeline.conversations()?)
+        let mut rows = self.timeline.conversations()?;
+        if !self.public_chat_enabled() {
+            rows.retain(|row| {
+                !matches!(
+                    self.conversation_for(&row.id),
+                    Some(MeshConversation::Room | MeshConversation::Channel(_))
+                )
+            });
+        }
+        Ok(rows)
     }
 
     /// Resolve and order sidebar rows before the UI maps them to its model.

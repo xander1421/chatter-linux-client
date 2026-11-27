@@ -135,9 +135,32 @@ impl BleRuntime {
         }
 
         let direct = accepted.direct_hint;
-        let paired_contact = direct
+        if direct
+            && let Some(record) = self.link_admission.get_mut(link)
+            && record.preview.is_some()
+        {
+            let candidate = record.candidate.get_or_insert_with(|| claimed.clone());
+            if *candidate != *claimed || !record.permits_proof(&self.config, Instant::now()) {
+                return false;
+            }
+        }
+        let mut paired_contact = direct
             .then(|| self.state.paired_contact_for_announce(announcement))
             .flatten();
+        if direct
+            && let Some(expected) = self
+                .link_admission
+                .get(link)
+                .and_then(|record| record.expected_contact.clone())
+        {
+            if paired_contact
+                .as_ref()
+                .is_some_and(|contact| *contact != expected)
+            {
+                return false;
+            }
+            paired_contact = Some(expected);
+        }
         if let Some(contact) = &paired_contact {
             self.note_pairing_candidate(claimed, contact, now_ms);
         }
@@ -212,7 +235,9 @@ impl BleRuntime {
         // A verified direct announce on an authenticated link can retry the
         // handover. The courier retains each envelope until its recipient confirms it.
         let ingress = AnnounceIngress::new(direct, link_authenticated);
-        if ingress.permits_offer() {
+        let application_data_allowed =
+            self.config.public_chat_enabled() || self.state.is_paired_link_to(link, claimed);
+        if application_data_allowed && ingress.permits_offer() {
             let claimed_keys = self
                 .courier_claims
                 .get(claimed)
@@ -223,7 +248,9 @@ impl BleRuntime {
                     .await;
             }
         }
-        if let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice()) {
+        if application_data_allowed
+            && let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice())
+        {
             if ingress.permits_offer() {
                 self.hand_over_courier_mail(claimed, &key, now_s, ingress)
                     .await;
@@ -241,8 +268,8 @@ impl BleRuntime {
         }
 
         self.retry_pending_dm_handshake(claimed).await;
-        if paired_contact.is_some() && self.state.has_session(claimed) {
-            self.send_pairing_proof(claimed).await;
+        if direct && paired_contact.is_some() && link_authenticated {
+            self.send_pairing_proof(link, claimed).await;
         }
         // A known peer may return on a new link, where an old session alone
         // cannot authorize routing. Reopen Noise to restore private delivery.
@@ -290,16 +317,14 @@ impl BleRuntime {
             && self
                 .state
                 .with(|state| state.links.discovery_peer_for(link) == Some(claimed));
-        if new_discovery || (is_new && (link_authenticated || direct_discovery)) {
+        if application_data_allowed
+            && (new_discovery || (is_new && (link_authenticated || direct_discovery)))
+        {
             // Push anything retained for them, and offer them mail for others.
             let _ = self.router.send(RouterCommand::PeerAvailable {
                 peer: self.state.contact(claimed),
             });
-            // A peer we have not synced with yet gets our public history.
-            if let Ok(send) = self.gossip.initial_sync_to(claimed, now_s) {
-                let packet = self.maybe_sign(send.packet, send.sign_before_send);
-                self.transmit_on_link(&packet, claimed, link).await;
-            }
+            self.sync_new_peer(link, claimed, now_s).await;
             // A newly reachable verified peer can carry previously queued
             // Signal ciphertext for some other verified recipient.
             if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device()
@@ -316,6 +341,18 @@ impl BleRuntime {
         }
 
         true
+    }
+
+    pub(super) async fn sync_new_peer(&mut self, link: &LinkId, peer: &PeerId, now_s: u64) {
+        if !self.config.public_chat_enabled() && !self.state.is_paired_link_to(link, peer) {
+            return;
+        }
+        self.gossip
+            .set_public_chat_enabled(self.config.public_chat_enabled());
+        if let Ok(send) = self.gossip.initial_sync_to(peer, now_s) {
+            let packet = self.maybe_sign(send.packet, send.sign_before_send);
+            self.transmit_on_link(&packet, peer, link).await;
+        }
     }
 
     pub(super) async fn prune_duplicate_links(&self, claimed: &PeerId, now_ms: u64) {

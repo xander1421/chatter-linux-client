@@ -380,12 +380,20 @@ impl BleRuntime {
     }
 
     pub(super) async fn send_chatter_hello(&mut self, peer: &PeerId) {
-        let mut nonce = [0u8; 16];
-        if getrandom::fill(&mut nonce).is_err() {
+        if !self.allows_chatter_hello(peer) {
             return;
         }
-        self.state
-            .with(|state| state.chatter_hello.set_local_nonce(peer, nonce));
+        let Some(nonce) = self.state.with(|state| {
+            if let Some(existing) = state.chatter_hello.local_nonce(peer) {
+                return Some(existing);
+            }
+            let mut nonce = [0u8; 16];
+            getrandom::fill(&mut nonce).ok()?;
+            state.chatter_hello.set_local_nonce(peer, nonce);
+            Some(nonce)
+        }) else {
+            return;
+        };
         let Some(payload) = ChatterHello::new(nonce).encode() else {
             return;
         };

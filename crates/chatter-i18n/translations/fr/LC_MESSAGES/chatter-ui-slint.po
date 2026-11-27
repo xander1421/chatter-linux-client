@@ -6041,3 +6041,39 @@ msgstr "Non autorisé"
 
 msgid "Allow"
 msgstr "Autoriser"
+
+#: ui/mesh/mesh_list.slint:143
+msgid "Create a private group or pair a contact in Mesh settings."
+msgstr "Créez un groupe privé ou associez un contact dans les paramètres Mesh."
+
+#: ui/mesh/mesh_setup_sheet.slint:140
+msgid "Pair a nearby contact"
+msgstr "Associer un contact à proximité"
+
+#: ui/mesh/mesh_setup_sheet.slint:156
+msgid "You appear as {} nearby. Choose your contact’s device and verify it in person."
+msgstr "Vous apparaissez sous le nom {} à proximité. Choisissez l’appareil de votre contact et vérifiez-le en personne."
+
+#: ui/mesh/mesh_setup_sheet.slint:165 ui/mesh/mesh_setup_sheet.slint:168
+msgid "Nearby public chat"
+msgstr "Discussion publique à proximité"
+
+#: ui/mesh/mesh_setup_sheet.slint:170
+msgid "Send and receive public messages and files over Bluetooth. Anyone nearby can read them."
+msgstr "Envoyez et recevez des messages et fichiers publics via Bluetooth. Toute personne à proximité peut les lire."
+
+#: ui/mesh/mesh_setup_sheet.slint:177 ui/mesh/mesh_setup_sheet.slint:180
+msgid "Bridge mode"
+msgstr "Mode passerelle"
+
+#: ui/mesh/mesh_setup_sheet.slint:182
+msgid "Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth."
+msgstr "Se connecte à des relais Internet publics et partage par Bluetooth les identifiants des appareils connectés et la cellule de localisation, si elle est configurée."
+
+#: ui/mesh/mesh_setup_sheet.slint:190
+msgid "Mesh nickname"
+msgstr "Pseudonyme Mesh"
+
+#: ui/mesh/mesh_setup_sheet.slint:204
+msgid "People nearby can see your mesh nickname. A custom nickname stays the same when your mesh identity changes."
+msgstr "Les personnes à proximité peuvent voir votre pseudonyme Mesh. Un pseudonyme personnalisé reste le même lorsque votre identité Mesh change."

@@ -21,6 +21,19 @@ fn runtime_parts() -> (
     Arc<MeshState>,
     Arc<crate::services::mesh::timeline::MeshTimeline>,
 ) {
+    let config = MeshConfig::default();
+    config.set_public_chat(true);
+    runtime_with_config(config)
+}
+
+fn runtime_with_config(
+    config: MeshConfig,
+) -> (
+    BleRuntime,
+    Arc<MockLink>,
+    Arc<MeshState>,
+    Arc<crate::services::mesh::timeline::MeshTimeline>,
+) {
     let radio = MockLink::shared();
     let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
     let state = Arc::new(MeshState::new());
@@ -53,7 +66,7 @@ fn runtime_parts() -> (
         Arc::clone(&state),
         nostr_state,
         identity,
-        Arc::new(MeshConfig::default()),
+        Arc::new(config),
         events,
         router,
         storage,
@@ -90,6 +103,45 @@ fn register_verified_peer(state: &MeshState, identity: &MeshIdentity, nickname: 
             .upsert_verified_announce(&peer, &announcement, true, now_millis());
     });
     peer
+}
+
+fn paired_remote(
+    runtime: &BleRuntime,
+    state: &MeshState,
+) -> (PeerId, PairingBeacon, PairingBeacon) {
+    use chatter_mesh_link::registry::PairingKey;
+
+    let remote = MeshIdentity::generate(&mut os_rng());
+    let peer = remote.peer_id();
+    let local = runtime.identity.peer_id();
+    state.with(|inner| {
+        assert!(inner.peers.pair_noise_identity(
+            &peer,
+            &remote.static_public(),
+            &remote.signing_public(),
+            now_millis(),
+            PairingKey::new([42; 32], false),
+        ));
+    });
+    let remote_state = MeshState::new();
+    remote_state.with(|inner| {
+        assert!(inner.peers.pair_noise_identity(
+            &local,
+            &runtime.identity.static_public(),
+            &runtime.identity.signing_public(),
+            now_millis(),
+            PairingKey::new([42; 32], true),
+        ));
+    });
+    let advert = remote_state
+        .pairing_beacons(&peer)
+        .into_iter()
+        .find(|slot| state.paired_contact_for_beacon(slot).as_ref() == Some(&peer))
+        .expect("one slot is addressed to the local contact");
+    let preface = remote_state
+        .pairing_beacon_for_contact(&peer, &local)
+        .unwrap();
+    (peer, advert, preface)
 }
 
 #[tokio::test]

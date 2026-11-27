@@ -24,6 +24,12 @@ pub enum MeshError {
     #[error("mesh service is not running")]
     NotRunning,
 
+    #[error("nearby public chat is disabled")]
+    PublicChatDisabled,
+
+    #[error("mesh bridge mode is disabled")]
+    BridgeModeDisabled,
+
     /// This build has no radio: neither Linux BlueZ nor Android JNI. The
     /// service still constructs and the Nostr half still works, so this is a
     /// per-operation error rather than a construction failure.

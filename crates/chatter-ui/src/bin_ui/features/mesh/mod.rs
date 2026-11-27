@@ -204,11 +204,27 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let global = window.global::<MeshGlobal>();
     global.set_enabled(true);
     global.set_nickname(ui_ctx.mesh_nickname().into());
+    global.set_custom_nickname(ui_ctx.mesh_custom_nickname().unwrap_or_default().into());
+    global.set_bridge_mode(ui_ctx.mesh_bridge_mode_enabled());
+    global.set_public_chat(ui_ctx.mesh_public_chat_enabled());
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_set_pairing(move |enabled| {
+            ui_ctx.set_mesh_pairing(enabled);
+            if let Some(w) = weak.upgrade() {
+                refresh_rows(&w, &ui_ctx);
+            }
+        });
+    }
     {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
         global.on_open_peer(move |peer| {
             if let Some(w) = weak.upgrade() {
+                if ui_ctx.mesh_pairing_active() {
+                    ui_ctx.mesh_select_pairing_peer(peer.as_str());
+                }
                 w.global::<MeshGlobal>().set_private_invite_visible(false);
                 w.global::<MeshGlobal>()
                     .set_private_remove_pending("".into());
@@ -548,11 +564,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             match ui_ctx.set_mesh_nickname(name.as_str()) {
                 Ok(()) => {
-                    w.global::<MeshGlobal>()
-                        .set_nickname(ui_ctx.mesh_nickname().into());
-                    w.global::<MeshGlobal>().set_notice(
-                        chatter_i18n::tr("Mesh name updated. Everyone nearby can see it.").into(),
-                    );
+                    let global = w.global::<MeshGlobal>();
+                    global.set_nickname(ui_ctx.mesh_nickname().into());
+                    global.set_custom_nickname(ui_ctx.mesh_custom_nickname().unwrap_or_default().into());
+                    global.set_notice(chatter_i18n::tr("Mesh nickname updated.").into());
                 }
                 Err(error) => w
                     .global::<MeshGlobal>()
@@ -560,6 +575,46 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         chatter_i18n::trf("Could not set mesh name: {}", &[&error]).into(),
                     ),
             }
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_set_bridge_mode(move |enabled| {
+            let Some(w) = weak.upgrade() else { return };
+            let global = w.global::<MeshGlobal>();
+            if let Err(error) = ui_ctx.set_mesh_bridge_mode(enabled) {
+                global.set_notice(
+                    chatter_i18n::trf("Could not change bridge mode: {}", &[&error]).into(),
+                );
+            }
+            global.set_bridge_mode(ui_ctx.mesh_bridge_mode_enabled());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_set_public_chat(move |enabled| {
+            let Some(w) = weak.upgrade() else { return };
+            let global = w.global::<MeshGlobal>();
+            match ui_ctx.set_mesh_public_chat(enabled) {
+                Ok(()) => {
+                    if !enabled
+                        && matches!(
+                            active(),
+                            Some(MeshConversation::Room | MeshConversation::Channel(_))
+                        )
+                    {
+                        close_mesh_conversation(&w, &ui_ctx);
+                    }
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => global.set_notice(
+                    chatter_i18n::trf("Could not change nearby public chat: {}", &[&error]).into(),
+                ),
+            }
+            global.set_public_chat(ui_ctx.mesh_public_chat_enabled());
         });
     }
 
@@ -804,8 +859,11 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 run_ui!(weak, |w| {
                     close_mesh_conversation(&w, &ui_ctx);
                     refresh_rows(&w, &ui_ctx);
-                    w.global::<MeshGlobal>()
-                        .set_nickname(ui_ctx.mesh_nickname().into());
+                    let global = w.global::<MeshGlobal>();
+                    global.set_nickname(ui_ctx.mesh_nickname().into());
+                    global.set_custom_nickname(ui_ctx.mesh_custom_nickname().unwrap_or_default().into());
+                    global.set_bridge_mode(ui_ctx.mesh_bridge_mode_enabled());
+                    global.set_public_chat(ui_ctx.mesh_public_chat_enabled());
                     if let Err(error) = &wiped {
                         tracing::warn!(%error, "mesh: panic wipe incomplete");
                         w.global::<MeshGlobal>().set_notice(
@@ -947,6 +1005,7 @@ fn refresh_rows_with_rows(
         })
         .collect();
     let global = window.global::<MeshGlobal>();
+    global.set_pairing_active(ui_ctx.mesh_pairing_active());
     // Count the same core-selected peers shown in the setup sheet. Transport
     // status counts only connected peers, while this list also includes peers
     // still reachable through the mesh after their direct link drops.
@@ -1227,6 +1286,7 @@ fn apply_status(
     // flapping rebuilds it, and a service flag inside it would read as the mesh
     // dying. See `MeshService::is_running`.
     global.set_running(core_api::service_running(ui_ctx));
+    global.set_nickname(ui_ctx.mesh_nickname().into());
     global.set_radio_running(status.radio_running);
     global.set_radio_down(core_api::radio_down_label(&status).into());
     global.set_relay_count(i32::try_from(status.connected_relays).unwrap_or(i32::MAX));

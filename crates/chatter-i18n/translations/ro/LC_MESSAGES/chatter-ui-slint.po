@@ -6039,3 +6039,39 @@ msgstr "Nepermis"
 
 msgid "Allow"
 msgstr "Permite"
+
+#: ui/mesh/mesh_list.slint:143
+msgid "Create a private group or pair a contact in Mesh settings."
+msgstr "Creează un grup privat sau asociază un contact din setările Mesh."
+
+#: ui/mesh/mesh_setup_sheet.slint:140
+msgid "Pair a nearby contact"
+msgstr "Asociază un contact din apropiere"
+
+#: ui/mesh/mesh_setup_sheet.slint:156
+msgid "You appear as {} nearby. Choose your contact’s device and verify it in person."
+msgstr "Cei din apropiere te văd ca {}. Alege dispozitivul contactului tău și verifică-l în persoană."
+
+#: ui/mesh/mesh_setup_sheet.slint:165 ui/mesh/mesh_setup_sheet.slint:168
+msgid "Nearby public chat"
+msgstr "Chat public în apropiere"
+
+#: ui/mesh/mesh_setup_sheet.slint:170
+msgid "Send and receive public messages and files over Bluetooth. Anyone nearby can read them."
+msgstr "Trimite și primește mesaje și fișiere publice prin Bluetooth. Oricine din apropiere le poate citi."
+
+#: ui/mesh/mesh_setup_sheet.slint:177 ui/mesh/mesh_setup_sheet.slint:180
+msgid "Bridge mode"
+msgstr "Mod punte"
+
+#: ui/mesh/mesh_setup_sheet.slint:182
+msgid "Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth."
+msgstr "Se conectează la relee publice de internet și distribuie prin Bluetooth identificatorii dispozitivelor conectate și celula de localizare configurată, dacă există."
+
+#: ui/mesh/mesh_setup_sheet.slint:190
+msgid "Mesh nickname"
+msgstr "Pseudonim Mesh"
+
+#: ui/mesh/mesh_setup_sheet.slint:204
+msgid "People nearby can see your mesh nickname. A custom nickname stays the same when your mesh identity changes."
+msgstr "Persoanele din apropiere îți pot vedea pseudonimul Mesh. Un pseudonim personalizat rămâne același când ți se schimbă identitatea Mesh."

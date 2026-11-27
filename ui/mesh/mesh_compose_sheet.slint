@@ -149,15 +149,15 @@ export component MeshComposeSheet inherits Rectangle {
                                 ComposeMenuRow { icon: Icons.lock; title: @tr("New private group"); detail: @tr("Invite only");
                                     tint: Colors.group-accent; touch: root.touch;
                                     clicked => { root.page = "group"; } }
-                                Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.hash; title: @tr("Join public channel"); detail: @tr("Talk with devices nearby"); touch: root.touch;
+                                if MeshGlobal.public-chat: Rectangle { height: 1px; background: Colors.divider; }
+                                if MeshGlobal.public-chat: ComposeMenuRow { icon: Icons.hash; title: @tr("Join public channel"); detail: @tr("Talk with devices nearby"); touch: root.touch;
                                     clicked => { root.page = "channel"; } }
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 ComposeMenuRow { icon: Icons.link; title: @tr("Join with invite"); detail: @tr("Paste or scan a private invite");
                                     tint: Colors.info; touch: root.touch;
                                     clicked => { root.page = "invite"; } }
-                                Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.radio; title: @tr("Join location cell"); detail: @tr("Connect through nearby relays");
+                                if MeshGlobal.bridge-mode: Rectangle { height: 1px; background: Colors.divider; }
+                                if MeshGlobal.bridge-mode: ComposeMenuRow { icon: Icons.radio; title: @tr("Join location cell"); detail: @tr("Connect through nearby relays");
                                     tint: Colors.accent; touch: root.touch;
                                     clicked => { root.page = "cell"; } }
                             }

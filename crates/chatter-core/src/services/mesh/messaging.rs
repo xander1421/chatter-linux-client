@@ -10,6 +10,9 @@ impl MeshService {
         if self.relay_connector.is_none() {
             return Err(MeshError::NoRelayConnector);
         }
+        if !self.bridge_mode_enabled() {
+            return Err(MeshError::BridgeModeDisabled);
+        }
         let message_id = new_message_id();
         self.nostr
             .send(NostrCommand::GeohashMessage {

@@ -194,14 +194,15 @@ impl MeshTimeline {
                 tracing::warn!(%error, "mesh: could not restore the conversation directory");
             }
         }
-        // The public room is not something you join — a running radio is in it.
-        // So it exists from construction rather than from the first message.
-        timeline.register(&MeshConversation::Room, None);
         timeline
     }
 }
 
 impl MeshTimeline {
+    pub(super) fn open_public_room(&self) {
+        self.register(&MeshConversation::Room, None);
+    }
+
     /// Mirror one directory entry to disk.
     ///
     /// Failures are logged, not propagated: the conversation is already open in
