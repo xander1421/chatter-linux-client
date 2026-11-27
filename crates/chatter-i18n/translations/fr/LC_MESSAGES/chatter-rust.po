@@ -52,6 +52,12 @@ msgstr ""
 msgid "Current PIN is incorrect"
 msgstr "Le PIN actuel est incorrect"
 
+#: crates/chatter-core/src/client/auth.rs
+msgid "Current PIN is incorrect. {n} attempt remaining."
+msgid_plural "Current PIN is incorrect. {n} attempts remaining."
+msgstr[0] "Le PIN actuel est incorrect. Il te reste {n} tentative."
+msgstr[1] "Le PIN actuel est incorrect. Il te reste {n} tentatives."
+
 #: crates/chatter-core/src/client/membership.rs:161
 msgid "Verified revision {}, state code {}."
 msgstr "Révision {} vérifiée, code d'état {}."
@@ -1158,6 +1164,10 @@ msgstr ""
 #: crates/chatter-core/src/services/key_recovery.rs
 msgid "Your key backup could not be read."
 msgstr "Impossible de lire ta sauvegarde de clés."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "This device could not process your key backup. Try again."
+msgstr "Cet appareil n’a pas pu traiter ta sauvegarde de clés. Réessaie."
 
 #: crates/chatter-core/src/services/key_recovery.rs
 msgid "That PIN did not unlock your key backup. {n} attempt remaining. Check your current PIN before trying again."

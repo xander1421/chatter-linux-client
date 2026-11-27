@@ -1432,6 +1432,7 @@ fn publish_svr_backup_error(error: SvrBackupError) -> ClientError {
             | SvrBackupError::RateLimited
             | SvrBackupError::BackupDestroyed
             | SvrBackupError::UnreadableBackup(_)
+            | SvrBackupError::Crypto(_)
     ) {
         return ClientError::IdentityRecoveryRequired(classify_restore_failure(&error));
     }
@@ -1444,7 +1445,17 @@ fn publish_svr_backup_error(error: SvrBackupError) -> ClientError {
 fn settings_pin_change_error(error: SvrBackupError) -> ClientError {
     use crate::services::link_device_service::{PinVerification, PinVerificationError};
     let message = match error {
-        SvrBackupError::WrongPin { .. } => chatter_i18n::tr("Current PIN is incorrect"),
+        SvrBackupError::WrongPin {
+            remaining_attempts: Some(remaining),
+        } => chatter_i18n::trn(
+            "Current PIN is incorrect. {n} attempt remaining.",
+            "Current PIN is incorrect. {n} attempts remaining.",
+            remaining.into(),
+            &[],
+        ),
+        SvrBackupError::WrongPin {
+            remaining_attempts: None,
+        } => chatter_i18n::tr("Current PIN is incorrect"),
         SvrBackupError::RateLimited => {
             PinVerification::Error(PinVerificationError::RateLimited).message()
         }
@@ -1591,6 +1602,18 @@ mod tests {
             );
         }
         assert!(!KeyRecoveryNeed::StaleBackup.is_retryable());
+    }
+
+    #[test]
+    fn change_pin_reports_the_attempt_count_when_available() {
+        for (remaining_attempts, expected) in [
+            (Some(1), "Current PIN is incorrect. 1 attempt remaining."),
+            (Some(3), "Current PIN is incorrect. 3 attempts remaining."),
+            (None, "Current PIN is incorrect"),
+        ] {
+            let error = settings_pin_change_error(SvrBackupError::WrongPin { remaining_attempts });
+            assert_eq!(error.user_message(), expected);
+        }
     }
 
     #[tokio::test]

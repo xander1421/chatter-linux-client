@@ -53,8 +53,10 @@ pub enum KeyRecoveryNeed {
     /// Too many recent restore attempts. The backup is intact; only waiting is
     /// required.
     RateLimited,
-    /// The SVR server could not be reached, or local storage failed. Says
-    /// nothing about whether a backup exists.
+    /// A local cryptographic operation failed while processing the key backup.
+    LocalCryptoFailure,
+    /// A network, storage, or other operational error prevented recovery.
+    /// Says nothing about whether a backup exists.
     Unavailable,
 }
 
@@ -75,6 +77,7 @@ impl KeyRecoveryNeed {
             | Self::WrongPin { .. }
             | Self::UnreadableBackup
             | Self::RateLimited
+            | Self::LocalCryptoFailure
             | Self::Unavailable => true,
             // There is nothing left to recover from.
             Self::NoBackup | Self::BackupDestroyed | Self::StaleBackup => false,
@@ -113,6 +116,9 @@ impl KeyRecoveryNeed {
             Self::RateLimited => chatter_i18n::tr(
                 "Too many recovery attempts. Wait before trying your PIN again — your backup is still intact.",
             ),
+            Self::LocalCryptoFailure => chatter_i18n::tr(
+                "This device could not process your key backup. Try again.",
+            ),
             Self::Unavailable => chatter_i18n::tr(
                 "Could not reach the key backup service. Your keys are still safe; try again when you are online.",
             ),
@@ -137,8 +143,8 @@ pub fn classify_restore_failure(err: &SvrBackupError) -> KeyRecoveryNeed {
         SvrBackupError::UnreadableBackup(_) => KeyRecoveryNeed::UnreadableBackup,
         SvrBackupError::BackupDestroyed => KeyRecoveryNeed::BackupDestroyed,
         SvrBackupError::RateLimited => KeyRecoveryNeed::RateLimited,
-        SvrBackupError::Crypto(_)
-        | SvrBackupError::Network(_)
+        SvrBackupError::Crypto(_) => KeyRecoveryNeed::LocalCryptoFailure,
+        SvrBackupError::Network(_)
         | SvrBackupError::Storage(_)
         | SvrBackupError::Generic(_) => KeyRecoveryNeed::Unavailable,
     }
@@ -195,6 +201,19 @@ mod tests {
     }
 
     #[test]
+    fn local_crypto_failure_reports_a_local_problem_and_keeps_recovery_available() {
+        let need = classify_restore_failure(&SvrBackupError::Crypto(
+            CryptoError::KeyDerivationFailed("Argon2 failed".into()),
+        ));
+        assert_eq!(need, KeyRecoveryNeed::LocalCryptoFailure);
+        assert!(need.is_retryable());
+        assert_ne!(
+            need.user_message(),
+            KeyRecoveryNeed::Unavailable.user_message(),
+        );
+    }
+
+    #[test]
     fn rate_limiting_is_retryable() {
         let need = classify_restore_failure(&SvrBackupError::RateLimited);
         assert_eq!(need, KeyRecoveryNeed::RateLimited);
@@ -231,6 +250,7 @@ mod tests {
             KeyRecoveryNeed::BackupDestroyed,
             KeyRecoveryNeed::StaleBackup,
             KeyRecoveryNeed::RateLimited,
+            KeyRecoveryNeed::LocalCryptoFailure,
             KeyRecoveryNeed::Unavailable,
         ] {
             // The whole defect was silence. An empty message would reproduce it.

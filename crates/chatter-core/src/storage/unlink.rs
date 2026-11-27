@@ -30,12 +30,9 @@ use crate::error::StorageError;
 /// resend log of messages encrypted under them, and the queued sends that would
 /// need those keys (Signal's `jobs`). Remote identities stay, as Signal keeps
 /// its `identityKeys` table (the safety numbers the user saw).
-const DEVICE_CONFIGURATION_TABLES: &[&str] = &[
+const LOCAL_IDENTITY_TABLES: &[&str] = &[
     "dm_outbox",
-    "peer_kt_jobs",
-    "peer_kt_archived_receives",
     "dm_bootstrap_replies",
-    "peer_key_transparency",
     "pending_dm_messages",
     "pending_channel_messages",
     "pending_anon_group_messages",
@@ -76,7 +73,10 @@ const DEVICE_CONFIGURATION_SETTINGS: &[&str] = &[
 pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(), StorageError> {
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
-    clear_device_configuration_tables(&tx)?;
+    clear_local_identity_tables(&tx)?;
+    for table in ["peer_kt_jobs", "peer_kt_archived_receives", "peer_key_transparency"] {
+        tx.execute(&format!("DELETE FROM {table}"), [])?;
+    }
     for key in DEVICE_CONFIGURATION_SETTINGS {
         tx.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
     }
@@ -99,18 +99,17 @@ pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(),
     Ok(())
 }
 
-fn clear_device_configuration_tables(tx: &Transaction<'_>) -> Result<(), StorageError> {
-    for table in DEVICE_CONFIGURATION_TABLES {
+fn clear_local_identity_tables(tx: &Transaction<'_>) -> Result<(), StorageError> {
+    for table in LOCAL_IDENTITY_TABLES {
         tx.execute(&format!("DELETE FROM {table}"), [])?;
     }
     Ok(())
 }
 
 /// Discard protocol state bound to an unpublished identity while keeping
-/// the provisional sign-in, the account's KT baseline, and message history.
+/// the provisional sign-in, peer identity pins and KT state, and message history.
 pub(crate) fn clear_staged_device_crypto(tx: &Transaction<'_>) -> Result<(), StorageError> {
-    clear_device_configuration_tables(tx)?;
-    tx.execute("DELETE FROM remote_identities", [])?;
+    clear_local_identity_tables(tx)?;
     for key in [
         keys::PROFILE_KEY_NEXT,
         keys::PROFILE_KEY_ROTATION_PENDING,
