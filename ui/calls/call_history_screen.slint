@@ -1,3 +1,4 @@
+import { IconAction } from "../components/icon_action.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
@@ -61,7 +62,7 @@ export component CallHistoryScreen inherits Rectangle {
 
     property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
     property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
-    property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
+    property <length> row-name-size: root.mobile-mode ? Typography.base : 13px * Appearance.text-scale;
     property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
 
     callback close();
@@ -138,9 +139,14 @@ export component CallHistoryScreen inherits Rectangle {
 
         Rectangle {
             vertical-stretch: 1;
+            background: root.mobile-mode ? transparent : Colors.background;
+            border-radius: Spacing.radius-panel;
+            border-width: root.mobile-mode ? 0px : 1px;
+            border-color: Colors.border;
 
         VerticalLayout {
-            spacing: Spacing.md;
+            padding: root.mobile-mode ? Spacing.none : Spacing.panel-gutter;
+            spacing: root.mobile-mode ? Spacing.md : Spacing.panel-gutter;
             vertical-stretch: 1;
 
             // Filter tabs — mirrors core's `CallHistoryFilter`. Same box
@@ -148,7 +154,9 @@ export component CallHistoryScreen inherits Rectangle {
             // Selection bar — stands in for the filter tabs while picking
             // rows, as the chat's SelectionBar stands in for its header.
             if root.selecting: GlassSurface {
-                material-enabled: root.mobile-mode;
+                border-radius: Spacing.radius-panel;
+                border-width: 1px;
+                border-color: Colors.border;
                 elevation: 0;
                 z: 1;
                 backdrop-paused: root.scrolling;
@@ -197,17 +205,14 @@ export component CallHistoryScreen inherits Rectangle {
             }
 
             if !root.selecting: GlassSurface {
-                material-enabled: root.mobile-mode;
+                border-radius: Spacing.radius-panel;
+                border-width: 1px;
+                border-color: Colors.border;
                 elevation: 0;
                 z: 1;
                 backdrop-paused: root.scrolling;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
-                // Segmented control, concentric with its shell: the tabs sit
-                // `chrome-inset` inside the glass pill and the selected one is
-                // filled at `radius-chrome-inner`, so its fill follows the
-                // shell's curve. Filled square to the shell's rectangle, the
-                // selection's corners stuck out past the rounded ends.
                 HorizontalLayout {
                     padding: Spacing.chrome-inset;
 
@@ -216,7 +221,7 @@ export component CallHistoryScreen inherits Rectangle {
                         { id: "missed", label: @tr("call filter" => "Missed") }
                     ]: Rectangle {
                         horizontal-stretch: 1;
-                        border-radius: Spacing.radius-chrome-inner;
+                        border-radius: Spacing.radius-control;
                         background: root.active-filter == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
                         transform-scale-x: tab-touch.pressed ? 96% : 100%;
                         transform-scale-y: tab-touch.pressed ? 94% : 100%;
@@ -280,15 +285,16 @@ export component CallHistoryScreen inherits Rectangle {
 
                 Text {
                     text: root.active-filter == "missed" ? @tr("No missed calls") : @tr("No calls yet");
-                    color: Colors.text-muted;
-                    font-size: Typography.base;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.semibold;
                     horizontal-alignment: center;
                 }
 
                 Text {
                     text: root.active-filter == "missed" ? @tr("Calls you did not answer show up here.") : @tr("Use the phone icon in a regular chat or channel.");
                     color: Colors.text-muted;
-                    font-size: Typography.sm;
+                    font-size: Typography.xs;
                     horizontal-alignment: center;
                 }
             }
@@ -314,6 +320,9 @@ export component CallHistoryScreen inherits Rectangle {
             // has no list at all (history.rs `EMPTY_PAGES`).
             if !root.loading && root.rows.length > 0: list-slot := Rectangle {
                 vertical-stretch: 1;
+                background: root.mobile-mode ? transparent : Colors.surface-card;
+                border-radius: Spacing.radius-panel;
+                clip: !root.mobile-mode;
                 property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
 
                 // A fling reports its release, not its end: `scrolling` lasts
@@ -375,7 +384,9 @@ export component CallHistoryScreen inherits Rectangle {
                         height: self.preferred-height;
                         // The list's insets ride on its first and last row, so
                         // the runtime counts them in viewport-height.
-                        padding-top: idx == 0 && root.mobile-mode ? calls-list.chrome-inset : Spacing.none;
+                        padding-top: idx == 0 ? (root.mobile-mode ? calls-list.chrome-inset : Spacing.sm) : Spacing.none;
+                        padding-left: root.mobile-mode ? Spacing.none : Spacing.sm;
+                        padding-right: root.mobile-mode ? Spacing.none : Spacing.sm;
                         padding-bottom: Spacing.xs;
 
                         Rectangle {
@@ -405,9 +416,9 @@ export component CallHistoryScreen inherits Rectangle {
                             accessible-action-expand => {
                                 if !root.selecting { root.toggle-select(row.id); }
                             }
-                            background: root.selecting && row.selected ? Colors.text-primary.with-alpha(0.12)
+                            background: root.selecting && row.selected ? Colors.tint-strong
                                 : row-touch.pressed ? Materials.pressed : row-touch.has-hover ? Colors.surface-hover : transparent;
-                            border-radius: Spacing.radius-md;
+                            border-radius: Spacing.radius-control;
                             transform-scale-x: row-touch.pressed ? 99% : 100%;
                             transform-scale-y: row-touch.pressed ? 97% : 100%;
                             animate transform-scale-x { duration: row-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
@@ -451,7 +462,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         width: Spacing.switch-thumb;
                                         height: self.width;
                                         border-radius: Spacing.radius-sm;
-                                        border-width: Spacing.stroke;
+                                        border-width: 1px;
                                         border-color: row.selected ? Colors.action-fill : Colors.text-muted;
                                         background: row.selected ? Colors.action-fill : transparent;
                                         accessible-role: checkbox;
@@ -518,7 +529,7 @@ export component CallHistoryScreen inherits Rectangle {
                                             text: row.name;
                                             color: row.is-missed ? Colors.error : Colors.text-primary;
                                             font-size: root.row-name-size;
-                                            font-weight: Typography.medium;
+                                            font-weight: Typography.semibold;
                                             overflow: elide;
                                             horizontal-stretch: 1;
                                         }
@@ -564,65 +575,18 @@ export component CallHistoryScreen inherits Rectangle {
                                     alignment: center;
                                     horizontal-stretch: 0;
 
-                                    Rectangle {
-                                        width: Spacing.touch-target-min;
-                                        border-radius: Spacing.radius-sm;
-                                        background: voice-touch.has-hover ? Colors.surface : transparent;
-                                        transform-scale-x: voice-touch.pressed ? 92% : 100%;
-                                        transform-scale-y: voice-touch.pressed ? 92% : 100%;
-                                        animate transform-scale-x { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                                        animate transform-scale-y { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                                        accessible-role: button;
-                                        accessible-label: @tr("Call {}", row.name);
-                                        // TalkBack activates through the default action.
-                                        accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, false); }
-                                        KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, false); } }
-
-                                        Image {
-                                            source: Icons.phone;
-                                            colorize: Colors.primary;
-                                            width: 18px;
-                                            height: 18px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-
-                                        voice-touch := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.call-back(row.conversation-id, row.conversation-type, false);
-                                            }
-                                        }
+                                    IconAction {
+                                        height: Spacing.touch-target-min;
+                                        icon: Icons.phone;
+                                        label: @tr("Call {}", row.name);
+                                        clicked => { root.call-back(row.conversation-id, row.conversation-type, false); }
                                     }
 
-                                    Rectangle {
-                                        width: Spacing.touch-target-min;
-                                        border-radius: Spacing.radius-sm;
-                                        background: video-touch.has-hover ? Colors.surface : transparent;
-                                        transform-scale-x: video-touch.pressed ? 92% : 100%;
-                                        transform-scale-y: video-touch.pressed ? 92% : 100%;
-                                        animate transform-scale-x { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                                        animate transform-scale-y { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                                        accessible-role: button;
-                                        accessible-label: @tr("Video call {}", row.name);
-                                        accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, true); }
-                                        KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, true); } }
-
-                                        Image {
-                                            source: Icons.video;
-                                            colorize: Colors.primary;
-                                            width: 18px;
-                                            height: 18px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-
-                                        video-touch := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.call-back(row.conversation-id, row.conversation-type, true);
-                                            }
-                                        }
+                                    IconAction {
+                                        height: Spacing.touch-target-min;
+                                        icon: Icons.video;
+                                        label: @tr("Video call {}", row.name);
+                                        clicked => { root.call-back(row.conversation-id, row.conversation-type, true); }
                                     }
                                 }
                             }
@@ -647,6 +611,8 @@ export component CallHistoryScreen inherits Rectangle {
             if !root.loading && root.paging-paused: Rectangle {
                 vertical-stretch: 0;
                 height: resume-body.preferred-height;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
                 TouchArea {}
 
                 resume-body := VerticalLayout {
@@ -684,8 +650,8 @@ export component CallHistoryScreen inherits Rectangle {
                 // left implicit, the card was squeezed and Cancel/Delete spilled
                 // past its bottom edge onto the mobile tab dock.
                 height: confirm-body.preferred-height;
-                background: Colors.surface;
-                border-radius: Spacing.radius-lg;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
                 // Shield whitespace as well as the controls from row actions.
                 TouchArea {}
 
@@ -760,7 +726,9 @@ export component CallHistoryScreen inherits Rectangle {
                     width: min(max(select-label.preferred-width, menu-label.preferred-width) + 2 * Spacing.lg,
                         max(0px, parent.width - root.more-menu-trailing-inset));
                     height: 2 * Spacing.touch-target-min;
-                    border-radius: Spacing.radius-xl;
+                    border-radius: Spacing.radius-panel;
+                    border-width: 1px;
+                    border-color: Colors.border;
 
                     VerticalLayout {
                         Rectangle {
