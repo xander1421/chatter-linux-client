@@ -564,11 +564,11 @@ export component MessageComposer inherits GlassSurface {
                     - (root.lift-layout * root.lower-terminal-width
                         + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width + Spacing.xs));
                 height: root.content-height;
+                // The field shares the island's glass: no second grey pill and no
+                // accent focus outline inside the composer (owner 2026-11-27).
                 // The native TextInput stays mounted while controls lift and settle.
-                background: Colors.surface-control;
-                border-radius: Spacing.radius-control;
-                border-width: text-input.has-focus ? 1phx : 0px;
-                border-color: Colors.primary;
+                background: transparent;
+                border-radius: Spacing.radius-chrome-inner;
                 opacity: root.disabled ? 0.5 : 1.0;
                 clip: true;
 

@@ -41,7 +41,8 @@ Set by the owner and cofounder designer on 2026-11-27, starting from the section
 ## Controls
 
 - Buttons come only from the shared families: `Button`, `HeaderButton`, `IconAction` (enforced by the `screens_do_not_define_private_button_families` test).
-- Text inputs: `radius-control` (8), `surface-control` fill, no inner bars. A composer is ONE island holding emoji, field, attach and send. Reply, edit and attachment previews sit inside the island above the field, never as a separate slab.
+- Standalone text inputs (in cards and dialogs): `radius-control` (8), `surface-control` fill, no inner bars.
+- The composer is ONE glass island holding emoji, field, attach and send. Its text field is transparent on the island's glass, with no grey fill and no accent focus outline. Reply, edit and attachment previews sit inside the island above the field, never as a separate slab.
 - Empty states: centred icon, 14 px title, 12 px muted line, at most one primary button.
 
 ## Lists and rows
