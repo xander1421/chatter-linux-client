@@ -4686,11 +4686,10 @@ fn headers_use_the_shared_header_button() {
         "\\u{2715}",
         "\\u{22EE}",
     ];
-    const NOT_A_HEADER: [(&str, &str); 15] = [
+    const NOT_A_HEADER: [(&str, &str); 14] = [
         ("chat/composer_reply_preview.slint", "Icons.x"), // cancel the reply strip
         ("chat/chat_layout.slint", "Icons.x"), // clear the picker drawer's search field
         ("chat/composer_edit_bar.slint", "Icons.x"), // cancel the edit strip
-        ("chat/composer_attachment_strip.slint", "Icons.x"), // remove a pending attachment
         ("chat/pinned_bar.slint", "Icons.x"),  // dismiss the pinned banner
         ("components/connection_banner.slint", "Icons.x"), // dismiss the banner
         ("components/toast.slint", "Icons.x"), // dismiss a toast
@@ -6086,7 +6085,6 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
     let recording = include_str!("../../../ui/chat/composer_recording_panel.slint");
     for (src, marker, binding) in [
         (composer, "GlassSurface {", "backdrop-paused: root.backdrop-paused;"),
-        (composer, "ComposerAttachmentStrip {", "backdrop-paused: root.backdrop-paused;"),
         (composer, "ComposerRecordingPanel {", "surface-backdrop-paused: root.backdrop-paused;"),
         (recording, "GlassSurface {", "backdrop-paused: root.surface-backdrop-paused;"),
         (recording, "HeaderButton {", "backdrop-paused: root.surface-backdrop-paused;"),

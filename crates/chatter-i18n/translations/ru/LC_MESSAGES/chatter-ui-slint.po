@@ -1020,10 +1020,6 @@ msgstr "Отменить голосовое"
 msgid "Send voice message"
 msgstr "Отправить голосовое"
 
-#: ui/chat/composer_reply_preview.slint:68
-msgid "Reply to {}"
-msgstr "Ответ {}"
-
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
 msgstr "Отменить ответ"

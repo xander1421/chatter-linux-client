@@ -1016,10 +1016,6 @@ msgstr "Sprachnachricht abbrechen"
 msgid "Send voice message"
 msgstr "Sprachnachricht senden"
 
-#: ui/chat/composer_reply_preview.slint:68
-msgid "Reply to {}"
-msgstr "Antwort an {}"
-
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
 msgstr "Antwort abbrechen"

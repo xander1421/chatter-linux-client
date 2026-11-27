@@ -1019,10 +1019,6 @@ msgstr "Anulează mesajul vocal"
 msgid "Send voice message"
 msgstr "Trimite mesajul vocal"
 
-#: ui/chat/composer_reply_preview.slint:68
-msgid "Reply to {}"
-msgstr "Răspuns către {}"
-
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
 msgstr "Anulează răspunsul"

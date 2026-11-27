@@ -993,10 +993,6 @@ msgstr ""
 msgid "Send voice message"
 msgstr ""
 
-#: ui/chat/composer_reply_preview.slint:68
-msgid "Reply to {}"
-msgstr ""
-
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
 msgstr ""
