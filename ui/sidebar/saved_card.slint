@@ -1,0 +1,92 @@
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { KeyFocus } from "../components/key_focus.slint";
+
+export component SavedCard inherits GlassSurface {
+    in property <string> preview;
+    in property <string> time-label;
+    in property <bool> selected;
+    in property <bool> roving;
+    in property <bool> roving-highlight;
+    callback opened();
+
+    border-radius: 12px;
+    elevation: 0;
+    material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+    accessible-role: groupbox;
+    accessible-label: @tr("Saved messages");
+    height: content.preferred-height + Spacing.sm;
+
+    row := Rectangle {
+        x: Spacing.xs;
+        y: Spacing.xs;
+        width: parent.width - 2 * self.x;
+        height: content.preferred-height;
+        border-radius: Spacing.sm;
+        background: root.selected ? Colors.primary.with-alpha(0.16)
+            : row-touch.has-hover ? Colors.row-hover : transparent;
+        border-width: root.roving-highlight ? 2px : 0px;
+        border-color: Colors.focus-ring;
+        accessible-role: list-item;
+        accessible-label: root.preview == "" ? @tr("Saved messages") : @tr("Saved messages: {}", root.preview);
+        accessible-action-default => { root.opened(); }
+
+        content := HorizontalLayout {
+            padding: Spacing.sm;
+            spacing: Spacing.sm;
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Rectangle {
+                    width: 34px;
+                    height: self.width;
+                    border-radius: self.width / 2;
+                    background: Colors.surface-control;
+                    Image {
+                        source: Icons.bookmark;
+                        width: 18px;
+                        height: self.width;
+                        colorize: Colors.text-secondary;
+                    }
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: @tr("Saved messages");
+                    color: Colors.text-primary;
+                    font-size: 13px * Appearance.text-scale;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                if root.preview != "": Text {
+                    text: root.preview;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    overflow: elide;
+                }
+            }
+            if root.time-label != "": Text {
+                text: root.time-label;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                vertical-alignment: top;
+            }
+        }
+        if !root.roving: KeyFocus {
+            border-radius: parent.border-radius;
+            activate => { root.opened(); }
+        }
+        row-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.opened(); }
+        }
+    }
+}
