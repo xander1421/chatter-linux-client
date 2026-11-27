@@ -243,7 +243,10 @@ export component MeshPeerSheet inherits Rectangle {
                                             alignment: center;
                                             Rectangle {
                                                 width: 40px; height: 30px; border-radius: Spacing.radius-full;
-                                                background: qr-touch.pressed ? Colors.surface-control-hover : Colors.surface-control;
+                                                border-width: 1px;
+                                                border-color: Colors.border;
+                                                background: qr-touch.pressed ? Colors.surface-control-hover
+                                                    : qr-touch.has-hover ? Colors.surface-control : transparent;
                                                 Text { text: "QR"; color: Colors.primary; font-size: Typography.xs; font-weight: 600;
                                                     horizontal-alignment: center; vertical-alignment: center; }
                                                 qr-touch := TouchArea {

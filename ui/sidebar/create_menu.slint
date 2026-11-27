@@ -1,5 +1,5 @@
 import { KeyFocus } from "../components/key_focus.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
+import { PopupSurface } from "../components/popup_surface.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 // Create menu — what the chat list's '+' opens (owner decision 2026-09-26).
@@ -58,7 +58,7 @@ export component CreateMenu inherits Rectangle {
     background: Materials.scrim;
     TouchArea { enabled: root.show; clicked => { root.close(); } }
 
-    GlassSurface {
+    PopupSurface {
         enter-distance: 0px;
         shown: root.show;
         // Keep the card attached to the control that opened it: the phone FAB
@@ -69,14 +69,11 @@ export component CreateMenu inherits Rectangle {
         animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
         animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
-        material-level: 3;
-        elevation: 4;
-
         x: root.card-x;
         y: root.card-y;
         width: root.card-width;
         height: root.card-height;
-        border-radius: root.show ? Spacing.radius-xl : Spacing.fab-size / 2;
+        border-radius: root.show ? Spacing.radius-panel : Spacing.fab-size / 2;
         animate border-radius { duration: Materials.motion-standard; easing: Materials.spring; }
         // Eat taps on the card's own padding.
         TouchArea { }
@@ -88,8 +85,7 @@ export component CreateMenu inherits Rectangle {
         Rectangle {
             visible: root.show || root.opacity > 0;
             menu := VerticalLayout {
-                padding-top: Spacing.xs;
-                padding-bottom: Spacing.xs;
+                padding: Spacing.xs;
                 MenuRow {
                     icon: Icons.message-circle; label: @tr("New chat");
                     opacity: root.first-arrived ? 1 : 0;
@@ -196,8 +192,8 @@ export component NewChatPicker inherits Rectangle {
                     alignment: start;
                     for friend in root.friends: Rectangle {
                         height: root.mobile-mode ? Spacing.row-height-touch : 48px;
-                        background: row-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
+                        background: row-touch.has-hover ? Colors.surface-control : transparent;
+                        border-radius: Spacing.radius-control;
                         accessible-role: button;
                         accessible-label: friend.display-name;
                         accessible-action-default => { if root.show { modal.release-focus(); root.pick(friend.user-id); } }

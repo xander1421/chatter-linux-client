@@ -1,3 +1,4 @@
+import { PopupSurface } from "../components/popup_surface.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { ChannelMemberData, ChannelRosterRowData } from "channel_member_types.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -23,8 +24,8 @@ component MemberMenuItem inherits Rectangle {
     in property <bool> destructive: false;
     callback clicked();
     height: Spacing.touch-target-min;
-    border-radius: Spacing.radius-sm;
-    background: item-touch.pressed ? Materials.pressed : item-touch.has-hover ? Colors.surface-hover : transparent;
+    border-radius: Spacing.radius-control;
+    background: item-touch.pressed ? Materials.pressed : item-touch.has-hover ? Colors.surface-control : transparent;
     accessible-role: button;
     accessible-label: root.label;
     accessible-action-default => { root.clicked(); }
@@ -50,12 +51,12 @@ component MemberMenuItem inherits Rectangle {
                 source: root.icon;
                 width: 18px;
                 height: 18px;
-                colorize: root.destructive ? Colors.error : Colors.text-secondary;
+                colorize: root.destructive ? Colors.danger : Colors.text-secondary;
             }
         }
         Text {
             text: root.label;
-            color: root.destructive ? Colors.error : Colors.text-primary;
+            color: root.destructive ? Colors.danger : Colors.text-primary;
             font-size: Typography.sm;
             vertical-alignment: center;
             horizontal-stretch: 1;
@@ -453,13 +454,11 @@ export component ChannelMembersSection inherits Rectangle {
             clicked => { root.role-picker-user = ""; }
         }
 
-        if root.confirm-action == "": GlassSurface {
+        if root.confirm-action == "": PopupSurface {
             width: min(280px, root.width - Spacing.md * 2);
             height: min(root.height - Spacing.md * 2, root.menu-content-height + Spacing.sm * 2);
             x: root.narrow ? (root.width - self.width) / 2 : root.width - self.width - Spacing.md;
             y: root.narrow ? root.height - self.height - Spacing.sm : Spacing.sm;
-            elevation: 4;
-            material-level: 3;
             menu-scroll := ScrollView {
                 x: Spacing.xs;
                 y: Spacing.xs;

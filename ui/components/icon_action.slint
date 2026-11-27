@@ -6,6 +6,7 @@ import { Materials } from "../theme/materials.slint";
 export component IconAction inherits Rectangle {
     in property <image> icon;
     in property <string> label;
+    in property <bool> outlined: false;
     in property <bool> active: false;
     in property <bool> destructive: false;
     in property <bool> enabled: true;
@@ -46,11 +47,13 @@ export component IconAction inherits Rectangle {
         animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
         animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
         border-radius: self.height / 2;
-        border-width: keys.has-focus ? 2px : 0px;
-        border-color: Colors.focus-ring;
+        border-width: keys.has-focus ? 2px : root.outlined ? 1px : 0px;
+        border-color: keys.has-focus ? Colors.focus-ring : Colors.border;
         animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
         opacity: root.enabled ? 1 : 0.38;
-        background: root.destructive
+        background: root.outlined
+            ? (touch.pressed ? Colors.surface-control-hover : touch.has-hover ? Colors.surface-control : transparent)
+            : root.destructive
             ? (touch.pressed || touch.has-hover ? Colors.error-hover : Colors.error)
             : root.active
             ? (touch.pressed ? Colors.action-active : touch.has-hover ? Colors.action-hover : Colors.action-fill)
@@ -68,7 +71,8 @@ export component IconAction inherits Rectangle {
             height: self.width;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            colorize: root.active || root.destructive ? Colors.on-action : Colors.text-primary;
+            colorize: root.outlined && root.destructive ? Colors.danger
+                : root.active || root.destructive ? Colors.on-action : Colors.text-primary;
         }
     }
     touch := TouchArea {

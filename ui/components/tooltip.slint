@@ -1,4 +1,4 @@
-import { GlassSurface } from "glass_surface.slint";
+import { PopupSurface } from "popup_surface.slint";
 import { Materials } from "../theme/materials.slint";
 // Tooltip components for hover hints
 //
@@ -39,7 +39,7 @@ export component TooltipArea inherits Rectangle {
     @children
 
     // Render tooltip inline when hovered and enabled
-    GlassSurface {
+    PopupSurface {
         visible: root.active || self.opacity > 0;
         opacity: root.active ? 1 : 0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
@@ -47,8 +47,6 @@ export component TooltipArea inherits Rectangle {
         transform-scale-y: root.active ? 100% : 90%;
         animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
         animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-        material-level: 3;
-        elevation: 4;
 
         // Position based on placement
         x: root.placement == "right" ? parent.width + Spacing.panel-gutter :
@@ -60,10 +58,6 @@ export component TooltipArea inherits Rectangle {
 
         width: Math.min(tt-text.preferred-width + Spacing.sm * 2, 200px);
         height: tt-text.preferred-height + Spacing.sm * 2;
-
-        border-radius: Spacing.radius-control;
-        border-width: 1px;
-        border-color: Colors.border;
 
         tt-text := Text {
             x: Spacing.sm;

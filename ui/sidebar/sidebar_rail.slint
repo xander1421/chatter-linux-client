@@ -1,5 +1,6 @@
-import { Avatar } from "../components/avatar.slint";
+import { PopupSurface } from "../components/popup_surface.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Avatar } from "../components/avatar.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { HeaderButton } from "../components/header_button.slint";
 import { SidebarPane } from "../app_sidebar_pane.slint";
@@ -357,17 +358,12 @@ export component SidebarRail inherits Rectangle {
     }
 
     // The hint sits outside the scroll viewport so the card cannot clip it.
-    if root.hover-hint != "" || (keys.has-focus && root.focus-hint != ""): GlassSurface {
+    if root.hover-hint != "" || (keys.has-focus && root.focus-hint != ""): PopupSurface {
         x: root.width + Spacing.sm;
         y: max(0px, min(root.height - self.height,
             (root.hover-hint != "" ? root.hover-y : root.focus-y) - self.height / 2));
         width: min(hint.preferred-width + 2 * Spacing.sm, 200px);
         height: hint.preferred-height + 2 * Spacing.xs;
-        border-radius: Spacing.radius-control;
-        border-width: 1px;
-        border-color: Colors.border;
-        material-level: 3;
-        elevation: 4;
         hint := Text {
             accessible-role: none;
             width: parent.width - 2 * Spacing.sm;

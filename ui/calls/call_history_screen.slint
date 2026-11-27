@@ -1,3 +1,4 @@
+import { PopupSurface } from "../components/popup_surface.slint";
 import { IconAction } from "../components/icon_action.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
@@ -718,23 +719,22 @@ export component CallHistoryScreen inherits Rectangle {
                     clicked => { root.show-more-menu = false; }
                 }
 
-                GlassSurface {
-                    material-level: 3;
-                    elevation: 4;
+                PopupSurface {
                     x: parent.width - root.more-menu-trailing-inset - self.width;
                     y: 0;
                     width: min(max(select-label.preferred-width, menu-label.preferred-width) + 2 * Spacing.lg,
                         max(0px, parent.width - root.more-menu-trailing-inset));
-                    height: 2 * Spacing.touch-target-min;
-                    border-radius: Spacing.radius-panel;
-                    border-width: 1px;
-                    border-color: Colors.border;
+                    height: 2 * Spacing.touch-target-min + 2 * Spacing.xs;
 
+                    TouchArea { }
                     VerticalLayout {
+                        padding: Spacing.xs;
                         Rectangle {
                             height: Spacing.touch-target-min;
+                            border-radius: Spacing.radius-control;
                             accessible-role: button;
                             accessible-label: select-label.text;
+                            background: select-touch.has-hover ? Colors.surface-control : transparent;
                             accessible-action-default => {
                                 root.show-more-menu = false;
                                 root.show-clear-confirm = false;
@@ -760,7 +760,7 @@ export component CallHistoryScreen inherits Rectangle {
                                 height: 100%;
                             }
 
-                            TouchArea {
+                            select-touch := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.show-more-menu = false;
@@ -772,8 +772,10 @@ export component CallHistoryScreen inherits Rectangle {
 
                         Rectangle {
                             height: Spacing.touch-target-min;
+                            border-radius: Spacing.radius-control;
                             accessible-role: button;
                             accessible-label: menu-label.text;
+                            background: menu-touch.has-hover ? Colors.surface-control : transparent;
                             accessible-action-default => {
                                 root.show-more-menu = false;
                                 root.confirm-selected = false;
@@ -791,7 +793,7 @@ export component CallHistoryScreen inherits Rectangle {
                             menu-label := Text {
                                 accessible-role: none;
                                 text: @tr("Clear call history");
-                                color: Colors.error;
+                                color: Colors.danger;
                                 font-size: Typography.base;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;

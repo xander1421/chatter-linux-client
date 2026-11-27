@@ -1,0 +1,12 @@
+import { GlassSurface } from "glass_surface.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component PopupSurface inherits GlassSurface {
+    material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+    border-radius: Spacing.radius-panel;
+    elevation: 4;
+    popup-rim: true;
+}

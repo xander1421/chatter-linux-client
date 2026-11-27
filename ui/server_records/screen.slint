@@ -1,3 +1,4 @@
+import { PopupSurface } from "../components/popup_surface.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Colors } from "../theme/colors.slint";
@@ -225,18 +226,14 @@ export component ServerRecordsScreen inherits Rectangle {
         width: 100%; height: 100%;
         background: transparent;
         TouchArea { clicked => { root.menu-id = ""; } }
-        Rectangle {
+        PopupSurface {
             x: max(Spacing.md, min(root.menu-x, parent.width - self.width - Spacing.md));
             y: max(Spacing.md, min(root.menu-y, parent.height - self.height - Spacing.md));
             width: 220px;
             height: menu-rows.preferred-height;
-            background: Colors.surface-section;
-            border-radius: Spacing.radius-lg;
-            clip: true;
             TouchArea { }
             menu-rows := VerticalLayout {
-                padding-top: Spacing.xs;
-                padding-bottom: Spacing.xs;
+                padding: Spacing.xs;
                 MenuRow { icon: Icons.info; label: @tr("Details"); clicked => { ServerRecordsGlobal.details(root.menu-id); if !root.menu-read { ServerRecordsGlobal.act(root.menu-id, "Mark read"); } root.menu-id = ""; } }
                 if !root.menu-read: MenuRow { icon: Icons.check; label: @tr("Mark read"); clicked => { ServerRecordsGlobal.act(root.menu-id, "Mark read"); root.menu-id = ""; } }
                 MenuRow { icon: Icons.trash; label: @tr("Delete"); destructive: true; clicked => { ServerRecordsGlobal.act(root.menu-id, "Delete"); root.menu-id = ""; } }
