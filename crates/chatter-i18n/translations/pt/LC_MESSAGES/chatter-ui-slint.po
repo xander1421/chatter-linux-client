@@ -1014,10 +1014,6 @@ msgstr "Cancelar mensagem de voz"
 msgid "Send voice message"
 msgstr "Enviar mensagem de voz"
 
-#: ui/chat/composer_reply_preview.slint:68
-msgid "Reply to {}"
-msgstr "Responder a {}"
-
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
 msgstr "Cancelar resposta"

@@ -287,25 +287,15 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let inset = 4.0_f32;
     let composer_src = include_str!("../../../ui/chat/message_composer.slint");
     assert!(
-        composer_src.contains("border-radius: Spacing.radius-chrome;"),
-        "shell radius"
+        composer_src
+            .contains("border-radius: root.mobile ? Spacing.radius-chrome : Spacing.radius-panel;"),
+        "mobile shell radius"
     );
-    // The field, the reply quote and the attachment tray's
-    // remove and add-more boxes (ae492dbb) are concentric with the shell. The
-    // chip and tray moved to their own files in e1dde46a; emoji and attach
-    // became free circular droplets in 08e7ca06 and send a circle in 15919403.
-    let concentric = [
-        composer_src,
-        include_str!("../../../ui/chat/composer_reply_preview.slint"),
-        include_str!("../../../ui/chat/composer_attachment_strip.slint"),
-    ]
-    .iter()
-    .map(|src| src.matches("border-radius: Spacing.radius-chrome-inner;").count())
-    .collect::<Vec<_>>();
-    assert_eq!(
-        concentric,
-        [1, 1, 2],
-        "field, reply quote, attachment remove and add-more are concentric with the shell"
+    assert!(
+        composer_src.contains(
+            "border-radius: root.mobile ? Spacing.radius-chrome-inner : Spacing.radius-control;"
+        ),
+        "the mobile field is concentric with the shell"
     );
     w.global::<chatter_ui::ModalHostState>()
         .set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
@@ -2182,9 +2172,9 @@ fn assert_attachment_strip_geometry(w: &MainWindow) {
     let (x, y, width, height) = rect(&attachment_strip(w));
     let (_, ey, _, eh) = rect(&one(w, "Emoji & GIF picker"));
     let (_, fy, _, _) = rect(&one(w, "Message input"));
-    // One chrome inset in from each side; one inset + Spacing.xs under the
-    // lifted controls (message_composer.slint: y = action-shell-height + xs).
-    assert!((x - sx - 4.0).abs() < 0.5 && (sx + sw - x - width - 4.0).abs() < 0.5);
+    // The tray spans the glass island and insets its scroll contents by 8px.
+    // Its row starts one inset plus Spacing.xs below the lifted controls.
+    assert!((x - sx).abs() < 0.5 && (width - sw).abs() < 0.5);
     assert!((y - ey - eh - 8.0).abs() < 0.5, "strip {} under the controls", y - ey - eh);
     assert!((height - 64.0).abs() < 0.5, "attachment band height {height}");
     assert!(width > 0.0 && y + height < fy);

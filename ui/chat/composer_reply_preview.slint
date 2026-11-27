@@ -20,8 +20,8 @@ export component ComposerReplyPreview inherits Rectangle {
         spacing: Spacing.sm;
 
         MessageQuote {
-            border-radius: Spacing.radius-chrome-inner;
-            reply-to-sender-name: @tr("Reply to {}", root.reply-to-sender);
+            composer-preview: true;
+            reply-to-sender-name: root.reply-to-sender;
             reply-to-preview: root.reply-to-preview;
             reply-to-has-thumbnail: root.reply-has-thumbnail;
             reply-to-thumbnail: root.reply-thumbnail;

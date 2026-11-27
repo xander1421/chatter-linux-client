@@ -245,16 +245,16 @@ export component MessageComposer inherits GlassSurface {
     // Raised controls, attachment strip, then reply preview each own a row;
     // the reply stays directly above the input even with files attached.
     property <length> reply-row-height: is-replying ? max(action-shell-height, 48px * Appearance.text-grow) : 0px;
-    property <length> raised-toolbar-height: lift-layout
-        * (action-shell-height + Spacing.xs
-            + (has-attachments ? attachment-band-height + Spacing.xs : 0px)
+    private property <length> raised-action-row-height: lift-layout * (action-shell-height + Spacing.xs);
+    property <length> raised-toolbar-height: raised-action-row-height + lift-layout
+        * ((has-attachments ? attachment-band-height + Spacing.xs : 0px)
             + (is-replying ? reply-row-height + Spacing.xs : 0px));
     // The part of the composer's height that is only the lifted action row.
     // The row rises into the clearance the message list already keeps below
     // its last row, so the host takes it back out of the list's geometry:
     // typing the first character must not move the messages.
     out property <length> action-lift-height: (root.collapsed && !root.keep-height) || root.recording-here
-        ? 0px : lift-layout * (action-shell-height + Spacing.xs);
+        ? 0px : raised-action-row-height;
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     // Reserve the inline terminal only when a mic actually occupies it. In
     // rooms without voice recording, Send claims its width as lift advances.
@@ -494,13 +494,14 @@ export component MessageComposer inherits GlassSurface {
                     - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
-            // One quiet shell behind the native input; raised actions keep their slots.
+            // One glass island under the attachment tray, reply preview, and input.
             GlassSurface {
                 x: 0px;
-                y: root.raised-toolbar-height;
+                y: root.raised-action-row-height;
                 width: parent.width;
                 height: parent.height - self.y;
-                border-radius: Spacing.radius-chrome;
+                border-radius: root.mobile ? Spacing.radius-chrome : Spacing.radius-panel;
+                popup-rim: !root.mobile;
                 material-level: root.material-level;
                 material-tint: Materials.chat-chrome;
                 darkening: Materials.chat-darkening;
@@ -528,23 +529,15 @@ export component MessageComposer inherits GlassSurface {
 
             // Attachment cards sit between the controls and the reply row.
             if root.has-attachments: ComposerAttachmentStrip {
-                x: root.row-padding;
+                x: 0px;
                 y: root.action-shell-height + Spacing.xs;
-                width: max(0px, parent.width - root.row-padding * 2);
+                width: parent.width;
                 height: min(root.attachment-band-height,
                     max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
-                row-padding: root.row-padding;
-                action-shell-height: root.action-shell-height;
-                attachment-band-height: root.attachment-band-height;
-                raised-toolbar-height: root.raised-toolbar-height;
                 attachment-chip-height: root.attachment-chip-height;
                 strip-reveal: root.strip-reveal;
-                show-attachment-action: root.show-attachment-action;
                 disabled: root.disabled;
                 pending-attachments: root.pending-attachments;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
                 remove-attachment(id) => { root.remove-attachment(id); }
                 attachment-clicked => { root.attachment-clicked(); }
             }
@@ -591,8 +584,8 @@ export component MessageComposer inherits GlassSurface {
                 // Share the shell surface rather than nesting a second bright pill.
                 // The native TextInput stays mounted while controls lift and settle.
                 background: transparent;
-                // Concentric with the shell: radius-chrome − chrome-inset.
-                border-radius: Spacing.radius-chrome-inner;
+                // Keep the focus rim concentric with the composer island.
+                border-radius: root.mobile ? Spacing.radius-chrome-inner : Spacing.radius-control;
                 // The glass shell supplies the resting silhouette. Keep a
                 // physical-pixel focus cue without a second permanent rim.
                 border-width: text-input.has-focus ? 1phx : 0px;

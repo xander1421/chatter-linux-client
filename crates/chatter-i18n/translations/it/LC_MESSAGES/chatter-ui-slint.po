@@ -1013,10 +1013,6 @@ msgstr "Annulla vocale"
 msgid "Send voice message"
 msgstr "Invia vocale"
 
-#: ui/chat/composer_reply_preview.slint:68
-msgid "Reply to {}"
-msgstr "Rispondi a {}"
-
 #: ui/chat/composer_reply_preview.slint:92
 msgid "Cancel reply"
 msgstr "Annulla risposta"

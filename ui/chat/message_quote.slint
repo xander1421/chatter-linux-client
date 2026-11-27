@@ -24,6 +24,7 @@ export component MessageQuote inherits Rectangle {
     in property <int> reply-to-thumbnail-height;
     in property <int> reply-to-thumbnail-width;
     in property <[int]> reply-to-waveform;
+    in property <bool> composer-preview: false;
     in property <length> content-max-width;
     in property <length> thumbnail-max-height: 60px;
     in property <length> thumbnail-max-width: 96px;
@@ -39,7 +40,7 @@ export component MessageQuote inherits Rectangle {
     preferred-height: quote-row.preferred-height;
     horizontal-stretch: 1;
 
-    Rectangle {
+    if !root.composer-preview: Rectangle {
         width: 2px;
         height: parent.height;
         background: Colors.border;
@@ -63,7 +64,7 @@ export component MessageQuote inherits Rectangle {
 
     quote-row := HorizontalLayout {
         padding: Spacing.xs;
-        padding-left: Spacing.sm + Spacing.xxs;
+        padding-left: root.composer-preview ? Spacing.xs : Spacing.sm + Spacing.xxs;
         spacing: Spacing.sm;
         alignment: stretch;
 
@@ -166,6 +167,10 @@ export component MessageQuote inherits Rectangle {
             // the quote is never just a bare sender name.
             if root.reply-to-category != "audio": Text {
                 wrap: no-wrap;
+                // Explicit line breaks still count as lines in a no-wrap Text.
+                max-height: root.composer-preview
+                    ? ceil((self.font-metrics.ascent + abs(self.font-metrics.descent)) / 1px) * 1px
+                    : self.preferred-height;
                 text: root.reply-to-preview != ""
                     ? root.reply-to-preview
                     : (root.reply-to-category != "" ? @tr("📎 Attachment") : @tr("message preview" => "Message"));
