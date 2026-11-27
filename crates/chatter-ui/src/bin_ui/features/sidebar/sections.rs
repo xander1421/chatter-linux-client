@@ -1340,6 +1340,13 @@ fn publish_snapshot(
 /// Retain each section and its conversation model across badge/selection
 /// refreshes. Only a real section insertion or removal creates delegates.
 fn apply_sections(window: &MainWindow, sections: Vec<CustomSectionData>) {
+    window
+        .global::<crate::SidebarPane>()
+        .set_has_section_conversations(
+            sections
+                .iter()
+                .any(|section| section.conversations.row_count() > 0),
+        );
     let model = window.global::<crate::SidebarPane>().get_custom_sections();
     let Some(vec) = model.as_any().downcast_ref::<VecModel<CustomSectionData>>() else {
         window

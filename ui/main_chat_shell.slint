@@ -1,3 +1,4 @@
+import { FirstFriend } from "pages/first_friend.slint";
 import { Appearance } from "theme/appearance.slint";
 import { UpdateBanner } from "sidebar/update_banner.slint";
 import { UpdateGlobal } from "update/update_global.slint";
@@ -128,6 +129,11 @@ export component MainChatShell inherits Rectangle {
             SettingsPane.navigation-section = "encryption";
         }
     }
+
+    private property <bool> show-first-friend: !root.compact-layout
+        && AuthFlow.is-signed-in && SidebarPane.active-tab == "chats"
+        && !SidebarPane.chat-rows-loading && SidebarPane.chat-rows.length == 0
+        && SidebarPane.archived-rows.length == 0 && !SidebarPane.has-section-conversations;
 
     // Leaving or ending our call drops the channel's "Call in progress"
     // banner at once: it was polled during the call and showed the call we
@@ -501,8 +507,14 @@ export component MainChatShell inherits Rectangle {
                 // flashed the two-pane placeholder on every phone open.
                 if !CallView.active-call-fullscreen && ChatPane.channel-name == "" && !ChatPane.loading-messages: Rectangle {
                     vertical-stretch: 1;
-                    background: Colors.background;
-                    Text {
+                    background: root.show-first-friend ? Colors.surface : Colors.background;
+                    border-radius: root.show-first-friend ? 12px : 0px;
+                    if root.show-first-friend: FirstFriend {
+                        width: parent.width;
+                        height: parent.height;
+                        touch: root.is-mobile-platform;
+                    }
+                    if !root.show-first-friend: Text {
                         text: @tr("Select a conversation");
                         color: Colors.text-muted;
                         font-size: Typography.lg;
