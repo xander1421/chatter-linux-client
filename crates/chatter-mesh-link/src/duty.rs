@@ -8,12 +8,9 @@
 //! to 3 s on / 15 s off once the mesh is dense enough that missing an advert costs
 //! nothing, because someone else already has that peer.
 //!
-//! It also knows when *not* to duty cycle, which matters more than the durations:
-//!
-//! - **Fewer than three peers.** A sparse node's whole job is finding more. Saving
-//!   power by not looking is a false economy when the alternative is no mesh.
-//! - **Traffic in the last 10 s.** Something is happening; be reachable for it.
-//! - **App not in the foreground.** The platform is already throttling us.
+//! Backgrounded and unconnected nodes scan in bursts. An active app with peers
+//! can scan continuously while it has one or two peers or has seen traffic in
+//! the last 10 s.
 //!
 //! Sans-IO: no timers, no clock. The driver supplies `now_unix_millis` and acts on
 //! the returned [`ScanCommand`]. Swift's `TimeInterval` seconds become `u64`
@@ -42,8 +39,8 @@ pub const DUTY_OFF_DENSE_MS: u64 = 15_000;
 /// is why it is one constant rather than a per-call parameter.
 pub const HIGH_DEGREE_THRESHOLD: usize = 6;
 
-/// Literal `connectedCount <= 2` in `BLEScanDutyPolicy` — at or below this we always
-/// scan continuously, whatever else is true. Finding peers is the priority.
+/// Up to this many peers, keep looking for more while the app is active and has
+/// at least one connection.
 pub const FORCE_CONTINUOUS_MAX_PEERS: usize = 2;
 
 /// `TransportConfig.bleRecentTrafficForceScanSeconds` (10 s) — how recently traffic
@@ -149,9 +146,8 @@ impl ScanDutyPlan {
 
 /// Choose a duty plan.
 ///
-/// `duty_enabled` is the local kill switch (bitchat keeps it on); `app_is_active` is
-/// false when the platform has backgrounded us — on Linux there is no such state, so
-/// pass `true`. `has_recent_traffic` should be evaluated over
+/// `duty_enabled` lets a visible app with connected peers rest. `app_is_active`
+/// follows app visibility. `has_recent_traffic` should be evaluated over
 /// [`RECENT_TRAFFIC_FORCE_SCAN_MS`].
 pub fn scan_duty_plan(
     duty_enabled: bool,
@@ -159,13 +155,10 @@ pub fn scan_duty_plan(
     connected_count: usize,
     has_recent_traffic: bool,
 ) -> ScanDutyPlan {
-    // Two independent reasons to stay awake: too few peers to stop looking for
-    // more, or something actively happening.
-    let force_continuous = connected_count <= FORCE_CONTINUOUS_MAX_PEERS || has_recent_traffic;
-    let should_duty_cycle =
-        duty_enabled && app_is_active && connected_count > 0 && !force_continuous;
-
-    if !should_duty_cycle {
+    let can_scan_continuously = app_is_active && connected_count > 0;
+    let needs_continuous =
+        !duty_enabled || connected_count <= FORCE_CONTINUOUS_MAX_PEERS || has_recent_traffic;
+    if can_scan_continuously && needs_continuous {
         return ScanDutyPlan::Continuous;
     }
 
@@ -447,23 +440,20 @@ mod tests {
     // -- Duty plan selection ---------------------------------------------------
 
     #[test]
-    fn scanning_stays_continuous_whenever_duty_cycling_would_cost_us_peers() {
-        // Kill switch off.
+    fn scanning_saves_battery_when_backgrounded_or_alone() {
+        // Disabling duty cycling only affects a visible app with peers.
         assert_eq!(
             scan_duty_plan(false, true, 4, false),
             ScanDutyPlan::Continuous
         );
-        // Backgrounded: the platform throttles us anyway.
-        assert_eq!(
-            scan_duty_plan(true, false, 4, false),
-            ScanDutyPlan::Continuous
-        );
-        // No peers at all.
-        assert_eq!(
-            scan_duty_plan(true, true, 0, false),
-            ScanDutyPlan::Continuous
-        );
-        // Traffic in the last 10 s.
+        assert_eq!(scan_duty_plan(false, false, 4, false), ScanDutyPlan::SPARSE);
+        assert_eq!(scan_duty_plan(false, true, 0, false), ScanDutyPlan::SPARSE);
+        assert_eq!(scan_duty_plan(true, false, 1, true), ScanDutyPlan::SPARSE);
+        assert_eq!(scan_duty_plan(true, false, 4, false), ScanDutyPlan::SPARSE);
+        assert_eq!(scan_duty_plan(true, false, 6, true), ScanDutyPlan::DENSE);
+        assert_eq!(scan_duty_plan(true, true, 0, false), ScanDutyPlan::SPARSE);
+        assert_eq!(scan_duty_plan(true, true, 0, true), ScanDutyPlan::SPARSE);
+        // An active mesh with recent traffic keeps scanning.
         assert_eq!(
             scan_duty_plan(true, true, 4, true),
             ScanDutyPlan::Continuous
@@ -472,7 +462,7 @@ mod tests {
 
     #[test]
     fn the_sparse_mesh_boundary_is_three_peers() {
-        // At or below two, finding more peers outranks saving power.
+        // An active app with one or two peers keeps looking for more.
         assert_eq!(
             scan_duty_plan(true, true, 1, false),
             ScanDutyPlan::Continuous
@@ -534,7 +524,7 @@ mod tests {
     fn continuous_scanning_starts_once_and_never_flips() {
         let mut cycle = ScanDutyCycle::new();
         assert_eq!(
-            cycle.update(true, true, 0, false, 1_000),
+            cycle.update(true, true, 1, false, 1_000),
             ScanCommand::StartScanning
         );
         assert!(cycle.should_scan());

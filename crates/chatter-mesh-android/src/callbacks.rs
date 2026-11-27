@@ -51,12 +51,13 @@ use crate::{BRIDGE_CLASS, NATIVE_METHODS};
 /// Kept as data so a test can assert it covers [`NATIVE_METHODS`] exactly, with
 /// no JVM: a native listed in the contract with no handler behind it would
 /// register nothing and fail silently at the first callback.
-const HANDLER_NAMES: [&str; 5] = [
+const HANDLER_NAMES: [&str; 6] = [
     "nativeOnDiscovered",
     "nativeOnConnected",
     "nativeOnDisconnected",
     "nativeOnData",
     "nativeOnAdapterPowerChanged",
+    "nativeCheckInbound",
 ];
 
 /// Entry point the JVM calls when this library is loaded.
@@ -119,7 +120,7 @@ fn on_load(raw_vm: *mut jni::sys::JavaVM) -> Result<(), String> {
 }
 
 /// Every native handler, paired with the name it answers to.
-fn handlers() -> [(&'static str, *mut c_void); 5] {
+fn handlers() -> [(&'static str, *mut c_void); 6] {
     [
         (HANDLER_NAMES[0], native_on_discovered as *mut c_void),
         (HANDLER_NAMES[1], native_on_connected as *mut c_void),
@@ -129,6 +130,7 @@ fn handlers() -> [(&'static str, *mut c_void); 5] {
             HANDLER_NAMES[4],
             native_on_adapter_power_changed as *mut c_void,
         ),
+        (HANDLER_NAMES[5], native_check_inbound as *mut c_void),
     ]
 }
 
@@ -267,7 +269,7 @@ extern "system" fn native_on_discovered(
     _this: JObject<'_>,
     address: JString<'_>,
     rssi: jint,
-    peer: JString<'_>,
+    beacon: JByteArray<'_>,
 ) {
     env.with_env(|mut env| -> jni::errors::Result<_> {
         Ok((|| {
@@ -276,18 +278,15 @@ extern "system" fn native_on_discovered(
                 else {
                     return;
                 };
-                // Null whenever the scan response has not arrived, which is common on the
-                // first sighting and never an error. Unparseable is treated the same as
-                // absent: the policy layer dials an unknown peer, so the worst case is the
-                // behaviour we had before the id existed.
-                let peer = (!peer.is_null())
-                    .then(|| read_string(&mut env, &peer, "nativeOnDiscovered(peer)"))
-                    .flatten()
-                    .and_then(|hex| decode_peer_hex(&hex));
+                let Some(beacon) = read_bytes(&env, &beacon, "nativeOnDiscovered(beacon)")
+                    .and_then(|bytes| chatter_mesh_link::PairingBeacon::try_from(bytes).ok())
+                else {
+                    return;
+                };
                 link::dispatch(LinkEvent::Discovered {
                     address,
                     rssi: clamp_rssi(rssi),
-                    peer,
+                    beacon,
                 });
             });
         })())
@@ -295,16 +294,27 @@ extern "system" fn native_on_discovered(
     .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
-/// Sixteen hex characters to the eight bytes they name.
-fn decode_peer_hex(hex: &str) -> Option<[u8; 8]> {
-    if hex.len() != 16 {
-        return None;
-    }
-    let mut out = [0u8; 8];
-    for (byte, pair) in out.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-        *byte = u8::from_str_radix(core::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(out)
+/// JNI: synchronous admission for the first inbound write.
+extern "system" fn native_check_inbound(
+    mut env: jni::EnvUnowned<'_>,
+    _this: JObject<'_>,
+    address: JString<'_>,
+    beacon: JByteArray<'_>,
+) -> u8 {
+    env.with_env(|mut env| -> jni::errors::Result<_> {
+        let mut allowed = false;
+        guard("nativeCheckInbound", || {
+            let Some(address) = read_string(&mut env, &address, "nativeCheckInbound(address)")
+            else {
+                return;
+            };
+            let beacon = read_bytes(&env, &beacon, "nativeCheckInbound(beacon)")
+                .and_then(|bytes| chatter_mesh_link::PairingBeacon::try_from(bytes).ok());
+            allowed = link::check_inbound(&chatter_mesh_link::InboundLink { address, beacon });
+        });
+        Ok(u8::from(allowed))
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// JNI: `MeshBleBridge.nativeOnConnected`.
@@ -319,6 +329,7 @@ extern "system" fn native_on_connected(
     handle: JString<'_>,
     is_peripheral_role: u8,
     max_write: jint,
+    beacon: JByteArray<'_>,
 ) {
     env.with_env(|mut env| -> jni::errors::Result<_> {
         Ok((|| {
@@ -327,7 +338,14 @@ extern "system" fn native_on_connected(
                 else {
                     return;
                 };
-                link::on_connected(&handle, role_for(to_bool(is_peripheral_role)), max_write);
+                let beacon = read_bytes(&env, &beacon, "nativeOnConnected(beacon)")
+                    .and_then(|bytes| chatter_mesh_link::PairingBeacon::try_from(bytes).ok());
+                link::on_connected(
+                    &handle,
+                    role_for(to_bool(is_peripheral_role)),
+                    max_write,
+                    beacon,
+                );
             });
         })())
     })
@@ -476,7 +494,7 @@ mod tests {
         // The one string in this file that is an address rather than an opaque
         // Kotlin handle: it is what `MeshLink::connect` is called with.
         let event = LinkEvent::Discovered {
-            peer: None,
+            beacon: [0; 13],
             address: "AA:BB:CC:DD:EE:FF".to_string(),
             rssi: clamp_rssi(-70),
         };
@@ -485,7 +503,7 @@ mod tests {
             LinkEvent::Discovered {
                 address: "AA:BB:CC:DD:EE:FF".to_string(),
                 rssi: -70,
-                peer: None,
+                beacon: [0; 13],
             }
         );
     }

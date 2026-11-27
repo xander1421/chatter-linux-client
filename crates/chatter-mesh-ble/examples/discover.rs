@@ -41,7 +41,10 @@ async fn main() {
 
     let session = bluer::Session::new().await.expect("bluez session");
     let adapter = session.default_adapter().await.expect("default adapter");
-    adapter.set_powered(true).await.expect("power on");
+    if !adapter.is_powered().await.expect("read Bluetooth power state") {
+        eprintln!("Bluetooth is off. Turn it on in system settings.");
+        std::process::exit(1);
+    }
     println!("adapter: {}", adapter.name());
 
     // The same filter the mesh installs, except that the UUID list is left empty

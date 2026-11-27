@@ -193,6 +193,10 @@ fn tls_config() -> Result<ClientConfig, NostrError> {
 }
 
 impl RelayConnector for TorRelayConnector {
+    fn isolated_for_pool(&self) -> Option<Arc<dyn RelayConnector>> {
+        Some(Arc::new(Self::new(self.shared.clone())))
+    }
+
     fn connect<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<RelayConnection, NostrError>> {
         Box::pin(async move {
             let target = parse_relay_url(url)?;

@@ -119,28 +119,37 @@ impl MeshLink for AndroidLink {
         })
     }
 
-    fn set_local_peer(&self, peer: [u8; 8]) {
-        // Best effort: without it peers cannot recognise us across an address
-        // rotation, which is a churn problem, not a broken radio. Said at warn
-        // because the symptom it produces — a peer reconnecting endlessly under
-        // new addresses — looks like anything but a missing advertisement field.
-        let hex: String = peer.iter().map(|byte| format!("{byte:02x}")).collect();
-        if let Err(error) = bridge::set_local_peer(&hex) {
-            error::log_warn(&format!(
-                "mesh: could not advertise our peer id; peers will not recognise us \
-                 across an address rotation: {error}"
-            ));
-        }
+    fn set_inbound_admission(&self, admission: chatter_mesh_link::InboundAdmission) {
+        *self
+            .inner
+            .inbound_admission
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(admission);
+    }
+
+    fn set_pairing_beacons(
+        &self,
+        beacons: &[chatter_mesh_link::PairingBeacon],
+    ) -> Result<(), LinkError> {
+        bridge::set_pairing_beacons(beacons.as_flattened())
     }
 
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
+        self.connect_with_beacon(address, None)
+    }
+
+    fn connect_with_beacon(
+        &self,
+        address: &str,
+        beacon: Option<chatter_mesh_link::PairingBeacon>,
+    ) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         let address = address.to_string();
         Box::pin(async move {
             if self.inner.stopped() {
                 return Err(error::stopped());
             }
 
-            let handle = bridge::connect(&address)?;
+            let handle = bridge::connect(&address, beacon.as_ref())?;
             if handle.is_empty() {
                 return Err(error::connect_failed(
                     &address,

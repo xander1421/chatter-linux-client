@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chatter_mesh_link::LinkError;
 use chatter_mesh_link::link::{BoxFuture, LinkEvent, LinkId, MeshLink};
+use chatter_mesh_link::{
+    InboundAdmission, InboundLink, LinkError, PairingBeacon, admission_beacon, admission_preface,
+};
 use chatter_mesh_nostr::NostrError;
 use chatter_mesh_nostr::relay::{
     BoxFuture as RelayBoxFuture, RelayConnection, RelayConnector, RelaySink, RelayStream,
@@ -28,6 +30,8 @@ pub struct MockLink {
     max_write: Mutex<BTreeMap<LinkId, usize>>,
     started: AtomicBool,
     connects: Mutex<Vec<String>>,
+    connect_prefaces: Mutex<Vec<[u8; 17]>>,
+    admission: Mutex<Option<InboundAdmission>>,
     /// Every write is rejected while set, so the backpressure path can be driven.
     reject_writes: AtomicBool,
     links_gone: AtomicBool,
@@ -52,6 +56,8 @@ impl MockLink {
             max_write: Mutex::new(BTreeMap::new()),
             started: AtomicBool::new(false),
             connects: Mutex::new(Vec::new()),
+            connect_prefaces: Mutex::new(Vec::new()),
+            admission: Mutex::new(None),
             reject_writes: AtomicBool::new(false),
             links_gone: AtomicBool::new(false),
             stopped_once: AtomicBool::new(false),
@@ -82,6 +88,21 @@ impl MockLink {
     #[must_use]
     pub fn connect_attempts(&self) -> Vec<String> {
         self.connects.lock().clone()
+    }
+
+    pub fn connect_prefaces(&self) -> Vec<[u8; 17]> {
+        self.connect_prefaces.lock().clone()
+    }
+
+    pub fn admits_first_write(&self, address: &str, first_write: &[u8]) -> bool {
+        let incoming = InboundLink {
+            address: address.to_string(),
+            beacon: admission_beacon(first_write),
+        };
+        self.admission
+            .lock()
+            .as_ref()
+            .is_some_and(|admit| admit(&incoming))
     }
 
     /// Refuse writes with a *retryable* error, as a full controller queue does.
@@ -150,6 +171,23 @@ impl MeshLink for MockLink {
         Box::pin(async move { Ok(link) })
     }
 
+    fn set_inbound_admission(&self, admission: InboundAdmission) {
+        *self.admission.lock() = Some(admission);
+    }
+
+    fn connect_with_beacon(
+        &self,
+        address: &str,
+        beacon: Option<PairingBeacon>,
+    ) -> BoxFuture<'_, Result<LinkId, LinkError>> {
+        if let Some(beacon) = beacon {
+            self.connect_prefaces
+                .lock()
+                .push(admission_preface(&beacon));
+        }
+        self.connect(address)
+    }
+
     fn disconnect(&self, _link: &LinkId) -> BoxFuture<'_, Result<(), LinkError>> {
         Box::pin(async { Ok(()) })
     }
@@ -213,6 +251,7 @@ impl RelayConnector for OfflineConnector {
 pub struct LoopbackConnector {
     /// Frames the client wrote.
     pub sent: Arc<Mutex<Vec<String>>>,
+    pub connects: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for LoopbackConnector {
@@ -226,6 +265,7 @@ impl LoopbackConnector {
     pub fn new() -> Self {
         Self {
             sent: Arc::new(Mutex::new(Vec::new())),
+            connects: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -271,6 +311,8 @@ impl RelayConnector for LoopbackConnector {
         &'a self,
         _url: &'a str,
     ) -> RelayBoxFuture<'a, Result<RelayConnection, NostrError>> {
+        self.connects
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let sink = LoopbackSink {
             sent: Arc::clone(&self.sent),
         };

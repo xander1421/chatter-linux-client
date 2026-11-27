@@ -1,6 +1,35 @@
 use super::*;
+use chatter_mesh_link::{InboundLink, PairingBeacon};
+use std::time::{Duration, Instant};
+
+const RECENT_PAIRING_ADVERT: Duration = Duration::from_secs(30);
+const MAX_RECENT_PAIRING_ADVERTS: usize = 128;
+pub(super) type RecentPairingAdverts = std::collections::HashMap<String, (PairingBeacon, Instant)>;
+
+fn permit_inbound(
+    state: &MeshState,
+    recent: &parking_lot::Mutex<RecentPairingAdverts>,
+    incoming: &InboundLink,
+) -> bool {
+    if let Some(preface) = &incoming.beacon {
+        return state.paired_contact_for_preface(preface).is_some();
+    }
+    let seen = recent.lock().get(&incoming.address).copied();
+    seen.is_some_and(|(beacon, seen_at)| {
+        seen_at.elapsed() < RECENT_PAIRING_ADVERT
+            && state.paired_contact_for_beacon(&beacon).is_some()
+    })
+}
 
 impl BleRuntime {
+    pub(super) fn install_inbound_admission(&self) {
+        let state = Arc::clone(&self.state);
+        let recent = Arc::clone(&self.recent_pairing_adverts);
+        self.radio.set_inbound_admission(Arc::new(move |incoming| {
+            permit_inbound(&state, &recent, incoming)
+        }));
+    }
+
     // ------------------------------------------------------------- link events
 
     pub(super) async fn on_link_event(&mut self, event: LinkEvent) {
@@ -8,12 +37,13 @@ impl BleRuntime {
             LinkEvent::Discovered {
                 address,
                 rssi,
-                peer,
-            } => self.on_discovered(&address, rssi, peer).await,
+                beacon,
+            } => self.on_discovered(&address, rssi, beacon).await,
             LinkEvent::Connected {
                 link,
                 role,
                 max_write,
+                ..
             } => self.on_connected(link, role, max_write).await,
             LinkEvent::Disconnected { link } => self.on_disconnected(&link).await,
             LinkEvent::Data { link, bytes } => self.on_data(&link, bytes).await,
@@ -29,7 +59,7 @@ impl BleRuntime {
                 );
                 self.degraded(
                     "Other devices can no longer connect to this one over Bluetooth. \
-                     Restarting the app should restore it."
+                     Turn Mesh off and back on to restore it."
                         .to_string(),
                 );
             }
@@ -52,59 +82,41 @@ impl BleRuntime {
         }
     }
 
-    /// A device advertising the mesh service came into range.
-    ///
-    /// `peer` is the identity from the advert's service data, when it carried
-    /// one. Recognising it here is the whole point: a private address rotates,
-    /// and without the id the only way to learn that an unfamiliar address is a
-    /// peer we already hold is to connect to it and read its announce. That
-    /// connection is not free — it displaces the ACL we already had, and the
-    /// disconnect makes the peer's advertiser restart under yet another address.
-    /// Measured before this existed: nineteen addresses dialled in four minutes,
-    /// every one of them the same phone.
-    ///
-    /// `None` means the scan response has not been seen yet, not that the device
-    /// is a stranger, so it falls through to the ordinary scheduler path.
-    ///
-    /// Deliberately counts links of *either* role, unlike
-    /// [`redundant_central_links_locked`], which prunes only central ones. The two
-    /// asymmetries point the same way: a peer already reachable needs no second
-    /// path, so an inbound link is reason enough not to dial out — but a link the
-    /// peer dialled to us cost us no slot and is not ours to hang up. Measured
-    /// consequence: where both devices are running, the phone usually dials first
-    /// and the desktop then never dials at all, which is what a 25 minute run on a
-    /// single peripheral link with zero warnings looks like.
-    ///
-    /// This does nothing at a cold start, when there are no links to recognise a
-    /// peer by. Over five restarts, two produced a second link before the first
-    /// announce arrived; the prune resolved each within seconds and no frame was
-    /// lost. That residual is the price of identity arriving with the first
-    /// announce rather than before it.
-    pub(super) async fn on_discovered(&mut self, address: &str, rssi: i16, peer: Option<[u8; 8]>) {
+    /// Consider dialing only after authenticating the beacon against a saved
+    /// pairing. The beacon cannot bind a link, identify its Noise key, or
+    /// authorize a route.
+    pub(super) async fn on_discovered(
+        &mut self,
+        address: &str,
+        rssi: i16,
+        beacon: chatter_mesh_link::PairingBeacon,
+    ) {
+        let Some(contact) = self.state.paired_contact_for_beacon(&beacon) else {
+            return;
+        };
         let now = now_millis();
-
-        if let Some(peer) = peer {
-            let peer = PeerId::from_bytes(&peer);
-            let held = self.state.with(|state| {
-                state
-                    .links
-                    .links()
-                    .any(|(_, link)| link.peer.as_ref() == Some(&peer))
-            });
-            if held {
-                tracing::trace!(
-                    target: "mesh::ble",
-                    %peer,
-                    %address,
-                    "another address for a peer we already hold; not dialling"
-                );
-                return;
+        {
+            let mut recent = self.recent_pairing_adverts.lock();
+            recent.retain(|_, (_, at)| at.elapsed() < RECENT_PAIRING_ADVERT);
+            if recent.len() < MAX_RECENT_PAIRING_ADVERTS || recent.contains_key(address) {
+                recent.insert(address.to_string(), (beacon, Instant::now()));
             }
+        }
+        let route = self.state.route(&contact);
+        let held = self.state.with(|state| {
+            state
+                .links
+                .links()
+                .any(|(_, link)| link.peer.as_ref() == Some(&route))
+        });
+        if held {
+            return;
         }
 
         let decision = self.state.with(|state| {
-            let candidate =
+            let mut candidate =
                 chatter_mesh_link::scheduler::ConnectionCandidate::new(address, rssi, now);
+            candidate.pairing_beacon = Some(beacon);
             let connected_or_connecting =
                 state.links.count_role(LinkRole::Central) + state.connecting.len();
             let existing = ExistingConnectionState {
@@ -130,7 +142,7 @@ impl BleRuntime {
         });
 
         match decision {
-            DiscoveryDecision::ConnectNow => self.dial(address).await,
+            DiscoveryDecision::ConnectNow => self.dial_paired(address, &contact).await,
             DiscoveryDecision::CancelStaleConnection => {
                 self.state.with(|state| {
                     state.connecting.remove(address);
@@ -143,8 +155,22 @@ impl BleRuntime {
         }
     }
 
-    /// Start a connect without blocking the loop; [`finish_dial`] applies it.
+    pub(super) async fn dial_paired(&mut self, address: &str, contact: &PeerId) {
+        if let Some(beacon) = self
+            .state
+            .pairing_beacon_for_contact(&self.broadcast_peer_id(), contact)
+        {
+            self.dial_with_beacon(address, Some(beacon)).await;
+        }
+    }
+
+    #[cfg(test)]
     pub(super) async fn dial(&mut self, address: &str) {
+        self.dial_with_beacon(address, None).await;
+    }
+
+    /// Start a connect without blocking the loop. `finish_dial` applies the result.
+    pub(super) async fn dial_with_beacon(&mut self, address: &str, beacon: Option<PairingBeacon>) {
         // Adverts repeat every few hundred ms, so a skipped dial is retried by
         // the next discovery or queue drain rather than lost.
         if self.dial_in_flight {
@@ -160,7 +186,7 @@ impl BleRuntime {
         let tx = self.dial_tx.clone();
         let address = address.to_string();
         tokio::spawn(async move {
-            let result = radio.connect(&address).await;
+            let result = radio.connect_with_beacon(&address, beacon).await;
             // A closed receiver means the runtime has stopped; nothing to apply.
             let _ = tx.send(DialOutcome { address, result });
         });
@@ -542,7 +568,8 @@ impl BleRuntime {
         });
 
         if packet.message_type() == Some(MessageType::Fragment) {
-            self.on_fragment(link, &packet, &claimed, &local, now_s).await;
+            self.on_fragment(link, &packet, &claimed, &local, now_s)
+                .await;
             return;
         }
         let retainable = self
@@ -646,13 +673,16 @@ impl BleRuntime {
                 return None;
             }
             let authenticated_sender = state.links.is_noise_authenticated(link, claimed);
-            state.fragments.receive(
-                packet,
-                link.clone(),
-                link.as_str().len(),
-                authenticated_sender,
-                now_s,
-            ).ok()
+            state
+                .fragments
+                .receive(
+                    packet,
+                    link.clone(),
+                    link.as_str().len(),
+                    authenticated_sender,
+                    now_s,
+                )
+                .ok()
         });
         let Some(received) = received else { return };
         if let Some(bytes) = received.reassembled {
@@ -688,7 +718,8 @@ impl BleRuntime {
                 false
             };
             if !accepted {
-                self.state.with(|state| state.fragments.reject_completion(packet, header));
+                self.state
+                    .with(|state| state.fragments.reject_completion(packet, header));
                 return;
             }
         }

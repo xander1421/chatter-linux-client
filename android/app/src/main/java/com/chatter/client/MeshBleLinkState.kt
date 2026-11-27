@@ -52,7 +52,10 @@ internal class OpGate {
 }
 
 /** A link where we are the central: we connected outward to them. */
-internal class CentralLink(val id: String, val device: BluetoothDevice) {
+internal class CentralLink(
+    val id: String, val device: BluetoothDevice, val firstWrite: ByteArray?,
+) {
+    val admissionPending = AtomicBoolean(false)
     @Volatile var gatt: BluetoothGatt? = null
     @Volatile var characteristic: BluetoothGattCharacteristic? = null
     @Volatile var maxWrite = DEFAULT_MAX_WRITE
@@ -95,6 +98,10 @@ internal class PeripheralLink(val id: String, val device: BluetoothDevice) {
     @Volatile var maxWrite = DEFAULT_MAX_WRITE
     @Volatile var announced = false
     val connectedAt = SystemClock.elapsedRealtime()
+    @Volatile var admitted = false
+    @Volatile var rejected = false
+    @Volatile var subscribed = false
+    var admissionBeacon: ByteArray? = null
 
     /**
      * Largest single write this central has made to us. A write of N bytes
