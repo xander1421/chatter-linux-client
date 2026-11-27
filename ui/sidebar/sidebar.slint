@@ -19,7 +19,7 @@ import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshList } from "../mesh/mesh_list.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
-import { SidebarFooter } from "sidebar_footer.slint";
+import { SidebarFooter, SidebarShieldToggle } from "sidebar_footer.slint";
 import { SidebarRail } from "sidebar_rail.slint";
 import { SidebarHeader } from "sidebar_header.slint";
 import { ActivityBell } from "../activity/activity_bell.slint";
@@ -422,12 +422,6 @@ export component Sidebar inherits Rectangle {
     property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
     property <brush> quick-link-text-color: Colors.text-primary;
     property <length> quick-link-icon-size: root.touch ? 24px : 14px;
-    // The header row's '+' and Shield on a touch two-pane: HeaderButton's
-    // 48px shell and 26px glyph were the biggest things in a panel whose own
-    // glyphs are 24px (quick links) and 18px (rail). Draw them at the
-    // footer's 36px with a 20px glyph; the 48px touch box is unchanged.
-    property <length> header-control-shell: root.touch ? (root.mobile-mode ? 36px : 28px) : Spacing.header-action-box;
-    property <length> header-control-glyph: root.touch ? (root.mobile-mode ? 20px : 16px) : Spacing.header-glyph;
     // Quick-link icons sit in the conversation rows' avatar column: the same
     // leading inset (ChatList's xs + the row's sm) and a slot as wide as a
     // row's avatar ring, icon centred in it — so the lens, bookmark and the
@@ -1134,18 +1128,12 @@ export component Sidebar inherits Rectangle {
             y: root.expanded-cards && !DesktopChrome.macos ? Spacing.panel-gutter : 0px;
             width: root.expanded-cards ? root.width - self.x - Spacing.panel-gutter
                 : root.width - 2 * self.x;
-            border-radius: root.expanded-cards ? Spacing.radius-panel
-                : root.mobile-mode ? Spacing.radius-lg : Spacing.radius-chrome;
-            panel-width: root.width;
             top-row-height: root.top-row-height;
             quick-link-inset: root.quick-link-inset;
             quick-link-slot: root.quick-link-slot;
             quick-link-icon-size: root.quick-link-icon-size;
             quick-link-text-color: root.quick-link-text-color;
             quick-link-text-size: root.quick-link-text-size;
-            traffic-lights-width: root.traffic-lights-width;
-            header-control-shell: root.header-control-shell;
-            header-control-glyph: root.header-control-glyph;
             search-overlay-open: root.search-overlay-open;
             server-unreachable: root.server-unreachable;
             connection-status: root.connection-status;
@@ -1153,7 +1141,16 @@ export component Sidebar inherits Rectangle {
             touch: root.touch;
             search-clicked => { root.search-clicked(); }
             create-clicked => { root.create-clicked(); }
-            anon-mode-clicked => { root.anon-mode-clicked(); }
+        }
+        // Phones use bottom tabs in place of the two-pane footer.
+        if root.mobile-mode && !root.collapsed && root.active-tab != "mesh" && !root.search-overlay-open: SidebarShieldToggle {
+            touch: root.touch;
+            shell: 36px;
+            glyph: 20px;
+            height: root.top-row-height;
+            x: parent.width - self.width - 2 * Spacing.sm;
+            y: 0px;
+            clicked => { root.anon-mode-clicked(); }
         }
 
         // Keep the list after the header and before the footer in Slint's

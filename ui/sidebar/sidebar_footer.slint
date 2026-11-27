@@ -16,6 +16,31 @@ import { TooltipArea } from "../components/tooltip.slint";
 import { Avatar } from "../components/avatar.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 
+// Shield works without Tor. Only the network status dot needs onion support.
+export component SidebarShieldToggle inherits HeaderButton {
+    plain: true;
+    control-radius: Spacing.radius-control;
+    control-fill: AnonMode.enabled ? Colors.accent-purple.with-alpha(0.16) : transparent;
+    icon-color: AnonMode.enabled ? Colors.accent-purple : Colors.text-secondary;
+    icon: Icons.onion;
+    label: AnonMode.enabled ? @tr("Shield on - tap to turn off") : @tr("Shield off - tap to turn on");
+
+    Rectangle {
+        visible: AnonMode.enabled && AnonMode.onion-built;
+        width: 8px;
+        height: self.width;
+        border-radius: self.width / 2;
+        x: (parent.width + root.glyph) / 2 - self.width * 0.75;
+        y: (parent.height - root.glyph) / 2 - self.height * 0.25;
+        border-width: 1px;
+        border-color: Colors.surface;
+        background: TorStatus.state == 2 ? Colors.success
+            : TorStatus.state >= 3 ? Colors.error
+            : TorStatus.state == 1 ? Colors.warning
+            : Colors.text-muted;
+    }
+}
+
 export component SidebarFooter inherits GlassSurface {
     in property <length> panel-width;
     in property <length> panel-height;
@@ -39,7 +64,7 @@ export component SidebarFooter inherits GlassSurface {
     in property <bool> server-unreachable;
     in property <int> missed-call-count;
     private property <bool> ai-available: JarvisGlobal.enabled && JarvisGlobal.opted-in;
-    private property <int> expanded-slot-count: 5 + (root.touch ? 1 : 0)
+    private property <int> expanded-slot-count: 6 + (root.touch ? 1 : 0)
         + (root.mesh-available ? 1 : 0) + (root.ai-available ? 1 : 0);
     private property <length> expanded-gap: 6px;
     private property <length> expanded-slot-width: clamp(
@@ -174,6 +199,11 @@ export component SidebarFooter inherits GlassSurface {
                         accessible-label: root.server-unreachable ? @tr("Server unreachable") : @tr("New activity");
                     }
                 }
+                SidebarShieldToggle {
+                    width: root.expanded-slot-width;
+                    glyph: 16px;
+                    clicked => { root.anon-mode-clicked(); }
+                }
                 HeaderButton {
                     width: root.expanded-slot-width;
                     plain: true;
@@ -195,8 +225,7 @@ export component SidebarFooter inherits GlassSurface {
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
                 alignment: end; spacing: root.rail-gap; padding-bottom: Spacing.sm;
-                // Touch only: the desktop rail keeps the Shield in the expanded
-                // header and gives the height to the list.
+                // Keep the legacy touch rail shortcut.
                 if root.touch: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? @tr("Anon mode (active) - tap to disable") : @tr("Anon mode");
@@ -213,7 +242,7 @@ export component SidebarFooter inherits GlassSurface {
                         Image { source: Icons.onion; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
                         // Tor status dot: green=connected, amber=CONNECTING ONLY,
-                        // red=error, muted=off. See the expanded shield above.
+                        // red=error, muted=off. As in the expanded footer.
                         Rectangle {
                             visible: AnonMode.enabled && AnonMode.onion-built;
                             width: 10px; height: 10px; border-radius: 5px;
