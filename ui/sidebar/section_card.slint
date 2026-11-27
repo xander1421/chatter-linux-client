@@ -8,6 +8,7 @@ import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { ChatRow, ChatRowData } from "chat_list.slint";
+import { PinnedStrip } from "pinned_strip.slint";
 import { SidebarCard, SidebarCards } from "card_types.slint";
 
 // ── Data structs ────────────────────────────────────────────────
@@ -291,6 +292,15 @@ export component SectionCard inherits GlassSurface {
             context-menu-requested(x, y) => { root.header-context-menu-requested(x, y); }
         }
 
+        if !root.card.collapsed && root.card.pinned.length > 0: PinnedStrip {
+            rows: root.card.pinned;
+            touch: root.touch;
+            highlighted-row: root.highlighted-row < root.card.pinned.length ? root.highlighted-row : -1;
+            row-context-menu-requested(row, x, y, row-y) => {
+                root.row-context-menu-requested(row, x, y, row-y);
+            }
+        }
+
         for row[index] in root.card.collapsed ? [] : root.card.rows: SidebarDragSource {
             row-id: row.conversation-id;
             source-card-id: root.card.id;
@@ -300,7 +310,7 @@ export component SectionCard inherits GlassSurface {
                 data: row.chat-row;
                 card-mode: true;
                 mobile-mode: root.touch;
-                keyboard-highlight: root.highlighted-row == index;
+                keyboard-highlight: root.highlighted-row == root.card.pinned.length + index;
                 clicked => { SidebarCards.open-row(row.conversation-id); }
                 pin-requested(pinned) => { root.pin-requested(row.conversation-id, pinned); }
                 context-menu-requested(x, y) => {

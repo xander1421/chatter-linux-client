@@ -147,6 +147,12 @@ impl ChatterClient {
         let rows = self.section_rows(&sections);
         cards.extend(sections.into_iter().zip(rows).map(|(section, rows)| {
             let unread = self.section_unread_badge(&section);
+            // A section pins like the Chats card: pinned chats leave the list
+            // and sit in the card's pinned strip.
+            let (pinned, rows): (Vec<_>, Vec<_>) = rows
+                .into_iter()
+                .map(SidebarCardRow::from)
+                .partition(|row| row.chat_row.is_pinned);
             SidebarCard {
                 id: section.id.to_string(),
                 kind: SidebarCardKind::Section,
@@ -154,8 +160,8 @@ impl ChatterClient {
                 emoji: Some(section.icon_emoji).filter(|emoji| !emoji.is_empty()),
                 collapsed: !section.is_expanded,
                 unread,
-                pinned: Vec::new(),
-                rows: rows.into_iter().map(SidebarCardRow::from).collect(),
+                pinned,
+                rows,
                 show_empty_hint: false,
             }
         }));
@@ -742,8 +748,10 @@ mod tests {
         assert_eq!(cards[1].rows.len(), 1);
         assert_eq!(cards[1].rows[0].conversation_id, loose);
         assert_eq!(cards[1].unread, 2);
-        assert!(cards[2].pinned.is_empty());
-        assert_eq!(cards[2].rows[0].conversation_id, filed_id);
+        // A pinned chat filed in a section sits in that section's strip.
+        assert_eq!(cards[2].pinned.len(), 1);
+        assert_eq!(cards[2].pinned[0].conversation_id, filed_id);
+        assert!(cards[2].rows.is_empty());
         assert_eq!(cards[2].unread, 1);
 
         client
@@ -754,7 +762,7 @@ mod tests {
         let cards = client.sidebar_cards();
         assert!(cards[1].collapsed && cards[2].collapsed);
         assert_eq!(cards[2].unread, 0);
-        assert_eq!(cards[2].rows[0].unread, 1);
+        assert_eq!(cards[2].pinned[0].unread, 1);
 
         #[cfg(feature = "onion")]
         {
