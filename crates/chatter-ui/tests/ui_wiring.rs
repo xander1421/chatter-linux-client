@@ -6163,7 +6163,7 @@ fn secondary_chrome_exposes_its_shared_material() {
     }
     let reaction = include_str!("../../../ui/chat/reaction_picker.slint");
     assert!(
-        reaction.contains("material-enabled: false;"),
+        reaction.contains("draw-surface: false;"),
         "embedded emoji picker must not stack glass"
     );
     // The list's overlays and row chips are their own files since d97fe91d.

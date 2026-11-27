@@ -50,7 +50,7 @@ pub use notifications::DesktopNotifications;
 pub use open::ExternalOpener;
 
 #[cfg(all(feature = "desktop-native", target_os = "linux"))]
-pub use tray::{SystemTray, TrayHandle, TrayMessage, TrayStatus};
+pub use tray::{SystemTray, TrayHandle, TrayMessage};
 
 #[cfg(all(feature = "desktop-native", target_os = "windows"))]
 pub use tray_windows::{SystemTray, TrayHandle, TrayMessage, TrayStatus};

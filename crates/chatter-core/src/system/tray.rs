@@ -8,14 +8,14 @@ use ksni::blocking::{Handle, TrayMethods};
 use ksni::{self, Icon, MenuItem, Tray, menu::StandardItem};
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, AtomicU32, Ordering},
+    atomic::{AtomicU32, Ordering},
 };
 use tokio::sync::mpsc;
 
 /// Messages emitted by the tray implementation (menu/activate events).
 ///
 /// Carries user-driven tray events only. Controller-driven mutations
-/// (unread count, status) flow through `SystemTray`'s typed methods and
+/// (the unread count) flow through `SystemTray`'s typed methods and
 /// `Handle::update`, not through this channel.
 #[derive(Clone, Debug)]
 pub enum TrayMessage {
@@ -25,46 +25,11 @@ pub enum TrayMessage {
     OpenWindow,
 }
 
-/// Tray icon status indicator.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TrayStatus {
-    /// User is online and available.
-    #[default]
-    Online,
-    /// User is offline/disconnected.
-    Offline,
-    /// User is away.
-    Away,
-    /// User has enabled Do Not Disturb.
-    DoNotDisturb,
-}
-
-impl TrayStatus {
-    fn from_u8(v: u8) -> Self {
-        match v {
-            1 => TrayStatus::Offline,
-            2 => TrayStatus::Away,
-            3 => TrayStatus::DoNotDisturb,
-            _ => TrayStatus::Online,
-        }
-    }
-
-    fn as_u8(self) -> u8 {
-        match self {
-            TrayStatus::Online => 0,
-            TrayStatus::Offline => 1,
-            TrayStatus::Away => 2,
-            TrayStatus::DoNotDisturb => 3,
-        }
-    }
-}
-
 /// Shared tray state. Mutated by `SystemTray` controller methods and read by
 /// the ksni `Tray` impl when it renders.
 #[derive(Default)]
 struct TrayState {
     unread_count: AtomicU32,
-    status: AtomicU8,
 }
 
 /// System tray icon controller.
@@ -110,12 +75,6 @@ impl SystemTray {
     pub fn set_unread_count(&self, count: u32) {
         self.state.unread_count.store(count, Ordering::Relaxed);
         // Force ksni to re-render so the icon updates.
-        self.handle.update(|_| {});
-    }
-
-    /// Update the tray status indicator.
-    pub fn set_status(&self, status: TrayStatus) {
-        self.state.status.store(status.as_u8(), Ordering::Relaxed);
         self.handle.update(|_| {});
     }
 
@@ -250,34 +209,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tray_status_variants() {
-        let statuses = [
-            TrayStatus::Online,
-            TrayStatus::Offline,
-            TrayStatus::Away,
-            TrayStatus::DoNotDisturb,
-        ];
-
-        assert_eq!(statuses.len(), 4);
-        assert_eq!(TrayStatus::default(), TrayStatus::Online);
-    }
-
-    #[test]
     fn test_tray_message_variants() {
         let messages = [TrayMessage::Quit, TrayMessage::OpenWindow];
         assert_eq!(messages.len(), 2);
-    }
-
-    #[test]
-    fn test_tray_status_roundtrip_u8() {
-        for status in [
-            TrayStatus::Online,
-            TrayStatus::Offline,
-            TrayStatus::Away,
-            TrayStatus::DoNotDisturb,
-        ] {
-            assert_eq!(TrayStatus::from_u8(status.as_u8()), status);
-        }
     }
 
     #[test]
