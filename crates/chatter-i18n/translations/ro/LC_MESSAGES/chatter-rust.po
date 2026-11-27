@@ -4002,3 +4002,19 @@ msgstr "Permite afișarea apelurilor primite pe ecranul de blocare."
 
 msgid "Not now"
 msgstr "Nu acum"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server showed you and this contact different key directories"
+msgstr "Serverul ți-a arătat ție și acestui contact directoare de chei diferite"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Either of you may be talking to someone intercepting this conversation. Sending is blocked until you trust this conversation — compare safety numbers with them over a call or in person first."
+msgstr "Unul dintre voi poate vorbi cu cineva care interceptează conversația. Trimiterea este blocată până ai încredere în această conversație — compară mai întâi numerele de siguranță cu persoana, într-un apel sau față în față."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Trust this conversation"
+msgstr "Ai încredere în această conversație"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Accept new safety number"
+msgstr "Acceptă noul număr de siguranță"

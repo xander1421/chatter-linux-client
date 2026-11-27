@@ -3971,3 +3971,19 @@ msgstr "Consenti la visualizzazione delle chiamate in arrivo sulla schermata di 
 
 msgid "Not now"
 msgstr "Non ora"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server showed you and this contact different key directories"
+msgstr "Il server ha mostrato a te e a questo contatto elenchi di chiavi diversi"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Either of you may be talking to someone intercepting this conversation. Sending is blocked until you trust this conversation — compare safety numbers with them over a call or in person first."
+msgstr "Uno di voi potrebbe parlare con qualcuno che sta intercettando questa conversazione. L’invio è bloccato finché non ti fidi di questa conversazione — prima confronta i numeri di sicurezza con questa persona in una chiamata o di persona."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Trust this conversation"
+msgstr "Fidati di questa conversazione"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Accept new safety number"
+msgstr "Accetta il nuovo numero di sicurezza"

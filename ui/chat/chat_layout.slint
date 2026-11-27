@@ -254,6 +254,7 @@ export component ChatLayout inherits Rectangle {
     // PeerIdentityChanged domain event.
     in property <bool> identity-change-visible: false;
     in property <string> identity-change-title: "";
+    in property <string> identity-change-accept: "";
     in property <string> identity-change-detail: "";
     in property <bool> identity-change-attributed: false;
     callback identity-change-accept-clicked();
@@ -555,6 +556,7 @@ export component ChatLayout inherits Rectangle {
             width: 100%;
             vertical-stretch: 0;
             title: root.identity-change-title;
+            accept-text: root.identity-change-accept;
             detail: root.identity-change-detail;
             attributed: root.identity-change-attributed;
             accept-clicked => {

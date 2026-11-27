@@ -481,6 +481,8 @@ pub struct IdentityChangePrompt {
     pub title: String,
     /// What it means and what to do before accepting.
     pub detail: String,
+    /// The button label: the trust decision Accept makes.
+    pub accept: String,
 }
 
 impl IdentityChangePrompt {
@@ -497,6 +499,7 @@ impl IdentityChangePrompt {
                 detail: chatter_i18n::tr(
                     "They most likely reinstalled the app or switched devices. It can also mean someone is intercepting this conversation. Messages are blocked in both directions until you accept the new safety number — compare it with them over a call or in person first.",
                 ),
+                accept: chatter_i18n::tr("Accept new safety number"),
             };
         }
         // Unattributed: the ONLY thing that named this peer was the server, so
@@ -507,6 +510,7 @@ impl IdentityChangePrompt {
             detail: chatter_i18n::tr(
                 "The server says this came from your contact, but nothing proved that, so it may not be them at all. Messages are blocked in both directions until you accept the new safety number — confirm it with them over a call or in person before you do.",
             ),
+            accept: chatter_i18n::tr("Accept new safety number"),
         }
     }
 
@@ -517,8 +521,9 @@ impl IdentityChangePrompt {
             attributed: false,
             title: chatter_i18n::tr("The server showed you and this contact different key directories"),
             detail: chatter_i18n::tr(
-                "Either of you may be talking to someone intercepting this conversation. Sending is blocked until you accept — compare safety numbers with them over a call or in person first.",
+                "Either of you may be talking to someone intercepting this conversation. Sending is blocked until you trust this conversation — compare safety numbers with them over a call or in person first.",
             ),
+            accept: chatter_i18n::tr("Trust this conversation"),
         }
     }
 }

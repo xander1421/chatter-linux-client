@@ -57,6 +57,8 @@ pub fn refresh(w: &MainWindow, ui_ctx: &ChatterClient, peer: &UserId) {
             w.global::<crate::ChatPane>()
                 .set_identity_change_detail(prompt.detail.into());
             w.global::<crate::ChatPane>()
+                .set_identity_change_accept(prompt.accept.into());
+            w.global::<crate::ChatPane>()
                 .set_identity_change_attributed(prompt.attributed);
             w.global::<crate::ChatPane>()
                 .set_identity_change_visible(true);
@@ -80,6 +82,8 @@ pub fn clear(w: &MainWindow) {
         .set_identity_change_title("".into());
     w.global::<crate::ChatPane>()
         .set_identity_change_detail("".into());
+    w.global::<crate::ChatPane>()
+        .set_identity_change_accept("".into());
     w.global::<crate::ChatPane>()
         .set_identity_change_attributed(false);
 }

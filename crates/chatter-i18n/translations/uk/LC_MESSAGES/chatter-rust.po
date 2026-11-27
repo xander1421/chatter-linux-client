@@ -3988,3 +3988,19 @@ msgstr "Дозвольте показувати вхідні виклики на
 
 msgid "Not now"
 msgstr "Не зараз"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server showed you and this contact different key directories"
+msgstr "Сервер показав вам і цьому контакту різні каталоги ключів"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Either of you may be talking to someone intercepting this conversation. Sending is blocked until you trust this conversation — compare safety numbers with them over a call or in person first."
+msgstr "Можливо, хтось із вас листується з тим, хто перехоплює цю розмову. Надсилання заблоковано, доки ви не довіритеся цій розмові — спочатку порівняйте номери безпеки під час дзвінка або особисто."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Trust this conversation"
+msgstr "Довіряти цій розмові"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Accept new safety number"
+msgstr "Прийняти новий номер безпеки"

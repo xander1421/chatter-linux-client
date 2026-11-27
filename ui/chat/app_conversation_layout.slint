@@ -84,6 +84,7 @@ export component AppConversationLayout inherits Rectangle {
     in property <bool> identity-change-attributed;
     in property <string> identity-change-detail;
     in property <string> identity-change-title;
+    in property <string> identity-change-accept;
     in property <bool> identity-change-visible;
     in property <int> insert-serial;
     in property <string> inserted-emoji;
@@ -354,6 +355,7 @@ export component AppConversationLayout inherits Rectangle {
     // Peer identity change prompt
     identity-change-visible: root.identity-change-visible;
     identity-change-title: root.identity-change-title;
+    identity-change-accept: root.identity-change-accept;
     identity-change-detail: root.identity-change-detail;
     identity-change-attributed: root.identity-change-attributed;
     identity-change-accept-clicked => { root.identity-change-accept-clicked(); }

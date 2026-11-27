@@ -4238,7 +4238,7 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
     );
     assert!(
         bar.contains(r#"accessible-role: button"#)
-            && bar.contains(r#"accessible-label: "Accept new safety number""#),
+            && bar.contains("accessible-label: root.accept-text"),
         "the control that pins a new identity key must be reachable by \
          assistive tech and must say what it does"
     );
@@ -4254,11 +4254,13 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
         "the only pointer surface in the bar must be Accept — a second one is \
          either a hidden dismiss or a mis-wire"
     );
-    // Wording is core's, so the bar must not hardcode any of it beyond the
-    // button label.
+    // Wording is core's, so the bar must not hardcode any of it.
     assert!(
-        bar.contains("in property <string> title") && bar.contains("in property <string> detail"),
-        "title and detail must come in from chatter-core, not be written here"
+        bar.contains("in property <string> title")
+            && bar.contains("in property <string> detail")
+            && bar.contains("in property <string> accept-text")
+            && !bar.contains("@tr("),
+        "title, detail and the button label must come in from chatter-core, not be written here"
     );
 
     let layout = include_str!("../../../ui/chat/chat_layout.slint");

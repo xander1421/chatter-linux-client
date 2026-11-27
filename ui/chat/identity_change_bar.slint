@@ -37,9 +37,10 @@ export component IdentityChangeBar inherits Rectangle {
     opacity: Appearance.reduce-motion || root.entered ? 1 : 0;
     animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
     animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
-    // Both strings are formatted by chatter-core.
+    // All three strings are formatted by chatter-core.
     in property <string> title;
     in property <string> detail;
+    in property <string> accept-text;
     // False when the peer id was server-supplied and nothing proved it. Only
     // used to pick the accent: the *wording* already carries the caveat, and a
     // colour is not allowed to be the thing that tells the user this may not be
@@ -126,9 +127,9 @@ export component IdentityChangeBar inherits Rectangle {
                 animate transform-scale-y { duration: accept-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
                 accept-label := Text {
-                    // Deliberately not "OK" or "Continue": the user is pinning
-                    // a new key, and the label should say so.
-                    text: @tr("Accept new safety number");
+                    // Deliberately not "OK" or "Continue": core names the
+                    // trust decision the user is making.
+                    text: root.accept-text;
                     color: Colors.text-primary;
                     font-size: Typography.xs;
                     horizontal-alignment: center;
@@ -140,7 +141,7 @@ export component IdentityChangeBar inherits Rectangle {
                 accept-touch := TouchArea {
                     mouse-cursor: pointer;
                     accessible-role: button;
-                    accessible-label: @tr("Accept new safety number");
+                    accessible-label: root.accept-text;
                     accessible-action-default => { root.accept-clicked(); }
                     KeyFocus { activate => { root.accept-clicked(); } }
                     clicked => {
