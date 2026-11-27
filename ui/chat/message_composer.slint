@@ -70,6 +70,7 @@ export component MessageComposer inherits GlassSurface {
         root.suspend-input();
         root.attachment-draft = root.text;
         root.attachment-suspended = true;
+        if root.picker-open { root.dismiss-picker(); }
         root.input-dismissed();
     }
     changed attachment-restore-serial => {
@@ -241,14 +242,20 @@ export component MessageComposer inherits GlassSurface {
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
     property <length> action-shell-height: Spacing.composer-bar-height;
     property <length> attachment-chip-height: Spacing.touch-target-min;
-    property <length> attachment-band-height: attachment-chip-height + Spacing.sm * 2;
+    property <length> attachment-band-height: attachment-chip-height + (root.mobile ? Spacing.sm * 2 : 0px);
+    private property <length> preview-gap: root.mobile ? Spacing.xs : Spacing.sm;
+    private property <length> preview-top-inset: root.mobile ? 0px : root.row-padding;
+    private property <length> preview-top: (root.mobile
+        ? root.action-shell-height + Spacing.xs : root.raised-action-row-height) + root.preview-top-inset;
     // Raised controls, attachment strip, then reply preview each own a row;
     // the reply stays directly above the input even with files attached.
-    property <length> reply-row-height: is-replying ? max(action-shell-height, 48px * Appearance.text-grow) : 0px;
+    property <length> reply-row-height: is-replying
+        ? root.mobile ? max(action-shell-height, 48px * Appearance.text-grow) : reply-preview.preferred-height
+        : 0px;
     private property <length> raised-action-row-height: lift-layout * (action-shell-height + Spacing.xs);
     property <length> raised-toolbar-height: raised-action-row-height + lift-layout
-        * ((has-attachments ? attachment-band-height + Spacing.xs : 0px)
-            + (is-replying ? reply-row-height + Spacing.xs : 0px));
+        * ((has-attachments ? attachment-band-height + preview-gap : 0px)
+            + (is-replying ? reply-row-height + preview-gap : 0px));
     // The part of the composer's height that is only the lifted action row.
     // The row rises into the clearance the message list already keeps below
     // its last row, so the host takes it back out of the list's geometry:
@@ -287,6 +294,8 @@ export component MessageComposer inherits GlassSurface {
     // finish composing; re-focusing immediately keeps the keyboard up so a user
     // can send several messages in a row.
     function reset-after-send() {
+        let return-to-field = root.picker-open && !root.mobile;
+        if root.picker-open { root.dismiss-picker(); }
         root.text = "";
         if InputPolicy.dismiss-after-send {
             text-input.clear-focus();
@@ -294,6 +303,7 @@ export component MessageComposer inherits GlassSurface {
             InputPolicy.dismiss-native-keyboard();
         } else {
             root.reset-composition();
+            if return-to-field { text-input.focus(); }
         }
     }
 
@@ -373,6 +383,7 @@ export component MessageComposer inherits GlassSurface {
     // Text paste is handled by TextInput itself (this doesn't consume the key).
     callback paste-image();
     callback emoji-clicked();
+    callback dismiss-picker();
     // The text field took focus: the emoji / GIF panel gives way to the
     // keyboard, the way Signal toggles between the two.
     callback input-focused();
@@ -431,13 +442,8 @@ export component MessageComposer inherits GlassSurface {
     // Forward focus to input
     forward-focus: text-input;
 
-    // The air above and below the input row. 4px, not 8px: the row's floor is a
-    // 48px touch target, so the row is already tall enough to breathe on its own
-    // — 16px on top of it made the composer 65px for one line of text and left
-    // the screen looking bottom-heavy. The buttons are untouched.
-    // The same inset on all four sides of the row, so the field and the
-    // buttons are concentric with the shell (Spacing.radius-chrome-inner).
-    property <length> row-padding: Spacing.chrome-inset;
+    // Match the desktop card inset and retain the tighter phone chrome inset.
+    property <length> row-padding: root.mobile ? Spacing.chrome-inset : Spacing.sm;
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(80px, Spacing.touch-target-min + row-padding * 2);
@@ -503,42 +509,59 @@ export component MessageComposer inherits GlassSurface {
                 border-radius: root.mobile ? Spacing.radius-chrome : Spacing.radius-panel;
                 popup-rim: !root.mobile;
                 material-level: root.material-level;
-                material-tint: Materials.chat-chrome;
-                darkening: Materials.chat-darkening;
+                material-tint: root.mobile ? Materials.chat-chrome
+                    : Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+                darkening: root.mobile ? Materials.chat-darkening : 1.0;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
                 visible: !root.recording-here;
             }
+            TouchArea {
+                enabled: !root.mobile && root.picker-open;
+                clicked => {
+                    root.dismiss-picker();
+                    root.restore-input();
+                }
+            }
             // Reply preview directly above the field, beneath the raised
             // action controls. Its own row remains reserved during the lift.
-            if root.is-replying: ComposerReplyPreview {
+            reply-preview := ComposerReplyPreview {
+                visible: root.is-replying;
+                compact: !root.mobile;
                 x: root.row-padding;
-                y: root.action-shell-height + Spacing.xs
-                    + (root.has-attachments ? root.attachment-band-height + Spacing.xs : 0px);
+                y: root.preview-top
+                    + (root.has-attachments ? root.attachment-band-height + root.preview-gap : 0px);
                 width: max(0px, parent.width - root.row-padding * 2);
                 height: min(root.reply-row-height,
-                    max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
+                    max(0px, root.raised-toolbar-height + root.preview-top-inset - self.y - root.preview-gap));
                 row-padding: root.row-padding;
                 reply-reveal: root.reply-reveal;
                 reply-has-thumbnail: root.reply-has-thumbnail;
                 reply-thumbnail: root.reply-thumbnail;
                 reply-to-sender: root.reply-to-sender;
                 reply-to-preview: root.reply-to-preview;
-                cancel-reply => { root.cancel-reply(); }
+                cancel-reply => {
+                    if root.picker-open { root.dismiss-picker(); }
+                    root.cancel-reply();
+                }
             }
 
             // Attachment cards sit between the controls and the reply row.
             if root.has-attachments: ComposerAttachmentStrip {
-                x: 0px;
-                y: root.action-shell-height + Spacing.xs;
-                width: parent.width;
+                compact: !root.mobile;
+                x: root.preview-top-inset;
+                y: root.preview-top;
+                width: max(0px, parent.width - 2 * self.x);
                 height: min(root.attachment-band-height,
-                    max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
+                    max(0px, root.raised-toolbar-height + root.preview-top-inset - self.y - root.preview-gap));
                 attachment-chip-height: root.attachment-chip-height;
                 strip-reveal: root.strip-reveal;
                 disabled: root.disabled;
                 pending-attachments: root.pending-attachments;
-                remove-attachment(id) => { root.remove-attachment(id); }
+                remove-attachment(id) => {
+                    if root.picker-open { root.dismiss-picker(); }
+                    root.remove-attachment(id);
+                }
                 attachment-clicked => { root.attachment-clicked(); }
             }
 
@@ -665,6 +688,10 @@ export component MessageComposer inherits GlassSurface {
                                 && !root.is-editing && !root.is-replying
                                 && root.pending-attachments.length == 0) {
                                 root.edit-last-requested();
+                                return accept;
+                            }
+                            if event.text == Key.Escape && root.picker-open {
+                                root.dismiss-picker();
                                 return accept;
                             }
                             // Escape backs out of an edit or a reply, like the bar's ×.

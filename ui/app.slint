@@ -527,6 +527,14 @@ export component MainWindow inherits Window {
             root.attachment-restore-serial += 1;
         }
     }
+    public function finish-gif-picker-send() {
+        ChatPane.composer-gif-picker-visible = false;
+        if root.is-mobile-platform {
+            root.release-text-focus();
+        } else {
+            root.reply-focus-serial += 1;
+        }
+    }
     public function release-text-focus() {
         root.cancel-composer-keyboard-handover();
         back-scope.focus();
@@ -778,6 +786,16 @@ export component MainWindow inherits Window {
             // Parent hit testing observes pointer movement before child controls handle it.
             changed mouse-x => { Appearance.keyboard-focus-visible = false; }
             changed mouse-y => { Appearance.keyboard-focus-visible = false; }
+            filter-pointer-event(event) => {
+                if !root.is-mobile-platform && event.kind == PointerEventKind.down {
+                    InputPolicy.desktop-press = {
+                        x: self.absolute-position.x + self.mouse-x,
+                        y: self.absolute-position.y + self.mouse-y,
+                        serial: InputPolicy.desktop-press.serial + 1
+                    };
+                }
+                return reject;
+            }
             pointer-event(event) => {
                 if event.kind == PointerEventKind.down {
                     Appearance.keyboard-focus-visible = false;

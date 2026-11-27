@@ -25,6 +25,7 @@ export component MessageQuote inherits Rectangle {
     in property <int> reply-to-thumbnail-width;
     in property <[int]> reply-to-waveform;
     in property <bool> composer-preview: false;
+    in property <bool> compact-composer-preview: false;
     in property <length> content-max-width;
     in property <length> thumbnail-max-height: 60px;
     in property <length> thumbnail-max-width: 96px;
@@ -63,8 +64,8 @@ export component MessageQuote inherits Rectangle {
     }
 
     quote-row := HorizontalLayout {
-        padding: Spacing.xs;
-        padding-left: root.composer-preview ? Spacing.xs : Spacing.sm + Spacing.xxs;
+        padding: root.compact-composer-preview ? 0px : Spacing.xs;
+        padding-left: root.composer-preview ? self.padding : Spacing.sm + Spacing.xxs;
         spacing: Spacing.sm;
         alignment: stretch;
 

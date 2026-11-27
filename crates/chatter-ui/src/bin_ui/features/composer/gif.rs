@@ -147,9 +147,7 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 
             // Accepted: the drawer gives way, and the pick is remembered for the
             // account it was made under, so a failed upload can be repicked.
-            w.global::<crate::ChatPane>()
-                .set_composer_gif_picker_visible(false);
-            w.invoke_release_text_focus();
+            w.invoke_finish_gif_picker_send();
             crate::bin_ui::gif_state::clear_picker_gifs();
             if let Some(scope) = scope {
                 ui_ctx.record_recent_gif(
