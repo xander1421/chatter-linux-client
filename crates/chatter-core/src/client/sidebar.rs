@@ -23,6 +23,10 @@ pub struct SidebarCard {
     pub unread: u32,
     pub pinned: Vec<SidebarCardRow>,
     pub rows: Vec<SidebarCardRow>,
+    /// Chats card only: the account has no conversations in any card yet,
+    /// so the card shows its first-friend hint. Filed chats count, so a user
+    /// who moved every chat into sections does not see the hint.
+    pub show_empty_hint: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +117,7 @@ impl ChatterClient {
                 unread: 0,
                 pinned: Vec::new(),
                 rows: vec![row],
+                show_empty_hint: false,
             });
         }
 
@@ -135,6 +140,7 @@ impl ChatterClient {
             unread,
             pinned,
             rows,
+            show_empty_hint: false,
         });
 
         let sections = self.list_sections_with_conversations().unwrap_or_default();
@@ -150,8 +156,15 @@ impl ChatterClient {
                 unread,
                 pinned: Vec::new(),
                 rows: rows.into_iter().map(SidebarCardRow::from).collect(),
+                show_empty_hint: false,
             }
         }));
+        let has_conversations = cards.iter()
+            .filter(|card| card.kind != SidebarCardKind::Saved)
+            .any(|card| !card.rows.is_empty() || !card.pinned.is_empty());
+        if let Some(chats) = cards.iter_mut().find(|card| card.kind == SidebarCardKind::Chats) {
+            chats.show_empty_hint = !has_conversations;
+        }
         cards
     }
 

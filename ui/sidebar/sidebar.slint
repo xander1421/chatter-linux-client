@@ -1036,7 +1036,7 @@ export component Sidebar inherits Rectangle {
                         if card.kind == "chats": ChatsCard {
                             card: card;
                             touch: root.touch;
-                            empty-text: root.chat-rows-loading ? "" : @tr("Friends you add appear here.");
+                            empty-text: root.chat-rows-loading || !card.show-empty-hint ? "" : @tr("Friends you add appear here.");
                             header-highlight: card-slot.highlighted && (root.focused-card-row < 0 || card.collapsed);
                             highlighted-row: card-slot.highlighted ? root.focused-card-row : -1;
                             pin-requested(id, pinned) => { root.set-conversation-pinned(id, pinned); }

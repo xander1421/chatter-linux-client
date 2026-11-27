@@ -189,6 +189,7 @@ fn apply_sidebar_cards(
                 unread: card.unread as i32,
                 pinned,
                 rows,
+                show_empty_hint: card.show_empty_hint,
             };
             if let Some(old) = old_cards.iter().find(|old| old.id == next.id) {
                 if old.pinned.iter().eq(next.pinned.iter()) {
