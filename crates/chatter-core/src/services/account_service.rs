@@ -28,6 +28,11 @@ pub enum AccountError {
     #[error("deletion failed: {0}")]
     DeletionFailed(String),
 
+    /// We could not leave this many private channels, so the account was not
+    /// deleted: it would stay in their signed rosters.
+    #[error("could not leave {0} private channel(s); the account was not deleted")]
+    LeaveFailed(usize),
+
     /// Network operation failed.
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
@@ -189,34 +194,45 @@ impl AccountService {
 
 /// The private channels to leave before deleting the account: a signed
 /// roster changes only by a member's signature, so without our own LEFT a
-/// deleted account stays a member that every post must leave out. An owner
-/// cannot leave (`verified_state/rules.rs`), so owned channels stay.
+/// deleted account stays a member that every post must leave out. Each
+/// entry is a private channel with our own entry in its verified roster.
+/// An active non-owner leaves; an owner cannot (`verified_state/rules.rs`),
+/// and a channel with no verified state, or one we are no longer active in,
+/// has nothing we could sign against.
 pub(crate) fn channels_to_leave_before_deletion(
-    channels: &[crate::domain::channel::Channel],
-    me: crate::domain::UserId,
+    channels: &[(
+        crate::domain::ids::ChannelId,
+        Option<(crate::domain::verified_state::ChannelRole, crate::domain::verified_state::MemberStatus)>,
+    )],
 ) -> Vec<crate::domain::ids::ChannelId> {
+    use crate::domain::verified_state::{ChannelRole, MemberStatus};
     channels
         .iter()
-        .filter(|c| c.channel_type == crate::domain::channel::ChannelType::Private && c.owner_id != me)
-        .map(|c| c.id)
+        .filter(|(_, me)| {
+            me.is_some_and(|(role, status)| status == MemberStatus::Active && role != ChannelRole::Owner)
+        })
+        .map(|(id, _)| *id)
         .collect()
 }
 
 #[cfg(test)]
 mod deletion_tests {
     use super::*;
-    use crate::domain::channel::{Channel, ChannelType};
-    use crate::domain::{ChannelId, UserId};
+    use crate::domain::ChannelId;
 
     #[test]
     fn deletion_leaves_private_channels_it_does_not_own() {
-        let (me, other) = (UserId::new(), UserId::new());
-        let joined = Channel::new(ChannelId::new(), "p".into(), ChannelType::Private, other);
-        let owned = Channel::new(ChannelId::new(), "o".into(), ChannelType::Private, me);
-        let public = Channel::new(ChannelId::new(), "pub".into(), ChannelType::Public, other);
+        use crate::domain::verified_state::{ChannelRole, MemberStatus};
+        let (joined, owned, left, unverified) =
+            (ChannelId::new(), ChannelId::new(), ChannelId::new(), ChannelId::new());
         assert_eq!(
-            channels_to_leave_before_deletion(&[joined.clone(), owned, public], me),
-            vec![joined.id]
+            channels_to_leave_before_deletion(&[
+                (joined, Some((ChannelRole::Member, MemberStatus::Active))),
+                (owned, Some((ChannelRole::Owner, MemberStatus::Active))),
+                (left, Some((ChannelRole::Member, MemberStatus::Invited))),
+                (unverified, None),
+            ]),
+            vec![joined]
         );
     }
 }

@@ -51,7 +51,7 @@ impl ChatterClient {
         );
         // A wrong password stops here, before any channel is left.
         account.verify_password(password).await?;
-        self.leave_channels_before_deletion().await;
+        self.leave_channels_before_deletion().await?;
         let suspension = self.suspend_presence(revision).await;
         account.delete_acct(password).await?;
         suspension.commit();
@@ -76,24 +76,41 @@ impl ChatterClient {
         Ok(())
     }
 
-    /// Sign our LEFT in every private channel we do not own, so the deleted
-    /// account drops out of the signed rosters. Best effort: a channel we
-    /// could not leave keeps us as a member without devices, which posts
-    /// leave out (`group_send.rs` `missing_bundle`).
-    async fn leave_channels_before_deletion(&self) {
-        let Some(me) = self.session_current_user_id() else { return };
-        let channels = match self.channels().get_channels_for_user() {
-            Ok(channels) => channels,
-            Err(error) => {
-                tracing::warn!(%error, "Could not list channels to leave before account deletion");
-                return;
-            }
-        };
-        for channel_id in crate::services::account_service::channels_to_leave_before_deletion(&channels, me) {
+    /// Sign our LEFT in every private channel we do not own (per its signed
+    /// roster), so the deleted account drops out of them. Any failure stops
+    /// the deletion and reports how many channels could not be left.
+    async fn leave_channels_before_deletion(
+        &self,
+    ) -> Result<(), crate::services::account_service::AccountError> {
+        use crate::services::account_service::AccountError;
+        let me = self.session_current_user_id().ok_or(AccountError::NotLoggedIn)?.to_string();
+        let channels = self
+            .channels()
+            .get_channels_for_user()
+            .map_err(|error| AccountError::DeletionFailed(error.to_string()))?;
+        let channel_service = self.channels();
+        let log = channel_service.membership_log();
+        let mine: Vec<_> = channels
+            .iter()
+            .filter(|c| c.channel_type == crate::domain::ChannelType::Private)
+            .map(|c| {
+                let own = log.load(&c.id).ok().flatten().and_then(|v| {
+                    v.state.members.get(&me).map(|m| (m.role, m.status))
+                });
+                (c.id, own)
+            })
+            .collect();
+        let mut failed = 0;
+        for channel_id in crate::services::account_service::channels_to_leave_before_deletion(&mine) {
             if let Err(error) = self.leave_channel(&channel_id).await {
                 tracing::warn!(%channel_id, %error, "Could not leave a private channel before account deletion");
+                failed += 1;
             }
         }
+        if failed > 0 {
+            return Err(AccountError::LeaveFailed(failed));
+        }
+        Ok(())
     }
 
     /// Get a user's display name.

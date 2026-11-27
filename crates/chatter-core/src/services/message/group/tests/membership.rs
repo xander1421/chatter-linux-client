@@ -726,25 +726,36 @@
         assert!(alice.signal_service.check_and_clear_rotation_needed(&other).unwrap());
     }
 
-    /// An accepted post is addressed to every registered device. A holder it
-    /// did not address is gone, even when no `extra` ever named it (its
-    /// session was archived first): the next post rotates.
+    /// A holder of our current key that a post no longer addresses rotates
+    /// the key: a device gone, or a device id reused by a new install (new
+    /// registration id). A holder recorded without a registration (0) is
+    /// matched by device.
     #[tokio::test]
-    async fn a_holder_the_accepted_post_did_not_address_rotates_the_key() {
+    async fn a_holder_that_is_no_longer_addressed_rotates_the_key() {
         let t = two_members();
         let alice = t.alice.messages();
         let (channel, bob) = (t.channel_id, t.bob_id.to_string());
         alice.record_sender_key_holders(&channel, &bob, &reached(&[(1, 101), (2, 202)]));
         let me = alice.signal_service.get_our_address().unwrap();
-        let addressed = |devices: &[u32]| -> std::collections::HashSet<(String, u32)> {
-            devices.iter().map(|&d| (bob.clone(), d))
-                .chain([(me.name().to_owned(), u32::from(me.device_id()))])
+        let current = |devices: &[(u32, u32)]| -> std::collections::HashSet<(String, u32, u32)> {
+            devices.iter().map(|&(d, r)| (bob.clone(), d, r))
+                .chain([(me.name().to_owned(), u32::from(me.device_id()), 42)])
                 .collect()
         };
-        alice.signal_service.rotate_if_holders_unaddressed(&channel, &addressed(&[1, 2])).unwrap();
-        assert!(!alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
-        alice.signal_service.rotate_if_holders_unaddressed(&channel, &addressed(&[1])).unwrap();
-        assert!(alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
+        let rotates = |devices: &[(u32, u32)]| {
+            let marked = alice.signal_service.rotate_if_holders_gone(&channel, &current(devices)).unwrap();
+            assert_eq!(marked, alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
+            marked
+        };
+        assert!(!rotates(&[(1, 101), (2, 202)]), "every holder addressed");
+        assert!(rotates(&[(1, 101)]), "device 2 is gone");
+        assert!(rotates(&[(1, 101), (2, 909)]), "device 2 is a new install under the reused id");
+
+        let mut unknown = reached(&[(3, 0)]);
+        unknown.registration_ids.clear();
+        alice.record_sender_key_holders(&channel, &bob, &unknown);
+        assert!(!rotates(&[(1, 101), (2, 202), (3, 555)]), "an unknown registration matches by device");
+        assert!(rotates(&[(1, 101), (2, 202)]));
     }
 
     /// A new key has reached nobody: rotation clears every holder. The old

@@ -3377,6 +3377,9 @@ msgstr "Неверный пароль. Попробуйте снова."
 msgid "Your session ended. Sign in again before deleting your account."
 msgstr "Сеанс завершён. Войдите снова, прежде чем удалять аккаунт."
 
+msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
+msgstr "Не удалось выйти из приватных каналов: {}. Аккаунт не удалён. Проверьте подключение и попробуйте снова."
+
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."
 msgstr "Не удалось удалить аккаунт. Проверьте соединение и попробуйте снова."

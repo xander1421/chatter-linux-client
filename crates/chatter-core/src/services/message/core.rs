@@ -247,6 +247,9 @@ impl MessageService {
 
         // Only a private channel encrypts (`channel_send_requires_encryption`).
         let previous_distribution = if require_encryption {
+            if let Some(state) = &group_state {
+                self.rotate_if_holders_left(channel_id, state).await?;
+            }
             Some(self.create_sender_key_for_channel(channel_id).await?)
         } else {
             None

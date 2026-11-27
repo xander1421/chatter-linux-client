@@ -758,9 +758,22 @@ impl ContentHandoff {
                 {
                     return Err("group sender not yet in roster".into());
                 }
-                self.group
+                let timer_was_known = self.group.group_timer_known(&id);
+                let events = self
+                    .group
                     .process_incoming_content(&id, &sender, &inner)
-                    .map_err(|error| error.to_string())?
+                    .map_err(|error| error.to_string())?;
+                // Posts held for the group timer go as soon as it is known
+                // (`AnonGroupService::release_held_if_timer_learned`).
+                if !timer_was_known && self.group.group_timer_known(&id) {
+                    let group = self.group.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = group.release_held_if_timer_learned(&id, false).await {
+                            tracing::warn!(%error, "Held group post retry after timer failed");
+                        }
+                    });
+                }
+                events
             }
             ("anon_group", Some(Body::AnonGroupMemberList(list))) => {
                 let id = crate::domain::anon_group::AnonGroupId::try_from_slice(&list.group_id)

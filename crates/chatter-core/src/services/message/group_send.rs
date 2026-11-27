@@ -143,6 +143,8 @@ impl TokenCache {
 /// `group_send.go`: a send may omit exactly the members without one).
 const NO_BUNDLE_MISSES: u32 = 3;
 const NO_BUNDLE_SECS: u64 = 10 * 60;
+const NO_BUNDLE_PROBE_SECS: u64 = 60 * 60;
+const NO_BUNDLE_PROBE_JITTER_SECS: u64 = 15 * 60;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 struct NoBundle {
@@ -150,6 +152,8 @@ struct NoBundle {
     misses: u32,
     /// The channel was told this member is left out.
     noticed: bool,
+    /// When a member already left out is looked up again.
+    probe_at: u64,
 }
 
 impl NoBundle {
@@ -159,11 +163,19 @@ impl NoBundle {
     }
 
     fn missed(self, now: u64) -> Self {
-        Self {
+        let missed = Self {
             first_at: if self.misses == 0 { now } else { self.first_at },
             misses: self.misses.saturating_add(1),
-            noticed: self.noticed,
-        }
+            ..self
+        };
+        // Once left out, wait about an hour before the next lookup; the
+        // jitter keeps members' probes of one account apart.
+        let probe_at = if missed.omitted(now) {
+            now + NO_BUNDLE_PROBE_SECS + rand::random::<u64>() % NO_BUNDLE_PROBE_JITTER_SECS
+        } else {
+            0
+        };
+        Self { probe_at, ..missed }
     }
 }
 
@@ -211,6 +223,36 @@ impl MessageService {
             }
         }
         Ok(devices)
+    }
+
+    /// Every `(member, device, registration id)` a private post addresses now
+    /// (0: registration unknown), from our sessions.
+    async fn addressed_devices(&self, members: &[String], me: &str) -> Result<HashSet<(String, u32, u32)>, MessageError> {
+        let mut current = HashSet::new();
+        for member in members {
+            for (device, registration) in self.private_post_devices(member, me).await? {
+                current.insert((member.clone(), device, registration.unwrap_or(0)));
+            }
+        }
+        Ok(current)
+    }
+
+    /// Before encrypting: a device that holds our current key but is no
+    /// longer one we address (removed, or replaced under its reused id with a
+    /// new registration) rotates the key first, so that post is already
+    /// under the new key. The check after an accepted post (the server's own
+    /// device list) catches what our sessions do not show yet.
+    pub(super) async fn rotate_if_holders_left(
+        &self,
+        channel_id: &ChannelId,
+        verified: &VerifiedChannel,
+    ) -> Result<(), MessageError> {
+        let me = self.current_user_id()?.to_string();
+        let current = self.addressed_devices(&active_members(verified), &me).await?;
+        self.signal_service
+            .rotate_if_holders_gone(channel_id, &current)
+            .map(|_| ())
+            .map_err(|error| MessageError::from_signal_send(error, "sender key holders"))
     }
 
     /// Whether `channel_id` is a private channel, whose messages have no
@@ -324,7 +366,8 @@ impl MessageService {
         if named != Some(*channel_id) {
             return Err(MessageError::InvalidContent("Control content must name its channel".into()));
         }
-        self.group_gate().for_distribution(channel_id)?;
+        let verified = self.group_gate().for_distribution(channel_id)?;
+        self.rotate_if_holders_left(channel_id, &verified).await?;
         let distribution = self.create_sender_key_for_channel(channel_id).await?;
         let sent_at = crate::util::time::TimestampNanos::now().as_u64();
         Self::pad_content_to_bucket(&mut content);
@@ -449,9 +492,16 @@ impl MessageService {
             .filter(|member| **member != me && self.no_bundle(&channel_id, member).omitted(now))
             .cloned()
             .collect();
+        // A member already left out does not make every post rescan the
+        // roster (each scan spends credentials and pops a one-time prekey
+        // from every device): it is probed alone, about hourly.
+        let probes: Vec<String> = omitted.iter()
+            .filter(|member| self.no_bundle(&channel_id, member).probe_at <= now)
+            .cloned()
+            .collect();
         let mut refresh_roster = false;
         let mut fanout = 0;
-        for member in &members {
+        for member in members.iter().filter(|m| !omitted.contains(*m)) {
             let devices = self.private_post_devices(member, &me).await?;
             refresh_roster |= devices.is_empty()
                 || (member == &me && devices.len() == 1 && devices[0].0 == self.current_device_id_or_zero()
@@ -463,17 +513,21 @@ impl MessageService {
                 fanout += 1;
             }
         }
-        let planned = if refresh_roster { 3 * members.len() } else { fanout };
+        let discovered: Vec<String> = members.iter()
+            .filter(|m| if omitted.contains(*m) { probes.contains(*m) } else { refresh_roster })
+            .cloned()
+            .collect();
+        let planned = (if refresh_roster { 3 * (members.len() - omitted.len()) } else { fanout }) + 2 * probes.len();
         self.require_private_post_balance(planned, MAX_REPAIRS_PER_POST)?;
-        for member in &members {
+        for member in members.iter().filter(|m| !omitted.contains(*m) || probes.contains(*m)) {
             self.signal_service.require_group_device_ready(member)
                 .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))?;
         }
 
-        if refresh_roster {
+        if !discovered.is_empty() {
             let mut prekeys = self.private_post_prekeys();
             let mut blocked = None;
-            for member in &members {
+            for member in &discovered {
                 match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
                     .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
                 {
@@ -556,11 +610,16 @@ impl MessageService {
                 .send_group_message(&request.channel_id, token.clone(), sealed, &request.client_request_id)
                 .await?;
             if resp.success {
-                let addressed = destinations.iter()
-                    .map(|a| (a.name().to_owned(), u32::from(a.device_id())))
-                    .collect();
-                // The post is accepted: a failure here must not fail (and so resend) it.
-                if let Err(error) = self.signal_service.rotate_if_holders_unaddressed(&channel_id, &addressed) {
+                // Accepted: the server refuses a send unless it addresses the
+                // members' registered devices, so these sessions are the
+                // channel's device list. A holder outside it rotates the next
+                // post. A failure here must not fail (and so resend) this one.
+                let checked = match self.addressed_devices(&recipients, &me).await {
+                    Ok(current) => self.signal_service.rotate_if_holders_gone(&channel_id, &current)
+                        .map_err(|error| MessageError::from_signal_send(error, "sender key holders")),
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = checked {
                     tracing::error!(%channel_id, %error, "Could not check sender-key holders after a private post");
                 }
                 if retain_resend_targets {
@@ -774,5 +833,10 @@ mod tests {
         assert!(twice.missed(t0 + 60).omitted(t0 + 60), "third discovery");
         assert!(once.omitted(t0 + NO_BUNDLE_SECS), "ten minutes");
         assert!(!NoBundle::default().omitted(t0 + NO_BUNDLE_SECS), "never missed");
+        // Waiting: probed on every post. Left out: next probe in about an hour.
+        assert_eq!(twice.probe_at, 0);
+        let out = twice.missed(t0 + 60);
+        assert!((t0 + 60 + NO_BUNDLE_PROBE_SECS..t0 + 60 + NO_BUNDLE_PROBE_SECS + NO_BUNDLE_PROBE_JITTER_SECS)
+            .contains(&out.probe_at));
     }
 }

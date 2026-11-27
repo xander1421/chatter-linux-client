@@ -161,6 +161,10 @@ pub(super) fn wire_profile_and_deletion(window: &MainWindow, ui_ctx: &Arc<Chatte
                             chatter_core::client::AccountError::NotLoggedIn => chatter_i18n::tr(
                                 "Your session ended. Sign in again before deleting your account.",
                             ),
+                            chatter_core::client::AccountError::LeaveFailed(count) => chatter_i18n::trf(
+                                "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again.",
+                                &[&count.to_string()],
+                            ),
                             _ => chatter_i18n::tr(
                                 "Could not delete your account. Check your connection and try again.",
                             ),

@@ -3397,6 +3397,9 @@ msgstr ""
 "Votre session est terminée. Connectez-vous de nouveau avant de supprimer "
 "votre compte."
 
+msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
+msgstr "Impossible de quitter {} canal/canaux privé(s), votre compte n’a donc pas été supprimé. Vérifiez votre connexion et réessayez."
+
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."
 msgstr ""

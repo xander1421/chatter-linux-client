@@ -3380,6 +3380,9 @@ msgstr "Password errata. Riprova."
 msgid "Your session ended. Sign in again before deleting your account."
 msgstr "La sessione è terminata. Accedi di nuovo prima di eliminare l'account."
 
+msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
+msgstr "Impossibile uscire da {} canale/i privato/i, quindi il tuo account non è stato eliminato. Controlla la connessione e riprova."
+
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."
 msgstr "Impossibile eliminare l'account. Controlla la connessione e riprova."
