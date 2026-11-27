@@ -4974,22 +4974,16 @@ fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
 /// nothing else told the user.
 #[test]
 fn tor_status_dot_does_not_report_off_as_connecting() {
-    // The two shield entry points live in the sidebar's header (expanded) and
-    // footer rail (collapsed) components since 852e5c15.
-    let src = concat!(
-        include_str!("../../../ui/sidebar/sidebar_header.slint"),
-        include_str!("../../../ui/sidebar/sidebar_footer.slint"),
-    );
+    let src = include_str!("../../../ui/sidebar/sidebar_footer.slint");
 
-    // Both shield entry points (expanded footer + collapsed rail) carry a dot.
+    // The shared Shield toggle and the legacy touch rail each carry a dot.
     let dots: Vec<_> = src
         .match_indices("TorStatus.state == 2 ? Colors.success")
         .collect();
     assert_eq!(
         dots.len(),
         2,
-        "expected the Tor dot at both shield entry points (expanded footer and \
-         collapsed rail); found {}",
+        "expected the Tor dot on the shared Shield toggle and the touch rail; found {}",
         dots.len()
     );
 
@@ -5038,21 +5032,26 @@ fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
         "a Shield entry point is gated on the `onion` feature again — the \
          Android build has no onion, so it would have no Shield toggle"
     );
-    // One pointer handler per shield; key and a11y activations ride on it.
-    let entries = concat!(
-        include_str!("../../../ui/sidebar/sidebar_header.slint"),
-        include_str!("../../../ui/sidebar/sidebar_footer.slint"),
-    );
-    let shields = entries
-        .matches(" clicked => { root.anon-mode-clicked(); }")
-        .count();
-    assert_eq!(shields, 2, "expanded header shield and collapsed rail shield");
-    let dots = entries
-        .matches("visible: AnonMode.enabled && AnonMode.onion-built;")
-        .count();
+    let header = include_str!("../../../ui/sidebar/sidebar_header.slint");
+    let footer = include_str!("../../../ui/sidebar/sidebar_footer.slint");
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+    assert!(!header.contains("anon-mode-clicked"));
+    assert!(footer.contains("SidebarShieldToggle {"));
+    assert!(sidebar.contains("if root.mobile-mode && !root.collapsed"));
+    assert!(sidebar.contains(": SidebarShieldToggle {"));
+    // The footer toggle shares its dot with the compact phone shortcut.
     assert_eq!(
-        dots, shields,
-        "every shield's Tor dot must be gated on onion-built"
+        footer
+            .matches(" clicked => { root.anon-mode-clicked(); }")
+            .count(),
+        2
+    );
+    assert_eq!(
+        footer
+            .matches("visible: AnonMode.enabled && AnonMode.onion-built;")
+            .count(),
+        2,
+        "both Tor dot definitions must be gated on onion-built"
     );
 
     // Rust mirrors the Cargo feature, exactly as it does for jarvis, and the
@@ -5781,6 +5780,18 @@ fn glass_material_is_chrome_only_with_one_optical_edge() {
     );
 }
 
+#[test]
+fn sidebar_search_and_create_have_separate_controls() {
+    let header = include_str!("../../../ui/sidebar/sidebar_header.slint");
+    assert!(header.contains("material-enabled: root.mobile-mode;"));
+    assert!(header.contains("spacing: Spacing.panel-gutter;"));
+    let create = header.find("if !root.mobile-mode: HeaderButton {").unwrap();
+    assert!(header[..create].contains("horizontal-stretch: 1;"));
+    assert!(header[create..].contains("width: 40px;"));
+    assert!(header[create..].contains("control-radius: Spacing.radius-panel;"));
+    assert!(header[create..].contains("control-fill: Colors.primary.with-alpha(0.16);"));
+}
+
 /// Chrome must sample scrolling content, with clearance inside the scroll range.
 #[test]
 fn floating_chrome_keeps_content_insets_and_clear_materials() {
@@ -5811,15 +5822,14 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
             && list.contains("root.is-at-bottom && !root.scrolling && root.jump-row < 0")
     );
     assert!(list.contains("y: root.height - root.bottom-inset - 60px;"));
-    // The glass header (SidebarHeader inherits GlassSurface) floats over the list.
+    // The header floats over the list. On two-pane layouts the search
+    // control and Create tile are adjacent children of the same layout.
     assert!(
         sidebar.find("central-scroll := ListView {").unwrap()
             < sidebar
                 .find("if !root.collapsed && root.active-tab != \"mesh\": SidebarHeader {")
                 .unwrap()
     );
-    assert!(include_str!("../../../ui/sidebar/sidebar_header.slint")
-        .contains("export component SidebarHeader inherits GlassSurface {"));
     assert!(sidebar.contains("root.bottom-inset + Spacing.fab-size"));
     assert!(!app.contains("// Space held for the bottom tab bar."));
     // The contacts screen's lists are its tab components since 85f04336;

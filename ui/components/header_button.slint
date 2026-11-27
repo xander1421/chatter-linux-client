@@ -41,11 +41,15 @@ export component HeaderButton inherits Rectangle {
     in property <length> control-radius: Spacing.radius-full;
     in property <brush> control-fill: transparent;
     // What is drawn, as opposed to what is tappable. The root box is always
-    // the touch target; a row with lighter chrome around it (the sidebar
-    // header's '+' and Shield beside 24px quick-link glyphs) draws a smaller
-    // shell and glyph inside the same box.
+    // the touch target. A compact layout can draw a smaller shell and glyph
+    // inside the same box.
     in property <length> shell: root.width;
     in property <length> glyph: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
+
+    in property <brush> icon-color: root.destructive ? Colors.error
+        : root.active ? Colors.glass-accent
+        : touch-area.pressed ? Colors.text-muted
+        : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
 
     callback clicked();
 
@@ -114,10 +118,7 @@ export component HeaderButton inherits Rectangle {
             height: self.width;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            colorize: root.destructive ? Colors.error
-                : root.active ? Colors.glass-accent
-                : touch-area.pressed ? Colors.text-muted
-                : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
+            colorize: root.icon-color;
         }
 
         // Status marks drawn over the glyph (Shield's Tor dot), relative to
