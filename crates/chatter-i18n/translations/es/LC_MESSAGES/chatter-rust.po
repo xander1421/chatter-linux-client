@@ -3453,7 +3453,9 @@ msgstr ""
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
-msgstr "Esta copia de seguridad se creó con una versión anterior y no se puede restaurar."
+msgstr ""
+"Esta copia de seguridad se creó con una versión anterior y no se puede "
+"restaurar."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
@@ -3963,11 +3965,14 @@ msgstr "Verificando la clave"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
-msgstr "No se pudo verificar el historial del registro de transparencia de claves."
+msgstr ""
+"No se pudo verificar el historial del registro de transparencia de claves."
 
 #: crates/chatter-core/src/client/calls/mod.rs
 msgid "Call media connects directly and can reveal your IP address."
-msgstr "El audio y el vídeo de la llamada se conectan directamente y pueden revelar tu dirección IP."
+msgstr ""
+"El audio y el vídeo de la llamada se conectan directamente y pueden revelar "
+"tu dirección IP."
 
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
@@ -3981,7 +3986,8 @@ msgid "Allow"
 msgstr "Permitir"
 
 msgid "Allow incoming calls to show on the lock screen."
-msgstr "Permite que las llamadas entrantes se muestren en la pantalla de bloqueo."
+msgstr ""
+"Permite que las llamadas entrantes se muestren en la pantalla de bloqueo."
 
 msgid "Not now"
 msgstr "Ahora no"
@@ -3997,3 +4003,58 @@ msgstr "No se pudo cambiar el modo puente: {}"
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
 msgid "Could not change nearby public chat: {}"
 msgstr "No se pudo cambiar el chat público cercano: {}"
+
+#: crates/chatter-core/src/client/auth.rs
+msgid "Current PIN is incorrect. {n} attempt remaining."
+msgid_plural "Current PIN is incorrect. {n} attempts remaining."
+msgstr[0] "El PIN actual es incorrecto. Queda {n} intento."
+msgstr[1] "El PIN actual es incorrecto. Quedan {n} intentos."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "Your key backup could not be read."
+msgstr "No se pudo leer tu copia de seguridad de claves."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "This device could not process your key backup. Try again."
+msgstr ""
+"Este dispositivo no pudo procesar tu copia de seguridad de claves. Inténtalo "
+"de nuevo."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid ""
+"That PIN did not unlock your key backup. {n} attempt remaining. Check your "
+"current PIN before trying again."
+msgid_plural ""
+"That PIN did not unlock your key backup. {n} attempts remaining. Check your "
+"current PIN before trying again."
+msgstr[0] ""
+"Ese PIN no desbloqueó tu copia de seguridad de claves. Queda {n} intento. "
+"Comprueba tu PIN actual antes de volver a intentarlo."
+msgstr[1] ""
+"Ese PIN no desbloqueó tu copia de seguridad de claves. Quedan {n} intentos. "
+"Comprueba tu PIN actual antes de volver a intentarlo."
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr ""
+"Vuelve a iniciar sesión para terminar de publicar tus claves de cifrado."
+
+msgid "The server published an unexpected encryption key for your account."
+msgstr "El servidor publicó una clave de cifrado inesperada para tu cuenta."
+
+msgid ""
+"This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr ""
+"Se reemplazó este dispositivo. Se borraron los datos locales. Vuelve a "
+"iniciar sesión para continuar."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Tu copia de seguridad está desactualizada. Configura un PIN nuevo."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Se reemplazó este dispositivo. Borrando los datos locales…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr ""
+"Se publicaron las nuevas claves de cifrado. Vuelve a iniciar sesión con tu "
+"nuevo PIN."

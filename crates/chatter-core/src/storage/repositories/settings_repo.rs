@@ -102,18 +102,6 @@ pub mod keys {
     /// Our identity public key (33 bytes - 0x05 + Curve25519, base64 encoded)
     /// Used for NDSS'21 private friend codes that embed cryptographic material.
     pub const IDENTITY_KEY_PUBLIC: &str = "crypto.identity_key_public";
-    /// The account-bound operation this device owes the server, stored in one
-    /// record and deleted once the server acknowledges the key-material republish.
-    ///
-    /// A recovery hands this device an identity key whose published prekeys
-    /// belong to a device that no longer exists. If the republish that fixes
-    /// that is interrupted — server down, connection dropped — the local keys
-    /// are already in place, so the next login would see a local identity, skip
-    /// the restore, and never retry. The account would sit there serving
-    /// prekeys nobody can complete a handshake with: the original bug, reached
-    /// by a different road. The record survives logout alongside the local
-    /// identity and is wiped with it.
-    pub const KEY_REPUBLISH_PENDING: &str = "crypto.key_republish_pending";
     /// Who receives our profile key ("everyone" | "contacts" | "nobody"),
     /// see `services::profile_visibility`. Absent = everyone.
     pub const PROFILE_VISIBILITY: &str = "privacy.profile_visibility";
@@ -373,10 +361,18 @@ impl SettingsRepository {
     ///
     /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
     pub fn set_bytes(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
-        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+        let conn = self.db.connection()?;
+        Self::set_bytes_with_connection(&conn, key, value)
+    }
 
+    pub(crate) fn set_bytes_with_connection(
+        conn: &rusqlite::Connection,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), StorageError> {
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         let encoded = BASE64.encode(value);
-        self.set(key, &encoded)
+        Self::set_with_connection(conn, key, &encoded)
     }
 
     // ========================================================================

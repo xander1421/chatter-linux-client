@@ -88,6 +88,14 @@ impl KeyStore {
         identity_key_pair: &[u8],
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
+        Self::insert_local_identity(&conn, registration_id, identity_key_pair)
+    }
+
+    pub(crate) fn insert_local_identity(
+        conn: &rusqlite::Connection,
+        registration_id: u32,
+        identity_key_pair: &[u8],
+    ) -> Result<(), StorageError> {
         let now = Utc::now().to_rfc3339();
 
         conn.execute(

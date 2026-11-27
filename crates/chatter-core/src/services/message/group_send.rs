@@ -23,7 +23,7 @@ use crate::domain::ids::ChannelId;
 use crate::domain::verified_state::{StateHash, VerifiedChannel};
 use crate::error::NetworkError;
 use crate::mailbox::token_manager::{MailboxToken, TokenManager};
-use crate::services::signal::PreKeySource;
+use crate::services::signal::{AnonymousPreKeyRoute, PreKeySource};
 
 use super::{MessageError, MessageService};
 
@@ -98,6 +98,12 @@ struct Cached {
 pub(crate) struct TokenCache(Mutex<HashMap<ChannelId, Cached>>);
 
 impl TokenCache {
+    pub(super) fn clear(&self) {
+        if let Ok(mut map) = self.0.lock() {
+            map.clear();
+        }
+    }
+
     fn get(&self, channel_id: &ChannelId, state_hash: &StateHash, now: u64) -> Option<Vec<u8>> {
         let map = self.0.lock().ok()?;
         map.get(channel_id)
@@ -252,9 +258,10 @@ impl MessageService {
 
     pub(super) fn private_post_prekeys(&self) -> PreKeySource<'_> {
         PreKeySource::Anonymous {
-            client: self
-                .grpc_pool
-                .private_post_auth_client(PRIVATE_POST_BUDGET.with(|post| post.channel)),
+            route: AnonymousPreKeyRoute::Client(
+                self.grpc_pool
+                    .private_post_auth_client(PRIVATE_POST_BUDGET.with(|post| post.channel)),
+            ),
             tokens: &self.token_manager,
             claim: claim_private_post_credential,
         }

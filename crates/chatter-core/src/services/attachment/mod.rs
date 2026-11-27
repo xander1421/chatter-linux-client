@@ -207,9 +207,12 @@ pub fn attachment_file_path(attachment_id: &AttachmentId) -> PathBuf {
 /// Creates `~/.local/share/chatter/attachments/` with mode 0700 (owner only).
 /// Safe to call multiple times.
 pub fn ensure_attachments_dir() -> std::io::Result<()> {
-    let dir = attachments_dir();
+    ensure_attachments_dir_at(&attachments_dir())
+}
+
+pub(crate) fn ensure_attachments_dir_at(dir: &std::path::Path) -> std::io::Result<()> {
     if !dir.exists() {
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(dir)?;
         tracing::info!("Created attachments directory: {}", dir.display());
     }
 
@@ -218,7 +221,7 @@ pub fn ensure_attachments_dir() -> std::io::Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let permissions = std::fs::Permissions::from_mode(0o700);
-        std::fs::set_permissions(&dir, permissions)?;
+        std::fs::set_permissions(dir, permissions)?;
     }
 
     Ok(())

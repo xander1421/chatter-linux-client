@@ -155,32 +155,32 @@ mod transport_switch_tests {
     }
 
     #[tokio::test]
-    async fn interrupted_identity_republish_waits_for_sign_in_on_restart() {
+    async fn interrupted_device_bundle_publish_waits_for_sign_in_on_restart() {
+        use crate::services::auth_service::LoginResult;
         use crate::storage::repositories::settings_repo::keys;
 
         let (client, dir) = build_test_client();
         let settings = &client.signal().settings_repo;
+        let user_id = crate::domain::UserId::new();
         settings
-            .set_string(
-                keys::CURRENT_USER_ID,
-                &crate::domain::UserId::new().to_string(),
-            )
+            .set_string(keys::CURRENT_USER_ID, &user_id.to_string())
             .unwrap();
         settings.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
         settings.set_bytes(keys::PROFILE_KEY, &[5; 32]).unwrap();
-        settings.set_bytes(keys::DEVICE_AUTH_TOKEN, &[6; 32]).unwrap();
         settings.set_string(keys::SVR_SALT_USERNAME, "owner").unwrap();
 
-        // Leave the authenticated credentials and pending intent exactly as
-        // a crash between the republish RPC and the local acknowledgement would.
-        client.auth().begin_key_republish().unwrap();
+        client.auth().auth_interceptor.set_basic(
+            format!("{user_id}.1"),
+            crate::crypto::device_credentials::DeviceToken::generate().to_base64(),
+        );
         drop(client);
         let client = ChatterClient::builder()
             .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .unwrap();
-        assert!(client.auth().is_logged_in());
+        assert_eq!(client.current_user(), Some((user_id, 1)));
+        assert!(!client.auth().is_logged_in());
         assert!(!client.restore_session());
         assert!(!client.is_logged_in());
         assert!(client.services.grpc_pool.auth_clone().get_auth_info().is_none());
@@ -188,99 +188,25 @@ mod transport_switch_tests {
             client.start().await,
             Err(ClientError::Validation(_))
         ));
-        assert!(client.auth().key_republish_pending().unwrap());
-
-        // Completion by the password-authenticated retry resumes normal restoration.
-        client.auth().finish_key_republish();
+        // The password retry reclaims device 1. A server-confirmed bundle
+        // permits the authentication token to be committed.
+        client.auth().auth_interceptor.set_basic(
+            format!("{user_id}.1"),
+            crate::crypto::device_credentials::DeviceToken::generate().to_base64(),
+        );
+        client
+            .auth()
+            .commit_login(&LoginResult {
+                user_id,
+                device_id: 1,
+                display_name: "Owner".into(),
+                keys_restored: false,
+                key_recovery: None,
+                recovery_codes: None,
+            })
+            .unwrap();
         assert!(client.restore_session());
         assert!(client.is_logged_in());
-    }
-
-    #[tokio::test]
-    async fn pending_identity_republish_rejects_other_accounts_after_logout() {
-        use crate::network::grpc::{AuthClient, interceptors::AuthInterceptor};
-        use crate::storage::{repositories::settings_repo::keys, unlink::wipe_account_data};
-
-        let (client, _dir) = build_test_client();
-        let settings = &client.signal().settings_repo;
-        settings
-            .set_string(
-                keys::CURRENT_USER_ID,
-                &crate::domain::UserId::new().to_string(),
-            )
-            .unwrap();
-        settings.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
-        settings.set_bytes(keys::DEVICE_AUTH_TOKEN, &[6; 32]).unwrap();
-        settings.set_string(keys::SVR_SALT_USERNAME, "owner").unwrap();
-        client.auth().begin_key_republish().unwrap();
-
-        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
-        let mut rpc = AuthClient::new(channel.into(), AuthInterceptor::new());
-        client.auth().logout(&mut rpc).await.unwrap();
-        assert!(settings.get_string(keys::CURRENT_USER_ID).unwrap().is_none());
-
-        let refused = client
-            .auth()
-            .login(&mut rpc, "other_account", "unused", "test", None, &|| {})
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            refused,
-            AuthError::LoginFailed(message)
-                if message == chatter_i18n::tr(
-                    "Sign in to the same account to finish publishing your encryption keys."
-                )
-        ));
-        let same_account = client
-            .auth()
-            .login(&mut rpc, "owner", "unused", "test", None, &|| {})
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            same_account,
-            AuthError::LoginFailed(message) if message == "PIN is required for account recovery"
-        ));
-        assert!(client.auth().key_republish_pending().unwrap());
-
-        wipe_account_data(settings.database()).unwrap();
-        assert!(!client.auth().key_republish_pending().unwrap());
-    }
-
-    #[tokio::test]
-    async fn acknowledged_identity_republish_continues_after_cleanup_error() {
-        use crate::storage::repositories::settings_repo::keys;
-
-        let (client, dir) = build_test_client();
-        let settings = &client.signal().settings_repo;
-        settings
-            .set_string(
-                keys::CURRENT_USER_ID,
-                &crate::domain::UserId::new().to_string(),
-            )
-            .unwrap();
-        settings.set_string(keys::SVR_SALT_USERNAME, "owner").unwrap();
-        client.auth().begin_key_republish().unwrap();
-        settings
-            .database()
-            .connection()
-            .unwrap()
-            .execute_batch(&format!(
-                "CREATE TRIGGER fail_republish_cleanup BEFORE DELETE ON settings
-                 WHEN OLD.key = '{}' BEGIN SELECT RAISE(ABORT, 'test cleanup failure'); END",
-                keys::KEY_REPUBLISH_PENDING,
-            ))
-            .unwrap();
-
-        client.auth().finish_key_republish();
-        assert!(!client.auth().key_republish_pending().unwrap());
-        drop(client);
-
-        let client = ChatterClient::builder()
-            .server_url("https://localhost:1")
-            .data_dir(dir.path().to_str().unwrap())
-            .build()
-            .unwrap();
-        assert!(client.auth().key_republish_pending().unwrap());
     }
 
     /// Entering anon mode must fire the ntfy push shutdown and clear the slot

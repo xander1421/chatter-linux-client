@@ -123,9 +123,8 @@ impl ChatterClient {
     /// Check `pin` against the local fingerprint, or — on a device that has
     /// none, i.e. a linked one — against the SVR backup itself (Signal's model:
     /// the backup is the PIN's only ground truth). The server meters that
-    /// read; it does not report attempts left on a miss, so the user is told
-    /// the tries are limited rather than a count. On success the fingerprint
-    /// is stored, so the next check is local.
+    /// read. This settings flow reports a failed check with the generic
+    /// PIN verification message. On success the next check is local.
     async fn check_pin_before_backup_write(&self, pin: &str) -> Result<(), ClientError> {
         let result = self.verify_pin_with_backup(pin).await;
         if result == crate::services::link_device_service::PinVerification::Match {
@@ -269,7 +268,7 @@ fn finish_pin_backup_check(
     use crate::storage::repositories::settings_repo::keys;
     let fingerprint = match result {
         Ok(fp) => zeroize::Zeroizing::new(fp),
-        Err(SvrBackupError::WrongPin) => return V::Mismatch,
+        Err(SvrBackupError::WrongPin { .. }) => return V::Mismatch,
         Err(SvrBackupError::BackupNotFound) => return V::NotSetUpOnThisDevice,
         Err(SvrBackupError::RateLimited) => return V::Error(E::RateLimited),
         Err(SvrBackupError::BackupDestroyed) => return V::Error(E::BackupDestroyed),
@@ -311,7 +310,12 @@ mod pin_tests {
             Some(fp.to_vec())
         );
         assert_eq!(
-            finish_pin_backup_check(&settings, Err(SvrBackupError::WrongPin)),
+            finish_pin_backup_check(
+                &settings,
+                Err(SvrBackupError::WrongPin {
+                    remaining_attempts: None
+                })
+            ),
             V::Mismatch
         );
         assert_eq!(

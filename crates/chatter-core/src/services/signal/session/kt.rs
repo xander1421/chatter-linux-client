@@ -423,11 +423,13 @@ mod kt_pin_tests {
     }
 
     #[tokio::test]
-    async fn proven_mismatch_parks_the_candidate_and_emits_the_existing_prompt() {
+    async fn peer_key_change_still_emits_the_prompt_after_staged_identity_cleanup() {
+        use crate::storage::peer_verification::PeerVerification;
         let (_dir, service, owner) = fixture();
         let peer = crate::domain::UserId::new();
         let old = [5; 33];
         let new = [6; 33];
+        let observed = [7; 33];
         service
             .key_store
             .save_identity(&peer.to_string(), &old)
@@ -436,17 +438,49 @@ mod kt_pin_tests {
             .key_store
             .enqueue_kt(&peer.to_string(), &old, KtRoute::Normal)
             .unwrap();
-        let mut jobs = service
+        let verified_job = service
             .key_store
             .due_kt_jobs(KtRoute::Normal, i64::MAX)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            service
+                .actor
+                .complete_kt_job(owner.to_string(), verified_job, KtVerdict::Verified)
+                .await
+                .unwrap(),
+            KtUpdate::Ready,
+        );
+        service
+            .key_store
+            .enqueue_kt(&peer.to_string(), &observed, KtRoute::Normal)
             .unwrap();
+
+        {
+            let mut conn = service.settings_repo.database().connection().unwrap();
+            let tx = conn.transaction().unwrap();
+            crate::storage::unlink::clear_staged_device_crypto(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+        assert_eq!(
+            service
+                .key_store
+                .peer_verification(&peer.to_string(), &old)
+                .unwrap(),
+            PeerVerification::Verified,
+        );
+        let job = service
+            .key_store
+            .due_kt_jobs(KtRoute::Normal, i64::MAX)
+            .unwrap()
+            .remove(0);
         let events = EventBus::new();
         let mut rx = events.subscribe_domain();
         settle_peer_verification(
             &service,
             &events,
             &owner.to_string(),
-            jobs.remove(0),
+            job,
             KtVerdict::Mismatch(new.to_vec()),
         )
         .await

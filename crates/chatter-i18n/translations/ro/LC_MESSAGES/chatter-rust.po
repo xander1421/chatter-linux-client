@@ -3468,7 +3468,9 @@ msgstr "Înregistrări restaurate: {} (deja prezente sau păstrate local: {})"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
-msgstr "Această copie de rezervă a fost creată cu o versiune mai veche și nu poate fi restaurată."
+msgstr ""
+"Această copie de rezervă a fost creată cu o versiune mai veche și nu poate "
+"fi restaurată."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
@@ -3980,11 +3982,14 @@ msgstr "Se verifică cheia"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
-msgstr "Istoricul jurnalului de transparență a cheilor nu a putut fi verificat."
+msgstr ""
+"Istoricul jurnalului de transparență a cheilor nu a putut fi verificat."
 
 #: crates/chatter-core/src/client/calls/mod.rs
 msgid "Call media connects directly and can reveal your IP address."
-msgstr "Fluxul audio și video al apelului folosește o conexiune directă și poate dezvălui adresa ta IP."
+msgstr ""
+"Fluxul audio și video al apelului folosește o conexiune directă și poate "
+"dezvălui adresa ta IP."
 
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
@@ -4014,3 +4019,61 @@ msgstr "Modul punte nu a putut fi schimbat: {}"
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
 msgid "Could not change nearby public chat: {}"
 msgstr "Chatul public din apropiere nu a putut fi schimbat: {}"
+
+#: crates/chatter-core/src/client/auth.rs
+msgid "Current PIN is incorrect. {n} attempt remaining."
+msgid_plural "Current PIN is incorrect. {n} attempts remaining."
+msgstr[0] "PIN-ul actual este incorect. Mai ai {n} încercare."
+msgstr[1] "PIN-ul actual este incorect. Mai ai {n} încercări."
+msgstr[2] "PIN-ul actual este incorect. Mai ai {n} de încercări."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "Your key backup could not be read."
+msgstr "Copia de rezervă a cheilor nu a putut fi citită."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "This device could not process your key backup. Try again."
+msgstr ""
+"Acest dispozitiv nu a putut procesa copia de rezervă a cheilor. Încearcă din "
+"nou."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid ""
+"That PIN did not unlock your key backup. {n} attempt remaining. Check your "
+"current PIN before trying again."
+msgid_plural ""
+"That PIN did not unlock your key backup. {n} attempts remaining. Check your "
+"current PIN before trying again."
+msgstr[0] ""
+"Acest PIN nu a deblocat copia de rezervă a cheilor. Mai ai {n} încercare. "
+"Verifică PIN-ul actual înainte să încerci din nou."
+msgstr[1] ""
+"Acest PIN nu a deblocat copia de rezervă a cheilor. Mai ai {n} încercări. "
+"Verifică PIN-ul actual înainte să încerci din nou."
+msgstr[2] ""
+"Acest PIN nu a deblocat copia de rezervă a cheilor. Mai ai {n} de încercări. "
+"Verifică PIN-ul actual înainte să încerci din nou."
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr ""
+"Autentifică-te din nou pentru a finaliza publicarea cheilor tale de criptare."
+
+msgid "The server published an unexpected encryption key for your account."
+msgstr "Serverul a publicat o cheie de criptare neașteptată pentru contul tău."
+
+msgid ""
+"This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr ""
+"Acest dispozitiv a fost înlocuit. Datele locale au fost șterse. Autentifică-"
+"te din nou pentru a continua."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Copia ta de rezervă este învechită. Configurează un PIN nou."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Acest dispozitiv a fost înlocuit. Se șterg datele locale…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr ""
+"Cheile de criptare noi au fost publicate. Autentifică-te din nou cu noul PIN."

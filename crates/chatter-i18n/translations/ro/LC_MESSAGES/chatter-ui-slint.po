@@ -4804,13 +4804,8 @@ msgstr ""
 "Gestionează dispozitivele › Asociază dispozitiv nou, apoi scanează acest cod."
 
 #: ui/pages/link_device.slint:87
-msgid ""
-"This device still holds another account's keys. Linking a different account "
-"will fail. Sign in to that account instead, or clear this app's data first."
-msgstr ""
-"Acest dispozitiv încă păstrează cheile altui cont. Asocierea unui cont "
-"diferit va eșua. Conectează-te la acel cont sau șterge mai întâi datele "
-"aplicației."
+msgid "Linking a different account clears local data on this device."
+msgstr "Asocierea cu alt cont șterge datele locale de pe acest dispozitiv."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"

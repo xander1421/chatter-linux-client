@@ -3440,7 +3440,9 @@ msgstr "Восстановлено строк: {} (уже было или ост
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
-msgstr "Эта резервная копия создана в более старой версии и не может быть восстановлена."
+msgstr ""
+"Эта резервная копия создана в более старой версии и не может быть "
+"восстановлена."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
@@ -3948,7 +3950,8 @@ msgstr "Не удалось проверить историю журнала п�
 
 #: crates/chatter-core/src/client/calls/mod.rs
 msgid "Call media connects directly and can reveal your IP address."
-msgstr "Аудио и видео звонка передаются напрямую и могут раскрыть ваш IP-адрес."
+msgstr ""
+"Аудио и видео звонка передаются напрямую и могут раскрыть ваш IP-адрес."
 
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
@@ -3978,3 +3981,60 @@ msgstr "Не удалось изменить режим моста: {}"
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
 msgid "Could not change nearby public chat: {}"
 msgstr "Не удалось изменить настройку публичного чата поблизости: {}"
+
+#: crates/chatter-core/src/client/auth.rs
+msgid "Current PIN is incorrect. {n} attempt remaining."
+msgid_plural "Current PIN is incorrect. {n} attempts remaining."
+msgstr[0] "Текущий PIN неверный. Осталась {n} попытка."
+msgstr[1] "Текущий PIN неверный. Осталось {n} попытки."
+msgstr[2] "Текущий PIN неверный. Осталось {n} попыток."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "Your key backup could not be read."
+msgstr "Не удалось прочитать резервную копию ключей."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "This device could not process your key backup. Try again."
+msgstr ""
+"Не удалось обработать резервную копию ключей на этом устройстве. Попробуйте "
+"ещё раз."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid ""
+"That PIN did not unlock your key backup. {n} attempt remaining. Check your "
+"current PIN before trying again."
+msgid_plural ""
+"That PIN did not unlock your key backup. {n} attempts remaining. Check your "
+"current PIN before trying again."
+msgstr[0] ""
+"Этот ПИН-код не разблокировал резервную копию ключей. Осталась {n} попытка. "
+"Проверьте действующий ПИН-код перед повторной попыткой."
+msgstr[1] ""
+"Этот ПИН-код не разблокировал резервную копию ключей. Осталось {n} попытки. "
+"Проверьте действующий ПИН-код перед повторной попыткой."
+msgstr[2] ""
+"Этот ПИН-код не разблокировал резервную копию ключей. Осталось {n} попыток. "
+"Проверьте действующий ПИН-код перед повторной попыткой."
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr "Войдите снова, чтобы завершить публикацию ключей шифрования."
+
+msgid "The server published an unexpected encryption key for your account."
+msgstr ""
+"Сервер опубликовал неожиданный ключ шифрования для вашей учётной записи."
+
+msgid ""
+"This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr ""
+"Это устройство было заменено. Локальные данные удалены. Войдите снова, чтобы "
+"продолжить."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Резервная копия устарела. Настройте новый PIN-код."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Это устройство было заменено. Локальные данные удаляются…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr "Новые ключи шифрования опубликованы. Войдите снова с новым ПИН-кодом."

@@ -46,6 +46,8 @@ impl ChatterClient {
                 key_store,
                 self.services.database.clone(),
                 self.services.event_bus.clone(),
+                #[cfg(feature = "mesh")]
+                Some(self.services.mesh_service.clone()),
             ))
         })
     }
@@ -80,7 +82,7 @@ impl ChatterClient {
         let device_name = LinkDeviceService::current_device_name();
         Ok(self
             .link_device()
-            .run_new_device_flow(device_info, device_name))
+            .run_new_device_flow(device_info, device_name, self.auth_lifecycle_lock.clone()))
     }
 
     /// Cancel the in-flight new-device flow if any. UI calls this from the

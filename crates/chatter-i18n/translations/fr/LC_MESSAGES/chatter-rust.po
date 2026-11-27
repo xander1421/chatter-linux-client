@@ -3461,7 +3461,9 @@ msgstr "{} lignes restaurées ({} déjà présentes ou conservées localement)"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
-msgstr "Cette sauvegarde a été créée avec une version antérieure et ne peut pas être restaurée."
+msgstr ""
+"Cette sauvegarde a été créée avec une version antérieure et ne peut pas être "
+"restaurée."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
@@ -3977,11 +3979,14 @@ msgstr "Vérification de la clé"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
-msgstr "Impossible de vérifier l’historique du journal de transparence des clés."
+msgstr ""
+"Impossible de vérifier l’historique du journal de transparence des clés."
 
 #: crates/chatter-core/src/client/calls/mod.rs
 msgid "Call media connects directly and can reveal your IP address."
-msgstr "Le flux audio et vidéo de l’appel passe par une connexion directe qui peut révéler votre adresse IP."
+msgstr ""
+"Le flux audio et vidéo de l’appel passe par une connexion directe qui peut "
+"révéler votre adresse IP."
 
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
@@ -4011,3 +4016,57 @@ msgstr "Impossible de modifier le mode passerelle : {}"
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
 msgid "Could not change nearby public chat: {}"
 msgstr "Impossible de modifier la discussion publique à proximité : {}"
+
+#: crates/chatter-core/src/client/auth.rs
+msgid "Current PIN is incorrect. {n} attempt remaining."
+msgid_plural "Current PIN is incorrect. {n} attempts remaining."
+msgstr[0] "Le PIN actuel est incorrect. Il te reste {n} tentative."
+msgstr[1] "Le PIN actuel est incorrect. Il te reste {n} tentatives."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "Your key backup could not be read."
+msgstr "Impossible de lire ta sauvegarde de clés."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "This device could not process your key backup. Try again."
+msgstr "Cet appareil n’a pas pu traiter ta sauvegarde de clés. Réessaie."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid ""
+"That PIN did not unlock your key backup. {n} attempt remaining. Check your "
+"current PIN before trying again."
+msgid_plural ""
+"That PIN did not unlock your key backup. {n} attempts remaining. Check your "
+"current PIN before trying again."
+msgstr[0] ""
+"Ce code PIN n’a pas déverrouillé ta sauvegarde de clés. Il reste {n} "
+"tentative. Vérifie ton code PIN actuel avant de réessayer."
+msgstr[1] ""
+"Ce code PIN n’a pas déverrouillé ta sauvegarde de clés. Il reste {n} "
+"tentatives. Vérifie ton code PIN actuel avant de réessayer."
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr ""
+"Reconnectez-vous pour terminer la publication de vos clés de chiffrement."
+
+msgid "The server published an unexpected encryption key for your account."
+msgstr ""
+"Le serveur a publié une clé de chiffrement inattendue pour votre compte."
+
+msgid ""
+"This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr ""
+"Cet appareil a été remplacé. Les données locales ont été effacées. "
+"Reconnectez-vous pour continuer."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Votre sauvegarde est obsolète. Configurez un nouveau code PIN."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Cet appareil a été remplacé. Effacement des données locales…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr ""
+"Les nouvelles clés de chiffrement ont été publiées. Reconnectez-vous avec "
+"votre nouveau code PIN."

@@ -30,12 +30,9 @@ use crate::error::StorageError;
 /// resend log of messages encrypted under them, and the queued sends that would
 /// need those keys (Signal's `jobs`). Remote identities stay, as Signal keeps
 /// its `identityKeys` table (the safety numbers the user saw).
-const DEVICE_CONFIGURATION_TABLES: &[&str] = &[
+const LOCAL_IDENTITY_TABLES: &[&str] = &[
     "dm_outbox",
-    "peer_kt_jobs",
-    "peer_kt_archived_receives",
     "dm_bootstrap_replies",
-    "peer_key_transparency",
     "pending_dm_messages",
     "pending_channel_messages",
     "pending_anon_group_messages",
@@ -63,7 +60,6 @@ const DEVICE_CONFIGURATION_SETTINGS: &[&str] = &[
     keys::DEVICE_WAKE_TOPIC,
     keys::PIN_FINGERPRINT,
     keys::IDENTITY_KEY_PUBLIC,
-    keys::KEY_REPUBLISH_PENDING,
     keys::PROFILE_KEY_NEXT,
     keys::PROFILE_KEY_ROTATION_PENDING,
     keys::SENDER_CERTIFICATE,
@@ -77,7 +73,8 @@ const DEVICE_CONFIGURATION_SETTINGS: &[&str] = &[
 pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(), StorageError> {
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
-    for table in DEVICE_CONFIGURATION_TABLES {
+    clear_local_identity_tables(&tx)?;
+    for table in ["peer_kt_jobs", "peer_kt_archived_receives", "peer_key_transparency"] {
         tx.execute(&format!("DELETE FROM {table}"), [])?;
     }
     for key in DEVICE_CONFIGURATION_SETTINGS {
@@ -102,29 +99,54 @@ pub fn forget_unlinked_device(db: &Database, former_owner: UserId) -> Result<(),
     Ok(())
 }
 
+fn clear_local_identity_tables(tx: &Transaction<'_>) -> Result<(), StorageError> {
+    for table in LOCAL_IDENTITY_TABLES {
+        tx.execute(&format!("DELETE FROM {table}"), [])?;
+    }
+    Ok(())
+}
+
+/// Discard protocol state bound to an unpublished identity while keeping
+/// the provisional sign-in, peer identity pins and KT state, and message history.
+pub(crate) fn clear_staged_device_crypto(tx: &Transaction<'_>) -> Result<(), StorageError> {
+    clear_local_identity_tables(tx)?;
+    for key in [
+        keys::PROFILE_KEY_NEXT,
+        keys::PROFILE_KEY_ROTATION_PENDING,
+        keys::SENDER_CERTIFICATE,
+        keys::SENDER_CERTIFICATE_REFRESH_AFTER,
+        keys::SENDER_CERTIFICATE_SERVER_KEY_ID,
+    ] {
+        tx.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+    }
+    Ok(())
+}
+
 /// Signal's `removeAllData` for this client's database, in one transaction:
 /// every row of every table except the migration ledger, the mesh tables and
 /// the `mesh.*` settings.
 ///
-/// Mesh is left alone on purpose: it is a separate device identity with its
-/// own threat model and its own wipe (`services::mesh::control` `panic_wipe`),
-/// and its link to the former account was removed when the device was
-/// unlinked. FTS shadow tables are skipped; their virtual table is emptied.
+/// Mesh is a separate device identity. Account switching uses
+/// `wipe_all_rows` to erase its data too. FTS shadow tables are skipped.
 ///
 /// A trigger can write a row into a table already emptied, so the pass repeats
 /// until every table is empty; one that never empties fails the wipe rather
 /// than reporting a partial one as done.
 pub fn wipe_account_data(db: &Database) -> Result<(), StorageError> {
-    wipe_rows(db, false)
+    wipe_rows(db, false, |_| Ok(()))
 }
 
 /// Every row of every table except the migration ledger, mesh included: the
 /// row step of the duress wipe (`storage::local_wipe`).
 pub(crate) fn wipe_all_rows(db: &Database) -> Result<(), StorageError> {
-    wipe_rows(db, true)
+    wipe_rows(db, true, |_| Ok(()))
 }
 
-fn wipe_rows(db: &Database, include_mesh: bool) -> Result<(), StorageError> {
+pub(crate) fn wipe_rows(
+    db: &Database,
+    include_mesh: bool,
+    finish: impl FnOnce(&Transaction<'_>) -> Result<(), StorageError>,
+) -> Result<(), StorageError> {
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
     tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
@@ -158,6 +180,7 @@ fn wipe_rows(db: &Database, include_mesh: bool) -> Result<(), StorageError> {
         }
         tx.execute(settings_filter, [])?;
         if !any_rows(&tx, &tables)? {
+            finish(&tx)?;
             tx.commit()?;
             return Ok(());
         }

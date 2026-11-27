@@ -1,6 +1,11 @@
 use super::*;
 
 impl MeshTimeline {
+    pub(in crate::services::mesh) fn clear_open_conversations(&self) {
+        self.nearby_channels.lock().clear();
+        self.open.lock().clear();
+    }
+
     /// Panic wipe: destroy every mesh message and forget every conversation.
     ///
     /// Deletes by conversation *type*, not by walking the open directory.
@@ -14,8 +19,7 @@ impl MeshTimeline {
     /// the rest on disk, which is the worst outcome for the one operation whose
     /// entire purpose is leaving nothing behind.
     pub fn wipe(&self) -> Result<(), StorageError> {
-        self.nearby_channels.lock().clear();
-        self.open.lock().clear();
+        self.clear_open_conversations();
 
         // Partial chunked transfers, before anything else. They have no
         // attachment row, so nothing below would ever reach them — and unlike a

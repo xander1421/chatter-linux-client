@@ -44,6 +44,10 @@ pub enum NetworkError {
     #[error("permission denied")]
     PermissionDenied,
 
+    /// The SVR PIN check failed. Older servers omit its remaining budget.
+    #[error("wrong backup PIN")]
+    SvrWrongPin { remaining_attempts: Option<u32> },
+
     /// Requested resource not found.
     #[error("resource not found: {0}")]
     NotFound(String),
@@ -226,6 +230,7 @@ impl NetworkError {
             self,
             NetworkError::InvalidRequest(_)
                 | NetworkError::PermissionDenied
+                | NetworkError::SvrWrongPin { .. }
                 | NetworkError::Unauthenticated
                 | NetworkError::NotFound(_)
                 | NetworkError::RateLimited
@@ -255,7 +260,9 @@ impl NetworkError {
     pub fn is_auth_error(&self) -> bool {
         matches!(
             self,
-            NetworkError::Unauthenticated | NetworkError::PermissionDenied
+            NetworkError::Unauthenticated
+                | NetworkError::PermissionDenied
+                | NetworkError::SvrWrongPin { .. }
         )
     }
 
@@ -264,7 +271,9 @@ impl NetworkError {
     pub fn is_access_refused(&self) -> bool {
         matches!(
             self,
-            NetworkError::PermissionDenied | NetworkError::NotFound(_)
+            NetworkError::PermissionDenied
+                | NetworkError::SvrWrongPin { .. }
+                | NetworkError::NotFound(_)
         )
     }
 

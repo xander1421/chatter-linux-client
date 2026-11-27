@@ -1,16 +1,15 @@
-use std::sync::atomic::Ordering;
-
 use super::*;
 
 impl AuthService {
     /// Create a new AuthService with all dependencies.
-    pub fn new(
+    pub(crate) fn new(
         grpc_pool: Arc<GrpcClientPool>,
         identity_manager: Arc<IdentityKeyManager>,
         prekey_manager: Arc<PreKeyManager>,
         user_repo: Arc<UserRepository>,
         settings_repo: Arc<SettingsRepository>,
         auth_interceptor: AuthInterceptor,
+        #[cfg(feature = "mesh")] mesh: Arc<crate::services::mesh::SharedMesh>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -19,7 +18,8 @@ impl AuthService {
             user_repo,
             settings_repo,
             auth_interceptor,
-            republish_completed: AtomicBool::new(false),
+            #[cfg(feature = "mesh")]
+            mesh,
             recovery_login_grant: parking_lot::Mutex::new(None),
         }
     }
@@ -101,58 +101,11 @@ impl AuthService {
     ///
     /// Returns true if a session was successfully restored.
     pub fn restore_session(&self) -> bool {
-        // A saved device token cannot provide the fresh password proof needed
-        // to retry an interrupted identity republish.
-        match self.key_republish_pending() {
-            Ok(false) => return self.restore_password_session(),
-            Ok(true) => tracing::info!("Sign-in required to finish the pending identity republish"),
-            Err(error) => tracing::warn!(%error, "Could not read pending identity republish"),
+        let restored = self.restore_password_session();
+        if !restored {
+            self.auth_interceptor.clear();
         }
-        self.auth_interceptor.clear();
-        false
-    }
-
-    pub(crate) fn key_republish_pending(&self) -> Result<bool, StorageError> {
-        if self.republish_completed.load(Ordering::Acquire) {
-            return Ok(false);
-        }
-        Ok(self.pending_key_republish()?.is_some())
-    }
-
-    pub(super) fn pending_key_republish(&self) -> Result<Option<PendingKeyRepublish>, StorageError> {
-        self.settings_repo.get(keys::KEY_REPUBLISH_PENDING)
-    }
-
-    pub(crate) fn begin_key_republish(&self) -> Result<(), StorageError> {
-        let owner = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)?
-            .and_then(|id| id.parse().ok())
-            .ok_or_else(|| StorageError::InvalidData("missing identity republish owner".into()))?;
-        let nickname = self
-            .settings_repo
-            .get_string(keys::SVR_SALT_USERNAME)?
-            .filter(|nickname| !nickname.trim().is_empty())
-            .ok_or_else(|| StorageError::InvalidData("missing identity republish login".into()))?;
-        self.republish_completed.store(false, Ordering::Release);
-        self.settings_repo.set(
-            keys::KEY_REPUBLISH_PENDING,
-            &PendingKeyRepublish {
-                owner,
-                login_identifier: login_identifier(&nickname),
-            },
-        )
-    }
-
-    pub(crate) fn finish_key_republish(&self) {
-        let cleanup = self.settings_repo.delete(keys::KEY_REPUBLISH_PENDING);
-        // The bundle and KT authorization already landed. Keep the live
-        // session usable even if a restart has to retry the publication.
-        self.republish_completed
-            .store(cleanup.is_err(), Ordering::Release);
-        if let Err(error) = cleanup {
-            tracing::warn!(%error, "Could not clear the completed identity republish");
-        }
+        restored
     }
 
     /// Restore a password-based (Basic auth) session.

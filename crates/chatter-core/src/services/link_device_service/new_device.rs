@@ -110,15 +110,22 @@ impl LinkDeviceService {
             .parse()
             .map_err(|e| LinkDeviceError::Invalid(format!("invalid aci: {e}")))?;
 
-        // Linking imports the primary's history (Link'n'Sync), Signal's
-        // "Transfer" relink, which deletes all local data first
-        // (DialogRelink.dom.tsx -> DeleteDataAndRelinkConfirmationDialog ->
-        // removeAllData). Only an install the server unlinked has an old
-        // history here to delete; it goes before any key of the new link is
-        // generated, since generating them already writes the key store.
-        if crate::services::auth_service::unlinked_account(&self.settings_repo).is_some() {
-            crate::services::auth_service::wipe_unlinked_install(&self.database)?;
+        if self
+            .settings_repo
+            .get_bytes(keys::DEVICE_AUTH_TOKEN)?
+            .is_some()
+        {
+            return Err(LinkDeviceError::Invalid(
+                "sign out before linking a device".into(),
+            ));
         }
+        use crate::services::auth_service::{
+            cache_saved_messages_channel, restore_staged_attachments, unlinked_account,
+            wipe_switched_account, wipe_unlinked_install,
+        };
+        let local_owner = crate::storage::unlink::local_account_owner(&self.database)?;
+        let switching = local_owner != Some(user_id);
+        let replacing_history = unlinked_account(&self.settings_repo).is_some();
 
         // Reconstruct identity keypair from primary's private key.
         let priv_bytes = Zeroizing::new(provision.aci_identity_key_private.clone());
@@ -130,81 +137,42 @@ impl LinkDeviceService {
         let identity_key = IdentityKey::new(public);
         let identity_pair = IdentityKeyPair::new(identity_key, private);
 
-        // Generate fresh registration ID and keys synchronously, keeping RNG
-        // state out of the async state machine.
-        let prekey_manager = PreKeyManager::new(self.key_store.clone());
-        #[allow(clippy::type_complexity)]
-        fn gen_keys(
-            prekey_manager: &PreKeyManager,
-            identity_pair: &IdentityKeyPair,
-        ) -> Result<
-            (
-                u32,
-                libsignal_protocol::SignedPreKeyRecord,
-                libsignal_protocol::KyberPreKeyRecord,
-                Vec<libsignal_protocol::PreKeyRecord>,
-                Vec<libsignal_protocol::KyberPreKeyRecord>,
-            ),
-            CryptoError,
-        > {
-            let mut rng = rand::rngs::OsRng.unwrap_err();
-            let reg_id = (rand::Rng::random::<u32>(&mut rng) % 0x3FFF) + 1;
-            let signed = prekey_manager.generate_signed_prekey(&mut rng, 1, identity_pair)?;
-            // The medium-term LAST-RESORT PQSPK (id 1) — reused across
-            // handshakes until rotated, so it is a floor, not the primary PQ
-            // key material.
-            let kyber = prekey_manager.generate_kyber_prekey(1, identity_pair)?;
-            let one_time = prekey_manager.generate_prekeys(&mut rng, 1, 100)?;
-
-            // The one-time Kyber prekey pool (PQOPK), same batch size as the
-            // classical OPKs above. Per PQXDH §3.2 the server pops one PQOPK for
-            // every classical OPK it hands out, so the two pools MUST be seeded
-            // in lockstep. A linked device is a full recipient of every message
-            // the account receives; without its own pool the server has nothing
-            // to pop for it and every PQXDH handshake to this device falls back
-            // to the single last-resort PQSPK above — spec-permitted, but one
-            // reused PQ secret across every session (see the warning at
-            // crypto/signal/identity.rs:38-42).
-            //
-            // This mirrors `services/auth_service.rs::register`, which seeds the
-            // same pool for the device created by registration. IDs start at 2:
-            // the last-resort PQSPK holds id 1, and `generate_kyber_prekey`
-            // persists each record, so `get_next_kyber_prekey_id` advances as we
-            // go.
-            let mut kyber_one_time = Vec::with_capacity(100);
-            for _ in 0..100 {
-                let id = prekey_manager.get_next_kyber_prekey_id()?;
-                kyber_one_time.push(prekey_manager.generate_kyber_prekey(id, identity_pair)?);
-            }
-            Ok((reg_id, signed, kyber, one_time, kyber_one_time))
-        }
-        let (registration_id, signed, kyber, one_time, kyber_one_time) =
-            gen_keys(&prekey_manager, &identity_pair)?;
-
-        // Identity-overwrite guard. If a local identity already exists,
-        // refuse to import a *different* one — overwriting would silently
-        // break every established session on this device. Same identity is
-        // idempotent (lets a user retry a half-completed link).
         let identity_pair_serialized = identity_pair.serialize();
-        if let Some((_existing_reg, existing_pair)) =
-            IdentityKeyManager::new(self.key_store.clone()).get_identity()?
+        if !switching
+            && !replacing_history
+            && let Some((_, existing_pair)) =
+                IdentityKeyManager::new(self.key_store.clone()).get_identity()?
+            && existing_pair.serialize().as_ref() != identity_pair_serialized.as_ref()
         {
-            let existing_serialized = existing_pair.serialize();
-            if existing_serialized.as_ref() != identity_pair_serialized.as_ref() {
-                return Err(LinkDeviceError::Invalid(
-                    "local identity already exists and differs from incoming \
-                     ProvisionMessage — refuse to overwrite (sign out + clear \
-                     local data first if you really mean to re-link)"
-                        .into(),
-                ));
-            }
+            return Err(LinkDeviceError::Invalid(
+                "the provisioning identity differs from the local account identity".into(),
+            ));
         }
 
-        // NOTE: identity import is *deferred* until the server confirms the
-        // device-linking RPC succeeded. Any failure between here and
-        // `complete_device_linking` returning Ok leaves local key_store +
-        // settings untouched, so a retry can proceed cleanly. Prekey
-        // generation above is in-memory only.
+        // Stage fresh prekeys in memory. Until provisioning is authenticated,
+        // neither another account's data nor its prekeys may be overwritten.
+        let (registration_id, signed, kyber, one_time, kyber_one_time) = {
+            use libsignal_protocol::{
+                KeyPair, KyberPreKeyId, KyberPreKeyRecord, PreKeyId, PreKeyRecord, kem,
+            };
+            let mut rng = rand::rngs::OsRng.unwrap_err();
+            let reg_id = (rand::Rng::random::<u32>(&mut rng) % 0x3fff) + 1;
+            let signed = PreKeyManager::new_signed_prekey(&mut rng, 1, &identity_pair)?;
+            let kyber_key = |id| {
+                KyberPreKeyRecord::generate(
+                    kem::KeyType::Kyber1024,
+                    KyberPreKeyId::from(id),
+                    identity_pair.private_key(),
+                )
+                .map_err(|error| CryptoError::Protocol(error.to_string()))
+            };
+            let kyber = kyber_key(1u32)?;
+            let one_time = (1..=100u32)
+                .map(|id| PreKeyRecord::new(PreKeyId::from(id), &KeyPair::generate(&mut rng)))
+                .collect::<Vec<_>>();
+            let kyber_one_time = (2..=101u32).map(kyber_key).collect::<Result<Vec<_>, _>>()?;
+            (reg_id, signed, kyber, one_time, kyber_one_time)
+        };
 
         // Profile key + auth token (server-side token is bootstrapped via
         // device_credentials::generate; the server also expects it in
@@ -384,6 +352,21 @@ impl LinkDeviceService {
 
         let device_id = response.device_id;
 
+        // Prove the provisioned owner with the freshly issued credential
+        // before changing local data. The link response may omit the profile.
+        let linked_credentials = DeviceCredentials::from_stored(
+            device_id,
+            *device_auth_token,
+            *credentials.unidentified_access_key(),
+        );
+        let linked_auth = AuthInterceptor::new();
+        linked_auth.set_basic(
+            linked_credentials.auth_username(&user_id.to_string()),
+            linked_credentials.auth_token_base64(),
+        );
+        let mut linked_client = AuthClient::new(self.grpc_pool.channel(), linked_auth);
+        let linked_identity = linked_client.get_my_identity().await;
+
         // The server sends our display name encrypted with the provisioned
         // profile key. Decrypt before the local commit so its write is covered
         // by the same server cleanup on failure.
@@ -403,12 +386,51 @@ impl LinkDeviceService {
                     .filter(|n| !n.is_empty())
             });
 
-        // Server confirmed — NOW commit identity + auth state. Earlier
-        // failure modes (network, validation, server reject) leave the
-        // local key store unmodified so a retry starts from clean state.
-        // The overwrite guard above already refused a different identity, so
-        // an existing row here is this same keypair (a re-link after revoke).
-        let local_commit = (|| -> Result<(), LinkDeviceError> {
+        let local_commit = async {
+            let linked_identity = linked_identity?;
+            if linked_identity.user_id.parse().ok() != Some(user_id)
+                || linked_identity.device_id != device_id
+            {
+                return Err(LinkDeviceError::Invalid(
+                    "link returned a different account or device".into(),
+                ));
+            }
+            if switching {
+                self.grpc_pool.auth_clone().clear();
+                let wipe = || wipe_switched_account(&self.database, |_| Ok(()));
+                #[cfg(feature = "mesh")]
+                if let Some(mesh) = &self.mesh {
+                    mesh.wipe_for_account_switch(wipe).await?;
+                } else {
+                    wipe()?;
+                }
+                #[cfg(not(feature = "mesh"))]
+                wipe()?;
+            } else if replacing_history {
+                wipe_unlinked_install(&self.database)?;
+            } else {
+                restore_staged_attachments(&self.database)?;
+            }
+
+            let protocol = |error: libsignal_protocol::SignalProtocolError| {
+                CryptoError::Protocol(error.to_string())
+            };
+            self.key_store
+                .save_signed_prekey(signed_id, &signed.serialize().map_err(protocol)?)?;
+            self.key_store
+                .save_kyber_prekey(kyber_id, &kyber.serialize().map_err(protocol)?)?;
+            for key in one_time {
+                self.key_store.save_prekey(
+                    key.id().map_err(protocol)?.into(),
+                    &key.serialize().map_err(protocol)?,
+                )?;
+            }
+            for key in kyber_one_time {
+                self.key_store.save_kyber_prekey(
+                    key.id().map_err(protocol)?.into(),
+                    &key.serialize().map_err(protocol)?,
+                )?;
+            }
             if self.key_store.has_local_identity()? {
                 self.key_store
                     .update_local_registration_id(registration_id)?;
@@ -417,6 +439,7 @@ impl LinkDeviceService {
                     .set_local_identity(registration_id, &identity_pair_serialized)?;
             }
 
+            cache_saved_messages_channel(&self.settings_repo, user_id)?;
             self.settings_repo
                 .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
             self.settings_repo
@@ -435,30 +458,20 @@ impl LinkDeviceService {
             if let Some(ref name) = display_name {
                 self.settings_repo.set_string(keys::DISPLAY_NAME, name)?;
             }
-            crate::services::signal::kt_anchor::authorize_own_identity(
+            crate::services::signal::kt_anchor::authorize_linked_owner_identity(
                 &self.settings_repo,
                 &user_id.to_string(),
                 &identity_pub_full,
             )?;
-            Ok(())
-        })();
+            Ok::<(), LinkDeviceError>(())
+        }
+        .await;
 
         if let Err(original_error) = local_commit {
             // Logout of the newly authenticated device retires its server row,
             // prekeys and queued messages. Use a private interceptor so a
             // failed local commit never authenticates the app as this device.
-            let cleanup_auth = AuthInterceptor::new();
-            let linked_credentials = DeviceCredentials::from_stored(
-                device_id,
-                *credentials.auth_token().as_bytes(),
-                *credentials.unidentified_access_key(),
-            );
-            cleanup_auth.set_basic(
-                linked_credentials.auth_username(&user_id.to_string()),
-                linked_credentials.auth_token_base64(),
-            );
-            let mut cleanup_client = AuthClient::new(self.grpc_pool.channel(), cleanup_auth);
-            match cleanup_client.logout(device_id, None).await {
+            match linked_client.logout(device_id, None).await {
                 Ok(()) => {
                     tracing::info!(device_id, "Retired linked device after local commit failed")
                 }
@@ -577,6 +590,7 @@ pub(super) async fn run_flow(
     device_info: String,
     device_name: String,
     tx: mpsc::UnboundedSender<LinkProgress>,
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
 ) {
     // 1. Start session + render QR.
     let session = match svc.start_as_new_device(&device_info, &device_name).await {
@@ -627,7 +641,8 @@ pub(super) async fn run_flow(
     *svc.active_uuid.lock() = None;
     let _ = tx.send(LinkProgress::Approved);
 
-    // 3. Complete linking.
+    // Serialize the server completion and local account change with sign-in.
+    let _lifecycle = lifecycle.lock().await;
     match svc.complete_linking(session, provision).await {
         Ok(c) => {
             let _ = tx.send(LinkProgress::Linked(c));

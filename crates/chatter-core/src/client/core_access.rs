@@ -26,7 +26,14 @@ impl ChatterClient {
     crate::service_accessor!(ai, AIService, ai_service);
     #[cfg(feature = "jarvis")]
     crate::service_accessor!(jarvis, JarvisService, jarvis_service);
-    #[cfg(feature = "mesh")]
-    crate::service_accessor!(mesh, crate::services::mesh::MeshService, mesh_service);
+    #[cfg(all(feature = "mesh", feature = "testing"))]
+    pub fn mesh(&self) -> Arc<crate::services::mesh::MeshService> {
+        self.services.mesh_service.get()
+    }
+
+    #[cfg(all(feature = "mesh", not(feature = "testing")))]
+    pub(crate) fn mesh(&self) -> Arc<crate::services::mesh::MeshService> {
+        self.services.mesh_service.get()
+    }
 
 }

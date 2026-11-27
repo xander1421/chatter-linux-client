@@ -3496,7 +3496,9 @@ msgstr "{} Einträge wiederhergestellt ({} schon vorhanden oder lokal behalten)"
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:259
 msgid "This backup was made by an older version and can't be restored"
-msgstr "Diese Sicherung wurde mit einer älteren Version erstellt und kann nicht wiederhergestellt werden."
+msgstr ""
+"Diese Sicherung wurde mit einer älteren Version erstellt und kann nicht "
+"wiederhergestellt werden."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/message_backup.rs:262
 msgid ""
@@ -4010,11 +4012,14 @@ msgstr "Schlüssel wird überprüft"
 
 #: crates/chatter-ui/src/bin_ui/features/auth/inbox/domain_handler/mod.rs
 msgid "Could not verify the Key Transparency log history."
-msgstr "Der Verlauf des Schlüsseltransparenzprotokolls konnte nicht überprüft werden."
+msgstr ""
+"Der Verlauf des Schlüsseltransparenzprotokolls konnte nicht überprüft werden."
 
 #: crates/chatter-core/src/client/calls/mod.rs
 msgid "Call media connects directly and can reveal your IP address."
-msgstr "Die Medienverbindung des Anrufs ist direkt und kann deine IP-Adresse offenlegen."
+msgstr ""
+"Die Medienverbindung des Anrufs ist direkt und kann deine IP-Adresse "
+"offenlegen."
 
 #: crates/chatter-ui/src/bin_ui/features/sidebar/anon_mode.rs
 msgid "Shield unavailable"
@@ -4028,7 +4033,8 @@ msgid "Allow"
 msgstr "Erlauben"
 
 msgid "Allow incoming calls to show on the lock screen."
-msgstr "Erlaube, dass eingehende Anrufe auf dem Sperrbildschirm angezeigt werden."
+msgstr ""
+"Erlaube, dass eingehende Anrufe auf dem Sperrbildschirm angezeigt werden."
 
 msgid "Not now"
 msgstr "Jetzt nicht"
@@ -4044,3 +4050,61 @@ msgstr "Bridge-Modus konnte nicht geändert werden: {}"
 #: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
 msgid "Could not change nearby public chat: {}"
 msgstr "Öffentlicher Chat in der Nähe konnte nicht geändert werden: {}"
+
+#: crates/chatter-core/src/client/auth.rs
+msgid "Current PIN is incorrect. {n} attempt remaining."
+msgid_plural "Current PIN is incorrect. {n} attempts remaining."
+msgstr[0] "Aktuelle PIN ist falsch. Noch {n} Versuch."
+msgstr[1] "Aktuelle PIN ist falsch. Noch {n} Versuche."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "Your key backup could not be read."
+msgstr "Deine Schlüsselsicherung konnte nicht gelesen werden."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid "This device could not process your key backup. Try again."
+msgstr ""
+"Auf diesem Gerät konnte deine Schlüsselsicherung nicht verarbeitet werden. "
+"Versuche es erneut."
+
+#: crates/chatter-core/src/services/key_recovery.rs
+msgid ""
+"That PIN did not unlock your key backup. {n} attempt remaining. Check your "
+"current PIN before trying again."
+msgid_plural ""
+"That PIN did not unlock your key backup. {n} attempts remaining. Check your "
+"current PIN before trying again."
+msgstr[0] ""
+"Diese PIN hat deine Schlüsselsicherung nicht entsperrt. Noch {n} Versuch. "
+"Prüfe deine aktuelle PIN, bevor du es erneut versuchst."
+msgstr[1] ""
+"Diese PIN hat deine Schlüsselsicherung nicht entsperrt. Noch {n} Versuche. "
+"Prüfe deine aktuelle PIN, bevor du es erneut versuchst."
+
+#: crates/chatter-core/src/client/startup.rs
+msgid "Sign in again to finish publishing your encryption keys."
+msgstr ""
+"Melde dich erneut an, um die Veröffentlichung deiner "
+"Verschlüsselungsschlüssel abzuschließen."
+
+msgid "The server published an unexpected encryption key for your account."
+msgstr ""
+"Der Server hat einen unerwarteten Verschlüsselungsschlüssel für dein Konto "
+"veröffentlicht."
+
+msgid ""
+"This device was replaced. Local data was cleared. Sign in again to continue."
+msgstr ""
+"Dieses Gerät wurde ersetzt. Die lokalen Daten wurden gelöscht. Melde dich "
+"erneut an, um fortzufahren."
+
+msgid "Your backup is out of date; set up a new PIN"
+msgstr "Deine Sicherung ist veraltet. Richte eine neue PIN ein."
+
+msgid "This device was replaced. Clearing local data…"
+msgstr "Dieses Gerät wurde ersetzt. Lokale Daten werden gelöscht…"
+
+msgid "New encryption keys published. Sign in again with your new PIN."
+msgstr ""
+"Die neuen Verschlüsselungsschlüssel wurden veröffentlicht. Melde dich erneut "
+"mit deiner neuen PIN an."

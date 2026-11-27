@@ -147,8 +147,14 @@ use std::sync::Arc;
 
 use chatter_proto::chat_v1::{KtMonitorRequest, KtMonitorResponse, KtSearchRequest};
 
-use super::{CHECKPOINT_REFRESH, DISTINGUISHED, DISTINGUISHED_HEAD, HEAD, KtError, KtTransport, Pin, PinScope};
-use super::{check_own, load_head, search_contact};
+use super::{
+    CHECKPOINT_REFRESH, DISTINGUISHED, DISTINGUISHED_HEAD, HEAD, KtError, KtTransport, Pin,
+    PinScope,
+};
+use super::{
+    OwnIdentityAtSignIn, OwnIdentityCheck, check_own, load_head, search_contact,
+    search_own_at_sign_in,
+};
 use crate::error::NetworkError;
 use crate::storage::{Database, repositories::SettingsRepository};
 
@@ -688,7 +694,242 @@ async fn contact_researches_an_advanced_version_even_if_the_key_is_restored() {
 }
 
 #[tokio::test]
-async fn authorized_owner_reset_establishes_a_new_baseline_and_detects_the_next_write() {
+async fn password_sign_in_reconciles_a_reset_interrupted_before_or_after_publish() {
+    let (verifier, vectors, now) = fixtures();
+    let (dir, settings) = database();
+    let prior = search_proof(&vectors, "owner identity");
+    let old_key = libsignal_protocol::IdentityKey::decode(&bytes(
+        vector(&vectors, "owner identity").value.as_deref().unwrap(),
+    ))
+    .unwrap();
+    let replacement = search_proof(&vectors, "owner replacement");
+    let mut repeated = replacement.clone();
+    repeated.tree_head.as_mut().unwrap().last.clear();
+    let mut client = Script {
+        searches: [
+            (
+                DISTINGUISHED,
+                None,
+                None,
+                Some(search_proof(&vectors, "owner checkpoint")),
+            ),
+            (PEER, None, Some(1), Some(prior.clone())),
+            (PEER, Some(2), Some(1), Some(prior)),
+            (PEER, Some(2), Some(1), Some(replacement)),
+            (PEER, Some(3), Some(1), Some(repeated)),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let new_key = bytes(
+        vector(&vectors, "owner replacement")
+            .value
+            .as_deref()
+            .unwrap(),
+    );
+
+    // The reset pins the old server value before storing the new local key.
+    assert_eq!(
+        search_own_at_sign_in(
+            &mut client,
+            &settings,
+            PEER,
+            OwnIdentityCheck::BeforeReset,
+            &verifier,
+            now
+        )
+        .await
+        .unwrap(),
+        OwnIdentityAtSignIn::Current
+    );
+    assert_eq!(
+        search_own_at_sign_in(
+            &mut client,
+            &settings,
+            PEER,
+            OwnIdentityCheck::Local(&new_key),
+            &verifier,
+            now
+        )
+        .await
+        .unwrap(),
+        OwnIdentityAtSignIn::Republish(old_key)
+    );
+
+    // The server commits, but the process dies before adopting the new proof.
+    // The reopened store sees the signed replacement and skips the republish.
+    drop(settings);
+    let db = Database::open(&dir.path().join("kt.db"), "kt tests").unwrap();
+    let settings = SettingsRepository::new(Arc::new(db));
+    for _ in 0..2 {
+        assert_eq!(
+            search_own_at_sign_in(
+                &mut client,
+                &settings,
+                PEER,
+                OwnIdentityCheck::Local(&new_key),
+                &verifier,
+                now
+            )
+            .await
+            .unwrap(),
+            OwnIdentityAtSignIn::Current
+        );
+        assert!(!super::own_mismatch(&settings, PEER).unwrap());
+    }
+    assert!(client.searches.is_empty());
+}
+
+#[tokio::test]
+async fn pin_restore_checks_the_signed_key_and_detects_a_replaced_install() {
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let mut client = Script {
+        searches: [
+            (
+                DISTINGUISHED,
+                None,
+                None,
+                Some(search_proof(&vectors, "owner checkpoint")),
+            ),
+            (
+                PEER,
+                None,
+                Some(1),
+                Some(search_proof(&vectors, "owner identity")),
+            ),
+            (
+                PEER,
+                Some(2),
+                Some(1),
+                Some(search_proof(&vectors, "owner replacement")),
+            ),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let verified = search_own_at_sign_in(
+        &mut client,
+        &settings,
+        PEER,
+        OwnIdentityCheck::BeforeRestore,
+        &verifier,
+        now,
+    )
+    .await
+    .unwrap();
+    let OwnIdentityAtSignIn::RestoreKey(key) = verified else {
+        panic!("restore must receive the signed identity key");
+    };
+    assert_eq!(
+        key.serialize().as_ref(),
+        bytes(vector(&vectors, "owner identity").value.as_deref().unwrap())
+    );
+    assert_eq!(
+        search_own_at_sign_in(
+            &mut client,
+            &settings,
+            PEER,
+            OwnIdentityCheck::BeforeRestore,
+            &verifier,
+            now
+        )
+        .await
+        .unwrap(),
+        OwnIdentityAtSignIn::Replaced
+    );
+}
+
+#[tokio::test]
+async fn password_sign_in_preserves_the_alarm_after_an_unexpected_server_write() {
+    let (verifier, vectors, now) = fixtures();
+    let (_dir, settings) = database();
+    let advanced = monitor_proof(&vectors, "owner replacement advanced");
+    let mut client = Script {
+        searches: [
+            (
+                DISTINGUISHED,
+                None,
+                None,
+                Some(search_proof(&vectors, "owner checkpoint")),
+            ),
+            (
+                PEER,
+                None,
+                Some(1),
+                Some(search_proof(&vectors, "owner identity")),
+            ),
+            (
+                PEER,
+                Some(2),
+                Some(1),
+                Some(search_proof(&vectors, "owner replacement")),
+            ),
+            (
+                PEER,
+                Some(4),
+                Some(1),
+                Some(search_proof(&vectors, "owner restored search")),
+            ),
+        ]
+        .into(),
+        monitors: [advanced]
+            .map(|(request, proof)| (request, Ok(proof)))
+            .into(),
+        ..Default::default()
+    };
+    let local_key = bytes(vector(&vectors, "owner identity").value.as_deref().unwrap());
+    assert_eq!(
+        search_own_at_sign_in(
+            &mut client,
+            &settings,
+            PEER,
+            OwnIdentityCheck::Local(&local_key),
+            &verifier,
+            now
+        )
+        .await
+        .unwrap(),
+        OwnIdentityAtSignIn::Current
+    );
+    assert_eq!(
+        search_own_at_sign_in(
+            &mut client,
+            &settings,
+            PEER,
+            OwnIdentityCheck::Local(&local_key),
+            &verifier,
+            now
+        )
+        .await
+        .unwrap(),
+        OwnIdentityAtSignIn::Replaced
+    );
+    assert!(super::own_mismatch(&settings, PEER).unwrap());
+    assert!(
+        check_own(&mut client, &settings, PEER, &local_key, &verifier, now)
+            .await
+            .unwrap()
+    );
+
+    assert_eq!(
+        search_own_at_sign_in(
+            &mut client,
+            &settings,
+            PEER,
+            OwnIdentityCheck::Local(&local_key),
+            &verifier,
+            now
+        )
+        .await
+        .unwrap(),
+        OwnIdentityAtSignIn::Current
+    );
+    assert!(super::own_mismatch(&settings, PEER).unwrap());
+}
+
+#[tokio::test]
+async fn linked_owner_key_establishes_a_new_baseline_and_detects_the_next_write() {
     use crate::storage::repositories::settings_repo::keys;
 
     let (verifier, vectors, now) = fixtures();
@@ -739,7 +980,7 @@ async fn authorized_owner_reset_establishes_a_new_baseline_and_detects_the_next_
             .unwrap()
     );
 
-    super::authorize_own_identity(&settings, owner, &new_key).unwrap();
+    super::authorize_linked_owner_identity(&settings, owner, &new_key).unwrap();
     // Simulate reopening the repository with the durable permission and pin.
     let settings = SettingsRepository::new(settings.database().clone());
     assert!(
@@ -749,8 +990,8 @@ async fn authorized_owner_reset_establishes_a_new_baseline_and_detects_the_next_
     );
     assert!(!super::own_mismatch(&settings, PEER).unwrap());
 
-    // Republishing the same key leaves version 1 as its baseline.
-    super::authorize_own_identity(&settings, owner, &new_key).unwrap();
+    // Linking the same key leaves version 1 as its baseline.
+    super::authorize_linked_owner_identity(&settings, owner, &new_key).unwrap();
     assert!(
         !check_own(&mut client, &settings, PEER, &new_key, &verifier, now)
             .await
@@ -764,7 +1005,7 @@ async fn authorized_owner_reset_establishes_a_new_baseline_and_detects_the_next_
 
     // A retry or another device installation of the same proven key cannot
     // clear evidence of a later unexpected write.
-    super::authorize_own_identity(&settings, owner, &new_key).unwrap();
+    super::authorize_linked_owner_identity(&settings, owner, &new_key).unwrap();
     assert!(super::own_mismatch(&settings, PEER).unwrap());
 }
 
@@ -782,7 +1023,7 @@ async fn provisioned_owner_key_can_bootstrap_at_an_existing_version() {
             .as_deref()
             .unwrap(),
     );
-    super::authorize_own_identity(&settings, owner, &key).unwrap();
+    super::authorize_linked_owner_identity(&settings, owner, &key).unwrap();
 
     let mut proof = search_proof(&vectors, "owner replacement");
     proof.tree_head.as_mut().unwrap().last.clear();
@@ -821,7 +1062,7 @@ async fn restored_owner_value_cannot_clear_an_alarm_from_an_authorized_bootstrap
             .as_deref()
             .unwrap(),
     );
-    super::authorize_own_identity(&settings, owner, &key).unwrap();
+    super::authorize_linked_owner_identity(&settings, owner, &key).unwrap();
     let (steady_request, steady_proof) = monitor_proof(&vectors, "owner replacement steady");
     let mut client = Script {
         searches: [

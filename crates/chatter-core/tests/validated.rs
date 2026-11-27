@@ -7224,7 +7224,9 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
     // Build a fresh, real SignalService backed by an in-memory-ish temp DB. This
     // is the SAME type PairwiseService drives on the anon send path, so the KT
     // gate under test is the production one.
-    async fn make_signal_service(rng: &mut StdRng) -> (SignalService, tempfile::NamedTempFile) {
+    async fn make_signal_service(
+        rng: &mut StdRng,
+    ) -> (SignalService, Arc<Database>, tempfile::NamedTempFile) {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let db = Arc::new(Database::open(db_file.path(), "test_passphrase").unwrap());
         db.run_migrations().unwrap();
@@ -7248,6 +7250,7 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
             .unwrap();
         (
             SignalService::new(key_store.clone(), settings_repo.clone()),
+            db,
             db_file,
         )
     }
@@ -7338,22 +7341,39 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
 
     let bob_addr = ProtocolAddress::new(bob.user_id.clone(), DeviceId::new(1).unwrap());
 
-    let proof = pool.anonymous_kt_client()
-        .search(kt_search_request(&bob.user_id, None))
-        .await
-        .expect("anonymous Search transport")
-        .expect("registered account has a KT entry");
-    assert_eq!(proof.condensed.unwrap().value.unwrap().value, bob.public_key);
+    // Validate the actual KT response and feed its exact key to the durable
+    // send gate, as the background verifier does. The fixture has no running
+    // verifier or configured Tor route.
+    async fn cache_verified_peer(
+        svc: &SignalService,
+        db: &Database,
+        auth: &mut chatter_core::testing::network::grpc::AuthClient,
+        user_id: &str,
+        expected: &[u8],
+    ) {
+        let verified = svc
+            .verified_identity_key_from_kt(auth, user_id)
+            .await
+            .expect("verify the account's key against the KT log");
+        assert_eq!(verified, expected);
+        db.connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO peer_key_transparency VALUES (?1, ?2, 'verified')",
+                rusqlite::params![user_id, verified],
+            )
+            .unwrap();
+    }
 
     // ---- POSITIVE CONTROL: honest anon bundle (Bob's real key) passes the anon
     // KT gate AND establishes a session. Mechanism works => a later reject is
     // real. --------------------------------------------------------------------
     {
-        let (svc, _db) = make_signal_service(&mut rng).await;
-        let mut anon_kt = pool.anonymous_kt_client();
+        let (svc, db, _file) = make_signal_service(&mut rng).await;
+        cache_verified_peer(&svc, &db, &mut pool.auth_client(), &bob.user_id, &bob.public_key).await;
         let honest = build_proto_bundle_response(&bob_kp, device_id, &mut rng);
 
-        svc.ensure_session_with_bundle(&mut anon_kt, &bob.user_id, device_id, honest)
+        svc.ensure_session_with_bundle(&bob.user_id, device_id, honest)
             .await
             .expect("POSITIVE CONTROL FAILED: honest Bob bundle must pass the anon KT gate and establish");
 
@@ -7371,12 +7391,12 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
     // reject it. A FRESH service is used so no prior session short-circuits the
     // gate. --------------------------------------------------------------------
     {
-        let (svc, _db) = make_signal_service(&mut rng).await;
-        let mut anon_kt = pool.anonymous_kt_client();
+        let (svc, db, _file) = make_signal_service(&mut rng).await;
+        cache_verified_peer(&svc, &db, &mut pool.auth_client(), &bob.user_id, &bob.public_key).await;
         let forged = build_proto_bundle_response(&mallory_kp, device_id, &mut rng);
 
         let verdict = svc
-            .ensure_session_with_bundle(&mut anon_kt, &bob.user_id, device_id, forged)
+            .ensure_session_with_bundle(&bob.user_id, device_id, forged)
             .await;
 
         assert!(
@@ -11680,7 +11700,9 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         );
         println!("  wrong PIN: login refused with {need:?} — {err}");
 
-        let refused = c.accept_new_identity(need, PASSWORD).await;
+        let refused = c
+            .accept_new_identity(need, PASSWORD, "Wr0ngPin!x7", None)
+            .await;
         assert!(
             refused.is_err(),
             "minting a new identity on a wrong PIN would destroy a recoverable account"
@@ -11751,7 +11773,7 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
     // (`crypto/logtree.go`), where a rotation is just another append, so the
     // rotation runs concurrently with everything else.
     client_fresh
-        .accept_new_identity(need, PASSWORD)
+        .accept_new_identity(need, PASSWORD, PIN, None)
         .await
         .expect("identity reset failed — there is still no way to publish a rotated key");
 
@@ -11798,6 +11820,19 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         "expected one leaf for registration and one for the rotation"
     );
     println!("  reset: KT log witnessed the new key ({kt_count} leaves)");
+
+    let restore_dir = tempfile::tempdir().unwrap();
+    let restored = build_client(restore_dir.path());
+    let restored_login = restored
+        .login(&user, PASSWORD, "validated-reset-backup", Some(PIN))
+        .await
+        .expect("a fresh install must be able to restore the reset identity");
+    assert!(restored_login.keys_restored);
+    assert_eq!(
+        restored.signal().get_identity_public_key().await.unwrap(),
+        new_key
+    );
+    restored.shutdown().await;
 
     println!(
         "\nV53 PASS — no backup is reported, never silently re-keyed; an explicit reset publishes a rotated identity key atomically and KT records it\n"

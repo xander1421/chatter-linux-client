@@ -4801,12 +4801,8 @@ msgstr ""
 "отсканируйте этот код."
 
 #: ui/pages/link_device.slint:87
-msgid ""
-"This device still holds another account's keys. Linking a different account "
-"will fail. Sign in to that account instead, or clear this app's data first."
-msgstr ""
-"На этом устройстве ещё есть ключи другого аккаунта. Привязать другой аккаунт "
-"не получится. Войдите в тот аккаунт или сначала очистите данные приложения."
+msgid "Linking a different account clears local data on this device."
+msgstr "При привязке другой учётной записи локальные данные на этом устройстве будут удалены."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"

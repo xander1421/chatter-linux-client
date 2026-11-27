@@ -8,24 +8,44 @@ impl MessageService {
     /// normal-mode DM send leaves a session per current device (the server
     /// names one we are missing). Outside Shield, a cold peer's bundles are
     /// fetched with a pre-fetched anonymous credential. The bootstrap send
-    /// checks them against the peer's registered devices. Shield retains its
-    /// cached-device policy: a cold peer is `NotReachablePrivately`.
+    /// checks them against the peer's registered devices. In Shield, a cold
+    /// peer is `NotReachablePrivately`. After a local device rebind, a known
+    /// peer's archived sessions can be rebuilt with a blind credential over Tor.
     pub(in crate::services::message) async fn bootstrap_devices(
         &self,
         peer_id: &UserId,
     ) -> Result<Vec<u32>, MessageError> {
         let peer_id_str = peer_id.to_string();
         let shield = self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
-        let discovery = if shield {
-            Ok(Vec::new())
-        } else {
-            self.signal_service
-                .ensure_anonymous_device_sessions(&mut self.anonymous_prekey_source(), &peer_id_str)
-                .await
-        };
-        let devices = bootstrap_device_order(self.live_session_devices(peer_id).await?);
+        let mut devices = self.live_session_devices(peer_id).await?;
+        if devices.is_empty()
+            && (!shield
+                || self
+                    .signal_service
+                    .has_session_history(&peer_id_str)
+                    .map_err(|error| {
+                        MessageError::from_signal_send(error, "Session device lookup")
+                    })?)
+        {
+            let signal = if shield {
+                self.signal_service.for_anonymous_route()
+            } else {
+                self.signal_service.as_ref().clone()
+            };
+            let discovery = signal
+                .ensure_anonymous_device_sessions(
+                    &mut self.anonymous_prekey_source(shield),
+                    &peer_id_str,
+                )
+                .await;
+            devices = self.live_session_devices(peer_id).await?;
+            if devices.is_empty() {
+                discovery.map_err(|error| {
+                    MessageError::from_signal_send(error, "Bootstrap device discovery")
+                })?;
+            }
+        }
         if devices.is_empty() {
-            discovery.map_err(|error| MessageError::from_signal_send(error, "Bootstrap device discovery"))?;
             return Err(if shield {
                 MessageError::NotReachablePrivately(*peer_id)
             } else {
@@ -34,7 +54,7 @@ impl MessageService {
                 ))
             });
         }
-        Ok(devices)
+        Ok(bootstrap_device_order(devices))
     }
 
     /// Devices of `peer_id` we hold a session with, less any the server has

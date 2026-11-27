@@ -12,43 +12,37 @@ impl AuthService {
         Ok(())
     }
 
-    /// Logout the current user.
-    ///
-    /// Orchestrates:
-    /// 1. Server logout notification
-    /// 2. Auth interceptor clearing
-    /// 3. Local auth state clearing (keeps identity keys for re-login)
+    /// Retire this device before clearing local credentials.
     pub async fn logout(&self, auth_client: &mut AuthClient) -> Result<(), AuthError> {
-        // Check is logged in
         if !self.is_logged_in() {
             return Err(AuthError::NotLoggedIn);
         }
 
-        // Get current device ID
-        let device_id: u32 = self
+        let owner = self
+            .settings_repo
+            .current_user_id()
+            .map_err(|error| match error {
+                crate::services::current_user::CurrentUserError::Storage(error) => {
+                    AuthError::Storage(error)
+                }
+                crate::services::current_user::CurrentUserError::NotLoggedIn => {
+                    AuthError::NotLoggedIn
+                }
+            })?;
+        super::cache_saved_messages_channel(&self.settings_repo, owner)?;
+
+        let device_id = self
             .settings_repo
             .get(keys::CURRENT_DEVICE_ID)?
-            .unwrap_or(0);
+            .ok_or(AuthError::NotLoggedIn)?;
+        auth_client.logout(device_id, None).await?;
+        self.finish_logout()
+    }
 
-        // Notify server of logout (ignore errors - we logout locally regardless)
-        let _ = auth_client.logout(device_id, None).await;
-
-        // Clear auth interceptor state
-        self.auth_interceptor.clear();
-
-        // Clear auth state from settings (but keep identity keys)
+    pub(super) fn finish_logout(&self) -> Result<(), AuthError> {
+        self.end_session()?;
         self.settings_repo.delete(keys::CURRENT_USER_ID)?;
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
-        self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
-        self.settings_repo.delete(keys::PUSH_TOPIC)?;
-        self.settings_repo.delete(keys::DEVICE_WAKE_TOPIC)?;
-
-        // Clear the local PIN fingerprint — re-derived on next login from
-        // user-supplied PIN. Leaving stale fingerprints behind would let a
-        // linked-device approve flow run after logout if the modal stayed
-        // open in another window.
-        let _ = self.settings_repo.delete(keys::PIN_FINGERPRINT);
-
         Ok(())
     }
 
@@ -108,13 +102,8 @@ impl AuthService {
         .await
     }
 
-    /// Simplified wrapper for logout that creates the client internally.
     pub async fn do_logout(&self) -> Result<(), AuthError> {
-        let mut auth_client = self.try_auth_client().ok_or_else(|| {
-            AuthError::Network(NetworkError::ConnectionFailed(
-                "Not connected to server".to_string(),
-            ))
-        })?;
+        let mut auth_client = self.try_auth_client().ok_or(NetworkError::Unavailable)?;
         self.logout(&mut auth_client).await
     }
 }

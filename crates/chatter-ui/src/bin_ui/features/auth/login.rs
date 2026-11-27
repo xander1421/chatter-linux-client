@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::client::{ChatterClient, ClientError};
-use chatter_core::client::KeyRecoveryNeed;
+use chatter_core::client::{ChatterClient, ClientError, KeyRecoveryNeed};
 
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
@@ -27,7 +26,7 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window
         .global::<crate::AuthFlow>()
-        .on_accept_new_identity(move |password| {
+        .on_accept_new_identity(move |password, new_pin| {
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
 
@@ -43,33 +42,43 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             auth.set_login_loading(true);
             auth.set_login_error("".into());
+            let pin = auth.get_login_pin();
 
             tokio::spawn(async move {
-                let outcome = ui_ctx.accept_new_identity(need, password.as_str()).await;
+                let new_pin = (need == KeyRecoveryNeed::StaleBackup).then_some(new_pin.as_str());
+                let outcome = ui_ctx
+                    .accept_new_identity(need, password.as_str(), pin.as_str(), new_pin)
+                    .await;
                 let message = match &outcome {
-                    Ok(()) => String::new(),
+                    Ok(()) if new_pin.is_some() => chatter_i18n::tr(
+                        "New encryption keys published. Sign in again with your new PIN.",
+                    ),
+                    Ok(()) => chatter_i18n::tr(
+                        "New encryption keys published. Sign in again to continue.",
+                    ),
                     Err(e) => e.user_message(),
                 };
                 let ok = outcome.is_ok();
+                let wrong_pin = matches!(
+                    outcome,
+                    Err(ClientError::IdentityRecoveryRequired(
+                        KeyRecoveryNeed::WrongPin { .. }
+                    ))
+                );
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.global::<crate::AuthFlow>().set_login_loading(false);
-                        if ok {
+                        if ok || wrong_pin {
                             w.global::<crate::AuthFlow>()
                                 .set_login_identity_reset_available(false);
-                            w.global::<crate::AuthFlow>().set_login_error(
-                                chatter_i18n::tr(
-                                    "New encryption keys published. Sign in again to continue.",
-                                )
-                                .into(),
-                            );
-                        } else {
                             w.global::<crate::AuthFlow>()
-                                .set_login_error(message.into());
+                                .set_login_reset_needs_new_pin(false);
+                            w.global::<crate::AuthFlow>().set_login_pin("".into());
                         }
+                        w.global::<crate::AuthFlow>().set_login_error(message.into());
                     }
                 });
-                if ok {
+                if ok || wrong_pin {
                     if let Ok(mut g) = PENDING_RECOVERY.lock() {
                         *g = None;
                     }
@@ -142,6 +151,11 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.global::<crate::AuthFlow>().set_login_error("".into());
             w.global::<crate::AuthFlow>()
                 .set_login_identity_reset_available(false);
+            w.global::<crate::AuthFlow>()
+                .set_login_reset_needs_new_pin(false);
+            if let Ok(mut pending) = PENDING_RECOVERY.lock() {
+                *pending = None;
+            }
             w.global::<crate::AnonMode>().set_onboarding_progress(
                 if shield {
                     super::shield::connecting_over_tor()
@@ -197,7 +211,30 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Login via SDK (handles auth + state + inbox + presence)
             let pin_opt = if pin.is_empty() { None } else { Some(pin.as_str()) };
             let verifying = forward_login_verifying(weak.clone(), &ui_ctx);
-            let outcome = ui_ctx.login(&username, &password, &chatter_core::client::ChatterClient::current_device_name(), pin_opt).await;
+            let notice_window = weak.clone();
+            let replacement_notice = async move {
+                let (shown, ready) = tokio::sync::oneshot::channel();
+                let queued = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = notice_window.upgrade() {
+                        w.global::<crate::AnonMode>()
+                            .set_onboarding_progress("".into());
+                        w.global::<crate::AuthFlow>().set_login_error(
+                            chatter_i18n::tr("This device was replaced. Clearing local data…").into(),
+                        );
+                    }
+                    let _ = shown.send(());
+                });
+                if queued.is_ok() {
+                    let _ = ready.await;
+                }
+            };
+            let outcome = ui_ctx.login_with_replacement_notice(
+                &username,
+                &password,
+                &ChatterClient::current_device_name(),
+                pin_opt,
+                replacement_notice,
+            ).await;
             verifying.abort();
             match outcome {
                 Ok(_result) => {
@@ -251,19 +288,16 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     ui_ctx.initialize_presence().await;
                 }
                 Err(e) => {
-                    // A login that could not establish this device's identity
-                    // key now fails loudly instead of returning a working
-                    // -looking session with no keys. Offer to start over only
-                    // when the original key is provably unrecoverable.
-                    let reset_available = match &e {
-                        ClientError::IdentityRecoveryRequired(need) => {
-                            if let Ok(mut g) = PENDING_RECOVERY.lock() {
-                                *g = Some(*need);
-                            }
-                            !need.is_retryable()
-                        }
-                        _ => false,
+                    let recovery = match &e {
+                        ClientError::IdentityRecoveryRequired(need) => Some(*need),
+                        _ => None,
                     };
+                    if let Ok(mut pending) = PENDING_RECOVERY.lock() {
+                        *pending = recovery;
+                    }
+                    let reset_available = recovery.is_some_and(|need| !need.is_retryable());
+                    let needs_new_pin = recovery == Some(KeyRecoveryNeed::StaleBackup);
+                    let wrong_pin = matches!(recovery, Some(KeyRecoveryNeed::WrongPin { .. }));
                     tracing::warn!("Login failed");
                     let error_msg = e.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
@@ -271,6 +305,10 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.global::<crate::AuthFlow>().set_login_loading(false);
                             w.global::<crate::AuthFlow>().set_login_error(error_msg.into());
+                            if wrong_pin {
+                                w.global::<crate::AuthFlow>().set_login_pin("".into());
+                            }
+                            w.global::<crate::AuthFlow>().set_login_reset_needs_new_pin(needs_new_pin);
                             w.global::<crate::AuthFlow>().set_login_identity_reset_available(reset_available);
                         }
                     });

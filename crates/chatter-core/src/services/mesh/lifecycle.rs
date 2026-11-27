@@ -1,8 +1,83 @@
 use super::*;
+use crate::error::StorageError;
+
+/// Owns the mesh across account switches and keeps UI subscriptions attached
+/// while the identity, router, and transport runtimes are replaced.
+pub(crate) struct SharedMesh {
+    current: parking_lot::RwLock<Arc<MeshService>>,
+    events: broadcast::Sender<MeshEvent>,
+    build:
+        Box<dyn Fn(broadcast::Sender<MeshEvent>) -> Result<MeshService, MeshError> + Send + Sync>,
+    lifecycle: tokio::sync::Mutex<()>,
+}
+
+impl SharedMesh {
+    pub(crate) fn new(
+        build: impl Fn(broadcast::Sender<MeshEvent>) -> Result<MeshService, MeshError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Result<Self, MeshError> {
+        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let current = Arc::new(build(events.clone())?);
+        Ok(Self {
+            current: parking_lot::RwLock::new(current),
+            events,
+            build: Box::new(build),
+            lifecycle: tokio::sync::Mutex::new(()),
+        })
+    }
+
+    pub(crate) fn get(&self) -> Arc<MeshService> {
+        self.current.read().clone()
+    }
+
+    pub(crate) async fn lock_lifecycle(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lifecycle.lock().await
+    }
+
+    pub(crate) async fn wipe_for_account_switch(
+        &self,
+        wipe: impl FnOnce() -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        let _lifecycle = self.lock_lifecycle().await;
+        let old = self.get();
+        // shutdown retains its join handles if this future is cancelled. Mark
+        // the old identity retired only once we've joined the transports and
+        // can finish the wipe without another await.
+        old.shutdown().await;
+        old.identity_wiped.store(true, Ordering::SeqCst);
+        old.retire_for_account_switch();
+        let result = wipe();
+        // Rebuild even on a storage error. The old runtime is retired and
+        // must never resume, even if the database still has the old owner.
+        let replacement = (self.build)(self.events.clone())
+            .map_err(|error| StorageError::InvalidData(format!("could not rebuild mesh: {error}")));
+        match replacement {
+            Ok(replacement) => {
+                *self.current.write() = Arc::new(replacement);
+                let _ = self.events.send(MeshEvent::Status(MeshStatus::default()));
+                let _ = self.events.send(MeshEvent::Peers(Vec::new()));
+                let _ = self.events.send(MeshEvent::PrivateChannelChanged);
+                result
+            }
+            Err(error) => result.and(Err(error)),
+        }
+    }
+}
 
 impl MeshService {
     /// Wire the stack while mesh is disabled. An enable creates the first identity.
     pub fn new(deps: MeshDeps, config: MeshConfig) -> Result<Self, MeshError> {
+        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        Self::with_events(deps, config, events)
+    }
+
+    pub(crate) fn with_events(
+        deps: MeshDeps,
+        config: MeshConfig,
+        sender: broadcast::Sender<MeshEvent>,
+    ) -> Result<Self, MeshError> {
         let identity_store = Arc::clone(&deps.identity_store);
         let config = Arc::new(config);
         let state = Arc::new(MeshState::new());
@@ -16,7 +91,7 @@ impl MeshService {
         if config.public_chat_enabled() {
             timeline.open_public_room();
         }
-        let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
+        let events = MeshEvents::with_sender(sender, Arc::clone(&timeline));
 
         // The receivers for the first channel are dropped: nothing runs until
         // `start`, and `start` rebinds. A command sent before then goes nowhere,
@@ -77,8 +152,7 @@ impl MeshService {
             has_radio: deps.radio_factory.is_some() || radio::platform_radio().is_some(),
             radio_factory: deps.radio_factory,
             relay_connector: deps.relay_connector,
-            tasks: Mutex::new(Vec::new()),
-            lifecycle: tokio::sync::Mutex::new(()),
+            tasks: tokio::sync::Mutex::new(Vec::new()),
             running: Arc::new(AtomicBool::new(false)),
             identity_wiped: Arc::new(AtomicBool::new(false)),
             sealer_unavailable,
@@ -108,7 +182,7 @@ impl MeshService {
     /// carries geohash channels, and a client with no relay connector still
     /// carries the BLE mesh. Neither absence is an error.
     pub async fn start(&self) -> Result<(), MeshError> {
-        let _lifecycle = self.lifecycle.lock().await;
+        let mut previous = self.tasks.lock().await;
         // Checked before the radio is touched. A mesh whose sealer has no key
         // would advertise, connect, and then fail every retained write — a peer
         // list that looks healthy over a store that cannot keep anything. Better
@@ -122,6 +196,11 @@ impl MeshService {
         }
         if self.running.load(Ordering::SeqCst) {
             return Ok(());
+        }
+        // A cancelled shutdown may have left stopped runtimes to join.
+        while let Some(task) = previous.last_mut() {
+            let _ = task.await;
+            previous.pop();
         }
         let channels = self.private_channels.list()?;
         let (epoch, group_identity) = {
@@ -218,23 +297,21 @@ impl MeshService {
             );
         }
 
-        *self.tasks.lock() = tasks;
+        *previous = tasks;
         Ok(())
     }
 
     /// Stop and join both transport runtimes; the router lives until service drop.
     pub async fn shutdown(&self) {
         self.set_pairing(false);
-        let _lifecycle = self.lifecycle.lock().await;
-        if !self.running.swap(false, Ordering::SeqCst) {
-            return;
+        let mut tasks = self.tasks.lock().await;
+        if self.running.swap(false, Ordering::SeqCst) {
+            let _ = self.ble.send(BleCommand::Stop);
+            let _ = self.nostr.send(NostrCommand::Stop);
         }
-        let _ = self.ble.send(BleCommand::Stop);
-        let _ = self.nostr.send(NostrCommand::Stop);
-
-        let tasks: Vec<JoinHandle<()>> = std::mem::take(&mut *self.tasks.lock());
-        for task in tasks {
+        while let Some(task) = tasks.last_mut() {
             let _ = task.await;
+            tasks.pop();
         }
         self.identity.write().take();
         self.private_group_identity.write().take();
@@ -251,6 +328,17 @@ impl MeshService {
             .read()
             .clone()
             .ok_or(MeshError::NotRunning)
+    }
+
+    fn retire_for_account_switch(&self) {
+        self.router.shutdown();
+        let _signal_guard = self.signal_lock.lock();
+        self.events.retire();
+        self.state.with(|state| *state = Default::default());
+        self.nostr_state.with(|state| *state = Default::default());
+        self.config.set_nickname("anon".to_owned());
+        self.events.clear_moderation();
+        self.timeline.clear_open_conversations();
     }
 
     // -------------------------------------------------------------- read paths

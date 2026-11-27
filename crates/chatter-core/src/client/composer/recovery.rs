@@ -33,22 +33,26 @@ impl ChatterClient {
         self.directories().data_dir().join("composer-staging")
     }
 
-    fn staged_upload_temp_root(&self) -> PathBuf {
-        self.directories().data_dir().join("attachments").join("staged-upload-tmp")
+    fn staged_upload_attachments_dir(&self) -> PathBuf {
+        self.directories().data_dir().join("attachments")
     }
 
     /// Upload plaintext is only needed for one send. A process death skips
     /// TempDir's destructor, so remove any leftovers before a client can send.
     pub(in crate::client) fn cleanup_staged_upload_temps(&self) -> std::io::Result<()> {
-        let root = self.staged_upload_temp_root();
-        if root.exists() {
-            std::fs::remove_dir_all(&root)?;
+        let attachments = self.staged_upload_attachments_dir();
+        match std::fs::remove_dir_all(attachments.join("staged-upload-tmp")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
-        Self::ensure_staged_upload_temp_root(root)?;
+        Self::ensure_staged_upload_temp_root(&attachments)?;
         Ok(())
     }
 
-    fn ensure_staged_upload_temp_root(root: PathBuf) -> std::io::Result<PathBuf> {
+    fn ensure_staged_upload_temp_root(attachments: &std::path::Path) -> std::io::Result<PathBuf> {
+        crate::services::attachment::ensure_attachments_dir_at(attachments)?;
+        let root = attachments.join("staged-upload-tmp");
         std::fs::create_dir_all(&root)?;
         #[cfg(unix)]
         {
@@ -335,10 +339,8 @@ impl ChatterClient {
                 AttachmentError::DecryptionError("staged file has no encryption key".into())
             })?;
         let path = path.to_path_buf();
-        let root = self.staged_upload_temp_root();
+        let attachments = self.staged_upload_attachments_dir();
         crate::services::attachment::run_attachment_work(move || {
-            let root = Self::ensure_staged_upload_temp_root(root)
-                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
             let key: [u8; 64] = crypto
                 .key
                 .try_into()
@@ -365,6 +367,8 @@ impl ChatterClient {
             decryptor
                 .init_decryption()
                 .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+            let root = Self::ensure_staged_upload_temp_root(&attachments)
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
             let temp = tempfile::Builder::new()
                 .prefix("upload-")
                 .tempdir_in(root)

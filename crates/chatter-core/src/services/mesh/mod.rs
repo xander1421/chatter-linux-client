@@ -265,8 +265,7 @@ pub struct MeshService {
     /// from whether one is running.
     has_radio: bool,
     relay_connector: Option<Arc<dyn RelayConnector>>,
-    tasks: Mutex<Vec<JoinHandle<()>>>,
-    lifecycle: tokio::sync::Mutex<()>,
+    tasks: tokio::sync::Mutex<Vec<JoinHandle<()>>>,
     running: Arc<AtomicBool>,
     /// Set by a panic wipe. `identity` above is the erased keypair; announcing
     /// it again would relink this device to everything the wipe was meant to
@@ -282,6 +281,7 @@ mod control;
 mod conversations;
 mod files;
 mod lifecycle;
+pub(crate) use lifecycle::SharedMesh;
 mod messaging;
 mod pairing;
 

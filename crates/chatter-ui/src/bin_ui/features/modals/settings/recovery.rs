@@ -50,8 +50,8 @@ pub(super) fn wire_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         });
                     }
                     Err(e) => {
-                        let error_msg = e.to_string();
-                        tracing::error!("Failed to change PIN: {}", error_msg);
+                        let error_msg = e.user_message();
+                        tracing::warn!(%e, "Could not change the account PIN");
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::SettingsPane>()

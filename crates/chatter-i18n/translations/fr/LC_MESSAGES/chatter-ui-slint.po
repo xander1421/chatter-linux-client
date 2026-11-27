@@ -4798,13 +4798,8 @@ msgstr ""
 "les appareils › Associer un nouvel appareil, puis scannez ce code."
 
 #: ui/pages/link_device.slint:87
-msgid ""
-"This device still holds another account's keys. Linking a different account "
-"will fail. Sign in to that account instead, or clear this app's data first."
-msgstr ""
-"Cet appareil contient encore les clés d'un autre compte. Associer un autre "
-"compte échouera. Connectez-vous plutôt à ce compte, ou effacez d'abord les "
-"données de l'app."
+msgid "Linking a different account clears local data on this device."
+msgstr "Lier un autre compte efface les données locales de cet appareil."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"

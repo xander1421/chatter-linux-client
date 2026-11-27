@@ -537,7 +537,6 @@ impl AuthService {
             user_id,
             device_id: result.device_id,
             display_name: server_display_name,
-            needs_prekey_upload: false, // Prekeys already generated (upload them next)
             keys_restored: false, // Not applicable for registration (keys are freshly generated)
             key_recovery: None,
             recovery_codes,

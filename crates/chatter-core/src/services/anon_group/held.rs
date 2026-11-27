@@ -32,6 +32,10 @@ pub(crate) struct HeldPost {
 pub(crate) struct HeldPosts(Mutex<HashMap<AnonGroupId, VecDeque<HeldPost>>>);
 
 impl HeldPosts {
+    pub(crate) fn clear(&self) {
+        self.0.lock().clear();
+    }
+
     /// Earliest actual post from this sender waiting for an owner roster.
     pub(crate) fn earliest_post_timestamp(
         &self,

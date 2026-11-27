@@ -45,6 +45,47 @@ pub struct SvrClient {
     inner: SvrServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
 }
 
+fn pin_rpc_error(status: tonic::Status) -> NetworkError {
+    if status.code() == tonic::Code::PermissionDenied && status.message() == "wrong PIN" {
+        let remaining_attempts = status
+            .metadata()
+            .get("svr-remaining-attempts")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok());
+        return NetworkError::SvrWrongPin { remaining_attempts };
+    }
+    NetworkError::from_status(&status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrong_pin_keeps_the_server_attempt_count_when_available() {
+        let mut status = tonic::Status::permission_denied("wrong PIN");
+        assert!(matches!(
+            pin_rpc_error(tonic::Status::permission_denied("permission denied")),
+            NetworkError::PermissionDenied,
+        ));
+        assert!(matches!(
+            pin_rpc_error(status.clone()),
+            NetworkError::SvrWrongPin {
+                remaining_attempts: None
+            },
+        ));
+        status
+            .metadata_mut()
+            .insert("svr-remaining-attempts", "2".parse().unwrap());
+        assert!(matches!(
+            pin_rpc_error(status),
+            NetworkError::SvrWrongPin {
+                remaining_attempts: Some(2)
+            },
+        ));
+    }
+}
+
 impl SvrClient {
     /// Create a new SvrClient from pool components.
     ///
@@ -88,7 +129,7 @@ impl SvrClient {
             .store_backup(request)
             .await
             .map(|r| r.into_inner().version)
-            .map_err(|s| NetworkError::from_status(&s))
+            .map_err(pin_rpc_error)
     }
 
     /// Fetch an encrypted backup from the server.
@@ -110,7 +151,7 @@ impl SvrClient {
             .fetch_backup(request)
             .await
             .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))?;
+            .map_err(pin_rpc_error)?;
 
         Ok(FetchBackupResult {
             encrypted_backup: response.encrypted_backup,
@@ -194,7 +235,7 @@ impl SvrClient {
             .change_pin_backup(request)
             .await
             .map(|r| r.into_inner().version)
-            .map_err(|s| NetworkError::from_status(&s))
+            .map_err(pin_rpc_error)
     }
 
     /// Register/replace the encrypted message-history backup.

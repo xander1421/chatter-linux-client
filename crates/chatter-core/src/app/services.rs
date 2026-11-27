@@ -22,7 +22,7 @@ use crate::services::gateway::MessageGateway;
 use crate::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
 use crate::services::mailbox_manager::MailboxManager;
 #[cfg(feature = "mesh")]
-use crate::services::mesh::{MeshConfig, MeshDeps, MeshService};
+use crate::services::mesh::{MeshConfig, MeshDeps, MeshService, SharedMesh};
 use crate::services::message::MessageService;
 use crate::services::pairwise::PairwiseService;
 use crate::services::pin_service::PinService;
@@ -89,7 +89,7 @@ pub struct ServiceContainer {
     /// The bitchat mesh, when built in. Serverless and independent of every
     /// other service here: it makes no RPC and shares no identity with them.
     #[cfg(feature = "mesh")]
-    pub mesh_service: Arc<MeshService>,
+    pub(crate) mesh_service: Arc<SharedMesh>,
     #[cfg(feature = "jarvis")]
     pub jarvis_service: Arc<JarvisService>,
     /// Jarvis inference engine (hot-swappable on provider change).
@@ -111,7 +111,7 @@ impl ServiceContainer {
     /// Create all services from infrastructure dependencies.
     ///
     /// Services are built in dependency order to ensure proper initialization.
-    pub(crate) fn new(infra: &InfrastructureContainer) -> Result<Self, ContextError> {
+    pub(crate) fn new(infra: &Arc<InfrastructureContainer>) -> Result<Self, ContextError> {
         // 1. Signal service (foundational crypto)
         let signal_service = Arc::new(SignalService::new(
             infra.key_store.clone(),
@@ -165,16 +165,6 @@ impl ServiceContainer {
             message_service.clone(),
             infra.grpc_pool.clone(),
             mailbox_manager.clone(),
-        ));
-
-        // 6. Auth service
-        let auth_service = Arc::new(AuthService::new(
-            infra.grpc_pool.clone(),
-            infra.identity_manager.clone(),
-            infra.prekey_manager.clone(),
-            infra.user_repo.clone(),
-            infra.settings_repo.clone(),
-            infra.auth_interceptor.clone(),
         ));
 
         // 7. User service
@@ -294,102 +284,128 @@ impl ServiceContainer {
         // so the radio does not come up merely because the app booted.
         #[cfg(feature = "mesh")]
         let mesh_service = {
-            let db_path = infra.directories.database_path();
-            let (mesh_storage, mesh_sealer) =
-                crate::storage::mesh_store::sealed_store(infra.database.clone(), &db_path);
-            let deps = MeshDeps {
-                key_store: infra.key_store.clone(),
-                binding_store: Arc::new(crate::storage::mesh_binding_store::MeshBindingStore::new(
-                    infra.database.clone(),
-                )),
-                private_channels: Arc::new(
-                    crate::services::mesh::private_channel::PrivateChannelStore::new(
+            let infra = infra.clone();
+            Arc::new(
+                SharedMesh::new(move |events| {
+                    let db_path = infra.directories.database_path();
+                    let (mesh_storage, mesh_sealer) =
+                        crate::storage::mesh_store::sealed_store(infra.database.clone(), &db_path);
+                    let deps = MeshDeps {
+                        key_store: infra.key_store.clone(),
+                        binding_store: Arc::new(
+                            crate::storage::mesh_binding_store::MeshBindingStore::new(
+                                infra.database.clone(),
+                            ),
+                        ),
+                        private_channels: Arc::new(
+                            crate::services::mesh::private_channel::PrivateChannelStore::new(
+                                infra.database.clone(),
+                            ),
+                        ),
+                        identity_store: Arc::new(crate::storage::MeshIdentityStore::new(
+                            infra.database.clone(),
+                        )),
+                        storage: Arc::new(mesh_storage),
+                        // Mesh messages are rows in the same unified message store as
+                        // every other conversation type. See `MeshTimeline::record` for
+                        // why they are stored at all — bitchat's stack is ephemeral by
+                        // design and this one deliberately is not.
+                        messages: infra.message_repo.clone(),
+                        deliveries: Arc::new(
+                            crate::storage::repositories::MeshDeliveryRepository::new(
+                                infra.database.clone(),
+                            ),
+                        ),
+                        conversations: Arc::new(
+                            crate::storage::repositories::MeshConversationRepository::new(
+                                infra.database.clone(),
+                            ),
+                        ),
+                        // Files carried by mesh messages are rows in the same attachment
+                        // table as every other conversation type's, for the same reason
+                        // the messages are: a mesh file is not a second kind of
+                        // attachment, it just never had a CDN behind it.
+                        attachments: infra.attachment_repo.clone(),
+                        // Never fatal. `from_keyring` hands back a sealer that reports
+                        // why it has no key rather than an error, and `MeshService::start`
+                        // declines to start on that basis. A locked keyring used to abort
+                        // initialization for the entire client here, so a Secret Service
+                        // that did not answer meant nobody could log in — over one
+                        // optional feature.
+                        sealer: Arc::new(mesh_sealer),
+                        // Relay traffic rides the Tor client the gRPC pool already owns,
+                        // on its own isolation group. Without the `onion` feature there is
+                        // no connector at all and the mesh runs radio-only.
+                        #[cfg(feature = "onion")]
+                        relay_connector: Some(Arc::new(
+                            crate::services::mesh::tor_relay::TorRelayConnector::new(
+                                infra.grpc_pool.onion_tor(),
+                            ),
+                        )),
+                        #[cfg(not(feature = "onion"))]
+                        relay_connector: None,
+                        radio_factory: None,
+                    };
+                    let settings = crate::storage::repositories::settings_repo::SettingsRepository::new(
                         infra.database.clone(),
-                    ),
-                ),
-                identity_store: Arc::new(crate::storage::MeshIdentityStore::new(
-                    infra.database.clone(),
-                )),
-                storage: Arc::new(mesh_storage),
-                // Mesh messages are rows in the same unified message store as
-                // every other conversation type. See `MeshTimeline::record` for
-                // why they are stored at all — bitchat's stack is ephemeral by
-                // design and this one deliberately is not.
-                messages: infra.message_repo.clone(),
-                deliveries: Arc::new(crate::storage::repositories::MeshDeliveryRepository::new(
-                    infra.database.clone(),
-                )),
-                conversations: Arc::new(
-                    crate::storage::repositories::MeshConversationRepository::new(
-                        infra.database.clone(),
-                    ),
-                ),
-                // Files carried by mesh messages are rows in the same attachment
-                // table as every other conversation type's, for the same reason
-                // the messages are: a mesh file is not a second kind of
-                // attachment, it just never had a CDN behind it.
-                attachments: infra.attachment_repo.clone(),
-                // Never fatal. `from_keyring` hands back a sealer that reports
-                // why it has no key rather than an error, and `MeshService::start`
-                // declines to start on that basis. A locked keyring used to abort
-                // initialization for the entire client here, so a Secret Service
-                // that did not answer meant nobody could log in — over one
-                // optional feature.
-                sealer: Arc::new(mesh_sealer),
-                // Relay traffic rides the Tor client the gRPC pool already owns,
-                // on its own isolation group. Without the `onion` feature there is
-                // no connector at all and the mesh runs radio-only.
-                #[cfg(feature = "onion")]
-                relay_connector: Some(Arc::new(
-                    crate::services::mesh::tor_relay::TorRelayConnector::new(
-                        infra.grpc_pool.onion_tor(),
-                    ),
-                )),
-                #[cfg(not(feature = "onion"))]
-                relay_connector: None,
-                radio_factory: None,
-            };
-            let settings = crate::storage::repositories::settings_repo::SettingsRepository::new(
-                infra.database.clone(),
-            );
-            use crate::storage::repositories::settings_repo::keys;
-            let config = MeshConfig::default();
-            if let Ok(Some(nickname)) = settings.get_string(keys::MESH_NICKNAME) {
-                config.set_nickname(nickname);
-            }
-            config.set_bridge_mode(
-                settings
-                    .get_bool(keys::MESH_BRIDGE_MODE)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default(),
-            );
-            config.set_public_chat(
-                settings
-                    .get_bool(keys::MESH_PUBLIC_CHAT)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default(),
-            );
-            let service =
-                MeshService::new(deps, config).map_err(|e| ContextError::Mesh(e.to_string()))?;
-            if let Ok(Some(names)) = settings.get::<Vec<String>>(keys::MESH_MUTED_CHANNELS) {
-                for name in names {
-                    let _ = service.set_channel_muted(&name, true);
-                }
-            }
-            if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_BLOCKED_PEERS) {
-                for peer in peers {
-                    service.set_peer_blocked(&chatter_mesh::ids::PeerId::from_str(&peer), true);
-                }
-            }
-            if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_MUTED_PEERS) {
-                for peer in peers {
-                    service.set_peer_muted(&chatter_mesh::ids::PeerId::from_str(&peer), true);
-                }
-            }
-            Arc::new(service)
+                    );
+                    use crate::storage::repositories::settings_repo::keys;
+                    let config = MeshConfig::default();
+                    if let Ok(Some(nickname)) = settings.get_string(keys::MESH_NICKNAME) {
+                        config.set_nickname(nickname);
+                    }
+                    config.set_bridge_mode(
+                        settings
+                            .get_bool(keys::MESH_BRIDGE_MODE)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default(),
+                    );
+                    config.set_public_chat(
+                        settings
+                            .get_bool(keys::MESH_PUBLIC_CHAT)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default(),
+                    );
+                    let service = MeshService::with_events(deps, config, events)?;
+                    if let Ok(Some(names)) = settings.get::<Vec<String>>(keys::MESH_MUTED_CHANNELS)
+                    {
+                        for name in names {
+                            let _ = service.set_channel_muted(&name, true);
+                        }
+                    }
+                    if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_BLOCKED_PEERS) {
+                        for peer in peers {
+                            service.set_peer_blocked(
+                                &chatter_mesh::ids::PeerId::from_str(&peer),
+                                true,
+                            );
+                        }
+                    }
+                    if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_MUTED_PEERS) {
+                        for peer in peers {
+                            service
+                                .set_peer_muted(&chatter_mesh::ids::PeerId::from_str(&peer), true);
+                        }
+                    }
+                    Ok(service)
+                })
+                .map_err(|error| ContextError::Mesh(error.to_string()))?,
+            )
         };
+
+        // Auth coordinates the account switch wipe with the mesh runtime.
+        let auth_service = Arc::new(AuthService::new(
+            infra.grpc_pool.clone(),
+            infra.identity_manager.clone(),
+            infra.prekey_manager.clone(),
+            infra.user_repo.clone(),
+            infra.settings_repo.clone(),
+            infra.auth_interceptor.clone(),
+            #[cfg(feature = "mesh")]
+            mesh_service.clone(),
+        ));
 
         #[cfg(feature = "jarvis")]
         let jarvis_engine = SharedJarvisEngine::new(JarvisEngine::Disabled);
