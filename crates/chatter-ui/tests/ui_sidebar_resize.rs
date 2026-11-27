@@ -1,8 +1,11 @@
 //! Exercise the real edge gesture, pointer capture, and responsive width policy.
-use chatter_ui::{DesktopChrome, MainWindow, ModalHostState, SearchPane, SidebarPane, SidebarRowData};
+use chatter_ui::{
+    ChatRowData, DesktopChrome, MainWindow, ModalHostState, SearchPane, SidebarCard,
+    SidebarCardRow, SidebarCards, SidebarPane,
+};
 use i_slint_backend_testing::{self as testing, ElementHandle};
-use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use slint::platform::{PointerEventButton, WindowEvent};
+use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 fn settle(w: &MainWindow) {
@@ -22,9 +25,11 @@ fn size(w: &MainWindow, width: f32) {
 
 fn drag(w: &MainWindow, targets: &[f32]) {
     let start = LogicalPosition::new(8.0 + w.get_sidebar_panel_width(), 350.0);
-    w.window().dispatch_event(WindowEvent::PointerMoved { position: start });
+    w.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: start });
     w.window().dispatch_event(WindowEvent::PointerPressed {
-        position: start, button: PointerEventButton::Left,
+        position: start,
+        button: PointerEventButton::Left,
     });
     for target in targets {
         w.window().dispatch_event(WindowEvent::PointerMoved {
@@ -40,8 +45,33 @@ fn drag(w: &MainWindow, targets: &[f32]) {
 }
 
 fn width(w: &MainWindow, expected: f32) {
-    assert!((w.get_sidebar_panel_width() - expected).abs() < 1.0,
-        "expected {expected}, got {}", w.get_sidebar_panel_width());
+    assert!(
+        (w.get_sidebar_panel_width() - expected).abs() < 1.0,
+        "expected {expected}, got {}",
+        w.get_sidebar_panel_width()
+    );
+}
+
+fn assert_card_order(w: &MainWindow) {
+    let card_y = |label: &str| {
+        ElementHandle::find_by_accessible_label(w, label)
+            .find(|element| element.accessible_role() == Some(testing::AccessibleRole::Groupbox))
+            .map(|element| element.absolute_position().y)
+            .unwrap_or_else(|| panic!("missing accessible sidebar card {label}"))
+    };
+    let saved = card_y("Saved messages");
+    let chats = card_y("Chats");
+    let section = card_y("Weekend plans");
+    assert!(
+        ElementHandle::find_by_accessible_label(w, "Katherine Johnson")
+            .next()
+            .is_none(),
+        "a collapsed section must hide its rows from the accessibility tree"
+    );
+    assert!(
+        saved < chats && chats < section,
+        "expected Saved, Chats, then user sections"
+    );
 }
 
 #[test]
@@ -51,17 +81,52 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     w.set_current_view("main".into());
     chatter_ui::bin_ui::features::back::wire(&w);
     let sidebar = w.global::<SidebarPane>();
-    // Production sidebar wiring populates the virtualized row model. This
-    // headless window only wires Back, so provide the quick-link rows here.
-    let rows: Vec<_> = ["search", "saved", "friends", "calls", "channel-actions", "bottom"]
-        .into_iter()
-        .map(|kind| SidebarRowData {
-            key: kind.into(),
-            kind: kind.into(),
+    // This headless window wires Back only. Seed the production card model
+    // so both responsive layouts render the same conversations.
+    let row = |id: &str, kind: &str, name: &str| SidebarCardRow {
+        conversation_id: id.into(),
+        kind: kind.into(),
+        name: name.into(),
+        short_name: name.split_whitespace().next().unwrap().into(),
+        unread: 2,
+        muted: id == "unfiled-chat",
+        chat_row: ChatRowData {
+            conversation_id: id.into(),
+            display_name: name.into(),
+            is_pinned: id == "pinned-chat",
+            accessible_label_text: name.into(),
             ..Default::default()
-        })
-        .collect();
-    sidebar.set_flat_rows(ModelRc::new(VecModel::from(rows)));
+        },
+        ..Default::default()
+    };
+    let rows = |rows: Vec<SidebarCardRow>| ModelRc::new(VecModel::from(rows));
+    w.global::<SidebarCards>()
+        .set_cards(ModelRc::new(VecModel::from(vec![
+            SidebarCard {
+                id: "saved".into(),
+                kind: "saved".into(),
+                title: "Saved messages".into(),
+                rows: rows(vec![row("saved-notes", "saved", "Saved messages")]),
+                ..Default::default()
+            },
+            SidebarCard {
+                id: "chats".into(),
+                kind: "chats".into(),
+                title: "Chats".into(),
+                pinned: rows(vec![row("pinned-chat", "dm", "Ada Lovelace")]),
+                rows: rows(vec![row("unfiled-chat", "dm", "Grace Hopper")]),
+                ..Default::default()
+            },
+            SidebarCard {
+                id: "filed".into(),
+                kind: "section".into(),
+                title: "Weekend plans".into(),
+                emoji: "🌿".into(),
+                collapsed: true,
+                rows: rows(vec![row("filed-chat", "dm", "Katherine Johnson")]),
+                ..Default::default()
+            },
+        ])));
     w.global::<DesktopChrome>().set_macos(true);
     w.global::<DesktopChrome>().set_frame_inset(8.0);
     w.set_macos_titlebar_height(34.0);
@@ -72,29 +137,86 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     let saved = saves.clone();
     sidebar.on_toggle_sidebar(move || saved.set(saved.get() + 1));
     width(&w, 256.0);
-    assert!(ElementHandle::find_by_accessible_label(&w, "Resize sidebar").next().is_some());
-    for label in ["Expand sidebar", "Collapse sidebar"] {
-        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_none());
+    assert_card_order(&w);
+    let chat_row_y = |label| {
+        let mut rows = ElementHandle::find_by_accessible_label(&w, label)
+            .filter(|element| element.accessible_role() == Some(testing::AccessibleRole::ListItem));
+        let position = rows.next().expect("missing chat row").absolute_position().y;
+        assert!(rows.next().is_none(), "{label} should appear once");
+        position
+    };
+    assert!(chat_row_y("Ada Lovelace") < chat_row_y("Grace Hopper"));
+    for label in ["Profile", "Friends", "Calls", "Activity", "Settings"] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&w, label)
+                .next()
+                .is_some(),
+            "{label} should be reachable from the expanded sidebar footer"
+        );
     }
+    assert!(
+        ElementHandle::find_by_accessible_label(&w, "Resize sidebar")
+            .next()
+            .is_some()
+    );
+    for label in ["Expand sidebar", "Collapse sidebar"] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&w, label)
+                .next()
+                .is_none()
+        );
+    }
+
+    let drop_zone = || {
+        ElementHandle::find_by_accessible_label(&w, "Drop here for a new section")
+            .find(|element| element.accessible_role() == Some(testing::AccessibleRole::Groupbox))
+    };
+    assert!(drop_zone().is_none());
+    let cards = w.global::<SidebarCards>();
+    cards.set_drag_row_id("unfiled-chat".into());
+    cards.set_dragging(true);
+    settle(&w);
+    assert!(drop_zone().is_some());
+    cards.set_dragging(false);
+    cards.set_drag_row_id("".into());
+    settle(&w);
+    assert!(drop_zone().is_none());
 
     // Modal accessibility intentionally hides the underlying page. Keep the
     // original element handle to inspect its geometry behind the overlay.
     let edge = ElementHandle::find_by_accessible_label(&w, "Resize sidebar")
-        .next().unwrap();
+        .next()
+        .unwrap();
     let edge_position = || edge.absolute_position();
     let before_overlay = edge_position();
-    assert!((before_overlay.y - 8.0).abs() < 1.0, "extra native titlebar band: {before_overlay:?}");
-    w.global::<ModalHostState>().invoke_nav_push("create-section".into());
+    assert!(
+        (before_overlay.y - 8.0).abs() < 1.0,
+        "extra native titlebar band: {before_overlay:?}"
+    );
+    w.global::<ModalHostState>()
+        .invoke_nav_push("create-section".into());
     settle(&w);
-    assert_eq!(edge_position(), before_overlay, "modal moved the base layout");
+    assert_eq!(
+        edge_position(),
+        before_overlay,
+        "modal moved the base layout"
+    );
     w.global::<ModalHostState>().invoke_nav_pop();
     w.global::<SearchPane>().set_unified_search_open(true);
     settle(&w);
-    assert_eq!(edge_position(), before_overlay, "search moved the base layout");
+    assert_eq!(
+        edge_position(),
+        before_overlay,
+        "search moved the base layout"
+    );
     w.global::<SearchPane>().set_unified_search_open(false);
     w.global::<ModalHostState>().set_settings_open(true);
     settle(&w);
-    assert_eq!(edge_position(), before_overlay, "settings moved the base layout");
+    assert_eq!(
+        edge_position(),
+        before_overlay,
+        "settings moved the base layout"
+    );
     w.global::<ModalHostState>().set_settings_open(false);
     settle(&w);
 
@@ -104,13 +226,36 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     drag(&w, &[240.0, 100.0]);
     width(&w, 68.0);
     assert!(sidebar.get_sidebar_user_collapsed());
-    for label in ["Saved messages", "Profile", "Settings", "Activity", "Friends", "Calls", "Anon mode"] {
-        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_none(),
-            "{label} should be absent from the collapsed desktop rail");
+    assert_card_order(&w);
+    for label in ["Ada Lovelace", "Grace Hopper"] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&w, label)
+                .any(|element| element.accessible_role() == Some(testing::AccessibleRole::Button)),
+            "missing rail avatar {label}"
+        );
+    }
+    for label in [
+        "Profile",
+        "Settings",
+        "Activity",
+        "Friends",
+        "Calls",
+        "Anon mode",
+    ] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&w, label)
+                .next()
+                .is_none(),
+            "{label} should be absent from the collapsed desktop rail"
+        );
     }
     for label in ["Search", "Create", "Expand sidebar"] {
-        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_some(),
-            "{label} should be reachable from the collapsed desktop rail");
+        assert!(
+            ElementHandle::find_by_accessible_label(&w, label)
+                .next()
+                .is_some(),
+            "{label} should be reachable from the collapsed desktop rail"
+        );
     }
     // Retain the last expanded width, rather than saving the 68px rail.
     assert_eq!(sidebar.get_sidebar_preferred_width(), 240.0);
@@ -121,7 +266,9 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     size(&w, 700.0);
     width(&w, 68.0);
     ElementHandle::find_by_accessible_label(&w, "Expand sidebar")
-        .next().unwrap().invoke_accessible_default_action();
+        .next()
+        .unwrap()
+        .invoke_accessible_default_action();
     settle(&w);
     assert!(w.get_sidebar_panel_width() > 68.0);
 
