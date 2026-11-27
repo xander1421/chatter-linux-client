@@ -8,6 +8,7 @@ import { Button } from "../components/button.slint";
 //
 // Integrates ChatHeader, MessageList, and MessageComposer into a complete chat view.
 
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -824,14 +825,18 @@ export component ChatLayout inherits Rectangle {
         // conversation — the input stays pinned at the bottom and nothing
         // reserves a row beside it (RC87). No wider than a picker needs:
         // across a 1600px pane two GIF tiles were 10:1 strips (RC86).
-        x: root.mobile ? Spacing.sm : 0px;
-        width: root.mobile ? root.width - 2 * Spacing.sm : min(root.width, 420px);
+        x: Spacing.panel-gutter;
+        width: max(0px, root.mobile ? root.width - 2 * self.x : min(root.width - 2 * self.x, 420px));
         y: root.mobile ? root.height - Spacing.sm - root.drawer-occupied-height
             : root.height - bottom-chrome.height - Spacing.xs - root.drawer-space;
         height: root.mobile ? root.drawer-occupied-height : root.drawer-space;
         opacity: root.drawer-visible ? 1 : 0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
         elevation: root.mobile ? 3 : 4;
+        material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+        border-radius: Spacing.radius-panel;
+        border-width: Spacing.stroke;
+        border-color: Colors.border;
         clip: true;
         // Derive chrome from the independent drawer budget, never from
         // a layout's measured height. Keep room for embedded picker chrome
@@ -878,8 +883,10 @@ export component ChatLayout inherits Rectangle {
                 y: picker-drawer.search-y;
                 width: parent.width - 2 * picker-drawer.drawer-padding;
                 height: picker-drawer.control-height;
-                border-radius: Spacing.radius-md;
-                background: Colors.inset;
+                border-radius: Spacing.radius-control;
+                background: transparent;
+                border-width: Spacing.stroke;
+                border-color: Colors.border;
                 HorizontalLayout {
                     padding-left: Spacing.sm;
                     padding-right: Spacing.xs;

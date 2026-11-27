@@ -999,6 +999,8 @@ export component MessageList inherits Rectangle {
 
                 message-bubble := MessageItem {
                     width: 100%;
+                    viewport-left: list.absolute-position.x;
+                    viewport-right: list.absolute-position.x + list.width;
                     cache-viewport-width: root.experimental-content-cache ? list.width : 0px;
                     cache-viewport-height: root.experimental-content-cache ? list.height : 0px;
                     chrome-bottom: root.absolute-position.y + root.top-inset;

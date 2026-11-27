@@ -564,6 +564,8 @@ export component ThreadPanel inherits Rectangle {
                     }
                     MessageItem {
                         width: 100%;
+                        viewport-left: replies-view.absolute-position.x;
+                        viewport-right: replies-view.absolute-position.x + replies-view.width;
                         message-id: item.message-id;
                         sender-id: item.sender-id;
                         timestamp-ns: item.timestamp-ns;

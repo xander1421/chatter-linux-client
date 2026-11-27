@@ -25,11 +25,12 @@ export component AppTopOverlays inherits Rectangle {
     // `changed` never fired); taking that as the limit gave the reaction
     // picker zero height: an empty, see-through popup. An unknown top is the
     // window's bottom instead.
-    property <length> main-composer-top: ChatPane.mention-composer-top > 0px ? ChatPane.mention-composer-top : root.height;
-    property <length> thread-composer-top: ChatPane.thread-composer-top > 0px ? ChatPane.thread-composer-top : root.height;
-    property <length> popup-bottom-limit: (ChatPane.thread-panel-visible
-        ? min(root.thread-composer-top, root.main-composer-top)
-        : root.main-composer-top) - root.safe-area-top;
+    property <length> main-composer-top: ChatPane.mention-composer-top > 0px
+        ? ChatPane.mention-composer-top - root.absolute-position.y : root.height;
+    property <length> thread-composer-top: ChatPane.thread-composer-top > 0px
+        ? ChatPane.thread-composer-top - root.absolute-position.y : root.height;
+    property <length> popup-bottom-limit: ChatPane.thread-panel-visible
+        ? min(root.thread-composer-top, root.main-composer-top) : root.main-composer-top;
     in property <string> active-modal;
     in property <length> context-menu-anchor-bottom;
     in property <length> context-menu-anchor-left;
@@ -235,11 +236,8 @@ export component AppTopOverlays inherits Rectangle {
         selected-category <=> ChatPane.reaction-picker-selected-category;
         search-query <=> ChatPane.reaction-picker-search-query;
         bottom-limit: max(0px, root.popup-bottom-limit);
-        // Anchor near button. Flip above if no space below. Clamp horizontally.
-        position-x: max(8px, min(ChatPane.reaction-picker-anchor-x, root.width - 288px));
-        position-y: ChatPane.reaction-picker-anchor-y - root.safe-area-top + 360px > root.popup-bottom-limit
-            ? max(8px, ChatPane.reaction-picker-anchor-y - root.safe-area-top - 360px)
-            : ChatPane.reaction-picker-anchor-y - root.safe-area-top + 4px;
+        position-x: ChatPane.reaction-picker-anchor-x - root.absolute-position.x;
+        position-y: ChatPane.reaction-picker-anchor-y - root.absolute-position.y;
 
         reaction-selected(sender-id, timestamp-ns, msg-id, emoji) => {
             ChatPane.reaction-picker-visible = false;
@@ -302,17 +300,14 @@ export component AppTopOverlays inherits Rectangle {
         sender-id: ChatPane.context-menu-sender-id;
         timestamp-ns: ChatPane.context-menu-timestamp-ns;
         message-id: ChatPane.context-menu-message-id;
-        position-x: ChatPane.context-menu-x;
-        // This overlay lives in the same inset content rectangle as the
-        // composer. Its height already excludes the IME and system bars.
-        position-y: ChatPane.context-menu-y - root.safe-area-top;
-        content-top: ChatPane.context-menu-content-top - root.safe-area-top;
-        anchor-top: root.context-menu-anchor-top > 0px
-            ? root.context-menu-anchor-top - root.safe-area-top : 0px;
-        anchor-bottom: root.context-menu-anchor-bottom > 0px
-            ? root.context-menu-anchor-bottom - root.safe-area-top : 0px;
-        anchor-left: root.context-menu-anchor-left;
-        anchor-right: root.context-menu-anchor-right;
+        // Convert the window anchors to this inset overlay’s coordinates.
+        position-x: ChatPane.context-menu-x - root.absolute-position.x;
+        position-y: ChatPane.context-menu-y - root.absolute-position.y;
+        content-top: ChatPane.context-menu-content-top - root.absolute-position.y;
+        anchor-top: root.context-menu-anchor-top - root.absolute-position.y;
+        anchor-bottom: root.context-menu-anchor-bottom - root.absolute-position.y;
+        anchor-left: root.context-menu-anchor-left - root.absolute-position.x;
+        anchor-right: root.context-menu-anchor-right - root.absolute-position.x;
         mobile: root.context-menu-mobile;
         from-thread: root.context-menu-from-thread;
         retry-clicked(id) => { ChatPane.message-clicked(id); }

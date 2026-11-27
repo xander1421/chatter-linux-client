@@ -15,8 +15,9 @@ export component MessageActions inherits Rectangle {
     in property <bool> is-own;
     in property <bool> is-system;
     in property <string> message-id;
-    in property <length> row-width;
-    in property <length> row-x;
+    in property <length> origin-x;
+    in property <length> left-limit;
+    in property <length> right-limit;
     in property <length> chrome-bottom: 0px;
     in property <string> sender-id;
     in property <string> timestamp-ns;
@@ -25,21 +26,18 @@ export component MessageActions inherits Rectangle {
     callback thread-clicked(string);
     callback request-menu(length, length, length, length, length, length);
 
-    // Peer bubbles in a narrow pane: the bar would run off the
-    // right edge, so it tucks inside the bubble's end instead.
-    property <bool> overflows-right: !root.is-own
-        && root.bubble-x + root.bubble-width + Spacing.xxs + action-btns.width
-            > root.row-x + root.row-width - Spacing.xs;
-    // Own bubbles wide enough to reach the left edge: the bar would be
-    // clipped by the framed chat or thread container, so it tucks inside
-    // the bubble's start instead (mirror of overflows-right).
-    property <bool> overflows-left: root.is-own
-        && root.bubble-x - Spacing.xxs - action-btns.width < root.row-x + Spacing.xs;
-    // Beside the bubble, not over it: an 8px overlap hid the first letters
-    // of a one-line bubble ("bg27" read "g27").
-    x: root.is-own ? (self.overflows-left ? Spacing.sm : -action-btns.width - Spacing.xxs)
-        : self.overflows-right ? root.bubble-width - action-btns.width - Spacing.sm
-        : root.bubble-width + Spacing.xxs;
+    // Try beside the bubble first, then tuck inside its near edge.
+    // Clamp the tucked position too: a short bubble can be narrower than the bar.
+    private property <length> outside-x: root.is-own
+        ? root.bubble-x - Spacing.xxs - self.width
+        : root.bubble-x + root.bubble-width + Spacing.xxs;
+    private property <length> inside-x: root.is-own
+        ? root.bubble-x + Spacing.sm
+        : root.bubble-x + root.bubble-width - self.width - Spacing.sm;
+    private property <length> preferred-x: self.outside-x < root.left-limit
+        || self.outside-x + self.width > root.right-limit ? self.inside-x : self.outside-x;
+    x: clamp(self.preferred-x, root.left-limit, max(root.left-limit, root.right-limit - self.width))
+        - root.origin-x;
     // Float halfway above the top edge, but never under the floating header
     // and pinned bar: a bubble scrolled up to them hid its own actions.
     y: max(-root.btn / 2, root.chrome-bottom - root.bubble-y);

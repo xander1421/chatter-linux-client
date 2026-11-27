@@ -58,6 +58,9 @@ export component MessageItem inherits Rectangle {
     in property <bool> show-sender: true;
     in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
+    // Visible list edges in window coordinates, independent of row geometry.
+    in property <length> viewport-left: root.absolute-position.x;
+    in property <length> viewport-right: root.absolute-position.x + root.width;
     // Only the scrolling list opts into bounded content textures; previews stay direct.
     in property <length> cache-viewport-width: 0px;
     in property <length> cache-viewport-height: 0px;
@@ -1018,8 +1021,11 @@ export component MessageItem inherits Rectangle {
                     bubble-width: bubble.width;
                     bubble-x: bubble.absolute-position.x;
                     bubble-y: bubble.absolute-position.y;
-                    row-width: root.width;
-                    row-x: root.absolute-position.x;
+                    origin-x: parent.absolute-position.x;
+                    left-limit: max(root.absolute-position.x + Spacing.xs,
+                        root.viewport-left + Spacing.panel-gutter);
+                    right-limit: min(root.absolute-position.x + root.width - Spacing.xs,
+                        root.viewport-right - Spacing.panel-gutter);
                     chrome-bottom: root.chrome-bottom;
                     reply-clicked(a0, a1) => { root.reply-clicked(a0, a1); }
                     react-clicked(a0, a1, a2, a3) => { root.react-clicked(a0, a1, a2, a3); }
