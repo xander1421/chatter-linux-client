@@ -52,6 +52,7 @@ export component AppSettingsHost inherits Rectangle {
         password-changing: SettingsPane.settings-password-changing;
         password-error: SettingsPane.settings-password-error;
         read-receipts-enabled <=> SettingsPane.settings-read-receipts;
+        delivery-receipts-enabled <=> SettingsPane.settings-delivery-receipts;
         typing-indicators-enabled <=> SettingsPane.settings-typing-indicators;
         notification-detail <=> SettingsPane.settings-notification-detail;
         profile-visibility: SettingsPane.settings-profile-visibility;
@@ -120,6 +121,9 @@ export component AppSettingsHost inherits Rectangle {
         }
         open-licenses => {
             ModalHostState.nav-push("licenses");
+        }
+        delivery-receipts-changed(value) => {
+            SettingsPane.settings-delivery-receipts-changed(value);
         }
         read-receipts-changed(value) => {
             SettingsPane.settings-read-receipts-changed(value);

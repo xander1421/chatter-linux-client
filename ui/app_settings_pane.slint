@@ -19,6 +19,7 @@ export global SettingsPane {
     in property <bool> settings-recovery-regen-loading: false;
     in property <string> settings-recovery-regen-error: "";
     in-out property <bool> settings-read-receipts: true;
+    in-out property <bool> settings-delivery-receipts: true;
     in-out property <bool> settings-typing-indicators: true;
     // "none" | "name_only" | "name_and_message" (NotificationDetailLevel::as_str)
     in-out property <string> settings-notification-detail: "none";
@@ -63,6 +64,7 @@ export global SettingsPane {
     callback settings-delete-account-confirmed(string);  // password
     callback settings-regenerate-recovery-codes(string);  // password
     callback settings-read-receipts-changed(bool);
+    callback settings-delivery-receipts-changed(bool);
     callback settings-typing-indicators-changed(bool);
     callback settings-notification-detail-changed(string);
     callback settings-profile-visibility-selected(string);

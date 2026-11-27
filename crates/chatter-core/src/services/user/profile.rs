@@ -167,8 +167,21 @@ impl UserService {
             None => None,
         };
 
+        // What the server profile may carry: under "nobody" every field goes
+        // up empty and the avatar is cleared, since accepted friends hold
+        // this key (it is their UAK for us). The plaintext stays local.
+        let visibility = crate::services::profile_visibility::ProfileVisibility::load(&self.settings_repo);
+        let hidden = visibility == crate::services::profile_visibility::ProfileVisibility::Nobody;
+        let (wire_name, wire_status, wire_avatar) =
+            crate::services::profile_visibility::server_profile_plaintext(
+                visibility,
+                display_name.clone(),
+                status_message.as_ref().map(|s| s.text.clone()),
+                self.settings_repo.get_bytes(keys::AVATAR)?,
+            );
+
         // SECURITY: Encrypt display_name with profile_key if being updated
-        let encrypted_display_name = if let Some(ref name) = display_name {
+        let encrypted_display_name = if let Some(ref name) = wire_name {
             if name.len() > crate::crypto::profile_crypto::MAX_NAME_LENGTH {
                 return Err(UserError::InvalidInput("that name is too long.".into()));
             }
@@ -182,12 +195,12 @@ impl UserService {
 
         // SECURITY: Encrypt status_message with profile_key if being updated —
         // same E2E treatment as display_name (was previously sent plaintext).
-        let encrypted_status = if let Some(ref s) = status_message {
-            if s.text.len() > crate::crypto::profile_crypto::MAX_STATUS_LENGTH {
+        let encrypted_status = if let Some(ref text) = wire_status {
+            if text.len() > crate::crypto::profile_crypto::MAX_STATUS_LENGTH {
                 return Err(UserError::InvalidInput("that bio is too long.".into()));
             }
             let profile_key = profile_key.ok_or(UserError::NotLoggedIn)?;
-            let encrypted = crate::crypto::profile_crypto::encrypt_status(&profile_key, &s.text)?;
+            let encrypted = crate::crypto::profile_crypto::encrypt_status(&profile_key, text)?;
             Some(base64::engine::general_purpose::STANDARD.encode(encrypted))
         } else {
             None
@@ -201,7 +214,7 @@ impl UserService {
         // still exceed the wire cap, skip it so the rest of the update succeeds.
         let (encrypted_avatar, own_avatar_bytes): (Vec<u8>, Option<Vec<u8>>) = match (
             profile_key,
-            self.settings_repo.get_bytes(keys::AVATAR)?,
+            wire_avatar,
         ) {
             (Some(pk), Some(avatar)) if !avatar.is_empty() => {
                 const AVATAR_TARGET_BYTES: usize = 64 * 1024;
@@ -251,13 +264,14 @@ impl UserService {
         };
 
         let mut paths = Vec::new();
-        if display_name.is_some() {
+        if wire_name.is_some() {
             paths.push("display_name".to_string());
         }
-        if status_message.is_some() {
+        if wire_status.is_some() {
             paths.push("status_message".to_string());
         }
-        if !encrypted_avatar.is_empty() {
+        // Hidden: the masked empty blob clears the server avatar.
+        if !encrypted_avatar.is_empty() || hidden {
             paths.push("encrypted_avatar".to_string());
         }
 
@@ -313,6 +327,9 @@ impl UserService {
         // via the friend-key path.
         if own_avatar_bytes.is_some() {
             profile.avatar_bytes = own_avatar_bytes;
+        } else if hidden {
+            // The server copy was cleared; ours stays.
+            profile.avatar_bytes = existing.avatar_bytes.clone();
         }
 
         self.user_repo.upsert_profile(&profile)?;

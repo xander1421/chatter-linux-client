@@ -3016,8 +3016,12 @@ msgstr[1] "Вкл. · {n} рядом"
 msgstr[2] "Вкл. · {n} рядом"
 
 #: ui/mesh/mesh_setup_sheet.slint:114
-msgid "While Mesh is on, nearby devices that connect over Bluetooth may see your device name. You can change it in system settings."
-msgstr "Пока Mesh включён, устройства поблизости, подключившиеся по Bluetooth, могут увидеть имя вашего устройства. Его можно изменить в системных настройках."
+msgid ""
+"While Mesh is on, nearby devices that connect over Bluetooth may see your "
+"device name. You can change it in system settings."
+msgstr ""
+"Пока Mesh включён, устройства поблизости, подключившиеся по Bluetooth, могут "
+"увидеть имя вашего устройства. Его можно изменить в системных настройках."
 
 #: ui/mesh/mesh_setup_sheet.slint:138
 msgid "Nearby devices will appear here when discovered."
@@ -4802,7 +4806,9 @@ msgstr ""
 
 #: ui/pages/link_device.slint:87
 msgid "Linking a different account clears local data on this device."
-msgstr "При привязке другой учётной записи локальные данные на этом устройстве будут удалены."
+msgstr ""
+"При привязке другой учётной записи локальные данные на этом устройстве будут "
+"удалены."
 
 #: ui/pages/link_device.slint:113
 msgid "Preparing your secure link…"
@@ -5856,8 +5862,7 @@ msgid "Leave this channel? You won't get new messages."
 msgstr "Выйти из этого канала? Новые сообщения приходить не будут."
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
-#: ui/sidebar/sidebar.slint:587
-#: ui/modals/friends.slint:147
+#: ui/sidebar/sidebar.slint:587 ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr "Добавить контакт"
 
@@ -6006,7 +6011,8 @@ msgstr "Ключ идентификации изменился"
 
 #: ui/chat/call_confirm.slint
 msgid "Call media connects directly and can reveal your IP address."
-msgstr "Аудио и видео звонка передаются напрямую и могут раскрыть ваш IP-адрес."
+msgstr ""
+"Аудио и видео звонка передаются напрямую и могут раскрыть ваш IP-адрес."
 
 #: ui/anon_mode/shield_network_banner.slint
 msgid "Couldn't reach the server over Tor. Shield is still on."
@@ -6029,36 +6035,73 @@ msgstr "Разрешить"
 
 #: ui/mesh/mesh_list.slint:143
 msgid "Create a private group or pair a contact in Mesh settings."
-msgstr "Создайте приватную группу или сопрягите устройство контакта в настройках Mesh."
+msgstr ""
+"Создайте приватную группу или сопрягите устройство контакта в настройках "
+"Mesh."
 
 #: ui/mesh/mesh_setup_sheet.slint:140
 msgid "Pair a nearby contact"
 msgstr "Сопрячь устройство контакта поблизости"
 
 #: ui/mesh/mesh_setup_sheet.slint:156
-msgid "You appear as {} nearby. Choose your contact’s device and verify it in person."
-msgstr "Пользователи поблизости видят вас под именем {}. Выберите устройство контакта и подтвердите его при личной встрече."
+msgid ""
+"You appear as {} nearby. Choose your contact’s device and verify it in "
+"person."
+msgstr ""
+"Пользователи поблизости видят вас под именем {}. Выберите устройство "
+"контакта и подтвердите его при личной встрече."
 
 #: ui/mesh/mesh_setup_sheet.slint:165 ui/mesh/mesh_setup_sheet.slint:168
 msgid "Nearby public chat"
 msgstr "Публичный чат поблизости"
 
 #: ui/mesh/mesh_setup_sheet.slint:170
-msgid "Send and receive public messages and files over Bluetooth. Anyone nearby can read them."
-msgstr "Отправляйте и получайте публичные сообщения и файлы по Bluetooth. Их может прочитать любой человек поблизости."
+msgid ""
+"Send and receive public messages and files over Bluetooth. Anyone nearby can "
+"read them."
+msgstr ""
+"Отправляйте и получайте публичные сообщения и файлы по Bluetooth. Их может "
+"прочитать любой человек поблизости."
 
 #: ui/mesh/mesh_setup_sheet.slint:177 ui/mesh/mesh_setup_sheet.slint:180
 msgid "Bridge mode"
 msgstr "Режим моста"
 
 #: ui/mesh/mesh_setup_sheet.slint:182
-msgid "Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth."
-msgstr "Подключается к публичным интернет-ретрансляторам и передаёт по Bluetooth идентификаторы подключённых устройств и настроенную ячейку местоположения, если она задана."
+msgid ""
+"Connect to public internet relays and share connected device IDs and any "
+"configured location cell over Bluetooth."
+msgstr ""
+"Подключается к публичным интернет-ретрансляторам и передаёт по Bluetooth "
+"идентификаторы подключённых устройств и настроенную ячейку местоположения, "
+"если она задана."
 
 #: ui/mesh/mesh_setup_sheet.slint:190
 msgid "Mesh nickname"
 msgstr "Псевдоним Mesh"
 
 #: ui/mesh/mesh_setup_sheet.slint:204
-msgid "People nearby can see your mesh nickname. A custom nickname stays the same when your mesh identity changes."
-msgstr "Люди поблизости могут видеть ваш псевдоним Mesh. Заданный вами псевдоним не меняется при смене идентификатора Mesh."
+msgid ""
+"People nearby can see your mesh nickname. A custom nickname stays the same "
+"when your mesh identity changes."
+msgstr ""
+"Люди поблизости могут видеть ваш псевдоним Mesh. Заданный вами псевдоним не "
+"меняется при смене идентификатора Mesh."
+
+#: ui/pages/link_device.slint:87
+msgid ""
+"This device still holds another account's keys. Linking a different account "
+"will fail. Sign in to that account instead, or clear this app's data first."
+msgstr ""
+"На этом устройстве ещё есть ключи другого аккаунта. Привязать другой аккаунт "
+"не получится. Войдите в тот аккаунт или сначала очистите данные приложения."
+
+msgid "Delivery receipts"
+msgstr "Отчёты о доставке"
+
+msgid ""
+"Let others know when their messages reach you. When off, you won't see "
+"theirs either"
+msgstr ""
+"Сообщать другим, когда их сообщения дошли до вас. Если выключено, вы тоже не "
+"увидите их отчёты"

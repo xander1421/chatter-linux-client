@@ -296,10 +296,12 @@ fn linked_device_adopts_the_primarys_privacy_settings() {
     };
     let (_p, primary) = open();
     primary.set_bool(keys::SEND_READ_RECEIPTS, false).unwrap();
+    primary.set_bool(keys::SEND_DELIVERY_RECEIPTS, false).unwrap();
     let sent = current(&primary);
     let provision = ProvisionMessage {
         read_receipts: sent.read_receipts,
         typing_indicators: sent.typing_indicators,
+        delivery_receipts: sent.delivery_receipts,
         ..Default::default()
     };
 
@@ -314,4 +316,5 @@ fn linked_device_adopts_the_primarys_privacy_settings() {
     adopt_provisioned_settings(&linked, &me, &provision).unwrap();
     assert_eq!(current(&linked), sent);
     assert!(!current(&linked).read_receipts && current(&linked).typing_indicators);
+    assert!(!current(&linked).delivery_receipts);
 }

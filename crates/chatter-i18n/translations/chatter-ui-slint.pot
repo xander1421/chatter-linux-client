@@ -13,13 +13,11 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 
 #: ui/activity/activity_bell.slint:66 ui/sidebar/sidebar_footer.slint:136
-#: ui/activity/activity_bell.slint:66 ui/sidebar/sidebar_footer.slint:136
 msgid "Activity, {} unread"
 msgstr ""
 
 #: ui/activity/activity_bell.slint:66 ui/activity/activity_sheet.slint:116
-#: ui/activity/activity_bell.slint:66 ui/activity/activity_sheet.slint:116 ui/sidebar/sidebar_footer.slint:136
-#: ui/activity/activity_bell.slint:66 ui/activity/activity_sheet.slint:116 ui/sidebar/sidebar_footer.slint:136 ui/sidebar/sidebar_footer.slint:272
+#: ui/sidebar/sidebar_footer.slint:136 ui/sidebar/sidebar_footer.slint:272
 msgid "Activity"
 msgstr ""
 
@@ -49,11 +47,9 @@ msgid "Reconnecting (attempt {})"
 msgstr ""
 
 #: ui/activity/activity_sheet.slint:102
-#: ui/activity/activity_sheet.slint:102
 msgid "Connecting…"
 msgstr ""
 
-#: ui/activity/activity_sheet.slint:103 ui/activity/activity_sheet.slint:178
 #: ui/activity/activity_sheet.slint:103 ui/activity/activity_sheet.slint:178
 msgid "Connected"
 msgstr ""
@@ -62,7 +58,6 @@ msgstr ""
 msgid "Disconnected"
 msgstr ""
 
-#: ui/activity/activity_sheet.slint:104 ui/activity/activity_sheet.slint:107
 #: ui/activity/activity_sheet.slint:104 ui/activity/activity_sheet.slint:107
 msgid "Unavailable"
 msgstr ""
@@ -92,11 +87,9 @@ msgid "Close activity"
 msgstr ""
 
 #: ui/activity/activity_sheet.slint:132 ui/mesh/mesh_peer_sheet.slint:72
-#: ui/activity/activity_sheet.slint:132 ui/mesh/mesh_peer_sheet.slint:72
 msgid "Done"
 msgstr ""
 
-#: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 #: ui/activity/activity_sheet.slint:141 ui/activity/activity_sheet.slint:145
 msgid "Mark all read"
 msgstr ""
@@ -118,11 +111,8 @@ msgctxt "push notifications"
 msgid "Push"
 msgstr ""
 
-#: ui/activity/activity_sheet.slint:173
 #: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44
-#: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44 ui/mesh/mesh_setup_sheet.slint:120
-#: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44 ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:249
-#: ui/activity/activity_sheet.slint:173 ui/mesh/mesh_list.slint:44 ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:249
+#: ui/mesh/mesh_setup_sheet.slint:120 ui/sidebar/sidebar_footer.slint:249
 msgid "Mesh"
 msgstr ""
 
@@ -165,12 +155,8 @@ msgid "Could not load activity."
 msgstr ""
 
 #: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299
-#: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299 ui/components/gif_picker.slint:269
-#: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299 ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58
-#: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299 ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58 ui/settings/account_settings.slint:453
-#: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299 ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58 ui/settings/account_settings.slint:453
-#: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299 ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58 ui/settings/account_settings.slint:453
-#: ui/activity/activity_sheet.slint:203 ui/calls/call_history_screen.slint:299 ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58 ui/settings/account_settings.slint:453 ui/startup_error.slint:43
+#: ui/components/gif_picker.slint:269 ui/modals/friends_requests_tab.slint:58
+#: ui/settings/account_settings.slint:453 ui/startup_error.slint:43
 msgid "Retry"
 msgstr ""
 
@@ -240,7 +226,6 @@ msgstr ""
 
 #. Properties
 #: ui/app_chat_pane.slint:58 ui/chat/chat_layout.slint:194
-#: ui/app_chat_pane.slint:58 ui/chat/chat_layout.slint:194
 msgid "Type a message..."
 msgstr ""
 
@@ -253,7 +238,7 @@ msgid "Enter your app lock PIN"
 msgstr ""
 
 #: ui/app_lock.slint:82 ui/modals/anon_mode_pin.slint:74
-#: ui/app_lock.slint:82 ui/modals/anon_mode_pin.slint:74 ui/settings/privacy_settings.slint:150
+#: ui/settings/privacy_settings.slint:150
 msgid "PIN"
 msgstr ""
 
@@ -320,8 +305,8 @@ msgstr ""
 #: ui/app_lock.slint:234
 msgid ""
 "Set. Entering it on the lock screen permanently erases everything Chatter "
-"keeps on this device — keys, messages, attachments, mesh data — and "
-"Chatter starts as if newly installed. Your account stays on the server."
+"keeps on this device — keys, messages, attachments, mesh data — and Chatter "
+"starts as if newly installed. Your account stays on the server."
 msgstr ""
 
 #: ui/app_lock.slint:235
@@ -353,7 +338,6 @@ msgid "Turn off app lock"
 msgstr ""
 
 #. ── Properties: User profile ──
-#: ui/app_sidebar_pane.slint:14 ui/sidebar/dm_list_item.slint:19
 #: ui/app_sidebar_pane.slint:14 ui/sidebar/dm_list_item.slint:19
 msgid "User"
 msgstr ""
@@ -530,10 +514,8 @@ msgstr ""
 msgid "End call"
 msgstr ""
 
-#: ui/calls/call_history_screen.slint:118
 #: ui/calls/call_history_screen.slint:118 ui/sidebar/sidebar.slint:68
-#: ui/calls/call_history_screen.slint:118 ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:619
-#: ui/calls/call_history_screen.slint:118 ui/sidebar/sidebar.slint:68 ui/sidebar/sidebar.slint:619
+#: ui/sidebar/sidebar.slint:619
 msgid "Calls"
 msgstr ""
 
@@ -563,7 +545,7 @@ msgid "Missed"
 msgstr ""
 
 #: ui/calls/call_history_screen.slint:258 ui/modals/channel_settings.slint:363
-#: ui/calls/call_history_screen.slint:258 ui/modals/channel_settings.slint:363 ui/server_records/screen.slint:94
+#: ui/server_records/screen.slint:94
 msgid "Loading…"
 msgstr ""
 
@@ -588,7 +570,7 @@ msgid "Select call with {}"
 msgstr ""
 
 #: ui/calls/call_history_screen.slint:491 ui/components/avatar.slint:32
-#: ui/calls/call_history_screen.slint:491 ui/components/avatar.slint:32 ui/components/avatar.slint:34
+#: ui/components/avatar.slint:34
 msgid "Avatar for {}"
 msgstr ""
 
@@ -626,39 +608,18 @@ msgid ""
 msgstr ""
 
 #: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
-#: ui/calls/call_history_screen.slint:722 ui/chat/call_confirm.slint:36 ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113 ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197 ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628 ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275 ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180 ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762 ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
+#: ui/chat/link_confirm.slint:36 ui/mesh/mesh_compose_sheet.slint:113
+#: ui/mesh/mesh_info_sheet.slint:342 ui/mesh/mesh_setup_sheet.slint:197
+#: ui/modals/channel_danger.slint:102 ui/modals/channel_members.slint:628
+#: ui/modals/create_section.slint:221 ui/modals/forward_message.slint:275
+#: ui/modals/invite_member.slint:244 ui/modals/link_device_approve.slint:180
+#: ui/modals/sessions.slint:354 ui/modals/user_profile.slint:762
+#: ui/modals/user_profile.slint:829 ui/pages/link_device.slint:183
 msgid "Cancel"
 msgstr ""
 
 #: ui/calls/call_history_screen.slint:728 ui/chat/delete_confirm.slint:80
-#: ui/calls/call_history_screen.slint:728 ui/chat/delete_confirm.slint:80 ui/modals/channel_danger.slint:264
-#: ui/calls/call_history_screen.slint:728 ui/chat/delete_confirm.slint:80 ui/modals/channel_danger.slint:264 ui/server_records/screen.slint:242
+#: ui/modals/channel_danger.slint:264 ui/server_records/screen.slint:242
 msgid "Delete"
 msgstr ""
 
@@ -785,7 +746,7 @@ msgid "Play voice message"
 msgstr ""
 
 #: ui/chat/audio_player.slint:146 ui/chat/message_attachments.slint:324
-#: ui/chat/audio_player.slint:146 ui/chat/message_attachments.slint:324 ui/chat/message_attachments.slint:605
+#: ui/chat/message_attachments.slint:605
 msgid "Download failed · tap to retry"
 msgstr ""
 
@@ -810,8 +771,7 @@ msgid "Start call"
 msgstr ""
 
 #: ui/chat/chat_header.slint:181 ui/chat/chat_header.slint:521
-#: ui/chat/chat_header.slint:181 ui/chat/chat_header.slint:521 ui/mesh/mesh_compose_sheet.slint:113
-#: ui/chat/chat_header.slint:181 ui/chat/chat_header.slint:521 ui/mesh/mesh_compose_sheet.slint:113
+#: ui/mesh/mesh_compose_sheet.slint:113
 msgid "Back"
 msgstr ""
 
@@ -832,12 +792,10 @@ msgid "Voice call"
 msgstr ""
 
 #: ui/chat/chat_header.slint:491 ui/mesh/mesh_info_sheet.slint:220
-#: ui/chat/chat_header.slint:491 ui/mesh/mesh_info_sheet.slint:220 ui/modals/invite_member.slint:255
-#: ui/chat/chat_header.slint:491 ui/mesh/mesh_info_sheet.slint:220 ui/modals/invite_member.slint:255
+#: ui/modals/invite_member.slint:255
 msgid "Invite"
 msgstr ""
 
-#: ui/chat/chat_header.slint:499 ui/components/modal.slint:55
 #: ui/chat/chat_header.slint:499 ui/components/modal.slint:55
 msgid "More options"
 msgstr ""
@@ -883,7 +841,6 @@ msgid "Search in chat"
 msgstr ""
 
 #: ui/chat/chat_header_menu.slint:95 ui/modals/channel_settings.slint:433
-#: ui/chat/chat_header_menu.slint:95 ui/modals/channel_settings.slint:433
 msgid "Pinned messages"
 msgstr ""
 
@@ -891,7 +848,6 @@ msgstr ""
 msgid "Video call"
 msgstr ""
 
-#: ui/chat/chat_header_menu.slint:97 ui/mesh/mesh_info_sheet.slint:62
 #: ui/chat/chat_header_menu.slint:97 ui/mesh/mesh_info_sheet.slint:62
 msgid "Add members"
 msgstr ""
@@ -905,7 +861,7 @@ msgid "Start secret chat"
 msgstr ""
 
 #: ui/chat/chat_header_menu.slint:100 ui/chat/secret_timer_modal.slint:14
-#: ui/chat/chat_header_menu.slint:100 ui/chat/secret_timer_modal.slint:14 ui/modals/user_profile.slint:522
+#: ui/modals/user_profile.slint:522
 msgid "Disappearing messages"
 msgstr ""
 
@@ -946,29 +902,21 @@ msgid "Join"
 msgstr ""
 
 #: ui/chat/chat_layout.slint:662 ui/mesh/mesh_peer_sheet.slint:273
-#: ui/chat/chat_layout.slint:662 ui/mesh/mesh_peer_sheet.slint:273 ui/modals/friends_blocked_tab.slint:132
-#: ui/chat/chat_layout.slint:662 ui/mesh/mesh_peer_sheet.slint:273 ui/modals/friends_blocked_tab.slint:132
+#: ui/modals/friends_blocked_tab.slint:132
 msgid "Unblock"
 msgstr ""
 
 #: ui/chat/chat_layout.slint:667 ui/components/unified_search.slint:963
-#: ui/chat/chat_layout.slint:667 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130
-#: ui/chat/chat_layout.slint:667 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102
-#: ui/chat/chat_layout.slint:667 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102 ui/modals/friends_requests_tab.slint:580
-#: ui/chat/chat_layout.slint:667 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102 ui/modals/friends_requests_tab.slint:580
-#: ui/chat/chat_layout.slint:667 ui/components/unified_search.slint:963 ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102 ui/modals/friends_requests_tab.slint:580
+#: ui/mesh/mesh_compose_sheet.slint:130 ui/mesh/mesh_setup_sheet.slint:102
+#: ui/modals/friends_requests_tab.slint:580
 msgid "Join"
 msgstr ""
 
 #: ui/chat/chat_layout.slint:677 ui/mesh/mesh_list.slint:108
-#: ui/chat/chat_layout.slint:677 ui/mesh/mesh_list.slint:108 ui/modals/friends_requests_tab.slint:177
-#: ui/chat/chat_layout.slint:677 ui/mesh/mesh_list.slint:108 ui/modals/friends_requests_tab.slint:177
-#: ui/chat/chat_layout.slint:677 ui/mesh/mesh_list.slint:108 ui/modals/friends_requests_tab.slint:177
-#: ui/chat/chat_layout.slint:677 ui/mesh/mesh_list.slint:108 ui/modals/friends_requests_tab.slint:177
+#: ui/modals/friends_requests_tab.slint:177
 msgid "Decline"
 msgstr ""
 
-#: ui/chat/chat_layout.slint:684 ui/modals/friends_requests_tab.slint:166
 #: ui/chat/chat_layout.slint:684 ui/modals/friends_requests_tab.slint:166
 msgid "Accept"
 msgstr ""
@@ -978,7 +926,6 @@ msgid "Search GIFs"
 msgstr ""
 
 #: ui/chat/chat_layout.slint:886 ui/components/emoji_picker.slint:137
-#: ui/chat/chat_layout.slint:886 ui/components/emoji_picker.slint:137
 msgid "Search emoji"
 msgstr ""
 
@@ -986,7 +933,6 @@ msgstr ""
 msgid "Search emoji and GIFs"
 msgstr ""
 
-#: ui/chat/chat_layout.slint:914 ui/components/emoji_picker.slint:166
 #: ui/chat/chat_layout.slint:914 ui/components/emoji_picker.slint:166
 msgid "Clear search"
 msgstr ""
@@ -1112,9 +1058,6 @@ msgid "Delete for me"
 msgstr ""
 
 #: ui/chat/disappearing_settings.slint:19
-#: ui/chat/disappearing_settings.slint:19
-#: ui/chat/disappearing_settings.slint:19
-#: ui/chat/disappearing_settings.slint:19
 msgid "Selected"
 msgstr ""
 
@@ -1158,7 +1101,6 @@ msgid "Open this link?"
 msgstr ""
 
 #: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
-#: ui/chat/link_confirm.slint:41 ui/components/unified_search.slint:963
 msgid "Open"
 msgstr ""
 
@@ -1174,7 +1116,6 @@ msgstr ""
 msgid "Hide"
 msgstr ""
 
-#: ui/chat/membership_bar.slint:150 ui/server_records/screen.slint:240
 #: ui/chat/membership_bar.slint:150 ui/server_records/screen.slint:240
 msgid "Details"
 msgstr ""
@@ -1255,7 +1196,6 @@ msgstr ""
 msgid "Open file {}"
 msgstr ""
 
-#: ui/chat/message_call.slint:54 ui/chat/message_item.slint:527
 #: ui/chat/message_call.slint:54 ui/chat/message_item.slint:527
 msgid "View profile of {}"
 msgstr ""
@@ -1403,13 +1343,9 @@ msgid "Edit"
 msgstr ""
 
 #: ui/chat/message_context_menu.slint:659
-#: ui/chat/message_context_menu.slint:659
-#: ui/chat/message_context_menu.slint:659
-#: ui/chat/message_context_menu.slint:659
 msgid "Copy"
 msgstr ""
 
-#: ui/chat/message_context_menu.slint:674 ui/modals/forward_message.slint:53
 #: ui/chat/message_context_menu.slint:674 ui/modals/forward_message.slint:53
 msgid "Forward"
 msgstr ""
@@ -1418,7 +1354,6 @@ msgstr ""
 msgid "Select"
 msgstr ""
 
-#: ui/chat/message_context_menu.slint:706
 #: ui/chat/message_context_menu.slint:706
 msgid "Unpin"
 msgstr ""
@@ -1831,14 +1766,11 @@ msgid "Choose your avatar"
 msgstr ""
 
 #: ui/components/code_preview_panel.slint:107
-#: ui/components/code_preview_panel.slint:107
 msgid "Open externally"
 msgstr ""
 
 #: ui/components/compose_fab.slint:38 ui/mesh/mesh_compose_sheet.slint:127
-#: ui/components/compose_fab.slint:38 ui/mesh/mesh_compose_sheet.slint:127 ui/modals/create_channel.slint:191
-#: ui/components/compose_fab.slint:38 ui/mesh/mesh_compose_sheet.slint:127 ui/modals/create_channel.slint:191 ui/modals/create_section.slint:228
-#: ui/components/compose_fab.slint:38 ui/mesh/mesh_compose_sheet.slint:127 ui/modals/create_channel.slint:191 ui/modals/create_section.slint:228
+#: ui/modals/create_channel.slint:191 ui/modals/create_section.slint:228
 msgid "Create"
 msgstr ""
 
@@ -1886,11 +1818,11 @@ msgstr ""
 
 #: ui/components/connection_banner.slint:124
 msgid ""
-"Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not "
-"need the server."
+"Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not need "
+"the server."
 msgid_plural ""
-"Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not "
-"need the server."
+"Mesh is running over Bluetooth — {n} nearby. Mesh conversations do not need "
+"the server."
 msgstr[0] ""
 msgstr[1] ""
 
@@ -1907,7 +1839,6 @@ msgid "Connecting over Tor…"
 msgstr ""
 
 #: ui/components/connection_banner.slint:215
-#: ui/components/connection_banner.slint:215
 msgid "Reconnecting…"
 msgstr ""
 
@@ -1916,7 +1847,7 @@ msgid "Reconnecting (attempt {})…"
 msgstr ""
 
 #: ui/components/connection_banner.slint:217
-#: ui/components/connection_banner.slint:217 ui/sidebar/sidebar_footer.slint:342
+#: ui/sidebar/sidebar_footer.slint:342
 msgid "Server unreachable"
 msgstr ""
 
@@ -2101,13 +2032,12 @@ msgid ""
 msgstr ""
 
 #: ui/components/mesh_only_bar.slint:76 ui/components/mesh_only_bar.slint:91
-#: ui/components/mesh_only_bar.slint:76 ui/components/mesh_only_bar.slint:91 ui/pages/register.slint:619
-#: ui/components/mesh_only_bar.slint:76 ui/components/mesh_only_bar.slint:91 ui/pages/register.slint:619
+#: ui/pages/register.slint:619
 msgid "Sign in"
 msgstr ""
 
 #: ui/components/mobile_bottom_nav.slint:216
-#: ui/components/mobile_bottom_nav.slint:216 ui/sidebar/sidebar_footer.slint:105
+#: ui/sidebar/sidebar_footer.slint:105
 msgid "Chats"
 msgstr ""
 
@@ -2115,8 +2045,6 @@ msgstr ""
 msgid "Contacts"
 msgstr ""
 
-#: ui/components/mobile_bottom_nav.slint:259
-#: ui/components/mobile_bottom_nav.slint:259 ui/sidebar/sidebar_footer.slint:80
 #: ui/components/mobile_bottom_nav.slint:259 ui/sidebar/sidebar_footer.slint:80
 msgid "Profile"
 msgstr ""
@@ -2160,7 +2088,6 @@ msgstr ""
 msgid "This build has no mesh, so there is nothing to fall back to."
 msgstr ""
 
-#: ui/components/offline_mesh_notice.slint:144
 #: ui/components/offline_mesh_notice.slint:144
 msgid "Use the mesh without an account"
 msgstr ""
@@ -2214,9 +2141,6 @@ msgid "All"
 msgstr ""
 
 #: ui/components/unified_search.slint:617
-#: ui/components/unified_search.slint:617
-#: ui/components/unified_search.slint:617
-#: ui/components/unified_search.slint:617
 msgid "Messages"
 msgstr ""
 
@@ -2225,13 +2149,9 @@ msgid "Media"
 msgstr ""
 
 #: ui/components/unified_search.slint:619
-#: ui/components/unified_search.slint:619
-#: ui/components/unified_search.slint:619
 msgid "Files"
 msgstr ""
 
-#: ui/components/unified_search.slint:620
-#: ui/components/unified_search.slint:620
 #: ui/components/unified_search.slint:620
 msgid "Links"
 msgstr ""
@@ -2314,26 +2234,21 @@ msgstr ""
 
 #. `choice` is compared to pick the date-filter key. Shown text is separate.
 #: ui/components/unified_search.slint:699
-#: ui/components/unified_search.slint:699
 msgid "Any time"
 msgstr ""
 
-#: ui/components/unified_search.slint:699
 #: ui/components/unified_search.slint:699
 msgid "Today"
 msgstr ""
 
 #: ui/components/unified_search.slint:699
-#: ui/components/unified_search.slint:699
 msgid "7 days"
 msgstr ""
 
 #: ui/components/unified_search.slint:699
-#: ui/components/unified_search.slint:699
 msgid "30 days"
 msgstr ""
 
-#: ui/components/unified_search.slint:699
 #: ui/components/unified_search.slint:699
 msgid "This year"
 msgstr ""
@@ -2405,7 +2320,6 @@ msgid "No user {}"
 msgstr ""
 
 #: ui/components/unified_search.slint:849
-#: ui/components/unified_search.slint:849
 msgid "Find {}"
 msgstr ""
 
@@ -2430,11 +2344,9 @@ msgid "Messages and shared content"
 msgstr ""
 
 #: ui/components/unified_search.slint:975
-#: ui/components/unified_search.slint:975
 msgid "Photos and videos"
 msgstr ""
 
-#: ui/components/unified_search.slint:978
 #: ui/components/unified_search.slint:978
 msgid "Voice messages"
 msgstr ""
@@ -2460,7 +2372,6 @@ msgstr ""
 msgid "Show more voice"
 msgstr ""
 
-#: ui/components/unified_search.slint:1066
 #: ui/components/unified_search.slint:1066
 msgid "Searching this device…"
 msgstr ""
@@ -2515,11 +2426,9 @@ msgid "In a chat"
 msgstr ""
 
 #: ui/components/unified_search.slint:1296
-#: ui/components/unified_search.slint:1296
 msgid "Search people"
 msgstr ""
 
-#: ui/components/unified_search.slint:1296
 #: ui/components/unified_search.slint:1296
 msgid "Search chats"
 msgstr ""
@@ -2599,8 +2508,6 @@ msgstr ""
 msgid "Connect through nearby relays"
 msgstr ""
 
-#: ui/mesh/mesh_compose_sheet.slint:170
-#: ui/mesh/mesh_compose_sheet.slint:170
 #: ui/mesh/mesh_compose_sheet.slint:170 ui/modals/channel_settings.slint:586
 msgid "Group name"
 msgstr ""
@@ -2669,8 +2576,7 @@ msgid "Noise (bitchat)"
 msgstr ""
 
 #: ui/mesh/mesh_info_sheet.slint:57 ui/modals/channel_danger.slint:57
-#: ui/mesh/mesh_info_sheet.slint:57 ui/modals/channel_danger.slint:57 ui/modals/channel_settings.slint:476
-#: ui/mesh/mesh_info_sheet.slint:57 ui/modals/channel_danger.slint:57 ui/modals/channel_settings.slint:476
+#: ui/modals/channel_settings.slint:476
 msgid "Leave group"
 msgstr ""
 
@@ -2679,9 +2585,7 @@ msgid "Leave cell"
 msgstr ""
 
 #: ui/mesh/mesh_info_sheet.slint:58 ui/mesh/mesh_list_item.slint:152
-#: ui/mesh/mesh_info_sheet.slint:58 ui/mesh/mesh_list_item.slint:152 ui/modals/channel_danger.slint:111
-#: ui/mesh/mesh_info_sheet.slint:58 ui/mesh/mesh_list_item.slint:152 ui/modals/channel_danger.slint:111
-#: ui/mesh/mesh_info_sheet.slint:58 ui/mesh/mesh_list_item.slint:152 ui/modals/channel_danger.slint:111
+#: ui/modals/channel_danger.slint:111
 msgid "Leave channel"
 msgstr ""
 
@@ -2735,8 +2639,7 @@ msgid "Waiting for a route"
 msgstr ""
 
 #: ui/mesh/mesh_info_sheet.slint:199 ui/modals/channel_members.slint:136
-#: ui/mesh/mesh_info_sheet.slint:199 ui/modals/channel_members.slint:136 ui/modals/invite_member.slint:186
-#: ui/mesh/mesh_info_sheet.slint:199 ui/modals/channel_members.slint:136 ui/modals/invite_member.slint:186
+#: ui/modals/invite_member.slint:186
 msgid "Member"
 msgstr ""
 
@@ -2755,17 +2658,10 @@ msgid ""
 msgstr ""
 
 #: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138
-#: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138 ui/modals/profile_action_tiles.slint:31
-#: ui/mesh/mesh_info_sheet.slint:259 ui/mesh/mesh_list_item.slint:138 ui/modals/profile_action_tiles.slint:31
+#: ui/modals/profile_action_tiles.slint:31
 msgid "Mute"
 msgstr ""
 
-#: ui/mesh/mesh_info_sheet.slint:263 ui/mesh/mesh_list_item.slint:142
-#: ui/mesh/mesh_info_sheet.slint:263 ui/mesh/mesh_list_item.slint:142
 #: ui/mesh/mesh_info_sheet.slint:263 ui/mesh/mesh_list_item.slint:142
 msgid "Mute channel"
 msgstr ""
@@ -2792,8 +2688,6 @@ msgstr ""
 msgid "View contact"
 msgstr ""
 
-#: ui/mesh/mesh_info_sheet.slint:322 ui/modals/channel_members.slint:635
-#: ui/mesh/mesh_info_sheet.slint:322 ui/modals/channel_members.slint:635
 #: ui/mesh/mesh_info_sheet.slint:322 ui/modals/channel_members.slint:635
 msgid "Remove"
 msgstr ""
@@ -2905,12 +2799,6 @@ msgid "Encrypted · nearby"
 msgstr ""
 
 #: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
-#: ui/mesh/mesh_list_item.slint:138 ui/mesh/mesh_peer_sheet.slint:113
 msgid "Unmute"
 msgstr ""
 
@@ -2918,7 +2806,6 @@ msgstr ""
 msgid "Unmute channel"
 msgstr ""
 
-#: ui/mesh/mesh_list_item.slint:149 ui/modals/channel_danger.slint:74
 #: ui/mesh/mesh_list_item.slint:149 ui/modals/channel_danger.slint:74
 msgid "Leave"
 msgstr ""
@@ -2935,7 +2822,6 @@ msgstr ""
 msgid "Verified"
 msgstr ""
 
-#: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 #: ui/mesh/mesh_peer_sheet.slint:109 ui/modals/profile_action_tiles.slint:34
 msgid "Message"
 msgstr ""
@@ -3001,7 +2887,7 @@ msgid "Remove from {}"
 msgstr ""
 
 #: ui/mesh/mesh_peer_sheet.slint:273 ui/modals/channel_danger.slint:188
-#: ui/mesh/mesh_peer_sheet.slint:273 ui/modals/channel_danger.slint:188 ui/modals/user_profile.slint:808
+#: ui/modals/user_profile.slint:808
 msgid "Block"
 msgstr ""
 
@@ -3013,7 +2899,6 @@ msgstr ""
 msgid "Remove and rotate key"
 msgstr ""
 
-#: ui/mesh/mesh_setup_sheet.slint:62 ui/mesh/mesh_setup_sheet.slint:73
 #: ui/mesh/mesh_setup_sheet.slint:62 ui/mesh/mesh_setup_sheet.slint:73
 msgid "Mesh settings"
 msgstr ""
@@ -3037,7 +2922,9 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: ui/mesh/mesh_setup_sheet.slint:114
-msgid "While Mesh is on, nearby devices that connect over Bluetooth may see your device name. You can change it in system settings."
+msgid ""
+"While Mesh is on, nearby devices that connect over Bluetooth may see your "
+"device name. You can change it in system settings."
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:138
@@ -3050,8 +2937,7 @@ msgstr ""
 
 #. "Save", not "Done": the sheet's own Done closes it.
 #: ui/mesh/mesh_setup_sheet.slint:152 ui/modals/create_section.slint:228
-#: ui/mesh/mesh_setup_sheet.slint:152 ui/modals/create_section.slint:228 ui/settings/account_settings.slint:233
-#: ui/mesh/mesh_setup_sheet.slint:152 ui/modals/create_section.slint:228 ui/settings/account_settings.slint:233
+#: ui/settings/account_settings.slint:233
 msgid "Save"
 msgstr ""
 
@@ -3081,8 +2967,8 @@ msgstr ""
 msgid ""
 "Shield hides your channels and Saved messages and shows your anonymous DMs. "
 "Your DMs with friends stay, and are sent through anonymous mailboxes instead "
-"of the server. Your network location is hidden behind Tor — if Tor can't "
-"be reached you will be told. Enter your PIN to enable. On a device checking "
+"of the server. Your network location is hidden behind Tor — if Tor can't be "
+"reached you will be told. Enter your PIN to enable. On a device checking "
 "online, wrong attempts can delete your key backup."
 msgstr ""
 
@@ -3117,11 +3003,9 @@ msgid "Create link"
 msgstr ""
 
 #: ui/modals/channel_access.slint:146 ui/modals/profile_info_card.slint:186
-#: ui/modals/channel_access.slint:146 ui/modals/profile_info_card.slint:186
 msgid "Copy link"
 msgstr ""
 
-#: ui/modals/channel_access.slint:167 ui/modals/sessions.slint:339
 #: ui/modals/channel_access.slint:167 ui/modals/sessions.slint:339
 msgid "Revoke"
 msgstr ""
@@ -3147,7 +3031,6 @@ msgid "Who can join?"
 msgstr ""
 
 #: ui/modals/channel_access_choices.slint:31
-#: ui/modals/channel_access_choices.slint:31
 msgctxt "channel access"
 msgid "Open"
 msgstr ""
@@ -3157,7 +3040,6 @@ msgid "Anyone finds and joins. New members see messages from when they join."
 msgstr ""
 
 #: ui/modals/channel_access_choices.slint:90
-#: ui/modals/channel_access_choices.slint:90
 msgid "Invite-only"
 msgstr ""
 
@@ -3165,7 +3047,6 @@ msgstr ""
 msgid "Hidden from discovery. Invite or password to join."
 msgstr ""
 
-#: ui/modals/channel_access_choices.slint:149
 #: ui/modals/channel_access_choices.slint:149
 msgid "Anon group"
 msgstr ""
@@ -3249,11 +3130,9 @@ msgid "Archive to hide from active channels"
 msgstr ""
 
 #: ui/modals/channel_danger.slint:221
-#: ui/modals/channel_danger.slint:221
 msgid "Unarchive"
 msgstr ""
 
-#: ui/modals/channel_danger.slint:221
 #: ui/modals/channel_danger.slint:221
 msgid "Archive"
 msgstr ""
@@ -3281,8 +3160,6 @@ msgid "Upload channel icon"
 msgstr ""
 
 #: ui/modals/channel_identity_fields.slint:64
-#: ui/modals/channel_identity_fields.slint:64
-#: ui/modals/channel_identity_fields.slint:64
 msgid "Change"
 msgstr ""
 
@@ -3291,7 +3168,7 @@ msgid "Upload"
 msgstr ""
 
 #: ui/modals/channel_identity_fields.slint:83
-#: ui/modals/channel_identity_fields.slint:83 ui/modals/channel_settings.slint:586
+#: ui/modals/channel_settings.slint:586
 msgid "Channel name"
 msgstr ""
 
@@ -3320,17 +3197,15 @@ msgid "Moderator"
 msgstr ""
 
 #: ui/modals/channel_members.slint:138 ui/modals/create_channel.slint:452
-#: ui/modals/channel_members.slint:138 ui/modals/create_channel.slint:452
 msgid "Admin"
 msgstr ""
 
-#: ui/modals/channel_members.slint:152 ui/modals/channel_settings.slint:199
 #: ui/modals/channel_members.slint:152 ui/modals/channel_settings.slint:199
 msgid "Members"
 msgstr ""
 
 #: ui/modals/channel_members.slint:173 ui/modals/channel_members.slint:199
-#: ui/modals/channel_members.slint:173 ui/modals/channel_members.slint:199 ui/modals/invite_private_group.slint:27
+#: ui/modals/invite_private_group.slint:27
 msgid "Invite members"
 msgstr ""
 
@@ -3440,13 +3315,10 @@ msgid "Make owner"
 msgstr ""
 
 #: ui/modals/channel_notifications.slint:23
-#: ui/modals/channel_notifications.slint:23
-#: ui/modals/channel_notifications.slint:23
-#: ui/modals/channel_notifications.slint:23 ui/settings/settings_screen.slint:614
+#: ui/settings/settings_screen.slint:614
 msgid "Notifications"
 msgstr ""
 
-#: ui/modals/channel_notifications.slint:33
 #: ui/modals/channel_notifications.slint:33
 msgid "Mute group"
 msgstr ""
@@ -3464,8 +3336,6 @@ msgid "When not muted, notify me for:"
 msgstr ""
 
 #: ui/modals/channel_notifications.slint:77
-#: ui/modals/channel_notifications.slint:77
-#: ui/modals/channel_notifications.slint:77
 msgid "All messages"
 msgstr ""
 
@@ -3473,8 +3343,6 @@ msgstr ""
 msgid "Get notified for every message"
 msgstr ""
 
-#: ui/modals/channel_notifications.slint:136
-#: ui/modals/channel_notifications.slint:136
 #: ui/modals/channel_notifications.slint:136
 msgid "Mentions only"
 msgstr ""
@@ -3484,7 +3352,6 @@ msgid "When someone mentions you or everyone"
 msgstr ""
 
 #: ui/modals/channel_notifications.slint:195
-#: ui/modals/channel_notifications.slint:195
 msgid "Nothing"
 msgstr ""
 
@@ -3492,7 +3359,6 @@ msgstr ""
 msgid "Never notify (still shows unread badge)"
 msgstr ""
 
-#: ui/modals/channel_notifications.slint:252
 #: ui/modals/channel_notifications.slint:252 ui/modals/create_channel.slint:616
 msgid "AI assistant"
 msgstr ""
@@ -3544,7 +3410,6 @@ msgid "Private channel icon"
 msgstr ""
 
 #: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:514
-#: ui/modals/channel_settings.slint:355 ui/modals/channel_settings.slint:514
 msgid "Channel icon"
 msgstr ""
 
@@ -3584,8 +3449,6 @@ msgstr ""
 msgid "Access and invite links"
 msgstr ""
 
-#: ui/modals/channel_settings.slint:427 ui/sidebar/channel_list_item.slint:224
-#: ui/modals/channel_settings.slint:427 ui/sidebar/channel_list_item.slint:224
 #: ui/modals/channel_settings.slint:427 ui/sidebar/channel_list_item.slint:224
 msgid "Muted"
 msgstr ""
@@ -3668,8 +3531,7 @@ msgid "Hosted Ollama"
 msgstr ""
 
 #: ui/modals/create_channel.slint:159 ui/settings/account_menu.slint:214
-#: ui/modals/create_channel.slint:159 ui/settings/account_menu.slint:214 ui/sidebar/create_menu.slint:170
-#: ui/modals/create_channel.slint:159 ui/settings/account_menu.slint:214 ui/sidebar/create_menu.slint:170 ui/sidebar/sidebar.slint:768
+#: ui/sidebar/create_menu.slint:170 ui/sidebar/sidebar.slint:768
 msgid "New channel"
 msgstr ""
 
@@ -3760,8 +3622,6 @@ msgid "Choose icon {}"
 msgstr ""
 
 #: ui/modals/edit_profile.slint:36 ui/modals/user_profile.slint:554
-#: ui/modals/edit_profile.slint:36 ui/modals/user_profile.slint:554
-#: ui/modals/edit_profile.slint:36 ui/modals/user_profile.slint:554
 msgid "Edit profile"
 msgstr ""
 
@@ -3827,13 +3687,12 @@ msgid "Add a friend"
 msgstr ""
 
 #: ui/modals/friends.slint:188 ui/sidebar/sidebar.slint:67
-#: ui/modals/friends.slint:188 ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:583
-#: ui/modals/friends.slint:188 ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:583
+#: ui/sidebar/sidebar.slint:583
 msgid "Friends"
 msgstr ""
 
 #: ui/modals/friends.slint:189 ui/sidebar/sidebar.slint:69
-#: ui/modals/friends.slint:189 ui/sidebar/sidebar.slint:69 ui/sidebar/sidebar.slint:718
+#: ui/sidebar/sidebar.slint:718
 msgid "Requests"
 msgstr ""
 
@@ -3867,7 +3726,6 @@ msgstr ""
 msgid "Blocked {}"
 msgstr ""
 
-#: ui/modals/friends_blocked_tab.slint:146
 #: ui/modals/friends_blocked_tab.slint:146
 msgid "Delete chat"
 msgstr ""
@@ -3929,31 +3787,25 @@ msgid "Use + to add a friend"
 msgstr ""
 
 #: ui/modals/friends_friends_tab.slint:200
-#: ui/modals/friends_friends_tab.slint:200
 msgid "Message {}"
 msgstr ""
 
-#: ui/modals/friends_request_tabs.slint:64
 #: ui/modals/friends_request_tabs.slint:64
 msgid "Received ({})"
 msgstr ""
 
 #: ui/modals/friends_request_tabs.slint:106
-#: ui/modals/friends_request_tabs.slint:106
 msgid "Sent ({})"
 msgstr ""
 
-#: ui/modals/friends_request_tabs.slint:148
 #: ui/modals/friends_request_tabs.slint:148
 msgid "Private ({})"
 msgstr ""
 
 #: ui/modals/friends_request_tabs.slint:190
-#: ui/modals/friends_request_tabs.slint:190
 msgid "Groups ({})"
 msgstr ""
 
-#: ui/modals/friends_request_tabs.slint:232
 #: ui/modals/friends_request_tabs.slint:232
 msgid "Channels ({})"
 msgstr ""
@@ -3983,7 +3835,9 @@ msgid "No private message requests"
 msgstr ""
 
 #: ui/modals/friends_requests_tab.slint:327
-msgid "Private requests use end-to-end encryption\nwith no server involvement"
+msgid ""
+"Private requests use end-to-end encryption\n"
+"with no server involvement"
 msgstr ""
 
 #: ui/modals/friends_requests_tab.slint:408
@@ -4001,7 +3855,9 @@ msgid "No pending group invites"
 msgstr ""
 
 #: ui/modals/friends_requests_tab.slint:491
-msgid "Group invites use end-to-end encryption\nwith anonymous mailboxes"
+msgid ""
+"Group invites use end-to-end encryption\n"
+"with anonymous mailboxes"
 msgstr ""
 
 #: ui/modals/friends_requests_tab.slint:558
@@ -4203,8 +4059,7 @@ msgid "Ctrl + 0"
 msgstr ""
 
 #: ui/modals/keyboard_shortcuts.slint:134 ui/settings/account_menu.slint:201
-#: ui/modals/keyboard_shortcuts.slint:134 ui/settings/account_menu.slint:201 ui/sidebar/sidebar.slint:499
-#: ui/modals/keyboard_shortcuts.slint:134 ui/settings/account_menu.slint:201 ui/sidebar/sidebar.slint:499 ui/sidebar/sidebar.slint:522
+#: ui/sidebar/sidebar.slint:499 ui/sidebar/sidebar.slint:522
 msgid "Saved messages"
 msgstr ""
 
@@ -4236,7 +4091,6 @@ msgstr ""
 msgid "Show this dialog"
 msgstr ""
 
-#: ui/modals/keyboard_shortcuts.slint:138
 #: ui/modals/keyboard_shortcuts.slint:138
 msgid "Escape"
 msgstr ""
@@ -4358,14 +4212,9 @@ msgid "Mute conversation"
 msgstr ""
 
 #: ui/modals/profile_action_tiles.slint:29
-#: ui/modals/profile_action_tiles.slint:29
-#: ui/modals/profile_action_tiles.slint:29
-#: ui/modals/profile_action_tiles.slint:29
-#: ui/modals/profile_action_tiles.slint:29
 msgid "More"
 msgstr ""
 
-#: ui/modals/profile_action_tiles.slint:39
 #: ui/modals/profile_action_tiles.slint:39
 msgctxt "action"
 msgid "Call"
@@ -4377,7 +4226,7 @@ msgid "About"
 msgstr ""
 
 #: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112
-#: ui/modals/profile_info_card.slint:83 ui/pages/account_recovery.slint:112 ui/pages/register.slint:373
+#: ui/pages/register.slint:373
 msgid "Username"
 msgstr ""
 
@@ -4490,7 +4339,7 @@ msgid "I have saved my recovery codes"
 msgstr ""
 
 #: ui/modals/recovery_codes.slint:219 ui/pages/register.slint:386
-#: ui/modals/recovery_codes.slint:219 ui/pages/register.slint:386 ui/pages/register.slint:543
+#: ui/pages/register.slint:543
 msgid "Continue"
 msgstr ""
 
@@ -4514,7 +4363,6 @@ msgstr ""
 msgid "Who can message you this way?"
 msgstr ""
 
-#: ui/modals/sealed_sender_intro.slint:132
 #: ui/modals/sealed_sender_intro.slint:132
 msgid "Allow sealed messages from anyone"
 msgstr ""
@@ -4547,7 +4395,6 @@ msgstr[1] ""
 msgid "Sessions not loaded"
 msgstr ""
 
-#: ui/modals/sessions.slint:116 ui/modals/sessions.slint:125
 #: ui/modals/sessions.slint:116 ui/modals/sessions.slint:125
 msgid "Link new device"
 msgstr ""
@@ -4588,7 +4435,6 @@ msgstr ""
 msgid "Revoke this device? It must be linked again."
 msgstr ""
 
-#: ui/modals/sessions.slint:339 ui/settings/devices_settings.slint:199
 #: ui/modals/sessions.slint:339 ui/settings/devices_settings.slint:199
 msgid "Confirm"
 msgstr ""
@@ -4742,7 +4588,6 @@ msgid "Recovery code is required"
 msgstr ""
 
 #: ui/pages/account_recovery.slint:160 ui/pages/account_recovery.slint:166
-#: ui/pages/account_recovery.slint:160 ui/pages/account_recovery.slint:166
 msgid "New password"
 msgstr ""
 
@@ -4751,7 +4596,6 @@ msgid "Password is required"
 msgstr ""
 
 #: ui/pages/account_recovery.slint:179 ui/pages/account_recovery.slint:185
-#: ui/pages/account_recovery.slint:179 ui/pages/account_recovery.slint:185
 msgid "Confirm password"
 msgstr ""
 
@@ -4759,7 +4603,6 @@ msgstr ""
 msgid "Please confirm your password"
 msgstr ""
 
-#: ui/pages/account_recovery.slint:194 ui/pages/register.slint:457
 #: ui/pages/account_recovery.slint:194 ui/pages/register.slint:457
 msgid "Passwords do not match"
 msgstr ""
@@ -4826,9 +4669,6 @@ msgstr ""
 msgid "Sign in to continue"
 msgstr ""
 
-#: ui/pages/login.slint:142 ui/pages/register.slint:407
-#: ui/pages/login.slint:142 ui/pages/register.slint:407
-#: ui/pages/login.slint:142 ui/pages/register.slint:407
 #: ui/pages/login.slint:142 ui/pages/register.slint:407
 msgid "Password"
 msgstr ""
@@ -5016,7 +4856,7 @@ msgid "Find people you know on Chatter"
 msgstr ""
 
 #: ui/pages/welcome.slint:202 ui/pages/welcome.slint:235
-#: ui/pages/welcome.slint:202 ui/pages/welcome.slint:235 ui/sidebar/sidebar.slint:796
+#: ui/sidebar/sidebar.slint:796
 msgid "Browse channels"
 msgstr ""
 
@@ -5048,8 +4888,7 @@ msgstr ""
 
 #: ui/server_records/screen.slint:71
 msgid ""
-"Call records from this channel’s server. Private call history stays in "
-"Calls."
+"Call records from this channel’s server. Private call history stays in Calls."
 msgstr ""
 
 #: ui/server_records/screen.slint:96
@@ -5099,8 +4938,7 @@ msgid "My profile"
 msgstr ""
 
 #: ui/settings/account_menu.slint:229 ui/settings/settings_screen.slint:265
-#: ui/settings/account_menu.slint:229 ui/settings/settings_screen.slint:265 ui/sidebar/sidebar_footer.slint:325
-#: ui/settings/account_menu.slint:229 ui/settings/settings_screen.slint:265 ui/sidebar/sidebar_footer.slint:325
+#: ui/sidebar/sidebar_footer.slint:325
 msgid "Settings"
 msgstr ""
 
@@ -5108,7 +4946,6 @@ msgstr ""
 msgid "Night mode"
 msgstr ""
 
-#: ui/settings/account_settings.slint:66 ui/settings/settings_screen.slint:277
 #: ui/settings/account_settings.slint:66 ui/settings/settings_screen.slint:277
 msgid "Account"
 msgstr ""
@@ -5137,7 +4974,6 @@ msgstr ""
 msgid "Lost or used up your codes? Get a new set."
 msgstr ""
 
-#: ui/settings/account_settings.slint:266
 #: ui/settings/account_settings.slint:266
 msgid "Regenerate"
 msgstr ""
@@ -5243,7 +5079,6 @@ msgid "Sign out of your account on this device."
 msgstr ""
 
 #: ui/settings/account_settings.slint:675
-#: ui/settings/account_settings.slint:675
 msgid "Log out"
 msgstr ""
 
@@ -5262,7 +5097,6 @@ msgid ""
 "be undone."
 msgstr ""
 
-#: ui/settings/account_settings.slint:745
 #: ui/settings/account_settings.slint:745
 msgid "Delete account"
 msgstr ""
@@ -5341,7 +5175,7 @@ msgid "Assistant memory"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:19
-#: ui/settings/appearance_settings.slint:19 ui/settings/settings_screen.slint:616
+#: ui/settings/settings_screen.slint:616
 msgid "Appearance"
 msgstr ""
 
@@ -5349,7 +5183,6 @@ msgstr ""
 msgid "Theme"
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:48
 #: ui/settings/appearance_settings.slint:48
 msgid "System"
 msgstr ""
@@ -5405,7 +5238,6 @@ msgid "Largest"
 msgstr ""
 
 #: ui/settings/appearance_settings.slint:341
-#: ui/settings/appearance_settings.slint:341
 msgid "Glass effects"
 msgstr ""
 
@@ -5415,7 +5247,6 @@ msgid ""
 "better performance."
 msgstr ""
 
-#: ui/settings/appearance_settings.slint:370
 #: ui/settings/appearance_settings.slint:370
 msgid "Reduce animations"
 msgstr ""
@@ -5482,7 +5313,6 @@ msgid "Search shortcut {}"
 msgstr ""
 
 #: ui/settings/devices_settings.slint:32 ui/settings/settings_screen.slint:280
-#: ui/settings/devices_settings.slint:32 ui/settings/settings_screen.slint:280
 msgid "Linked devices"
 msgstr ""
 
@@ -5496,7 +5326,6 @@ msgid ""
 "one out."
 msgstr ""
 
-#: ui/settings/devices_settings.slint:98
 #: ui/settings/devices_settings.slint:98
 msgid "Manage devices"
 msgstr ""
@@ -5518,7 +5347,7 @@ msgid "Approved, waiting to finish linking (until {})"
 msgstr ""
 
 #: ui/settings/encryption_settings.slint:21
-#: ui/settings/encryption_settings.slint:21 ui/settings/settings_screen.slint:617
+#: ui/settings/settings_screen.slint:617
 msgid "Encryption"
 msgstr ""
 
@@ -5540,7 +5369,6 @@ msgid "To verify a contact, compare safety numbers from their profile"
 msgstr ""
 
 #: ui/settings/encryption_settings.slint:130
-#: ui/settings/encryption_settings.slint:130
 msgid "Allow sealed sender from anyone"
 msgstr ""
 
@@ -5550,7 +5378,6 @@ msgid ""
 "still can't see who sent them."
 msgstr ""
 
-#: ui/settings/notifications_settings.slint:41
 #: ui/settings/notifications_settings.slint:41
 msgid "Account push notifications"
 msgstr ""
@@ -5586,7 +5413,6 @@ msgid "No name or content"
 msgstr ""
 
 #: ui/settings/notifications_settings.slint:198
-#: ui/settings/notifications_settings.slint:198
 msgid "Sound and vibration"
 msgstr ""
 
@@ -5595,7 +5421,6 @@ msgid "Opens this device's settings for message notifications"
 msgstr ""
 
 #: ui/settings/notifications_settings.slint:255
-#: ui/settings/notifications_settings.slint:255
 msgid "Notification sound"
 msgstr ""
 
@@ -5603,7 +5428,6 @@ msgstr ""
 msgid "Play a sound when a message notification arrives"
 msgstr ""
 
-#: ui/settings/privacy_settings.slint:36 ui/settings/settings_screen.slint:278
 #: ui/settings/privacy_settings.slint:36 ui/settings/settings_screen.slint:278
 msgid "Privacy"
 msgstr ""
@@ -5623,7 +5447,6 @@ msgid ""
 msgstr ""
 
 #: ui/settings/privacy_settings.slint:80
-#: ui/settings/privacy_settings.slint:80
 msgid "Everyone"
 msgstr ""
 
@@ -5632,7 +5455,6 @@ msgid "My contacts"
 msgstr ""
 
 #: ui/settings/privacy_settings.slint:82
-#: ui/settings/privacy_settings.slint:82
 msgid "Nobody"
 msgstr ""
 
@@ -5640,7 +5462,6 @@ msgstr ""
 msgid "Enter your PIN to change this"
 msgstr ""
 
-#: ui/settings/privacy_settings.slint:213
 #: ui/settings/privacy_settings.slint:213
 msgid "Shield"
 msgstr ""
@@ -5670,7 +5491,6 @@ msgid "Only people with your friend code or username link can find you"
 msgstr ""
 
 #: ui/settings/privacy_settings.slint:358
-#: ui/settings/privacy_settings.slint:358
 msgid "Read receipts"
 msgstr ""
 
@@ -5678,7 +5498,6 @@ msgstr ""
 msgid "Let others know when you've read their messages"
 msgstr ""
 
-#: ui/settings/privacy_settings.slint:396
 #: ui/settings/privacy_settings.slint:396
 msgid "Typing indicators"
 msgstr ""
@@ -5696,11 +5515,9 @@ msgid "Pinned"
 msgstr ""
 
 #: ui/sidebar/channel_list_item.slint:262 ui/sidebar/dm_list_item.slint:260
-#: ui/sidebar/channel_list_item.slint:262 ui/sidebar/dm_list_item.slint:260
 msgid "typing"
 msgstr ""
 
-#: ui/sidebar/channel_list_item.slint:279 ui/sidebar/dm_list_item.slint:273
 #: ui/sidebar/channel_list_item.slint:279 ui/sidebar/dm_list_item.slint:273
 msgid "Draft:"
 msgstr ""
@@ -5832,19 +5649,16 @@ msgid "Leave this channel? You won't get new messages."
 msgstr ""
 
 #: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574
-#: ui/sidebar/sidebar.slint:67 ui/sidebar/sidebar.slint:574 ui/sidebar/sidebar.slint:587
-#: ui/modals/friends.slint:147
+#: ui/sidebar/sidebar.slint:587 ui/modals/friends.slint:147
 msgid "Add contact"
 msgstr ""
 
 #: ui/sidebar/sidebar.slint:70 ui/sidebar/sidebar.slint:470
-#: ui/sidebar/sidebar.slint:70 ui/sidebar/sidebar.slint:470 ui/sidebar/sidebar_header.slint:53
-#: ui/sidebar/sidebar.slint:70 ui/sidebar/sidebar.slint:470 ui/sidebar/sidebar_header.slint:53
+#: ui/sidebar/sidebar_header.slint:53
 msgid "Search"
 msgstr ""
 
 #. "Archived Chats" bar; its chevron is the way back.
-#: ui/sidebar/sidebar.slint:71 ui/sidebar/sidebar.slint:408
 #: ui/sidebar/sidebar.slint:71 ui/sidebar/sidebar.slint:408
 msgid "Archived chats"
 msgstr ""
@@ -6012,7 +5826,9 @@ msgid "Pair a nearby contact"
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:156
-msgid "You appear as {} nearby. Choose your contact’s device and verify it in person."
+msgid ""
+"You appear as {} nearby. Choose your contact’s device and verify it in "
+"person."
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:165 ui/mesh/mesh_setup_sheet.slint:168
@@ -6020,7 +5836,9 @@ msgid "Nearby public chat"
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:170
-msgid "Send and receive public messages and files over Bluetooth. Anyone nearby can read them."
+msgid ""
+"Send and receive public messages and files over Bluetooth. Anyone nearby can "
+"read them."
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:177 ui/mesh/mesh_setup_sheet.slint:180
@@ -6028,7 +5846,9 @@ msgid "Bridge mode"
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:182
-msgid "Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth."
+msgid ""
+"Connect to public internet relays and share connected device IDs and any "
+"configured location cell over Bluetooth."
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:190
@@ -6036,5 +5856,21 @@ msgid "Mesh nickname"
 msgstr ""
 
 #: ui/mesh/mesh_setup_sheet.slint:204
-msgid "People nearby can see your mesh nickname. A custom nickname stays the same when your mesh identity changes."
+msgid ""
+"People nearby can see your mesh nickname. A custom nickname stays the same "
+"when your mesh identity changes."
+msgstr ""
+
+#: ui/pages/link_device.slint:87
+msgid ""
+"This device still holds another account's keys. Linking a different account "
+"will fail. Sign in to that account instead, or clear this app's data first."
+msgstr ""
+
+msgid "Delivery receipts"
+msgstr ""
+
+msgid ""
+"Let others know when their messages reach you. When off, you won't see "
+"theirs either"
 msgstr ""

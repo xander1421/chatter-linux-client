@@ -20,15 +20,15 @@ impl MessageService {
     ) -> Result<(), MessageError> {
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             self.send_dm(peer_id, content, &self.mailbox_manager).await
-        } else if is_delivery_receipt(&content)
-            && self.sealed_access_key(&peer_id.to_string(), false).is_none()
-        {
-            // Without their UAK the deposit degrades to identified delivery,
-            // which names us as the receipt's sender — exactly the link a
-            // sealed receipt exists to hide. An automatic receipt is not worth
-            // that (Signal-Desktop only receipts sealed incoming DMs).
-            tracing::info!(%peer_id, "No delivery receipt: no sealed access to the peer");
-            Ok(())
+        } else if is_sealed_only_content(&content) {
+            // Checked before encrypting so a receipt or typing indicator
+            // never costs a prekey fetch it cannot use. A UAK the server
+            // rejects is refused inside the deposit (`send_sealed_batch`).
+            if self.sealed_access_key(&peer_id.to_string(), false).is_none() {
+                tracing::info!(%peer_id, "No receipt/typing: no sealed access to the peer");
+                return Ok(());
+            }
+            drop_without_sealed_access(peer_id, self.send_sealed_dm_content(peer_id, content).await)
         } else {
             self.send_sealed_dm_content(peer_id, content).await
         }
@@ -65,10 +65,10 @@ impl MessageService {
     /// copies it to our own other devices (Signal-style multi-device sync)
     /// when `own_device_copy` gives it one.
     ///
-    /// If the recipient's UAK is unavailable this degrades to identified
-    /// (Basic auth) delivery, which exposes us to the server as the sender.
-    /// That case is loud in the logs and never silent — see
-    /// `deposit_sealed_to_all_devices`.
+    /// With no UAK at all a DataMessage degrades to identified (Basic auth)
+    /// delivery, which exposes us to the server as the sender; that case is
+    /// loud in the logs, never silent. A rejected UAK, and receipts or typing
+    /// without one, are never sent identified — see `send_sealed_batch`.
     ///
     /// Callers that need local storage (e.g. `send_server_dm`) do it
     /// themselves after this returns — this method only handles delivery.
@@ -145,9 +145,4 @@ impl MessageService {
 
         Ok(())
     }
-}
-
-fn is_delivery_receipt(content: &chatter_proto::content_v1::Content) -> bool {
-    use chatter_proto::content_v1::{content::Content as Body, receipt_message::Type};
-    matches!(&content.content, Some(Body::Receipt(r)) if r.r#type == Type::Delivery as i32)
 }

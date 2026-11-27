@@ -223,13 +223,12 @@ impl MessageService {
                 });
             }
         };
-        if let (Ok(peer), Ok(content)) = (
-            recipient_id.parse::<UserId>(),
-            chatter_proto::content_v1::Content::decode(plaintext),
-        ) {
+        let content = chatter_proto::content_v1::Content::decode(plaintext).ok();
+        let sealed_only = content.as_ref().is_some_and(super::is_sealed_only_content);
+        if let (Ok(peer), Some(content)) = (recipient_id.parse::<UserId>(), content.as_ref()) {
             self.snapshot_dm_content_targets(
                 peer,
-                &content,
+                content,
                 &sealed.keys().copied().collect::<Vec<_>>(),
             )
             .map_err(|error| {
@@ -271,7 +270,12 @@ impl MessageService {
         // sealed sender entirely. Logged loudly and per-recipient on purpose:
         // a silent fallback here would report "sealed DM sent" while shipping
         // the exact opposite.
-        if policy == AccessPolicy::FetchIfNeeded && recipient_uak.is_none() && !is_self {
+        let identified = policy == AccessPolicy::FetchIfNeeded
+            && recipient_uak.is_none()
+            && !is_self
+            && !sealed_only
+            && !self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
+        if identified {
             tracing::warn!(
                 recipient = recipient_id,
                 reason = "no profile key held for the recipient to derive their UAK",
@@ -283,14 +287,13 @@ impl MessageService {
         let sent = match policy {
             AccessPolicy::FetchIfNeeded => self.send_sealed_batch(
                 message_client, recipient_id, messages, SealedDelivery::AllDevices,
-                recipient_uak.as_ref(), client_request_id,
+                recipient_uak.as_ref(), sealed_only, client_request_id,
             ).await,
             AccessPolicy::AnonymousGroup => {
-                self.send_private_distribution(recipient_id, messages, client_request_id)
-                    .await.map(|response| (response, false))
+                self.send_private_distribution(recipient_id, messages, client_request_id).await
             }
         };
-        let (response, uak_rejected) = match sent {
+        let response = match sent {
             Ok(r) => r,
             Err(e @ crate::error::NetworkError::MismatchedDevices { .. }) => return Err(e),
             Err(e) => {
@@ -302,7 +305,7 @@ impl MessageService {
             }
         };
         let mut outcome = DepositOutcome::delivered(&response);
-        if policy == AccessPolicy::FetchIfNeeded && !is_self && (recipient_uak.is_none() || uak_rejected) {
+        if identified {
             outcome.degraded = outcome.delivered;
         }
         outcome.registration_ids = registration_ids;
@@ -334,9 +337,9 @@ impl MessageService {
     /// (a resend to a message's original devices, a NullMessage after a
     /// reset, own-device sync in Shield) in ONE `SendSealedMessage`
     /// (`SealedDelivery::NamedDevices`): UAK-authorized on the anonymous
-    /// channel with `uak`, identified on `message_client` without — or when
-    /// the server rejects the UAK (our copy of the recipient's profile key is
-    /// stale: they rotated it). The server checks only that each named device
+    /// channel with `uak`, identified on `message_client` without one (never
+    /// in Shield, never after the server rejects the UAK — see
+    /// [`Self::send_sealed_batch`]). The server checks only that each named device
     /// is registered; one that is not (retired by Log Out / unlink) gets its
     /// session archived and the rest are sent again, once.
     pub(in crate::services::message) async fn deposit_sealed_ciphertexts(
@@ -345,6 +348,7 @@ impl MessageService {
         recipient_id: &str,
         ciphertexts: std::collections::HashMap<u32, Vec<u8>>,
         uak: Option<&[u8; 16]>,
+        sealed_only: bool,
     ) -> DepositOutcome {
         let timestamp = crate::util::time::TimestampNanos::now_anonymized().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
@@ -364,6 +368,11 @@ impl MessageService {
         let client_request_id = super::super::dm_outbox::request_id()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+        // Only a deposit without a UAK goes identified; a rejected one fails.
+        let identified = uak.is_none()
+            && !sealed_only
+            && !self.current_user_id().is_ok_and(|me| me.to_string() == recipient_id)
+            && !self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
         let mut error = None;
         for _attempt in 0..2 {
             if messages.is_empty() {
@@ -376,13 +385,14 @@ impl MessageService {
                     messages.clone(),
                     SealedDelivery::NamedDevices,
                     uak,
+                    sealed_only,
                     &client_request_id,
                 )
                 .await
             {
-                Ok((response, uak_rejected)) => {
+                Ok(response) => {
                     let mut outcome = DepositOutcome::delivered(&response);
-                    if uak_rejected {
+                    if identified {
                         outcome.degraded = outcome.delivered;
                     }
                     outcome.error = error;
@@ -459,9 +469,24 @@ impl MessageService {
     /// One `SendSealedMessage`: with `uak` on the anonymous channel (no
     /// `authorization` header — `message_client` is interceptor-wrapped and
     /// would attach Basic auth next to the UAK, which the server rejects as
-    /// multiple auth methods), identified on `message_client` without one,
-    /// or when the server rejects the UAK. The `bool` is that rejection: the
-    /// send went identified although we meant to seal it.
+    /// multiple auth methods), or identified on `message_client` when there
+    /// is no UAK at all and the send may be identified.
+    ///
+    /// A UAK the server rejects never falls back to Basic auth: that is the
+    /// server learning the sender of a message we meant to seal. Our copy of
+    /// the recipient's profile key is stale (they rotated it); a newer one
+    /// may have arrived since `uak` was derived (a queued envelope stores
+    /// the UAK it was sealed with), so the UAK is derived again from the
+    /// stored key and the send retried sealed, once. Otherwise the send fails
+    /// with [`NetworkError::SealedAccessUnavailable`]: a queued DM waits for
+    /// the peer's next message to bring the new key, a receipt is dropped.
+    ///
+    /// With no UAK, `sealed_only` content (receipts, typing, call hangups,
+    /// NullMessages, decryption-error reports, resends) fails the same way
+    /// instead of going identified. In Shield a deposit without a UAK is
+    /// authorized by a single-use blind mailbox credential instead, so it is
+    /// never identified either. Deposits to our own account are identified by
+    /// design (own-device sync).
     ///
     /// Friend DMs are sealed even though the server already stores the
     /// friendship: a static friendship graph is not a behavioural delivery
@@ -469,6 +494,9 @@ impl MessageService {
     /// server; knowing "A sent B a message at 14:03, then three more by
     /// 14:05" is a timing-and-frequency record neither of them agreed to.
     /// Signal seals to known contacts for exactly this reason, and so do we.
+    ///
+    /// [`NetworkError::SealedAccessUnavailable`]: crate::error::NetworkError::SealedAccessUnavailable
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::services::message) async fn send_sealed_batch(
         &self,
         message_client: &mut MessageClient,
@@ -476,10 +504,13 @@ impl MessageService {
         messages: Vec<SealedDeviceMessage>,
         delivery: SealedDelivery,
         uak: Option<&[u8; 16]>,
+        sealed_only: bool,
         client_request_id: &str,
-    ) -> Result<(SendSealedMessageResponse, bool), crate::error::NetworkError> {
+    ) -> Result<SendSealedMessageResponse, crate::error::NetworkError> {
+        use crate::error::NetworkError;
+
         crate::state::send_session::check_send_session()
-            .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
+            .map_err(|error| NetworkError::InvalidRequest(error.to_string()))?;
         // A queued DM stores these exact envelopes before the first byte goes.
         super::super::dm_outbox::retain_request(
             recipient_id,
@@ -488,20 +519,58 @@ impl MessageService {
             uak,
             client_request_id,
         )
-        .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
+        .map_err(|error| NetworkError::ServerError(error.to_string()))?;
         // Shield turned on during a queued DM's attempt: this transport names
         // the recipient, so the stored envelope waits instead.
         let shield_fence = || {
             if super::super::dm_outbox::request_id().is_some()
                 && self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
             {
-                return Err(crate::error::NetworkError::Unavailable);
+                return Err(NetworkError::Unavailable);
             }
             Ok(())
         };
         shield_fence()?;
-        let mut uak_rejected = false;
-        if let Some(uak) = uak {
+        let Some(&first) = uak else {
+            let is_self = self
+                .current_user_id()
+                .is_ok_and(|me| me.to_string() == recipient_id);
+            if !is_self && self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+                // Shield: authorize with a single-use blind mailbox credential,
+                // as private posts do (`send_private_distribution`), so an
+                // SKDM, resend or repair to a member whose profile key we
+                // lack still reaches them without naming us.
+                let token = self.token_manager.claim_budgeted_credential(
+                    super::super::group_send::RESERVED_MAILBOX_CREDENTIALS,
+                    |_| Ok(()),
+                )?;
+                return self
+                    .grpc_pool
+                    .anonymous_message_client()
+                    .send_with_anonymous_credential(
+                        client_request_id,
+                        recipient_id,
+                        messages,
+                        delivery,
+                        0,
+                        &token.public_key,
+                        &token.signature,
+                    )
+                    .await;
+            }
+            if !is_self && sealed_only {
+                tracing::info!(
+                    recipient = recipient_id,
+                    "Sealed send: no UAK for the recipient; identified delivery refused"
+                );
+                return Err(NetworkError::SealedAccessUnavailable);
+            }
+            return message_client
+                .send_sealed_messages(recipient_id, messages, delivery, client_request_id)
+                .await;
+        };
+        let mut uak = first;
+        loop {
             match self
                 .grpc_pool
                 .anonymous_message_client()
@@ -510,28 +579,36 @@ impl MessageService {
                     messages.clone(),
                     delivery,
                     client_request_id,
-                    uak,
+                    &uak,
                 )
                 .await
             {
                 Err(e) if e.is_auth_error() => {
-                    tracing::warn!(
-                        recipient = recipient_id,
-                        reason = "UAK from our stored profile key rejected",
-                        "SEALED SENDER DEGRADED: delivering identified (Basic auth)"
-                    );
-                    uak_rejected = true;
+                    match self.sealed_access_key(recipient_id, false) {
+                        Some(fresh) if uak == first && fresh != uak => {
+                            tracing::info!(
+                                recipient = recipient_id,
+                                "Sealed send: UAK rejected; retrying with the newer stored profile key"
+                            );
+                            uak = fresh;
+                            crate::state::send_session::check_send_session().map_err(
+                                |error| NetworkError::InvalidRequest(error.to_string()),
+                            )?;
+                            shield_fence()?;
+                        }
+                        _ => {
+                            tracing::warn!(
+                                recipient = recipient_id,
+                                "Sealed send: UAK from our stored profile key rejected; \
+                                 not delivered (identified fallback refused)"
+                            );
+                            return Err(NetworkError::SealedAccessUnavailable);
+                        }
+                    }
                 }
-                other => return other.map(|response| (response, false)),
+                other => return other,
             }
         }
-        crate::state::send_session::check_send_session()
-            .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
-        shield_fence()?;
-        message_client
-            .send_sealed_messages(recipient_id, messages, delivery, client_request_id)
-            .await
-            .map(|response| (response, uak_rejected))
     }
 }
 

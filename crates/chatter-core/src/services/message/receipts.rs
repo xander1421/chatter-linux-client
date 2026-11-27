@@ -148,6 +148,15 @@ impl MessageService {
             )
             .await;
         if outcome.delivered == 0 {
+            // Sealed or nothing (`send_sealed_batch`): without sealed access
+            // to the author the receipt is dropped, never retried identified.
+            if matches!(
+                outcome.error,
+                Some(MessageError::Network(crate::error::NetworkError::SealedAccessUnavailable))
+            ) {
+                tracing::info!(channel_id = %channel, "Channel receipt dropped: no sealed access to the author");
+                return Ok(());
+            }
             return Err(outcome.error.unwrap_or_else(|| {
                 MessageError::EncryptionFailed(
                     "channel receipt reached no author device".into(),
@@ -508,7 +517,9 @@ fn receipt_stage(
     receipt_type: i32,
 ) -> Result<Option<bool>, crate::error::StorageError> {
     match receipt_type {
-        1 => Ok(Some(false)),
+        1 if crate::services::configuration_sync::delivery_receipts_enabled(settings) => {
+            Ok(Some(false))
+        }
         2 | 3 if settings.get_bool(keys::SEND_READ_RECEIPTS)?.unwrap_or(true) => Ok(Some(true)),
         _ => Ok(None),
     }
@@ -518,6 +529,22 @@ fn receipt_stage(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// "Delivery receipts" is mutual: off, an incoming delivery receipt is
+    /// ignored while read receipts follow their own setting.
+    #[test]
+    fn delivery_receipt_setting_is_mutual() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("r.db"), "testpass").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let settings = SettingsRepository::new(db);
+        assert_eq!(receipt_stage(&settings, 1).unwrap(), Some(false));
+        settings.set_bool(keys::SEND_DELIVERY_RECEIPTS, false).unwrap();
+        assert_eq!(receipt_stage(&settings, 1).unwrap(), None);
+        assert_eq!(receipt_stage(&settings, 2).unwrap(), Some(true));
+    }
 
     /// RC109: an unconfirmed send leaves "sending" for its own state; a
     /// receipt still upgrades it.

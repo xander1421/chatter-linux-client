@@ -3832,3 +3832,9 @@ msgstr ""
 #: crates/chatter-ui/src/platform/android/system_settings.rs
 msgid "Keep Chatter's own connection"
 msgstr ""
+
+msgid "Waiting for contact's new key"
+msgstr ""
+
+msgid "Not delivered: contact's key changed"
+msgstr ""

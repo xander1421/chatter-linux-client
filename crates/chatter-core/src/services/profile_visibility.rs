@@ -9,6 +9,12 @@
 //! Restricting the setting cannot take the key back from people who already
 //! hold it, so it rotates the key (`client::profile_visibility`); the local
 //! half of that — which key is current, what is pending — lives here.
+//!
+//! The same key also derives our Unidentified-Access-Key, which is what lets
+//! a friend send to us sealed. So accepted friends ALWAYS hold the current
+//! key (owner decision 2026-11-27), "nobody" included: there the server
+//! profile is uploaded empty ([`server_profile_plaintext`]), so the key
+//! decrypts nothing and friends see only the username.
 
 use crate::domain::ids::UserId;
 use crate::domain::user::FriendshipStatus;
@@ -98,7 +104,9 @@ pub fn rotation_pending(settings: &SettingsRepository) -> bool {
 /// Our profile key for `recipient`, or `None` when the setting says they may
 /// not hold it: never to ourselves (our devices get it by `ProfileKeySync`),
 /// never to someone we blocked, never mid-rotation; then everyone / accepted
-/// friends only / nobody. Fails closed: a lookup error shares nothing.
+/// friends only. Accepted friends get it under "nobody" too: they need it to
+/// reach us sealed, and the profile it opens is empty then. Fails closed: a
+/// lookup error shares nothing.
 pub fn shareable_profile_key(
     settings: &SettingsRepository,
     users: &UserRepository,
@@ -113,18 +121,60 @@ pub fn shareable_profile_key(
     }
     let allowed = match ProfileVisibility::load(settings) {
         ProfileVisibility::Everyone => true,
-        ProfileVisibility::Contacts => [(us, *recipient), (*recipient, us)].iter().any(|(a, b)| {
-            matches!(
-                users.get_friendship(a, b),
-                Ok(Some(f)) if f.status == FriendshipStatus::Accepted
-            )
-        }),
-        ProfileVisibility::Nobody => false,
+        ProfileVisibility::Contacts | ProfileVisibility::Nobody => {
+            is_accepted_friend(users, &us, recipient)
+        }
     };
     if allowed {
         own_profile_key(settings)
     } else {
         None
+    }
+}
+
+fn is_accepted_friend(users: &UserRepository, us: &UserId, peer: &UserId) -> bool {
+    [(*us, *peer), (*peer, *us)].iter().any(|(a, b)| {
+        matches!(
+            users.get_friendship(a, b),
+            Ok(Some(f)) if f.status == FriendshipStatus::Accepted
+        )
+    })
+}
+
+/// Who must be sent our new key after a rotation finishes: every accepted
+/// friend we have not blocked, whatever the visibility, so each can derive
+/// our new UAK and keep reaching us sealed. Fails closed to nobody.
+pub fn key_rotation_recipients(settings: &SettingsRepository, users: &UserRepository) -> Vec<UserId> {
+    let Ok(us) = settings.current_user_id() else {
+        return Vec::new();
+    };
+    let mut peers: Vec<UserId> = users
+        .list_friends(&us)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f.status == FriendshipStatus::Accepted)
+        .map(|f| if f.requester_id == us { f.addressee_id } else { f.requester_id })
+        .filter(|peer| *peer != us && !users.is_blocked(&us, peer).unwrap_or(true))
+        .collect();
+    peers.sort_by_key(|p| p.to_string());
+    peers.dedup();
+    peers
+}
+
+/// The plaintext our server profile carries under `visibility`: the real
+/// name, status and avatar, except under "nobody", where every field goes up
+/// empty (and the avatar is cleared) so the key our friends hold opens
+/// nothing. Our own devices keep the plaintext locally.
+pub fn server_profile_plaintext(
+    visibility: ProfileVisibility,
+    name: Option<String>,
+    status: Option<String>,
+    avatar: Option<Vec<u8>>,
+) -> (Option<String>, Option<String>, Option<Vec<u8>>) {
+    if visibility == ProfileVisibility::Nobody {
+        (Some(String::new()), Some(String::new()), Some(Vec::new()))
+    } else {
+        (name, status, avatar)
     }
 }
 
@@ -305,8 +355,66 @@ mod tests {
         assert!(!share(&stranger) && !share(&blocked));
         assert!(anon_shareable_profile_key(&t.settings).is_none());
 
+        // "Nobody" still hands friends the delivery key (their UAK for us);
+        // the profile it opens is empty (`server_profile_plaintext`).
         ProfileVisibility::Nobody.store(&t.settings).unwrap();
-        assert!(!share(&friend) && !share(&stranger) && !share(&blocked));
+        assert!(share(&friend));
+        assert!(!share(&stranger) && !share(&blocked));
+    }
+
+    /// After any rotation every accepted, non-blocked friend is owed the new
+    /// key, whatever the setting: Everyone→Contacts and Everyone→Nobody both
+    /// keep friends deliverable (their UAK is derived from what we send, and
+    /// the server UAK moves to the same key).
+    #[test]
+    fn rotation_pushes_the_new_key_to_every_friend() {
+        let t = setup();
+        let friend = peer(&t, Some(FriendshipStatus::Accepted));
+        let incoming = peer(&t, None);
+        t.users
+            .insert_friendship(&Friendship {
+                requester_id: incoming,
+                addressee_id: t.me,
+                status: FriendshipStatus::Accepted,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        let _stranger = peer(&t, None);
+        let _pending = peer(&t, Some(FriendshipStatus::Pending));
+        let _blocked = peer(&t, Some(FriendshipStatus::Blocked));
+        let mut expected = vec![friend, incoming];
+        expected.sort_by_key(|p| p.to_string());
+
+        for visibility in [ProfileVisibility::Contacts, ProfileVisibility::Nobody] {
+            let next = next_profile_key(&t.settings).unwrap();
+            commit_rotation(&t.settings, visibility).unwrap();
+            clear_rotation_pending(&t.settings).unwrap();
+            assert_eq!(key_rotation_recipients(&t.settings, &t.users), expected);
+            for to in &expected {
+                // The handshake carries exactly the key the server UAK moved to.
+                assert_eq!(shareable_profile_key(&t.settings, &t.users, to), Some(next));
+                assert_eq!(
+                    crate::crypto::derive_uak(&shareable_profile_key(&t.settings, &t.users, to).unwrap()),
+                    crate::crypto::derive_uak(&own_profile_key(&t.settings).unwrap()),
+                );
+            }
+        }
+    }
+
+    /// Everyone→Nobody uploads an empty profile, so friends (who still hold
+    /// the key) see only the username; Nobody→Contacts uploads it again.
+    #[test]
+    fn nobody_uploads_an_empty_profile_and_contacts_restores_it() {
+        let real = || (Some("Ada".to_string()), Some("hi".to_string()), Some(vec![1, 2, 3]));
+        let (n, s, a) = real();
+        assert_eq!(
+            server_profile_plaintext(ProfileVisibility::Nobody, n, s, a),
+            (Some(String::new()), Some(String::new()), Some(Vec::new()))
+        );
+        for visibility in [ProfileVisibility::Contacts, ProfileVisibility::Everyone] {
+            let (n, s, a) = real();
+            assert_eq!(server_profile_plaintext(visibility, n, s, a), real());
+        }
     }
 
     #[test]

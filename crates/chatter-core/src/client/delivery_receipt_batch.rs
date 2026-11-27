@@ -95,6 +95,9 @@ impl ChatterClient {
         peer: UserId,
         timestamp: u64,
     ) -> Option<DmReceiptKey> {
+        if !self.delivery_receipts_enabled().unwrap_or(true) {
+            return None;
+        }
         if !self.dm_delivery_receipt_allowed(&peer) {
             tracing::debug!(%peer, "No delivery receipt: DM sender not accepted");
             return None;
@@ -184,10 +187,20 @@ mod tests {
         // network — the server here is unreachable, so any send would fail.
         let receipt = crate::services::gateway::build_delivery_receipt_content_with_channel(vec![10, 11], None);
         assert!(client.messages().send_friend_dm_content(&friend, receipt).await.is_ok());
+        // Read receipts and typing indicators are sealed-only too.
         let read = crate::services::gateway::build_read_receipt_content_with_channel(vec![10], None);
-        assert!(
-            client.messages().send_friend_dm_content(&friend, read).await.is_err(),
-            "only delivery receipts are dropped; others still try the network",
-        );
+        assert!(client.messages().send_friend_dm_content(&friend, read).await.is_ok());
+        let typing = chatter_proto::content_v1::Content {
+            content: Some(chatter_proto::content_v1::content::Content::Typing(Default::default())),
+            ..Default::default()
+        };
+        assert!(client.messages().send_friend_dm_content(&friend, typing).await.is_ok());
+        // An ordinary message still tries the network (and fails here).
+        let text = crate::services::build_data_message_content("hi", vec![], 12);
+        assert!(client.messages().send_friend_dm_content(&friend, text).await.is_err());
+
+        // "Delivery receipts" off: nothing is owed, not even to a friend.
+        client.set_delivery_receipts_enabled(false).unwrap();
+        assert!(client.queue_dm_delivery_receipt(friend, 20).is_none());
     }
 }

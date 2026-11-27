@@ -4087,3 +4087,9 @@ msgstr ""
 
 msgid "Keep Chatter's own connection"
 msgstr "Păstrează conexiunea proprie Chatter"
+
+msgid "Waiting for contact's new key"
+msgstr "Se așteaptă noua cheie a contactului"
+
+msgid "Not delivered: contact's key changed"
+msgstr "Nelivrat: cheia contactului s-a schimbat"

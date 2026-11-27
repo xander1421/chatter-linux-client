@@ -4048,3 +4048,9 @@ msgstr ""
 
 msgid "Keep Chatter's own connection"
 msgstr "Оставить собственное соединение Chatter"
+
+msgid "Waiting for contact's new key"
+msgstr "Ожидание нового ключа собеседника"
+
+msgid "Not delivered: contact's key changed"
+msgstr "Не доставлено: ключ собеседника изменился"

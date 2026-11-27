@@ -229,6 +229,7 @@ impl MessageService {
                     &peer_id.to_string(),
                     ciphertexts,
                     None,
+                    false,
                 )
                 .await;
             if outcome.delivered == 0 {

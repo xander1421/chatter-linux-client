@@ -4057,3 +4057,9 @@ msgstr ""
 
 msgid "Keep Chatter's own connection"
 msgstr "Mantieni la connessione di Chatter"
+
+msgid "Waiting for contact's new key"
+msgstr "In attesa della nuova chiave del contatto"
+
+msgid "Not delivered: contact's key changed"
+msgstr "Non consegnato: la chiave del contatto è cambiata"

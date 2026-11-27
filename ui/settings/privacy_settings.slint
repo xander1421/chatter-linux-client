@@ -17,6 +17,7 @@ export component PrivacySettings inherits VerticalLayout {
     in property <string> profile-visibility-pending;
     in-out property <string> profile-visibility-pin;
     in-out property <bool> read-receipts-enabled;
+    in-out property <bool> delivery-receipts-enabled;
     in-out property <bool> shield-switch;
     in-out property <bool> typing-indicators-enabled;
     in-out property <bool> username-discoverable;
@@ -24,6 +25,7 @@ export component PrivacySettings inherits VerticalLayout {
     callback profile-visibility-confirmed(string, string);
     callback profile-visibility-selected(string);
     callback read-receipts-changed(bool);
+    callback delivery-receipts-changed(bool);
     callback shield-toggled();
     callback typing-indicators-changed(bool);
     callback username-discoverable-changed(bool);
@@ -375,6 +377,46 @@ export component PrivacySettings inherits VerticalLayout {
             Text {
                 width: read-receipts-row.label-width;
                 text: @tr("Let others know when you've read their messages");
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // Delivery Receipts setting (mutual: off also hides others' receipts)
+    Rectangle {
+        height: delivery-receipts-row.preferred-height;
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        delivery-receipts-row := ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            accessible-text: @tr("Delivery receipts");
+            checked <=> root.delivery-receipts-enabled;
+            toggled(value) => {
+                root.delivery-receipts-enabled = value;
+                root.delivery-receipts-changed(value);
+            }
+
+            Text {
+                width: delivery-receipts-row.label-width;
+                text: @tr("Delivery receipts");
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+                wrap: word-wrap;
+            }
+            Text {
+                width: delivery-receipts-row.label-width;
+                text: @tr("Let others know when their messages reach you. When off, you won't see theirs either");
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;

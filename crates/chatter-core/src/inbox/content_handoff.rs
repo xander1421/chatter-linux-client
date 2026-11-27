@@ -524,7 +524,11 @@ impl ContentHandoff {
                 .map_err(|error| error.to_string())??;
         // Group posts need the same after-persist acknowledgement as secret DMs.
         // Decode only after apply_blocking has admitted and stored the post.
-        if artifact.kind == ReceiveKind::Content && artifact.key.transport == "anon_group" {
+        // The "delivery receipts" setting covers secret groups too.
+        if artifact.kind == ReceiveKind::Content
+            && artifact.key.transport == "anon_group"
+            && crate::services::configuration_sync::delivery_receipts_enabled(&self.group.settings_repo)
+        {
             use chatter_proto::content_v1::content::Content as Body;
             if let Ok(content) = chatter_proto::protovalidate::decode_inbound_content(
                 &artifact.content, "secret_group_receipt",

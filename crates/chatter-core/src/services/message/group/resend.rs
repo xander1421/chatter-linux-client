@@ -457,6 +457,9 @@ impl MessageService {
     /// Deposit one sealed envelope in one device inbox
     /// (`SealedDelivery::NamedDevices`), UAK-authorized when we hold the
     /// peer's profile key (the same choice as `send_decryption_error_report`).
+    /// Sealed-only: a resend is provoked by the peer's (or a server's)
+    /// decryption error, so without a UAK outside Shield it is dropped rather
+    /// than sent identified; in Shield it uses a blind mailbox credential.
     /// A retired device comes back as `MismatchedDevices` with it `extra`
     /// (`NetworkError::is_unknown_destination_device`).
     pub(in crate::services::message) async fn deposit_sealed_to_device(
@@ -476,27 +479,16 @@ impl MessageService {
         };
         let peer = peer_id.to_string();
         let uak = self.sealed_access_key(&peer, false);
-        if uak.is_none() {
-            tracing::warn!(
-                %peer_id,
-                reason = "no stored profile key to derive the peer's UAK",
-                "SEALED SENDER DEGRADED: group resend delivered identified \
-                 (Basic auth) — the server WILL record us as the sender"
-            );
-        }
-        let (_, uak_rejected) = self
-            .send_sealed_batch(
-                &mut self.message_client(),
-                &peer,
-                vec![message],
-                chatter_proto::chat_v1::SealedDelivery::NamedDevices,
-                uak.as_ref(),
-                &uuid::Uuid::new_v4().to_string(),
-            )
-            .await?;
-        if uak_rejected {
-            tracing::warn!(%peer_id, reason = "UAK from our stored profile key rejected", "SEALED SENDER DEGRADED: group resend delivered identified");
-        }
+        self.send_sealed_batch(
+            &mut self.message_client(),
+            &peer,
+            vec![message],
+            chatter_proto::chat_v1::SealedDelivery::NamedDevices,
+            uak.as_ref(),
+            true,
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .await?;
         Ok(())
     }
 
