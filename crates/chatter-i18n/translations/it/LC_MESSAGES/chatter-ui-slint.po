@@ -6113,6 +6113,8 @@ msgstr "Gli amici che aggiungi appariranno qui."
 msgid "Got theirs?"
 msgstr "Hai il suo codice?"
 
-#: ui/sidebar/sidebar_rail.slint:25
-msgid "{} · {} unread"
-msgstr "{} · {} da leggere"
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] "{0} · {n} da leggere"
+msgstr[1] "{0} · {n} da leggere"

@@ -54,7 +54,7 @@ component RailItem inherits Rectangle {
     in property <bool> focused;
     in property <bool> has-menu;
     out property <string> hint: root.unread > 0
-        ? @tr("{} · {} unread", root.label, root.unread) : root.label;
+        ? @tr("{0} · {n} unread" | "{0} · {n} unread" % root.unread, root.label) : root.label;
     out property <bool> hovered: hit.has-hover;
     callback activated();
     callback menu-requested(length, length);
@@ -85,6 +85,7 @@ component RailItem inherits Rectangle {
 
         if root.emoji != "": Text {
             text: root.emoji;
+            accessible-role: none;
             font-size: Typography.lg;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -112,6 +113,7 @@ component RailItem inherits Rectangle {
             border-radius: self.height / 2;
             background: Colors.action-fill;
             badge := Text {
+                accessible-role: none;
                 text: root.unread > 99 ? "99+" : "\{root.unread}";
                 color: Colors.on-action;
                 font-size: Typography.xs;
@@ -139,6 +141,8 @@ component RailAvatar inherits RailItem {
     unread: root.conversation.muted ? 0 : root.conversation.unread;
     glyph: root.conversation.kind == "saved" ? Icons.bookmark
         : root.conversation.kind == "channel" && !root.conversation.has-avatar ? (root.conversation.locked ? Icons.lock : Icons.hash) : @image-url("");
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
     selected: root.conversation.kind == "saved" ? root.saved-open : root.conversation.chat-row.is-selected;
     has-menu: root.conversation.kind != "saved";
     activated => { SidebarCards.open-row(root.conversation.conversation-id); }
@@ -297,6 +301,8 @@ export component SidebarRail inherits Rectangle {
                         if root.header-count(card) > 0: RailItem {
                             touch: root.touch;
                             label: card.title;
+                            accessible-expandable: true;
+                            accessible-expanded: !card.collapsed;
                             emoji: card.emoji;
                             glyph: Icons.message-circle;
                             unread: card.collapsed ? card.unread : 0;
@@ -359,6 +365,7 @@ export component SidebarRail inherits Rectangle {
         material-level: 3;
         elevation: 4;
         hint := Text {
+            accessible-role: none;
             width: parent.width - 2 * Spacing.sm;
             text: root.hover-hint != "" ? root.hover-hint : root.focus-hint;
             color: Colors.text-primary;

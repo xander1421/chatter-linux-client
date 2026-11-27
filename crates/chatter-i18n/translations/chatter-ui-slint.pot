@@ -5902,6 +5902,8 @@ msgstr ""
 msgid "Got theirs?"
 msgstr ""
 
-#: ui/sidebar/sidebar_rail.slint:25
-msgid "{} · {} unread"
-msgstr ""
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] ""
+msgstr[1] ""
