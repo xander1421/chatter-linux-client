@@ -30,9 +30,14 @@ export component MessageActions inherits Rectangle {
     property <bool> overflows-right: !root.is-own
         && root.bubble-x + root.bubble-width + Spacing.xxs + action-btns.width
             > root.row-x + root.row-width - Spacing.xs;
+    // Own bubbles wide enough to reach the left edge: the bar would be
+    // clipped by the framed chat or thread container, so it tucks inside
+    // the bubble's start instead (mirror of overflows-right).
+    property <bool> overflows-left: root.is-own
+        && root.bubble-x - Spacing.xxs - action-btns.width < root.row-x + Spacing.xs;
     // Beside the bubble, not over it: an 8px overlap hid the first letters
     // of a one-line bubble ("bg27" read "g27").
-    x: root.is-own ? -action-btns.width - Spacing.xxs
+    x: root.is-own ? (self.overflows-left ? Spacing.sm : -action-btns.width - Spacing.xxs)
         : self.overflows-right ? root.bubble-width - action-btns.width - Spacing.sm
         : root.bubble-width + Spacing.xxs;
     // Float halfway above the top edge, but never under the floating header
