@@ -1,5 +1,4 @@
 import { GlassSurface } from "../components/glass_surface.slint";
-import { KeyFocus } from "../components/key_focus.slint";
 // Thread panel component for viewing replies to a message
 //
 // Displays as a right-side panel with root message preview, reply list, and composer.
@@ -8,6 +7,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Button } from "../components/button.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
@@ -410,7 +410,7 @@ export component ThreadPanel inherits Rectangle {
                     HorizontalLayout {
                         alignment: center;
                         Image {
-                            source: Icons.message-circle;
+                            source: root.pinned-mode ? Icons.pin : Icons.message-circle;
                             width: 32px;
                             height: 32px;
                             colorize: Colors.text-muted;
@@ -425,7 +425,9 @@ export component ThreadPanel inherits Rectangle {
                     }
 
                     Text {
-                        text: @tr("Be the first to reply!");
+                        text: root.pinned-mode
+                            ? (root.touch ? @tr("Long-press a message and choose Pin") : @tr("Right-click a message and choose Pin"))
+                            : @tr("Be the first to reply!");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
@@ -714,24 +716,14 @@ export component ThreadPanel inherits Rectangle {
             }
         }
 
-        if root.pinned-mode && root.replies.length > 0: Rectangle {
-            height: Spacing.touch-target-min + Spacing.sm;
-            background: unpin-all-touch.pressed ? Materials.pressed : unpin-all-touch.has-hover ? Colors.surface-hover : Colors.surface;
-            accessible-role: button;
-            accessible-label: unpin-all-label.text;
-            accessible-action-default => { root.unpin-all(); }
-            KeyFocus { activate => { root.unpin-all(); } }
-            unpin-all-label := Text {
-                width: 100%;
-                height: 100%;
+        if root.pinned-mode && root.replies.length > 0: HorizontalLayout {
+            padding: Spacing.panel-gutter;
+            Button {
                 text: @tr("Unpin message" | "Unpin all {n} messages" % root.replies.length);
-                color: Colors.primary;
-                font-size: Typography.sm;
-                font-weight: Typography.semibold;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+                touch: root.touch;
+                border-radius: Spacing.radius-control;
+                clicked => { root.unpin-all(); }
             }
-            unpin-all-touch := TouchArea { mouse-cursor: pointer; clicked => { root.unpin-all(); } }
         }
 
         composer := MessageComposer {

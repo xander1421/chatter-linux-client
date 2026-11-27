@@ -6079,7 +6079,8 @@ fn fine_glass_rim_preserves_shared_childless_material() {
 #[test]
 fn secondary_chrome_exposes_its_shared_material() {
     let pinned = include_str!("../../../ui/chat/pinned_bar.slint");
-    assert!(pinned.contains("inherits GlassSurface"));
+    assert!(pinned.contains("background: Colors.surface-card;"));
+    assert!(pinned.contains("border-radius: Spacing.radius-panel;"));
     assert!(!pinned.contains("drop-shadow-"));
     for src in [
         include_str!("../../../ui/components/emoji_picker.slint"),

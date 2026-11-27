@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { Modal } from "../components/modal.slint";
 import { Materials } from "../theme/materials.slint";
 import { Colors } from "../theme/colors.slint";
@@ -27,121 +28,131 @@ export component PinnedMessagesModal inherits Rectangle {
         title: root.items.length == 0 ? @tr("Pinned messages")
             : @tr("{n} pinned message" | "{n} pinned messages" % root.items.length);
         close => { root.close(); }
-        VerticalLayout {
-            if root.items.length == 0: Rectangle {
-                height: 180px;
-                VerticalLayout {
-                    width: 100%;
-                    height: 100%;
-                    alignment: center;
-                    spacing: Spacing.sm;
-                    Rectangle {
+        Rectangle {
+            background: Colors.background;
+            border-width: 1px;
+            border-color: Colors.border;
+            border-radius: Spacing.radius-panel;
+            clip: true;
+
+            VerticalLayout {
+                padding: Spacing.panel-gutter;
+                if root.items.length == 0: Rectangle {
+                    vertical-stretch: 1;
+                    VerticalLayout {
                         width: 100%;
-                        height: 32px;
-                        Image {
-                            source: Icons.pin;
-                            width: 32px;
+                        height: 100%;
+                        alignment: center;
+                        spacing: Spacing.sm;
+                        Rectangle {
+                            width: 100%;
                             height: 32px;
-                            x: (parent.width - self.width) / 2;
-                            colorize: Colors.text-muted;
+                            Image {
+                                source: Icons.pin;
+                                width: 32px;
+                                height: 32px;
+                                x: (parent.width - self.width) / 2;
+                                colorize: Colors.text-muted;
+                            }
                         }
-                    }
-                    Text {
-                        width: 100%;
-                        text: @tr("No pinned messages");
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                    }
-                    Text {
-                        width: 100%;
-                        text: root.touch ? @tr("Long-press a message and choose Pin") : @tr("Right-click a message and choose Pin");
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        horizontal-alignment: center;
+                        Text {
+                            width: 100%;
+                            text: @tr("No pinned messages");
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            width: 100%;
+                            text: root.touch ? @tr("Long-press a message and choose Pin") : @tr("Right-click a message and choose Pin");
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                        }
                     }
                 }
-            }
-            if root.items.length > 0: pin-list := Flickable {
-                width: 100%;
-                vertical-stretch: 1;
-                viewport-height: rows.preferred-height;
-                rows := VerticalLayout {
-                    spacing: Spacing.xs;
-                    for item in root.items: pin-row := Rectangle {
-                        property <length> text-width: max(0px, pin-list.width - 2 * Spacing.md - (item.thumbnail.width > 0 ? 72px + Spacing.sm : 0px));
-                        accessible-role: button;
-                        accessible-label: item.sender-name + ": " + item.preview;
-                        // The same guard as the pointer path: the modal only
-                        // fades after close, and a fading row is not a target.
-                        accessible-action-default => { if root.show-modal { root.selected(item.message-id); } }
-                        // The content layout already includes its padding.
-                        height: max(56px, content.preferred-height);
-                        background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : Colors.surface;
-                        border-radius: Spacing.radius-md;
-                        transform-scale-x: touch.pressed ? 97% : 100%;
-                        transform-scale-y: touch.pressed ? 94% : 100%;
-                        animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                        animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                        border-width: keys.has-focus ? Spacing.stroke : 0px;
-                        border-color: Colors.primary;
-                        keys := FocusScope {
-                            width: 0px;
-                            height: 0px;
-                            enabled: root.show-modal;
-                            key-pressed(event) => {
-                                if event.text == Key.Space || event.text == Key.Return {
-                                    if root.show-modal { root.selected(item.message-id); }
-                                    return accept;
-                                }
-                                return reject;
-                            }
-                        }
-                        content := HorizontalLayout {
-                            padding: Spacing.md;
-                            spacing: Spacing.sm;
-                            if item.thumbnail.width > 0: Rectangle {
-                                width: 72px;
-                                min-height: 72px;
-                                vertical-stretch: 1;
-                                Rectangle {
-                                    width: 72px; height: 72px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: Spacing.radius-sm; clip: true;
-                                    Image { accessible-label: @tr("Pinned message image"); source: item.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+                if root.items.length > 0: pin-list := Flickable {
+                    width: 100%;
+                    vertical-stretch: 1;
+                    viewport-height: rows.preferred-height;
+                    rows := VerticalLayout {
+                        spacing: Spacing.panel-gutter;
+                        for item in root.items: pin-row := Rectangle {
+                            property <length> text-width: max(0px, pin-list.width - 2 * Spacing.sm - (item.thumbnail.width > 0 ? 72px + Spacing.sm : 0px));
+                            accessible-role: button;
+                            accessible-label: item.sender-name + ": " + item.preview;
+                            // The same guard as the pointer path: the modal only
+                            // fades after close, and a fading row is not a target.
+                            accessible-action-default => { if root.show-modal { root.selected(item.message-id); } }
+                            // The content layout already includes its padding.
+                            height: max(56px, content.preferred-height);
+                            background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : Colors.surface-card;
+                            border-radius: Spacing.radius-panel;
+                            transform-scale-x: touch.pressed ? 97% : 100%;
+                            transform-scale-y: touch.pressed ? 94% : 100%;
+                            animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            border-width: keys.has-focus ? Spacing.stroke : 0px;
+                            border-color: Colors.focus-ring;
+                            keys := FocusScope {
+                                width: 0px;
+                                height: 0px;
+                                enabled: root.show-modal;
+                                key-pressed(event) => {
+                                    if event.text == Key.Space || event.text == Key.Return {
+                                        if root.show-modal { root.selected(item.message-id); }
+                                        return accept;
+                                    }
+                                    return reject;
                                 }
                             }
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                spacing: Spacing.xxs;
-                                alignment: center;
-                                HorizontalLayout {
-                                    spacing: Spacing.sm;
-                                    Text {
-                                        text: item.sender-name;
-                                        color: Colors.primary;
-                                        font-size: Typography.sm;
-                                        font-weight: Typography.semibold;
-                                        overflow: elide;
-                                        horizontal-stretch: 1;
+                            content := HorizontalLayout {
+                                padding: Spacing.sm;
+                                spacing: Spacing.sm;
+                                if item.thumbnail.width > 0: Rectangle {
+                                    width: 72px;
+                                    min-height: 72px;
+                                    vertical-stretch: 1;
+                                    Rectangle {
+                                        width: 72px; height: 72px;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: Spacing.radius-control; clip: true;
+                                        Image { accessible-label: @tr("Pinned message image"); source: item.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+                                    }
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: Spacing.xxs;
+                                    alignment: center;
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        Text {
+                                            text: item.sender-name;
+                                            color: Colors.text-secondary;
+                                            font-size: 13px * Appearance.text-scale;
+                                            font-weight: Typography.semibold;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                        Text {
+                                            text: item.sent-time;
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            horizontal-alignment: right;
+                                        }
                                     }
                                     Text {
-                                        text: item.sent-time;
+                                        width: pin-row.text-width;
+                                        text: item.preview;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
-                                        horizontal-alignment: right;
+                                        wrap: word-wrap;
                                     }
                                 }
-                                Text {
-                                    width: pin-row.text-width;
-                                    text: item.preview;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.base;
-                                    wrap: word-wrap;
-                                }
                             }
+                            touch := TouchArea { clicked => { if root.show-modal { root.selected(item.message-id); } } }
                         }
-                        touch := TouchArea { clicked => { if root.show-modal { root.selected(item.message-id); } } }
                     }
                 }
             }

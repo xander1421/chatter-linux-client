@@ -1,4 +1,4 @@
-import { KeyFocus } from "../components/key_focus.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -21,24 +21,15 @@ export component ComposerReplyPreview inherits GlassSurface {
     in property <string> reply-to-preview;
     callback cancel-reply();
     opacity: min(1, max(0, root.reply-reveal));
-    border-radius: Spacing.radius-chrome;
+    border-radius: Spacing.radius-control;
     clip: true;
     material-enabled: false;
-    opaque: true;
+    background: Colors.surface-control;
 
     HorizontalLayout {
-        padding-left: Spacing.md;
+        padding-left: Spacing.sm;
         padding-right: root.row-padding;
         spacing: Spacing.sm;
-
-        // Reply accent bar
-        Rectangle {
-            width: 4px;
-            height: parent.height - Spacing.sm * 2;
-            y: Spacing.sm;
-            background: Colors.primary;
-            border-radius: 2px;
-        }
 
         // Thumbnail preview for image replies
         if root.reply-has-thumbnail: VerticalLayout {
@@ -66,49 +57,26 @@ export component ComposerReplyPreview inherits GlassSurface {
 
             Text {
                 text: @tr("Reply to {}", root.reply-to-sender);
-                color: Colors.primary;
+                color: Colors.text-secondary;
                 font-size: Typography.sm;
-                font-weight: 600;
+                font-weight: Typography.semibold;
                 overflow: elide;
             }
 
             Text {
                 text: root.reply-to-preview;
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
                 overflow: elide;
             }
         }
 
-        // Cancel reply button — a 48dp box, glyph centred in it
-        VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                border-radius: Spacing.radius-chrome-inner;
-                accessible-role: button;
-                accessible-label: @tr("Cancel reply");
-                accessible-action-default => { root.cancel-reply(); }
-                KeyFocus { border-radius: parent.border-radius; activate => { root.cancel-reply(); } }
-
-                Image {
-                    source: Icons.x;
-                    width: 18px;
-                    height: 18px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-secondary;
-                }
-
-                cancel-reply-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.cancel-reply();
-                    }
-                }
-            }
+        HeaderButton {
+            width: Spacing.touch-target-min;
+            icon: Icons.x;
+            label: @tr("Cancel reply");
+            plain: true;
+            clicked => { root.cancel-reply(); }
         }
     }
 }

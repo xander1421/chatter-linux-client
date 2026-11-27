@@ -1,5 +1,5 @@
 import { KeyFocus } from "../components/key_focus.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { Materials } from "../theme/materials.slint";
 // Pinned messages bar component
 //
@@ -12,7 +12,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 
-export component PinnedBar inherits GlassSurface {
+export component PinnedBar inherits Rectangle {
     // Properties
     in property <string> message-preview: "";
     in property <image> thumbnail;
@@ -31,100 +31,28 @@ export component PinnedBar inherits GlassSurface {
     // Computed
     property <string> position-text: has-multiple ? @tr("Pinned message {0} of {1}", current-index, total-count) : @tr("Pinned message");
 
-    // One material for the pinned-message chrome.
-    height: Spacing.touch-target-min * Appearance.text-grow;
-    elevation: 0;
-    border-radius: Spacing.radius-chrome;
+    height: Spacing.touch-target-min * Appearance.text-grow + 2 * Spacing.sm;
+    background: Colors.surface-card;
+    border-radius: Spacing.radius-panel;
 
-    // Main content
     HorizontalLayout {
-        padding-left: Spacing.sm;
-        padding-right: Spacing.none;
+        padding: Spacing.sm;
         spacing: Spacing.sm;
-        // No `alignment`: under `start` Slint ignores horizontal-stretch, so
-        // the preview never grew and the close button floated mid-row.
 
-        // Navigation buttons on LEFT (only if multiple pinned)
-        // Fixed width: unsized, this layout stretched to half the bar and
-        // pushed the preview to the middle.
-        if root.has-multiple: HorizontalLayout {
-            width: Spacing.touch-target-min * 2 + Spacing.xxs;
-            spacing: Spacing.xxs;
-
-            // Up/prev button
-            Rectangle {
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                background: prev-touch.pressed ? Materials.pressed : prev-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-                transform-scale-x: prev-touch.pressed ? 90% : 100%;
-                transform-scale-y: prev-touch.pressed ? 90% : 100%;
-                animate transform-scale-x { duration: prev-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                animate transform-scale-y { duration: prev-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-
-                Image {
-                    source: Icons.chevron-right;
-                    width: Spacing.button-icon;
-                    height: Spacing.button-icon;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    transform-rotation: 270deg;
-                    colorize: Colors.text-secondary;
-                }
-
-                prev-touch := TouchArea {
-                    accessible-role: button;
-                    accessible-label: @tr("Previous pinned message");
-                    accessible-action-default => { root.prev-clicked(); }
-                    KeyFocus { activate => { root.prev-clicked(); } }
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.prev-clicked();
-                    }
-                }
-            }
-
-            // Down/next button
-            Rectangle {
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                background: next-touch.pressed ? Materials.pressed : next-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-                transform-scale-x: next-touch.pressed ? 90% : 100%;
-                transform-scale-y: next-touch.pressed ? 90% : 100%;
-                animate transform-scale-x { duration: next-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                animate transform-scale-y { duration: next-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-
-                Image {
-                    source: Icons.chevron-right;
-                    width: Spacing.button-icon;
-                    height: Spacing.button-icon;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    transform-rotation: 90deg;
-                    colorize: Colors.text-secondary;
-                }
-
-                next-touch := TouchArea {
-                    accessible-role: button;
-                    accessible-label: @tr("Next pinned message");
-                    accessible-action-default => { root.next-clicked(); }
-                    KeyFocus { activate => { root.next-clicked(); } }
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.next-clicked();
-                    }
-                }
-            }
+        if root.has-multiple: HeaderButton {
+            width: Spacing.touch-target-min;
+            icon: Icons.chevron-down;
+            label: @tr("Previous pinned message");
+            plain: true;
+            transform-rotation: 180deg;
+            clicked => { root.prev-clicked(); }
         }
-
-        // Left accent bar — glow-tinted for neo depth
-        Rectangle {
-            width: 3px;
-            height: 24px;
-            y: (parent.height - self.height) / 2;
-            background: Colors.primary;
-            border-radius: 1.5px;
+        if root.has-multiple: HeaderButton {
+            width: Spacing.touch-target-min;
+            icon: Icons.chevron-down;
+            label: @tr("Next pinned message");
+            plain: true;
+            clicked => { root.next-clicked(); }
         }
 
         if root.thumbnail.width > 0: Rectangle {
@@ -134,7 +62,7 @@ export component PinnedBar inherits GlassSurface {
             Rectangle {
                 width: 36px; height: 36px;
                 y: (parent.height - self.height) / 2;
-                border-radius: Spacing.radius-sm; clip: true;
+                border-radius: Spacing.radius-control; clip: true;
                 Image { accessible-label: @tr("Pinned message image"); source: root.thumbnail; width: 100%; height: 100%; image-fit: cover; }
             }
             TouchArea { clicked => { root.go-to-message(); } }
@@ -144,13 +72,13 @@ export component PinnedBar inherits GlassSurface {
         Rectangle {
             horizontal-stretch: 1;
             background: bar-touch.pressed ? Materials.pressed : bar-touch.has-hover ? Materials.hover : transparent;
-            border-radius: Spacing.radius-sm;
+            border-radius: Spacing.radius-control;
 
             bar-touch := TouchArea {
                 accessible-role: button;
                 accessible-label: @tr("Go to pinned message: {}", root.message-preview);
                 accessible-action-default => { root.go-to-message(); }
-                KeyFocus { activate => { root.go-to-message(); } }
+                KeyFocus { border-radius: Spacing.radius-control; activate => { root.go-to-message(); } }
                 mouse-cursor: pointer;
                 clicked => {
                     root.go-to-message();
@@ -164,54 +92,31 @@ export component PinnedBar inherits GlassSurface {
 
                 // Position text (small, muted)
                 Text {
-                    text: position-text;
-                    color: Colors.primary;
-                    font-size: Typography.xs;
-                    font-weight: Typography.medium;
+                    text: root.position-text.to-uppercase();
+                    color: Colors.text-muted;
+                    font-size: 11px * Appearance.text-scale;
+                    letter-spacing: self.font-size * 0.06;
+                    font-weight: Typography.semibold;
+                    overflow: elide;
                 }
 
                 // Message preview
                 Text {
                     text: root.message-preview;
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
                     overflow: TextOverflow.elide;
                     wrap: TextWrap.no-wrap;
                 }
             }
         }
 
-        // All pinned messages, on the RIGHT — a full 48dp box flush with the edge
-        Rectangle {
+        HeaderButton {
             width: Spacing.touch-target-min;
-            height: Spacing.touch-target-min;
-            background: list-touch.pressed ? Materials.pressed : list-touch.has-hover ? Colors.surface-hover : transparent;
-            border-radius: Spacing.radius-sm;
-            transform-scale-x: list-touch.pressed ? 90% : 100%;
-            transform-scale-y: list-touch.pressed ? 90% : 100%;
-            animate transform-scale-x { duration: list-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-            animate transform-scale-y { duration: list-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-            accessible-role: button;
-            accessible-label: @tr("All pinned messages");
-            accessible-action-default => { root.list-clicked(); }
-            KeyFocus { border-radius: parent.border-radius; activate => { root.list-clicked(); } }
-
-            Image {
-                source: Icons.pin-list;
-                width: Spacing.button-icon;
-                height: Spacing.button-icon;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: Colors.text-secondary;
-            }
-
-            list-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.list-clicked();
-                }
-            }
+            icon: Icons.pin-list;
+            label: @tr("All pinned messages");
+            plain: true;
+            clicked => { root.list-clicked(); }
         }
     }
-
 }

@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -29,7 +30,7 @@ export component MessageQuote inherits Rectangle {
     callback audio-seek(string, float);
 
     background: Colors.bubble-inset;
-    border-radius: 6px;
+    border-radius: Spacing.radius-control;
     max-width: root.text-max-width;
     height: quote-row.preferred-height + Spacing.xs;
 
@@ -66,13 +67,6 @@ export component MessageQuote inherits Rectangle {
         padding: Spacing.xs;
         spacing: Spacing.sm;
         alignment: stretch;
-
-        // Accent bar
-        Rectangle {
-            width: 3px;
-            background: Colors.primary;
-            border-radius: 1.5px;
-        }
 
         // Small media thumbnail on the LEFT (image/gif/video).
         // Aspect-fit within a compact box so the whole preview
@@ -120,10 +114,10 @@ export component MessageQuote inherits Rectangle {
                 width: gif-label.preferred-width + 6px;
                 height: 13px;
                 border-radius: 3px;
-                background: Colors.action-fill;
+                background: Colors.surface-control;
                 gif-label := Text {
                     text: @tr("GIF");
-                    color: Colors.on-action;
+                    color: Colors.text-secondary;
                     font-size: Typography.xxs;
                     font-weight: Typography.semibold;
                     x: (parent.width - self.width) / 2;
@@ -141,7 +135,7 @@ export component MessageQuote inherits Rectangle {
 
             Text {
                 text: root.reply-to-sender-name;
-                color: Colors.primary;
+                color: Colors.text-secondary;
                 font-size: Typography.xs;
                 font-weight: Typography.semibold;
                 overflow: elide;
@@ -174,7 +168,7 @@ export component MessageQuote inherits Rectangle {
                 text: root.reply-to-preview != ""
                     ? root.reply-to-preview
                     : (root.reply-to-category != "" ? @tr("📎 Attachment") : @tr("message preview" => "Message"));
-                color: Colors.text-secondary;
+                color: Colors.text-muted;
                 font-size: Typography.xs;
                 overflow: elide;
             }
@@ -188,5 +182,11 @@ export component MessageQuote inherits Rectangle {
                 overflow: elide;
             }
         }
+    }
+
+    KeyFocus {
+        enabled: !root.reply-to-not-found && root.reply-to-message-id != "";
+        border-radius: root.border-radius;
+        activate => { root.quote-clicked(root.reply-to-message-id); }
     }
 }

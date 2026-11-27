@@ -524,6 +524,30 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
+        if root.has-pinned-messages && !root.mobile: Rectangle {
+            height: Spacing.panel-gutter;
+        }
+        if root.has-pinned-messages: PinnedBar {
+            thumbnail: root.pinned-thumbnail;
+            message-preview: root.pinned-message-preview;
+            current-index: root.pinned-current-index;
+            total-count: root.pinned-total-count;
+            has-multiple: root.pinned-total-count > 1;
+
+            prev-clicked => {
+                root.pinned-prev-clicked();
+            }
+            next-clicked => {
+                root.pinned-next-clicked();
+            }
+            go-to-message => {
+                root.pinned-go-to-message();
+            }
+            list-clicked => {
+                root.pinned-list-clicked();
+            }
+        }
+
         if !root.hide-header && root.conversation-kind == ConversationKind.channel
             && root.header-can-call && root.active-channel-call-id != "": Rectangle {
             width: 100%;
@@ -585,36 +609,6 @@ export component ChatLayout inherits Rectangle {
         if MeshGlobal.active-id != "" && MeshGlobal.context-strip-needed: MeshContextBar {
             width: 100%;
             vertical-stretch: 0;
-        }
-
-        // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
-        if root.has-pinned-messages && !root.hide-header && !root.mobile: Rectangle {
-            height: Spacing.xs;
-        }
-        if root.has-pinned-messages: HorizontalLayout {
-            padding-left: Spacing.sm;
-            padding-right: Spacing.sm;
-            PinnedBar {
-                backdrop-paused: message-list.scrolling;
-                thumbnail: root.pinned-thumbnail;
-                message-preview: root.pinned-message-preview;
-                current-index: root.pinned-current-index;
-                total-count: root.pinned-total-count;
-                has-multiple: root.pinned-total-count > 1;
-
-                prev-clicked => {
-                    root.pinned-prev-clicked();
-                }
-                next-clicked => {
-                    root.pinned-next-clicked();
-                }
-                go-to-message => {
-                    root.pinned-go-to-message();
-                }
-                list-clicked => {
-                    root.pinned-list-clicked();
-                }
-            }
         }
 
         // Message list in middle (fills remaining space)
