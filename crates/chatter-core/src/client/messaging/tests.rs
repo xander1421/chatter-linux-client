@@ -799,6 +799,22 @@ mod section_row_tests {
             .await;
         assert_eq!(cands.map(|c| c.len()), Some(0));
     }
+
+    /// A stranger found by exact username is invitable from the lookup alone:
+    /// the server no longer shows their profile (SEC F5), and the hit must not
+    /// depend on it.
+    #[test]
+    fn invite_candidate_from_username_needs_no_profile() {
+        let user = crate::domain::ids::UserId::new();
+        let c =
+            crate::client::messaging::InviteCandidate::found_by_username(user, "alice.4711".into());
+        assert_eq!(c.user_id, user);
+        assert_eq!(c.display_name, "alice.4711");
+        assert_eq!(c.username, "alice.4711");
+        assert!(c.avatar_bytes.is_empty());
+        assert!(!c.already_member && !c.banned);
+        assert!(c.matches("alice"), "the picker's own filter still finds it");
+    }
 }
 
 mod result_scope_tests {

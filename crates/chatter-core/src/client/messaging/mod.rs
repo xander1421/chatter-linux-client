@@ -197,6 +197,22 @@ pub struct InviteCandidate {
 }
 
 impl InviteCandidate {
+    /// A non-contact found by exact username. The exact-username lookup is
+    /// all it takes: the server shows a profile only to contacts and channel
+    /// co-members, and without the peer's profile key the display name would
+    /// not decrypt anyway, so the handle stands in for it. If they are already
+    /// a member or banned, the invite RPC rejects it server-side.
+    pub(crate) fn found_by_username(user_id: crate::domain::ids::UserId, username: String) -> Self {
+        Self {
+            user_id,
+            display_name: username.clone(),
+            username,
+            avatar_bytes: Vec::new(),
+            already_member: false,
+            banned: false,
+        }
+    }
+
     /// Whether this candidate matches a search query (case-insensitive
     /// substring over display name or username). Keeps the "what fields a
     /// query matches" rule out of the UI filter.
