@@ -49,6 +49,7 @@ export component ChatRow inherits Rectangle {
     in property <ChatRowData> data;
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
+    in property <bool> card-mode: false;
     in property <bool> keyboard-highlight: false;
 
     accessible-role: list-item;
@@ -67,6 +68,7 @@ export component ChatRow inherits Rectangle {
 
     height: root.collapsed ? 48px : root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
     background: transparent;
+    border-radius: root.card-mode ? Spacing.radius-control : 0px;
     border-width: root.keyboard-highlight ? 2px : 0px;
     border-color: Colors.focus-ring;
     clip: true;
@@ -198,6 +200,7 @@ export component ChatRow inherits Rectangle {
         selected: root.data.is-selected;
         collapsed: root.collapsed;
         mobile-mode: root.mobile-mode;
+        card-mode: root.card-mode;
         clicked => { root.activate(); }
         context-menu-requested(x, y) => { root.context-menu-requested(x, y); }
         swipe-down(x, y) => { root.begin-swipe(x, y); }
@@ -222,6 +225,7 @@ export component ChatRow inherits Rectangle {
         is-pinned: root.data.is-pinned;
         is-muted: root.data.is-muted;
         mobile-mode: root.mobile-mode;
+        card-mode: root.card-mode;
         clicked => { root.activate(); }
         context-menu-requested(x, y) => { root.context-menu-requested(x, y); }
         swipe-down(x, y) => { root.begin-swipe(x, y); }
@@ -244,6 +248,7 @@ export component ChatRow inherits Rectangle {
         selected: root.data.is-selected;
         collapsed: root.collapsed;
         mobile-mode: root.mobile-mode;
+        card-mode: root.card-mode;
         clicked => { root.activate(); }
         context-menu-requested(x, y) => { root.context-menu-requested(x, y); }
         swipe-down(x, y) => { root.begin-swipe(x, y); }
