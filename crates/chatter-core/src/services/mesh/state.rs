@@ -73,6 +73,7 @@ pub struct LinkStateInner {
     pub(super) pairing_couriers: super::pairing::PairingCouriers,
     pub(super) pairing_beacon_slots: super::pairing::PairingBeaconSlots,
     pub links: LinkStateStore,
+    pub(super) awaiting_pairing_proof: BTreeSet<LinkId>,
     pub peers: PeerRegistry,
     pub ingress: IngressRegistry,
     pub scheduler: ConnectionScheduler,
@@ -128,6 +129,7 @@ impl Default for LinkStateInner {
     fn default() -> Self {
         Self {
             links: LinkStateStore::new(),
+            awaiting_pairing_proof: BTreeSet::new(),
             peers: PeerRegistry::new(),
             ingress: IngressRegistry::new(),
             scheduler: ConnectionScheduler::new(),
@@ -167,6 +169,23 @@ impl Default for LinkStateInner {
     }
 }
 
+impl LinkStateInner {
+    fn paired_link_matches(&self, link: &LinkId, peer: &PeerId) -> bool {
+        if self.awaiting_pairing_proof.contains(link)
+            || !self.links.is_noise_authenticated(link, peer)
+        {
+            return false;
+        }
+        let Some(pin) = self.peers.pinned(peer).filter(|pin| pin.pairing.is_some()) else {
+            return false;
+        };
+        self.sessions
+            .remote_static(peer)
+            .as_ref()
+            .is_some_and(|key| pin.noise_public_key.as_slice() == key.as_slice())
+    }
+}
+
 /// Everything the BLE half of the mesh knows, shared between the radio loop and
 /// the router's transport view of it.
 pub struct MeshState {
@@ -197,6 +216,46 @@ impl MeshState {
 
     pub(super) fn contact(&self, peer: &PeerId) -> PeerId {
         self.with(|state| state.peers.contact(&peer.to_short()).clone())
+    }
+
+    pub(super) fn visible_peers(&self, allow_unpaired: bool) -> Vec<MeshPeer> {
+        let mut peers = self.peers();
+        if !allow_unpaired {
+            self.with(|state| {
+                peers.retain(|peer| {
+                    state
+                        .peers
+                        .pinned(state.peers.route(&peer.peer))
+                        .is_some_and(|pin| pin.pairing.is_some())
+                });
+            });
+        }
+        peers
+    }
+
+    pub(super) fn is_paired_link(&self, link: &LinkId) -> bool {
+        self.with(|state| {
+            state
+                .links
+                .peer_for(link)
+                .is_some_and(|peer| state.paired_link_matches(link, peer))
+        })
+    }
+
+    pub(super) fn is_paired_link_to(&self, link: &LinkId, peer: &PeerId) -> bool {
+        self.with(|state| state.paired_link_matches(link, peer))
+    }
+
+    /// Contact traffic requires a proven pairing on a live Noise link.
+    pub(super) fn paired_session(&self, peer: &PeerId) -> bool {
+        self.with(|state| {
+            let route = state.peers.route(peer);
+            state
+                .links
+                .links_to(route)
+                .iter()
+                .any(|link| state.paired_link_matches(link, route))
+        })
     }
 
     /// A rotated route inherits the private account authorization only via
@@ -243,7 +302,9 @@ impl MeshState {
     pub fn can_write_to(&self, peer: &PeerId) -> bool {
         self.with(|state| {
             let links = state.links.links_to(state.peers.route(peer));
-            links.iter().any(|link| state.links.is_writable(link))
+            links.iter().any(|link| {
+                state.links.is_writable(link) && !state.awaiting_pairing_proof.contains(link)
+            })
         })
     }
 
@@ -547,7 +608,6 @@ impl NostrState {
         self.with(|state| state.nicknames.get(peer).cloned())
     }
 
-    #[cfg(test)]
     #[must_use]
     pub fn joined_cells(&self) -> Vec<String> {
         self.with(|state| state.joined.iter().cloned().collect())

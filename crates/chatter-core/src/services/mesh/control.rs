@@ -9,6 +9,9 @@ impl MeshService {
         if self.relay_connector.is_none() {
             return Err(MeshError::NoRelayConnector);
         }
+        if !self.bridge_mode_enabled() {
+            return Err(MeshError::BridgeModeDisabled);
+        }
         self.nostr
             .send(NostrCommand::Join(cell.to_string()))
             .map_err(|_| MeshError::WorkerGone)
@@ -88,7 +91,9 @@ impl MeshService {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.identity.write().take();
         self.private_group_identity.write().take();
-        self.config.set_nickname("anon".to_owned());
+        self.config.set_nickname(String::new());
+        self.config.set_bridge_mode(false);
+        self.config.set_public_chat(false);
         self.events.clear_moderation();
         let mut first_error: Option<MeshError> = None;
         let fail = |error: MeshError, slot: &mut Option<MeshError>| {
@@ -154,7 +159,7 @@ impl MeshService {
         // their routing ID. A peer that is neither cannot be reached at all, and
         // saying so up front beats queueing a message nothing will ever pick up.
         if self.nostr_state.knows_peer(peer) {
-            return self.relay_connector.is_some();
+            return self.relay_connector.is_some() && self.bridge_mode_enabled();
         }
         self.has_radio && peer.to_routing_bytes().is_some()
     }

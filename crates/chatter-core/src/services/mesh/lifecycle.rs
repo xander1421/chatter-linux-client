@@ -13,6 +13,9 @@ impl MeshService {
             deps.deliveries,
             deps.attachments,
         ));
+        if config.public_chat_enabled() {
+            timeline.open_public_room();
+        }
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
         // The receivers for the first channel are dropped: nothing runs until
@@ -221,6 +224,7 @@ impl MeshService {
 
     /// Stop and join both transport runtimes; the router lives until service drop.
     pub async fn shutdown(&self) {
+        self.set_pairing(false);
         let _lifecycle = self.lifecycle.lock().await;
         if !self.running.swap(false, Ordering::SeqCst) {
             return;
@@ -281,7 +285,8 @@ impl MeshService {
     /// Every peer the mesh currently knows, shaped for display.
     #[must_use]
     pub fn peers(&self) -> Vec<MeshPeer> {
-        self.state.peers()
+        self.state
+            .visible_peers(self.public_chat_enabled() || self.pairing_active())
     }
 
     /// Peers still in radio range, shaped and ordered by the core peer registry.
@@ -290,8 +295,7 @@ impl MeshService {
         if !self.status().radio_running {
             return Vec::new();
         }
-        self.state
-            .peers()
+        self.peers()
             .into_iter()
             .filter(|peer| peer.reachable || peer.connected)
             .collect()

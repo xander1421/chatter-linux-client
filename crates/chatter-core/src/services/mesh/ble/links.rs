@@ -1,32 +1,27 @@
 use super::*;
-use chatter_mesh_link::{InboundLink, PairingBeacon};
-use std::time::{Duration, Instant};
-
-const RECENT_PAIRING_ADVERT: Duration = Duration::from_secs(30);
-const MAX_RECENT_PAIRING_ADVERTS: usize = 128;
-pub(super) type RecentPairingAdverts = std::collections::HashMap<String, (PairingBeacon, Instant)>;
-
-fn permit_inbound(
-    state: &MeshState,
-    recent: &parking_lot::Mutex<RecentPairingAdverts>,
-    incoming: &InboundLink,
-) -> bool {
-    if let Some(preface) = &incoming.beacon {
-        return state.paired_contact_for_preface(preface).is_some();
-    }
-    let seen = recent.lock().get(&incoming.address).copied();
-    seen.is_some_and(|(beacon, seen_at)| {
-        seen_at.elapsed() < RECENT_PAIRING_ADVERT
-            && state.paired_contact_for_beacon(&beacon).is_some()
-    })
-}
 
 impl BleRuntime {
     pub(super) fn install_inbound_admission(&self) {
+        let config = Arc::clone(&self.config);
         let state = Arc::clone(&self.state);
-        let recent = Arc::clone(&self.recent_pairing_adverts);
-        self.radio.set_inbound_admission(Arc::new(move |incoming| {
-            permit_inbound(&state, &recent, incoming)
+        let scans = Arc::clone(&self.matched_scans);
+        let previews = Arc::clone(&self.pairing_previews);
+        self.radio.set_inbound_admission(Arc::new(move |inbound| {
+            let now = Instant::now();
+            match admission::inbound_admission(&config, &state, &scans, inbound, now) {
+                Some(ConnectionAdmission::Pairing) => {
+                    let already_outbound = state.with(|inner| {
+                        inner.connecting.contains(&inbound.address)
+                            || inner
+                                .address_of
+                                .values()
+                                .any(|address| *address == inbound.address)
+                    });
+                    !already_outbound && previews.lock().reserve_inbound(&inbound.address, now)
+                }
+                Some(_) => true,
+                None => false,
+            }
         }));
     }
 
@@ -43,9 +38,12 @@ impl BleRuntime {
                 link,
                 role,
                 max_write,
-                ..
-            } => self.on_connected(link, role, max_write).await,
-            LinkEvent::Disconnected { link } => self.on_disconnected(&link).await,
+                inbound,
+            } => {
+                self.on_connected(link, role, max_write, inbound.as_ref())
+                    .await
+            }
+            LinkEvent::Disconnected { link } => self.on_disconnected(&link, Instant::now()).await,
             LinkEvent::Data { link, bytes } => self.on_data(&link, bytes).await,
             LinkEvent::PeripheralRoleEnded => {
                 // Not fatal and not recoverable from here: outbound links still
@@ -64,12 +62,21 @@ impl BleRuntime {
                 );
             }
             LinkEvent::AdapterPowerChanged { powered } => {
+                if !powered {
+                    self.matched_scans.lock().clear();
+                    *self.pairing_previews.lock() = Default::default();
+                    self.link_admission.clear();
+                    self.pairing_exchanges.clear();
+                    self.pending_central = None;
+                    self.central_admissions.clear();
+                }
                 self.state.with(|state| {
                     state.adapter_powered = powered;
                     if !powered {
                         // Every link dies with the adapter. Keeping the bindings
                         // would make the router believe it can still write.
                         state.links.clear();
+                        state.awaiting_pairing_proof.clear();
                         state.max_write.clear();
                         state.address_of.clear();
                         state.connecting.clear();
@@ -82,41 +89,20 @@ impl BleRuntime {
         }
     }
 
-    /// Consider dialing only after authenticating the beacon against a saved
-    /// pairing. The beacon cannot bind a link, identify its Noise key, or
-    /// authorize a route.
-    pub(super) async fn on_discovered(
-        &mut self,
-        address: &str,
-        rssi: i16,
-        beacon: chatter_mesh_link::PairingBeacon,
-    ) {
-        let Some(contact) = self.state.paired_contact_for_beacon(&beacon) else {
-            return;
-        };
-        let now = now_millis();
-        {
-            let mut recent = self.recent_pairing_adverts.lock();
-            recent.retain(|_, (_, at)| at.elapsed() < RECENT_PAIRING_ADVERT);
-            if recent.len() < MAX_RECENT_PAIRING_ADVERTS || recent.contains_key(address) {
-                recent.insert(address.to_string(), (beacon, Instant::now()));
-            }
+    /// Queue only recognized contacts or addresses permitted by an active opt-in.
+    pub(super) async fn on_discovered(&mut self, address: &str, rssi: i16, beacon: PairingBeacon) {
+        let instant = Instant::now();
+        if self.state.paired_contact_for_beacon(&beacon).is_some() {
+            self.matched_scans.lock().remember(address, beacon, instant);
         }
-        let route = self.state.route(&contact);
-        let held = self.state.with(|state| {
-            state
-                .links
-                .links()
-                .any(|(_, link)| link.peer.as_ref() == Some(&route))
-        });
-        if held {
+        if self.outbound_admission(address, instant).is_none() {
             return;
         }
 
+        let now = now_millis();
         let decision = self.state.with(|state| {
-            let mut candidate =
+            let candidate =
                 chatter_mesh_link::scheduler::ConnectionCandidate::new(address, rssi, now);
-            candidate.pairing_beacon = Some(beacon);
             let connected_or_connecting =
                 state.links.count_role(LinkRole::Central) + state.connecting.len();
             let existing = ExistingConnectionState {
@@ -142,7 +128,7 @@ impl BleRuntime {
         });
 
         match decision {
-            DiscoveryDecision::ConnectNow => self.dial_paired(address, &contact).await,
+            DiscoveryDecision::ConnectNow => self.dial(address).await,
             DiscoveryDecision::CancelStaleConnection => {
                 self.state.with(|state| {
                     state.connecting.remove(address);
@@ -155,27 +141,92 @@ impl BleRuntime {
         }
     }
 
-    pub(super) async fn dial_paired(&mut self, address: &str, contact: &PeerId) {
-        if let Some(beacon) = self
-            .state
-            .pairing_beacon_for_contact(&self.broadcast_peer_id(), contact)
-        {
-            self.dial_with_beacon(address, Some(beacon)).await;
+    fn outbound_admission(&self, address: &str, now: Instant) -> Option<ConnectionAdmission> {
+        let matched = admission::recent_contact(&self.state, &self.matched_scans, address, now);
+        let permission = self.config.connection_admission(matched, now)?;
+        match &permission {
+            ConnectionAdmission::Paired(contact)
+                if self.failed_pairing_proofs.blocks(contact, now)
+                    || self.state.paired_session(contact)
+                    || self.link_admission.values().any(|record| {
+                        record.expected_contact.as_ref() == Some(contact)
+                            && record.permits_proof(&self.config, now)
+                    }) =>
+            {
+                None
+            }
+            ConnectionAdmission::Pairing
+                if self.has_pairing_preview(LinkRole::Central)
+                    || !self.pairing_previews.lock().allows_central(address, now) =>
+            {
+                None
+            }
+            _ => Some(permission),
         }
     }
 
-    #[cfg(test)]
-    pub(super) async fn dial(&mut self, address: &str) {
-        self.dial_with_beacon(address, None).await;
+    fn has_pairing_preview(&self, role: LinkRole) -> bool {
+        self.link_admission.iter().any(|(link, record)| {
+            record
+                .preview
+                .as_ref()
+                .is_some_and(|(held_role, _)| *held_role == role)
+                && !self.state.is_paired_link(link)
+        })
     }
 
-    /// Start a connect without blocking the loop. `finish_dial` applies the result.
-    pub(super) async fn dial_with_beacon(&mut self, address: &str, beacon: Option<PairingBeacon>) {
+    pub(super) async fn close_lapsed_admissions(&mut self, now: Instant) {
+        for (link, record) in &mut self.link_admission {
+            if self.state.is_paired_link(link)
+                && let Some((role, address)) = record.preview.take()
+            {
+                self.pairing_previews
+                    .lock()
+                    .release(role, address, now, false);
+            }
+        }
+        let public_chat = self.config.public_chat_enabled();
+        let expired: Vec<_> = self
+            .link_admission
+            .iter()
+            .filter(|(link, record)| {
+                (!public_chat || record.expected_contact.is_some())
+                    && !record.permits_proof(&self.config, now)
+                    && !self.state.is_paired_link(link)
+            })
+            .map(|(link, _)| link.clone())
+            .collect();
+        for link in expired {
+            self.state
+                .with(|state| state.links.set_writable(&link, false));
+            let _ = self.radio.disconnect(&link).await;
+            self.on_disconnected(&link, now).await;
+        }
+    }
+
+    /// Start a connect without blocking the loop; [`finish_dial`] applies it.
+    pub(super) async fn dial(&mut self, address: &str) {
         // Adverts repeat every few hundred ms, so a skipped dial is retried by
         // the next discovery or queue drain rather than lost.
         if self.dial_in_flight {
             return;
         }
+        let Some(permission) = self.outbound_admission(address, Instant::now()) else {
+            return;
+        };
+        let beacon = match &permission {
+            ConnectionAdmission::Paired(contact) => {
+                let Some(beacon) = self
+                    .state
+                    .pairing_beacon_for_contact(&self.broadcast_peer_id(), contact)
+                else {
+                    return;
+                };
+                Some(beacon)
+            }
+            _ => None,
+        };
+        self.pending_central = Some((address.to_owned(), permission));
         self.dial_in_flight = true;
         let now = now_millis();
         self.state.with(|state| {
@@ -194,6 +245,7 @@ impl BleRuntime {
 
     pub(super) fn finish_dial(&mut self, outcome: DialOutcome) {
         self.dial_in_flight = false;
+        let permission = self.pending_central.take();
         // BlueZ pauses its own discovery session for a dial. Its scan duty
         // state must issue a fresh StartScanning on the next tick.
         #[cfg(target_os = "linux")]
@@ -202,6 +254,9 @@ impl BleRuntime {
         let address = address.as_str();
         match result {
             Ok(link) => {
+                if let Some(permission) = permission {
+                    self.central_admissions.insert(link.clone(), permission);
+                }
                 self.state.with(|state| {
                     // `Connected` can now be handled before this result: the
                     // link layer emits it from the connect itself.
@@ -213,6 +268,14 @@ impl BleRuntime {
                 });
             }
             Err(error) => {
+                if matches!(permission, Some((_, ConnectionAdmission::Pairing))) {
+                    self.pairing_previews.lock().release(
+                        LinkRole::Central,
+                        address.to_owned(),
+                        Instant::now(),
+                        true,
+                    );
+                }
                 let timed_out =
                     matches!(error, chatter_mesh_link::LinkError::ConnectTimedOut { .. });
                 self.state.with(|state| {
@@ -261,10 +324,84 @@ impl BleRuntime {
         self.finish_dial(outcome);
     }
 
-    async fn on_connected(&mut self, link: LinkId, role: LinkRole, max_write: usize) {
+    async fn on_connected(
+        &mut self,
+        link: LinkId,
+        role: LinkRole,
+        max_write: usize,
+        inbound: Option<&InboundLink>,
+    ) {
+        let now = Instant::now();
+        let (permission, address) = match role {
+            LinkRole::Central => {
+                let previous = self
+                    .central_admissions
+                    .remove(&link)
+                    .or_else(|| self.pending_central.take());
+                let (contact, address) = match previous {
+                    Some((address, ConnectionAdmission::Paired(contact))) => {
+                        (Some(contact), Some(address))
+                    }
+                    Some((address, _)) => (None, Some(address)),
+                    None => (None, None),
+                };
+                (self.config.connection_admission(contact, now), address)
+            }
+            LinkRole::Peripheral => (
+                inbound.and_then(|inbound| {
+                    admission::inbound_admission(
+                        &self.config,
+                        &self.state,
+                        &self.matched_scans,
+                        inbound,
+                        now,
+                    )
+                }),
+                inbound.map(|incoming| incoming.address.clone()),
+            ),
+        };
+        let (expected_contact, preview) = match (permission, address) {
+            (Some(ConnectionAdmission::Paired(contact)), _) => (Some(contact), None),
+            (Some(ConnectionAdmission::PublicChat), _) => (None, None),
+            (Some(ConnectionAdmission::Pairing), Some(address))
+                if !self.has_pairing_preview(role) =>
+            {
+                let Some(deadline) = self.config.pairing_deadline(now) else {
+                    let _ = self.radio.disconnect(&link).await;
+                    return;
+                };
+                if role == LinkRole::Peripheral {
+                    let reserved = {
+                        let mut previews = self.pairing_previews.lock();
+                        let reserved = previews.reserve_inbound(&address, now);
+                        if reserved {
+                            previews.hold_inbound(&address, deadline);
+                        }
+                        reserved
+                    };
+                    if !reserved {
+                        let _ = self.radio.disconnect(&link).await;
+                        return;
+                    }
+                }
+                (None, Some((role, address)))
+            }
+            _ => {
+                let _ = self.radio.disconnect(&link).await;
+                return;
+            }
+        };
+        let needs_proof = expected_contact.is_some();
+        let mut record = admission::LinkAdmission::new(expected_contact, now);
+        record.role = Some(role);
+        record.preview = preview;
+        self.link_admission.insert(link.clone(), record);
         self.link_last_inbound_ms.insert(link.clone(), now_millis());
         self.state.with(|state| {
             state.links.link_up(link.clone(), role);
+            if needs_proof {
+                state.awaiting_pairing_proof.insert(link.clone());
+            }
             // `Connected` means writable: the trait's contract is that an
             // implementation withholds this event until the link can carry a
             // write, so the flag is set here rather than waited for.
@@ -281,12 +418,31 @@ impl BleRuntime {
         self.flush_buffered_writes().await;
     }
 
-    async fn on_disconnected(&mut self, link: &LinkId) {
+    async fn on_disconnected(&mut self, link: &LinkId, instant: Instant) {
         let now = now_millis();
         self.link_last_inbound_ms.remove(link);
+        if let Some(record) = self.link_admission.remove(link) {
+            if record.role == Some(LinkRole::Central)
+                && let Some(contact) = record.expected_contact
+                && self
+                    .state
+                    .with(|state| state.awaiting_pairing_proof.contains(link))
+            {
+                self.failed_pairing_proofs.record(contact, instant);
+            }
+            if let Some((role, address)) = record.preview {
+                let cool = !self.state.is_paired_link(link);
+                self.pairing_previews
+                    .lock()
+                    .release(role, address, instant, cool);
+            }
+        }
+        self.central_admissions.remove(link);
+        self.pairing_exchanges.remove(link);
         let peer = self.state.with(|state| {
             let (moved, discarded) = rescue_link_writes(state, link, None);
             let peer = state.links.link_down(link);
+            state.awaiting_pairing_proof.remove(link);
             state.max_write.remove(link);
             state.assembler.discard(link);
             if moved > 0 || !discarded.is_empty() {
@@ -315,6 +471,9 @@ impl BleRuntime {
     }
 
     pub(super) async fn on_data(&mut self, link: &LinkId, bytes: Vec<u8>) {
+        if !self.state.with(|state| state.links.is_writable(link)) {
+            return;
+        }
         let now = now_millis();
         self.link_last_inbound_ms.insert(link.clone(), now);
         let appended = self.state.with(|state| {
@@ -356,6 +515,12 @@ impl BleRuntime {
     // ----------------------------------------------------------------- inbound
 
     pub(super) async fn on_packet(&mut self, link: &LinkId, packet: BitchatPacket) {
+        let pairing_only = !self.config.public_chat_enabled() && !self.state.is_paired_link(link);
+        if !self.allows_public_packet(&packet)
+            || !self.allows_link_frame(link, broadcasts::packet_kind(&packet))
+        {
+            return;
+        }
         let now_ms = now_millis();
         let channel_fragment = if packet.message_type() == Some(MessageType::Fragment) {
             chatter_mesh::fragment::FragmentHeader::parse(&packet)
@@ -437,6 +602,18 @@ impl BleRuntime {
                 .or_else(|| state.links.discovery_peer_for(link))
                 .cloned()
         });
+        if pairing_only {
+            if packet.is_rsr || bound.as_ref().is_some_and(|peer| *peer != claimed) {
+                return;
+            }
+            let kind = broadcasts::packet_kind(&packet);
+            if kind == Some(MessageType::Announce) && packet.ttl != DIRECT_ANNOUNCE_TTL {
+                return;
+            }
+            if kind != Some(MessageType::Announce) && !self.addressed_to_us(&packet) {
+                return;
+            }
+        }
 
         // Which peer's outstanding request this could be answering.
         //
@@ -577,10 +754,10 @@ impl BleRuntime {
             .await;
 
         // Refused identity-control packets must not be propagated to peers.
-        if !retainable {
+        if !retainable || pairing_only {
             return;
         }
-        if packet.is_broadcast() {
+        if packet.is_broadcast() && broadcasts::allows_forwarding(&self.config, &packet) {
             self.gossip.on_public_packet_seen(&packet, now_s);
         }
         // TTL 0 already stops the relay; this does not depend on that.
@@ -727,7 +904,10 @@ impl BleRuntime {
             return;
         }
         for (ingress, fragment) in received.forwards {
-            if fragment.is_broadcast() {
+            if !self.config.public_chat_enabled() && !self.state.is_paired_link(&ingress) {
+                continue;
+            }
+            if fragment.is_broadcast() && broadcasts::allows_forwarding(&self.config, &fragment) {
                 self.gossip.on_public_packet_seen(&fragment, now_s);
             }
             self.relay(&ingress, &fragment, local).await;
@@ -754,6 +934,9 @@ impl BleRuntime {
         claimed: &PeerId,
         verified_key: Option<[u8; 32]>,
     ) -> bool {
+        if !self.allows_public_packet(packet) {
+            return false;
+        }
         match packet.message_type() {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => {

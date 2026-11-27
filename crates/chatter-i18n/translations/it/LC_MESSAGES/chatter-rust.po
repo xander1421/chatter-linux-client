@@ -3971,3 +3971,15 @@ msgstr "Consenti la visualizzazione delle chiamate in arrivo sulla schermata di 
 
 msgid "Not now"
 msgstr "Non ora"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:557
+msgid "Mesh nickname updated."
+msgstr "Soprannome Mesh aggiornato."
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:576
+msgid "Could not change bridge mode: {}"
+msgstr "Impossibile modificare la modalità ponte: {}"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
+msgid "Could not change nearby public chat: {}"
+msgstr "Impossibile modificare la chat pubblica nelle vicinanze: {}"

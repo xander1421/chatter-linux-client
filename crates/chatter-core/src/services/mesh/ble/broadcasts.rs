@@ -1,8 +1,100 @@
 use super::*;
 
+fn public_chat_type(kind: Option<MessageType>) -> bool {
+    matches!(
+        kind,
+        Some(
+            MessageType::Message
+                | MessageType::ChannelMessage
+                | MessageType::FileTransfer
+                | MessageType::FileManifest
+                | MessageType::FileChunk
+                | MessageType::FileChunkRequest
+        )
+    )
+}
+
+pub(super) fn packet_kind(packet: &BitchatPacket) -> Option<MessageType> {
+    match packet.message_type() {
+        Some(MessageType::Fragment) => {
+            let (header, _) = fragment::FragmentHeader::parse(packet).ok()?;
+            MessageType::from_u8(header.original_type)
+        }
+        kind => kind,
+    }
+}
+
+pub(in crate::services::mesh) fn frame_kind(bytes: &[u8]) -> Option<MessageType> {
+    match bytes.get(1).copied().and_then(MessageType::from_u8) {
+        Some(MessageType::Fragment) => packet_kind(&codec::decode(bytes).ok()?),
+        kind => kind,
+    }
+}
+
+pub(super) fn allows_transmission(config: &MeshConfig, packet: &BitchatPacket) -> bool {
+    if !allows_public_packet(config, packet) {
+        return false;
+    }
+    if config.bridge_mode_enabled() {
+        return true;
+    }
+    match (packet.message_type(), packet_kind(packet)) {
+        (Some(MessageType::Announce), _) => {
+            matches!(
+                AnnouncementPacket::carries_bridge_metadata(&packet.payload),
+                Ok(false)
+            )
+        }
+        // A fragment alone cannot establish that the announce has no metadata.
+        (Some(MessageType::Fragment), Some(MessageType::Announce)) => false,
+        _ => true,
+    }
+}
+
+pub(super) fn allows_forwarding(config: &MeshConfig, packet: &BitchatPacket) -> bool {
+    allows_transmission(config, packet)
+        && (packet_kind(packet) != Some(MessageType::Announce)
+            || (packet.message_type() == Some(MessageType::Announce)
+                && matches!(
+                    AnnouncementPacket::carries_pairing_beacon(&packet.payload),
+                    Ok(false)
+                )))
+}
+
+fn allows_public_packet(config: &MeshConfig, packet: &BitchatPacket) -> bool {
+    config.public_chat_enabled() || !public_chat_type(packet_kind(packet))
+}
+
 impl BleRuntime {
+    pub(super) fn allows_link_frame(&self, link: &LinkId, kind: Option<MessageType>) -> bool {
+        self.config.public_chat_enabled()
+            || self.state.is_paired_link(link)
+            || (matches!(
+                kind,
+                Some(
+                    MessageType::Announce
+                        | MessageType::NoiseHandshake
+                        | MessageType::NoiseEncrypted
+                )
+            ) && self
+                .link_admission
+                .get(link)
+                .is_some_and(|record| record.permits_proof(&self.config, Instant::now())))
+    }
+
+    pub(super) fn allows_public_packet(&self, packet: &BitchatPacket) -> bool {
+        allows_public_packet(&self.config, packet)
+    }
+
+    pub(super) fn allows_queued_frame(&self, bytes: &[u8]) -> bool {
+        self.config.public_chat_enabled() || !public_chat_type(frame_kind(bytes))
+    }
+
     /// Broadcast a public message into the mesh room.
     pub async fn broadcast_public(&mut self, message_id: &str, content: &str) {
+        if !self.config.public_chat_enabled() {
+            return;
+        }
         let now_ms = now_millis();
         let nickname = self.config.nickname();
         // The payload of a public message is the message text and nothing else
@@ -42,6 +134,9 @@ impl BleRuntime {
     }
 
     pub(super) async fn broadcast_channel(&mut self, message_id: &str, name: &str, content: &str) {
+        if !self.config.public_chat_enabled() {
+            return;
+        }
         let Some(payload) = chatter_mesh::channel::encode(name, content) else {
             return;
         };
@@ -69,35 +164,67 @@ impl BleRuntime {
     }
 
     pub(super) async fn broadcast_channel_presence(&mut self, name: &str) {
+        if !self.config.public_chat_enabled() {
+            return;
+        }
         let Some(payload) = chatter_mesh::channel::encode_presence(name) else {
             return;
         };
-        let packet = self.build_packet(
+        let mut packet = self.build_packet(
             MessageType::ChannelMessage,
             None,
             payload,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
+        packet.timestamp = super::transmission::presence_timestamp(packet.timestamp);
         let packet = self.maybe_sign(packet, true);
         self.originate_broadcast(&packet).await;
     }
 
     pub(super) async fn send_private_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
-        let Ok(ciphertext) = self.state.with(|s| s.sessions.encrypt(peer, bytes)) else {
-            // A current member retries when this peer establishes Noise again.
+        if !self.config.public_chat_enabled()
+            && !self.state.paired_session(peer)
+            && !self.allows_pairing_control(peer, bytes)
+            && !bytes.starts_with(super::super::account_identity::PAIRING_RECEIPT_MAGIC)
+        {
+            return false;
+        }
+        let Some(packet) = self.private_control_packet(peer, bytes) else {
             return false;
         };
-        let packet = self.build_packet(
+        self.transmit(&packet, Some(peer), None).await
+    }
+
+    fn private_control_packet(&self, peer: &PeerId, bytes: &[u8]) -> Option<BitchatPacket> {
+        let ciphertext = self
+            .state
+            .with(|state| state.sessions.encrypt(peer, bytes))
+            .ok()?;
+        Some(self.build_packet(
             MessageType::NoiseEncrypted,
             Some(peer),
             ciphertext,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-        );
-        self.transmit(&packet, Some(peer), None).await
+        ))
+    }
+
+    pub(super) async fn send_private_control_on_link(
+        &self,
+        link: &LinkId,
+        peer: &PeerId,
+        bytes: &[u8],
+    ) -> bool {
+        let Some(packet) = self.private_control_packet(peer, bytes) else {
+            return false;
+        };
+        self.transmit_on_link(&packet, peer, link).await
     }
 
     pub(super) async fn send_group_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
-        self.pairing_verified(peer) && self.send_private_control(peer, bytes).await
+        let Some(link) = self.verified_pairing_link(peer) else {
+            return false;
+        };
+        self.send_private_control_on_link(&link, peer, bytes).await
     }
 
     pub(super) async fn send_group_state(&mut self, peer: &PeerId, bytes: &[u8], invite: bool) {
@@ -111,34 +238,23 @@ impl BleRuntime {
             NoisePayloadType::GroupKeyUpdate
         };
         let payload = chatter_mesh::packet::encode_noise_payload(kind, bytes);
-        let sealed = self.pairing_verified(peer).then(|| {
-            self.state
-                .with(|state| state.sessions.encrypt(peer, &payload))
-        });
-        let Some(Ok(ciphertext)) = sealed else {
-            let now = now_millis();
-            let due = self.state.with(|state| {
-                state
-                    .links
-                    .links_to(peer)
-                    .iter()
-                    .any(|link| state.links.is_writable(link))
-                    && !state.sessions.has_session(peer)
-                    && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
-                        >= DM_HANDSHAKE_RETRY_MS
-            });
-            if due {
-                self.start_handshake(peer).await;
-            }
+        if self.send_group_control(peer, &payload).await {
             return;
-        };
-        let packet = self.build_packet(
-            MessageType::NoiseEncrypted,
-            Some(peer),
-            ciphertext,
-            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-        );
-        self.transmit(&packet, Some(peer), None).await;
+        }
+        let now = now_millis();
+        let due = self.state.with(|state| {
+            state
+                .links
+                .links_to(peer)
+                .iter()
+                .any(|link| state.links.is_writable(link))
+                && !state.sessions.has_session(peer)
+                && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
+                    >= DM_HANDSHAKE_RETRY_MS
+        });
+        if due {
+            self.start_handshake(peer).await;
+        }
     }
 
     pub(super) async fn broadcast_private_channel(

@@ -7,6 +7,11 @@ impl BleRuntime {
         let now_ms = now_millis();
         let now_s = now_secs();
         self.refresh_pairing_beacons();
+        let now = Instant::now();
+        if self.config.expire_pairing(now) {
+            self.emit_peers();
+        }
+        self.close_lapsed_admissions(now).await;
         let expired = self.state.with(|state| {
             state.declined_group_invites.retain(|_, (_, at)| {
                 now_s.saturating_sub(*at) < super::super::DIRECT_INVITE_LIFETIME_SECS
@@ -197,13 +202,8 @@ impl BleRuntime {
             let fresh = now_ms.saturating_sub(candidate.discovered_at_ms) <= 5_000;
             #[cfg(not(target_os = "linux"))]
             let fresh = true;
-            if fresh
-                && let Some(contact) = candidate
-                    .pairing_beacon
-                    .as_ref()
-                    .and_then(|beacon| self.state.paired_contact_for_beacon(beacon))
-            {
-                self.dial_paired(&candidate.address, &contact).await;
+            if fresh {
+                self.dial(&candidate.address).await;
             }
         }
 
@@ -220,7 +220,7 @@ impl BleRuntime {
                 state.peers.is_empty(),
                 elapsed,
                 recent_traffic,
-                duty::no_jitter,
+                |bound_ms| (bound_ms as i64) * self.announce_jitter_permille / 1_000,
             );
             state.maintenance_cycle = if plan.should_reset_counter {
                 0
@@ -267,11 +267,18 @@ impl BleRuntime {
         self.maintain_prekeys(now_ms).await;
 
         // Gossip sync, which nothing else can schedule.
-        let connected = self.state.public_sync_peers();
+        let public_chat_enabled = self.config.public_chat_enabled();
+        let mut connected = self.state.public_sync_peers();
+        if !public_chat_enabled {
+            connected.retain(|peer| self.state.paired_session(peer));
+        }
+        self.gossip.set_public_chat_enabled(public_chat_enabled);
         match self.gossip.maintenance(&connected, now_s) {
             Ok(sends) => {
                 for send in sends {
-                    self.dispatch_sync(send).await;
+                    if public_chat_enabled || send.to.is_some() {
+                        self.dispatch_sync(send).await;
+                    }
                 }
             }
             Err(error) => self.degraded(format!("gossip sync maintenance failed: {error}")),
@@ -352,6 +359,9 @@ impl BleRuntime {
         // is the only recovery. On the cleanup cadence rather than the tick, so a
         // persistent failure retries occasionally instead of twice a second.
         for id in self.files_in.completed() {
+            if !self.config.public_chat_enabled() {
+                break;
+            }
             let nickname = self
                 .files_in
                 .get(&id)
@@ -469,14 +479,11 @@ impl BleRuntime {
         });
 
         for (link, write) in next {
-            let kind = write.bytes.get(1).copied().and_then(MessageType::from_u8);
-            let group = match kind {
-                Some(MessageType::GroupMessage) => true,
-                Some(MessageType::Fragment) => codec::decode(&write.bytes)
-                    .is_ok_and(|packet| super::transmission::is_private_group_packet(&packet)),
-                _ => false,
-            };
-            if group && !self.group_traffic_allowed(&link) {
+            let kind = broadcasts::frame_kind(&write.bytes);
+            if !self.allows_queued_frame(&write.bytes)
+                || !self.allows_link_frame(&link, kind)
+                || (kind == Some(MessageType::GroupMessage) && !self.group_traffic_allowed(&link))
+            {
                 continue;
             }
             match self.radio.send(&link, &write.bytes).await {

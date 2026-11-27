@@ -65,8 +65,15 @@ export global MeshGlobal {
     //
     // Turning it off stops the radio but keeps past conversations readable.
     in-out property <bool> mesh-on: false;
-    in-out property <string> nickname: "anon";
+    in-out property <string> nickname;
+    in-out property <string> custom-nickname;
     callback set-nickname(string);
+    in-out property <bool> bridge-mode: false;
+    callback set-bridge-mode(bool);
+    in-out property <bool> public-chat: false;
+    callback set-public-chat(bool);
+    in-out property <bool> pairing-active: false;
+    callback set-pairing(bool);
     in-out property <[string]> nearby-channels: [];
     in-out property <[MeshPeerData]> nearby-peers: [];
     callback open-peer(string);

@@ -6040,3 +6040,39 @@ msgstr "Не дозволено"
 
 msgid "Allow"
 msgstr "Дозволити"
+
+#: ui/mesh/mesh_list.slint:143
+msgid "Create a private group or pair a contact in Mesh settings."
+msgstr "Створіть приватну групу або сполучіть пристрій контакту в налаштуваннях Mesh."
+
+#: ui/mesh/mesh_setup_sheet.slint:140
+msgid "Pair a nearby contact"
+msgstr "Сполучити пристрій контакту поблизу"
+
+#: ui/mesh/mesh_setup_sheet.slint:156
+msgid "You appear as {} nearby. Choose your contact’s device and verify it in person."
+msgstr "Користувачі поблизу бачать вас під іменем {}. Виберіть пристрій контакту та перевірте його під час особистої зустрічі."
+
+#: ui/mesh/mesh_setup_sheet.slint:165 ui/mesh/mesh_setup_sheet.slint:168
+msgid "Nearby public chat"
+msgstr "Публічний чат поблизу"
+
+#: ui/mesh/mesh_setup_sheet.slint:170
+msgid "Send and receive public messages and files over Bluetooth. Anyone nearby can read them."
+msgstr "Надсилайте й отримуйте публічні повідомлення та файли через Bluetooth. Їх може прочитати будь-хто поблизу."
+
+#: ui/mesh/mesh_setup_sheet.slint:177 ui/mesh/mesh_setup_sheet.slint:180
+msgid "Bridge mode"
+msgstr "Режим моста"
+
+#: ui/mesh/mesh_setup_sheet.slint:182
+msgid "Connect to public internet relays and share connected device IDs and any configured location cell over Bluetooth."
+msgstr "Підключається до публічних інтернет-ретрансляторів і передає через Bluetooth ідентифікатори підключених пристроїв і налаштовану комірку розташування, якщо її задано."
+
+#: ui/mesh/mesh_setup_sheet.slint:190
+msgid "Mesh nickname"
+msgstr "Псевдонім Mesh"
+
+#: ui/mesh/mesh_setup_sheet.slint:204
+msgid "People nearby can see your mesh nickname. A custom nickname stays the same when your mesh identity changes."
+msgstr "Люди поблизу можуть бачити ваш псевдонім Mesh. Власний псевдонім не змінюється, коли змінюється ваш ідентифікатор Mesh."

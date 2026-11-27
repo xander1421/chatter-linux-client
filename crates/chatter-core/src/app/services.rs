@@ -349,21 +349,30 @@ impl ServiceContainer {
                 relay_connector: None,
                 radio_factory: None,
             };
-            let mut config = MeshConfig::default();
-            if let Ok(Some(nickname)) =
-                crate::storage::repositories::settings_repo::SettingsRepository::new(
-                    infra.database.clone(),
-                )
-                .get_string(crate::storage::repositories::settings_repo::keys::MESH_NICKNAME)
-            {
-                config.nickname = nickname;
-            }
-            let service =
-                MeshService::new(deps, config).map_err(|e| ContextError::Mesh(e.to_string()))?;
             let settings = crate::storage::repositories::settings_repo::SettingsRepository::new(
                 infra.database.clone(),
             );
             use crate::storage::repositories::settings_repo::keys;
+            let config = MeshConfig::default();
+            if let Ok(Some(nickname)) = settings.get_string(keys::MESH_NICKNAME) {
+                config.set_nickname(nickname);
+            }
+            config.set_bridge_mode(
+                settings
+                    .get_bool(keys::MESH_BRIDGE_MODE)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
+            );
+            config.set_public_chat(
+                settings
+                    .get_bool(keys::MESH_PUBLIC_CHAT)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
+            );
+            let service =
+                MeshService::new(deps, config).map_err(|e| ContextError::Mesh(e.to_string()))?;
             if let Ok(Some(names)) = settings.get::<Vec<String>>(keys::MESH_MUTED_CHANNELS) {
                 for name in names {
                     let _ = service.set_channel_muted(&name, true);

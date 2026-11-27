@@ -3972,3 +3972,15 @@ msgstr "Permita que as chamadas recebidas apareçam na tela de bloqueio."
 
 msgid "Not now"
 msgstr "Agora não"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:557
+msgid "Mesh nickname updated."
+msgstr "Apelido na malha atualizado."
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:576
+msgid "Could not change bridge mode: {}"
+msgstr "Não foi possível alterar o modo ponte: {}"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
+msgid "Could not change nearby public chat: {}"
+msgstr "Não foi possível alterar a conversa pública nas proximidades: {}"

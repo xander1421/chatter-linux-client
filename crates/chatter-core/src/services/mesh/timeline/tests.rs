@@ -422,7 +422,10 @@ fn a_wipe_empties_everything_and_keeps_only_the_empty_room() {
     );
 
     let listed = timeline.conversations().expect("conversations");
-    assert_eq!(listed.len(), 1, "only the room should remain");
+    assert!(
+        listed.is_empty(),
+        "the wipe clears the entire mesh directory"
+    );
 }
 
 /// Leaving a cell forgets it durably, rather than only for this session.
@@ -608,6 +611,7 @@ fn a_sent_message_is_readable_immediately_and_counts_as_read() {
 #[test]
 fn the_room_a_cell_and_a_dm_all_surface_with_the_right_type() {
     let timeline = temp_timeline();
+    timeline.open_public_room();
     let sender = peer("abcdef0123456789");
     timeline.note_geohash("u4pruy");
     timeline

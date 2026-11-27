@@ -3966,3 +3966,15 @@ msgstr "Разрешите показывать входящие вызовы н
 
 msgid "Not now"
 msgstr "Не сейчас"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:557
+msgid "Mesh nickname updated."
+msgstr "Псевдоним Mesh обновлён."
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:576
+msgid "Could not change bridge mode: {}"
+msgstr "Не удалось изменить режим моста: {}"
+
+#: crates/chatter-ui/src/bin_ui/features/mesh/mod.rs:601
+msgid "Could not change nearby public chat: {}"
+msgstr "Не удалось изменить настройку публичного чата поблизости: {}"

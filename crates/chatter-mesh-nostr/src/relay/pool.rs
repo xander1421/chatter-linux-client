@@ -493,14 +493,19 @@ impl RelayPool {
         Ok(reply_rx.await.unwrap_or(false))
     }
 
-    /// Stops every relay and the dispatcher.
-    pub async fn shutdown(&self) {
+    /// Disconnects the relay clients while leaving the dispatcher available.
+    pub async fn disconnect_relays(&self) {
         let entries: Vec<RelayEntry> = self.clients.lock().await.drain().map(|(_, e)| e).collect();
         for entry in entries {
             entry.client.shutdown().await;
             entry.handle.abort();
             let _ = entry.handle.await;
         }
+    }
+
+    /// Stops every relay and the dispatcher.
+    pub async fn shutdown(&self) {
+        self.disconnect_relays().await;
         let _ = self.ctl.send(Ctl::Stop);
         if let Some(handle) = self.dispatcher.lock().await.take() {
             handle.abort();

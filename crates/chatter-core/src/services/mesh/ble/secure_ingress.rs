@@ -16,6 +16,19 @@ fn signing_binding_bytes(noise: &[u8; 32], transcript: &[u8; 32], signing: &[u8;
 }
 
 impl BleRuntime {
+    pub(super) fn allows_chatter_hello(&self, peer: &PeerId) -> bool {
+        self.state.paired_session(peer)
+            || self.config.is_pairing_peer(peer, std::time::Instant::now())
+    }
+
+    pub(super) fn allows_pairing_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
+        self.config.is_pairing_peer(peer, Instant::now())
+            && (ChatterHello::decode(bytes).is_some()
+                || BindingV1::decode(bytes).is_some()
+                || bytes.starts_with(SIGNING_BINDING_MAGIC)
+                || bytes.starts_with(SIGNING_BINDING_REQUEST))
+    }
+
     fn on_pairing_receipt(&mut self, peer: &PeerId, receipt: &[u8]) {
         let Ok(receipt) = <&[u8; 128]>::try_from(receipt) else {
             return;
@@ -74,6 +87,7 @@ impl BleRuntime {
             true
         });
         if paired {
+            self.refresh_pairing_beacons();
             self.gossip.retain_signing_key(peer, key);
             self.emit_peers();
         }
@@ -195,14 +209,25 @@ impl BleRuntime {
                 && self
                     .state
                     .with(|state| state.links.mark_noise_authenticated(link, claimed));
+            if direct
+                && let Some(record) = self.link_admission.get_mut(link)
+                && record.candidate.as_ref() == Some(claimed)
+            {
+                record.candidate_authenticated = true;
+            }
+            let paired = self.state.is_paired_link_to(link, claimed);
+            let application_data_allowed = paired || self.config.public_chat_enabled();
             if direct {
                 self.prune_duplicate_links(claimed, now_millis()).await;
+                if !self.config.public_chat_enabled() && paired {
+                    self.sync_new_peer(link, claimed, now_secs()).await;
+                }
                 let announced_key_matches = self.state.with(|state| {
                     state.peers.info(claimed).is_some_and(|peer| {
                         peer.noise_public_key.as_deref() == Some(recipient_key.as_slice())
                     })
                 });
-                if announced_key_matches {
+                if application_data_allowed && announced_key_matches {
                     self.hand_over_courier_mail(
                         claimed,
                         &recipient_key,
@@ -214,8 +239,13 @@ impl BleRuntime {
             }
             // The mesh runtime exists only after the user enabled discovery.
             // Keep capability negotiation inside this authenticated Noise link.
-            self.send_pairing_proof(claimed).await;
+            if direct {
+                self.send_pairing_proof(link, claimed).await;
+            }
             self.send_chatter_hello(claimed).await;
+            if !application_data_allowed {
+                return;
+            }
             // A session is the only signal strong enough for the router to send
             // without retaining, so this is the moment retained mail can go.
             let _ = self.router.send(RouterCommand::PeerAvailable {
@@ -227,7 +257,7 @@ impl BleRuntime {
     }
 
     pub(super) async fn sync_private_groups(&mut self, claimed: &PeerId) {
-        if !self.pairing_verified(claimed) {
+        if self.verified_pairing_link(claimed).is_none() {
             return;
         }
         let Some(group) = self.state.group_peer_for_wire(claimed) else {
@@ -346,14 +376,20 @@ impl BleRuntime {
 
         if let Some(receipt) = plaintext.strip_prefix(PAIRING_RECEIPT_MAGIC) {
             self.on_pairing_receipt(claimed, receipt);
-            self.send_pairing_proof(claimed).await;
+            self.send_pairing_proof(link, claimed).await;
             return;
         }
-        if self.on_pairing_control(claimed, &plaintext).await {
+        if self.on_pairing_control(link, claimed, &plaintext).await {
+            return;
+        }
+        if !self.config.public_chat_enabled()
+            && !self.state.is_paired_link_to(link, claimed)
+            && !self.allows_pairing_control(claimed, &plaintext)
+        {
             return;
         }
         if let Some(payload) = plaintext.strip_prefix(PAIRED_COURIER_MAGIC) {
-            if self.state.has_paired_pin(claimed) {
+            if self.state.is_paired_link_to(link, claimed) {
                 self.receive_courier(payload, packet.timestamp, claimed)
                     .await;
             }
@@ -389,6 +425,9 @@ impl BleRuntime {
         }
 
         if let Some(hello) = ChatterHello::decode(&plaintext) {
+            if !self.allows_chatter_hello(claimed) {
+                return;
+            }
             let can_bind = hello.compatible()
                 && hello.capabilities & super::super::chatter_hello::NOISE_SIGNING_BINDING != 0;
             let signal_capable = hello.capabilities & super::super::chatter_hello::SIGNAL_MESH != 0
@@ -414,6 +453,9 @@ impl BleRuntime {
                     None
                 }
             });
+            // If the remote Hello arrived before we selected this peer,
+            // repeat our existing nonce after accepting their retry.
+            self.send_chatter_hello(claimed).await;
             if let Some(key) = recipient_key
                 && let Err(error) =
                     self.couriers
@@ -984,6 +1026,9 @@ impl BleRuntime {
         let peer = self.state.route(peer);
         if self.state.has_paired_pin(&peer) {
             // Stable recipient tags and repeated envelopes stay inside Noise.
+            if !self.state.paired_session(&peer) {
+                return false;
+            }
             let frame = [PAIRED_COURIER_MAGIC.as_slice(), &payload].concat();
             return self.send_private_control(&peer, &frame).await;
         }

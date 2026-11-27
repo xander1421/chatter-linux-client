@@ -705,7 +705,7 @@ mod tests {
         );
         let packet = BitchatPacket {
             signature: Some([0x5A; SIGNATURE_LEN]),
-            payload: announcement.encode().unwrap(),
+            payload: announcement.encode_for_bridge().unwrap(),
             ..announce_packet(1_000_000, MESSAGE_TTL_DEFAULT, true)
         };
 

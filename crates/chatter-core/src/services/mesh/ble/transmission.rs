@@ -9,8 +9,15 @@ pub(super) fn is_private_group_packet(packet: &BitchatPacket) -> bool {
     }
 }
 
+/// Presence packets carry whole seconds. Local cadence still uses the full
+/// clock, and message timestamps retain their precision for deduplication.
+pub(super) fn presence_timestamp(now_ms: u64) -> u64 {
+    now_ms / 1_000 * 1_000
+}
+
 impl BleRuntime {
     pub(super) async fn announce(&mut self) {
+        self.config.on_identity_rotated(&self.identity.peer_id());
         let now_ms = now_millis();
         let passed = self.state.with(|state| {
             let passed = duty::announce_floor_passed(state.last_announce_ms, now_ms);
@@ -25,26 +32,48 @@ impl BleRuntime {
             return;
         }
         let nickname = self.config.nickname();
+        let bridge_mode = self.config.bridge_mode_enabled();
+        let bridge_geohash = self
+            .config
+            .bridge_geohash
+            .as_ref()
+            .filter(|cell| bridge_mode && chatter_mesh_nostr::geohash::is_valid(cell));
         let mut capabilities = PeerCapabilities::from_bits(0);
-        if self.config.bridge_geohash.is_some() {
+        if bridge_geohash.is_some() {
             capabilities.insert(PeerCapabilities::BRIDGE);
         }
         // We serve one-time prekeys only while our store is loaded.
         if self.state.with(|state| state.prekeys.local.is_some()) {
             capabilities.insert(PeerCapabilities::PREKEYS);
         }
+        let direct_neighbors = bridge_mode.then(|| {
+            self.state.with(|state| {
+                state
+                    .peers
+                    .connected_peer_ids()
+                    .iter()
+                    .filter_map(PeerId::to_routing_bytes)
+                    .take(chatter_mesh::tlv::announce::MAX_DIRECT_NEIGHBORS)
+                    .collect()
+            })
+        });
         let mut announcement = AnnouncementPacket::new(
             nickname.clone(),
             self.identity.static_public().to_vec(),
             self.identity.signing_public().to_vec(),
-            None,
+            direct_neighbors,
             Some(capabilities),
-            self.config.bridge_geohash.clone(),
+            bridge_geohash.cloned(),
         );
         let beacons = self.state.pairing_beacons(&self.broadcast_peer_id());
         announcement.pairing_beacon = Some(beacons[self.beacon_cursor % beacons.len()]);
         self.beacon_cursor = self.beacon_cursor.wrapping_add(1);
-        let payload = match announcement.encode() {
+        let encoded = if bridge_mode {
+            announcement.encode_for_bridge()
+        } else {
+            announcement.encode()
+        };
+        let payload = match encoded {
             Ok(payload) => payload,
             Err(error) => {
                 // Silent before. An announce that cannot be encoded means this
@@ -66,7 +95,7 @@ impl BleRuntime {
             payload,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
-        packet.timestamp = now_ms;
+        packet.timestamp = presence_timestamp(now_ms);
         // Signed over the packet preimage, not over `canonicalAnnounceBytes`.
         // bitchat has both, but `buildAnnounceSignature` has no callers outside
         // its own tests — the wire uses `noiseService.signPacket(packet)`
@@ -75,9 +104,11 @@ impl BleRuntime {
         let packet = self.maybe_sign(packet, true);
 
         self.state.with(|state| state.last_announce_ms = now_ms);
+        self.announce_jitter_permille = rand::random_range(-1_000..=1_000);
         self.originate_broadcast(&packet).await;
-        if now_ms.saturating_sub(self.last_channel_presence_ms) >= 60_000 {
-            self.last_channel_presence_ms = now_ms;
+        if self.config.public_chat_enabled() && now_ms >= self.next_channel_presence_ms {
+            self.next_channel_presence_ms =
+                now_ms.saturating_add(rand::random_range(54_000..=66_000));
             for name in self.events.active_channels() {
                 self.broadcast_channel_presence(&name).await;
             }
@@ -158,6 +189,9 @@ impl BleRuntime {
     /// peer whose announce has aged past `STALE_PEER_TIMEOUT_SECS`, and filing
     /// ours would aim that sweep at our own messages between announces.
     pub(super) async fn originate_broadcast(&mut self, packet: &BitchatPacket) {
+        if !self.allows_public_packet(packet) {
+            return;
+        }
         if packet.message_type() != Some(MessageType::Announce) {
             self.gossip.on_public_packet_seen(packet, now_secs());
         }
@@ -192,6 +226,9 @@ impl BleRuntime {
         ingress_link: Option<&LinkId>,
         chosen_link: Option<&LinkId>,
     ) -> bool {
+        if !broadcasts::allows_transmission(&self.config, packet) {
+            return false;
+        }
         let directed_peer = directed_peer.map(|peer| self.state.route(peer));
         let directed_peer = directed_peer.as_ref();
         let padding = fragment::pads_ble_frame(packet.msg_type);
@@ -217,6 +254,8 @@ impl BleRuntime {
 
         let (plan, frames) = {
             let mut links = self.state.link_candidates();
+            let kind = broadcasts::packet_kind(packet);
+            links.retain(|link| self.allows_link_frame(&link.id, kind));
             if let (Some(link), Some(peer)) = (chosen_link, directed_peer) {
                 links.retain(|candidate| &candidate.id == link);
                 let Some(candidate) = links.first_mut() else {
@@ -313,13 +352,19 @@ impl BleRuntime {
         for link in plan.selected.iter() {
             for frame in &frames {
                 let admitted = self.state.with(|state| {
-                    state.writes.enqueue(
+                    if !broadcasts::allows_transmission(&self.config, packet) {
+                        return None;
+                    }
+                    Some(state.writes.enqueue(
                         link,
                         frame.clone(),
                         write_priority,
                         PENDING_WRITE_BUFFER_CAP_BYTES,
-                    )
+                    ))
                 });
+                let Some(admitted) = admitted else {
+                    return false;
+                };
                 // Byte-capped, so this can refuse. A refusal is a dropped packet
                 // and has to be said out loud — which is what `#[must_use]` on
                 // `WriteEnqueue` is for.
@@ -338,6 +383,9 @@ impl BleRuntime {
     }
 
     pub(super) async fn relay(&self, ingress: &LinkId, packet: &BitchatPacket, local: &PeerId) {
+        if !broadcasts::allows_forwarding(&self.config, packet) {
+            return;
+        }
         let degree = self.state.with(|state| state.peers.connected_count());
         let sender_is_self = PeerId::from_bytes(&packet.sender_id) == *local;
         let recipient_is_self = self.addressed_to_us(packet);
@@ -365,6 +413,7 @@ impl BleRuntime {
         // a real wait rather than a hint. Spawned so the loop keeps servicing the
         // radio while it elapses.
         let state = Arc::clone(&self.state);
+        let config = Arc::clone(&self.config);
         let ingress = ingress.clone();
         let delay = u64::from(decision.delay_ms);
         let group_links = is_private_group_packet(packet).then(|| {
@@ -379,7 +428,14 @@ impl BleRuntime {
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            transmit_forwarded(&state, &forwarded, &ingress, group_links.as_deref()).await;
+            transmit_forwarded(
+                &state,
+                &config,
+                &forwarded,
+                &ingress,
+                group_links.as_deref(),
+            )
+            .await;
         });
     }
 }

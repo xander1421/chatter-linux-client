@@ -190,6 +190,8 @@ pub enum BleCommand {
 #[derive(Debug)]
 pub enum NostrCommand {
     RotateIdentity(Arc<MeshIdentity>),
+    /// Reconcile connections with the current explicit bridge-mode setting.
+    BridgeModeChanged,
     /// Gift-wrap and publish a private message.
     Dm {
         peer: PeerId,
