@@ -158,41 +158,11 @@ export component ThreadPanel inherits Rectangle {
     in property <bool> menu-open: false;
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
 
-    // Panel sizing — adjustable width with drag handle
-    in-out property <length> panel-width: Spacing.thread-panel-width;
-    in property <length> max-panel-width: 500px;
-
-    width: root.panel-width;
     background: Colors.background;
     border-radius: Spacing.radius-panel;
     border-width: 1px;
     border-color: Colors.border;
     clip: true;
-
-    TouchArea {
-        visible: !root.mobile;
-        x: 0px;
-        width: Spacing.panel-gutter;
-        height: 100%;
-        mouse-cursor: col-resize;
-        property <length> start-x;
-        property <length> start-width;
-
-        pointer-event(event) => {
-            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
-                self.start-x = self.absolute-position.x + self.mouse-x;
-                self.start-width = root.width;
-            }
-        }
-        moved => {
-            if self.pressed {
-                root.panel-width = clamp(
-                    self.start-width + self.start-x - self.absolute-position.x - self.mouse-x,
-                    320px, root.max-panel-width
-                );
-            }
-        }
-    }
 
     VerticalLayout {
         x: (1 - root.panel-progress) * (root.mobile ? 36px : 24px);

@@ -37,7 +37,6 @@ export component MainChatShell inherits Rectangle {
     in property <length> chat-traffic-lights-lead;
     in-out property <float> chat-push-progress;
     in property <bool> compact-layout;
-    private property <length> thread-panel-width: 320px;
     in property <length> top-inset;
     in-out property <string> composer-composed-text;
     in-out property <bool> composer-composing;
@@ -233,12 +232,14 @@ export component MainChatShell inherits Rectangle {
             // Reserve 400px for the chat and 320px for the thread before
             // allowing a docked layout, with room for the gutter between them.
             property <bool> thread-covers-chat: ChatPane.thread-panel-visible
-                && (ChatPane.thread-pinned-mode || root.is-small-screen || self.width < 720px + Spacing.panel-gutter);
+                && (ChatPane.thread-pinned-mode || root.is-small-screen
+                    || self.width < 400px + Spacing.thread-panel-min-width + Spacing.panel-gutter);
             property <bool> thread-docked: ChatPane.thread-panel-visible && !self.thread-covers-chat;
-            property <length> max-thread-width: clamp(self.width - 400px - Spacing.panel-gutter, 320px, 500px);
+            property <length> max-thread-width: clamp(self.width - 400px - Spacing.panel-gutter,
+                Spacing.thread-panel-min-width, 500px);
             property <length> thread-panel-w: !ChatPane.thread-panel-visible ? 0px
                 : self.thread-covers-chat ? self.width
-                : min(root.thread-panel-width, self.max-thread-width);
+                : min(ChatPane.thread-preferred-width, self.max-thread-width);
 
                 // Chat column: call dock (when active) on top of ChatLayout.
                 // The dock collapses to 0px when no call is active so the chat
@@ -562,8 +563,6 @@ export component MainChatShell inherits Rectangle {
                 visible: ChatPane.thread-panel-visible;
                 composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
                 touch: root.is-mobile-platform;
-                panel-width <=> root.thread-panel-width;
-                max-panel-width: chat-panel-area.max-thread-width;
                 x: parent.width - self.width;
                 y: 0px;
                 width: chat-panel-area.thread-panel-w;
@@ -578,6 +577,80 @@ export component MainChatShell inherits Rectangle {
                 keyboard-open: root.keyboard-inset > 0px;
                 reply-focus-serial <=> root.reply-focus-serial;
                 viewer-origin-width <=> root.viewer-origin-width;
+            }
+
+            if chat-panel-area.thread-docked: thread-edge := Rectangle {
+                property <length> start-pointer-x;
+                property <length> start-width;
+                property <length> start-preferred-width;
+                property <bool> dragging;
+                x: parent.width - chat-panel-area.thread-panel-w - self.width;
+                width: Spacing.panel-gutter;
+                height: parent.height;
+                border-radius: Spacing.radius-control;
+                border-width: thread-resize-keys.has-focus ? 1px : 0px;
+                border-color: Colors.focus-ring;
+                background: thread-resize-touch.pressed || thread-resize-touch.has-hover
+                    ? Colors.surface-control : transparent;
+                accessible-role: button;
+                accessible-label: @tr("Resize thread panel");
+                accessible-description: @tr("Drag to resize. Left and right arrows adjust width; Home sets the minimum; End sets the maximum. Press Enter to reset.");
+                accessible-action-default => { self.reset-width(); }
+
+                function resize(width: length) {
+                    ChatPane.thread-preferred-width = clamp(width,
+                        Spacing.thread-panel-min-width, chat-panel-area.max-thread-width);
+                }
+
+                function reset-width() {
+                    self.resize(Spacing.thread-panel-min-width);
+                    ChatPane.save-thread-width(ChatPane.thread-preferred-width);
+                }
+
+                thread-resize-keys := FocusScope {
+                    width: 0px;
+                    height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return {
+                            thread-edge.reset-width();
+                            return accept;
+                        }
+                        if event.text == Key.LeftArrow || event.text == Key.RightArrow
+                            || event.text == Key.Home || event.text == Key.End {
+                            thread-edge.resize(event.text == Key.Home ? Spacing.thread-panel-min-width
+                                : event.text == Key.End ? chat-panel-area.max-thread-width
+                                : chat-panel-area.thread-panel-w + (event.text == Key.LeftArrow ? 16px : -16px));
+                            ChatPane.save-thread-width(ChatPane.thread-preferred-width);
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+                thread-resize-touch := TouchArea {
+                    mouse-cursor: col-resize;
+                    moved => {
+                        if thread-edge.dragging && self.pressed {
+                            thread-edge.resize(thread-edge.start-width + thread-edge.start-pointer-x
+                                - self.absolute-position.x - self.mouse-x);
+                        }
+                    }
+                    pointer-event(event) => {
+                        if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                            thread-edge.start-width = chat-panel-area.thread-panel-w;
+                            thread-edge.start-preferred-width = ChatPane.thread-preferred-width;
+                            thread-edge.start-pointer-x = self.absolute-position.x + self.mouse-x;
+                            thread-edge.dragging = true;
+                            thread-resize-keys.focus();
+                        }
+                        if thread-edge.dragging && (event.kind == PointerEventKind.cancel
+                            || (event.button == PointerEventButton.left && event.kind == PointerEventKind.up)) {
+                            thread-edge.dragging = false;
+                            if ChatPane.thread-preferred-width != thread-edge.start-preferred-width {
+                                ChatPane.save-thread-width(ChatPane.thread-preferred-width);
+                            }
+                        }
+                    }
+                }
             }
 
         } // end chat-panel-area Rectangle

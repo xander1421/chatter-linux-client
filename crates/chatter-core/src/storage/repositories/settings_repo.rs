@@ -130,6 +130,7 @@ pub mod keys {
     // UI settings
     pub const SIDEBAR_COLLAPSED: &str = "ui.sidebar_collapsed";
     pub const SIDEBAR_WIDTH: &str = "ui.sidebar_width";
+    pub const THREAD_PANEL_WIDTH: &str = "ui.thread_panel_width";
     pub const SEARCH_SHORTCUT: &str = "ui.search_shortcut";
 
     /// Whether the user enabled the BLE mesh. Absent means off; radio use is opt-in.

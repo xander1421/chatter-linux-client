@@ -36,6 +36,13 @@ fn update_reply_continuation(model: &VecModel<MessageItemData>, index: usize) {
 }
 
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let pane = window.global::<crate::ChatPane>();
+    if let Some(width) = ui_ctx.thread_panel_width() {
+        pane.set_thread_preferred_width(width);
+    }
+    let client = ui_ctx.clone();
+    pane.on_save_thread_width(move |width| client.set_thread_panel_width(width));
+
     wire_close_thread(window, ui_ctx);
     wire_send_thread_reply(window, ui_ctx);
     wire_load_more_thread_replies(window, ui_ctx);
