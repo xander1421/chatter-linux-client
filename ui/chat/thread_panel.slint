@@ -1,4 +1,6 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Button } from "../components/button.slint";
+import { KeyFocus } from "../components/key_focus.slint";
 // Thread panel component for viewing replies to a message
 //
 // Displays as a right-side panel with root message preview, reply list, and composer.
@@ -7,7 +9,6 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { Button } from "../components/button.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
@@ -60,7 +61,7 @@ export component ThreadPanel inherits Rectangle {
     }
     // Root message data
     // Lists the chat's pinned messages instead of a thread: counted title,
-    // no root strip, no composer, an "Unpin all" action.
+    // no root card, no composer, an "Unpin all" action.
     in property <bool> pinned-mode: false;
     callback unpin-all();
     in property <string> root-message-id;
@@ -159,41 +160,35 @@ export component ThreadPanel inherits Rectangle {
 
     // Panel sizing — adjustable width with drag handle
     in-out property <length> panel-width: Spacing.thread-panel-width;
-    property <length> min-panel-width: 320px;
-    property <length> max-panel-width: 500px;
+    in property <length> max-panel-width: 500px;
 
     width: root.panel-width;
-    background: Colors.surface;
+    background: Colors.background;
+    border-radius: Spacing.radius-panel;
+    border-width: 1px;
+    border-color: Colors.border;
+    clip: true;
 
-    // Left resize handle (draggable)
-    Rectangle {
+    TouchArea {
         visible: !root.mobile;
-        x: 0;
-        width: 18px;
+        x: 0px;
+        width: Spacing.panel-gutter;
         height: 100%;
-        background: resize-handle.has-hover || resize-handle.pressed ? Colors.primary.with-alpha(0.3) : transparent;
+        mouse-cursor: col-resize;
+        property <length> start-x;
+        property <length> start-width;
 
-        // Visual indicator line
-        Rectangle {
-            x: 0;
-            width: 2px;
-            height: 100%;
-            background: resize-handle.has-hover || resize-handle.pressed
-                ? Colors.primary
-                : Colors.text-muted.with-alpha(0.2);
+        pointer-event(event) => {
+            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                self.start-x = self.absolute-position.x + self.mouse-x;
+                self.start-width = root.width;
+            }
         }
-
-        resize-handle := TouchArea {
-            width: 100%;
-            height: 100%;
-            mouse-cursor: col-resize;
-
-            moved => {
-                // Drag left = increase width, drag right = decrease width
+        moved => {
+            if self.pressed {
                 root.panel-width = clamp(
-                    root.panel-width - self.mouse-x + self.pressed-x,
-                    root.min-panel-width,
-                    root.max-panel-width
+                    self.start-width + self.start-x - self.absolute-position.x - self.mouse-x,
+                    320px, root.max-panel-width
                 );
             }
         }
@@ -203,14 +198,18 @@ export component ThreadPanel inherits Rectangle {
         x: (1 - root.panel-progress) * (root.mobile ? 36px : 24px);
         width: 100%;
         height: 100%;
+        padding: Spacing.panel-gutter;
+        spacing: Spacing.panel-gutter;
         opacity: 0.72 + 0.28 * root.panel-progress;
         // Header — same height as the conversation header it sits beside, so
         // the two panes share one top row instead of stepping.
-        GlassSurface {
+        header := GlassSurface {
             material-level: 2;
-            material-tint: root.pinned-mode ? Materials.chat-chrome : Materials.regular;
-            darkening: root.pinned-mode ? Materials.chat-darkening : 1.0;
-            show-edge: !root.pinned-mode;
+            material-tint: Materials.chat-chrome;
+            darkening: Materials.chat-darkening;
+            border-radius: Spacing.radius-panel;
+            border-width: 1px;
+            border-color: Colors.border;
             elevation: 3;
 
             height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
@@ -219,7 +218,7 @@ export component ThreadPanel inherits Rectangle {
                 // Horizontal padding only: vertical padding squeezed the 48dp
                 // chevron below its box and pulled the title off its centre.
                 // The phone chevron brings its own inset; without it the title
-                // lines up with the root-message strip below.
+                // lines up with the root-message card below.
                 padding-left: root.mobile ? Spacing.xs : Spacing.sm;
                 padding-right: Spacing.sm;
                 spacing: Spacing.sm;
@@ -244,9 +243,10 @@ export component ThreadPanel inherits Rectangle {
                             text: !root.pinned-mode ? @tr("Thread")
                                 : @tr("{n} pinned message" | "{n} pinned messages" % root.replies.length);
                             color: Colors.text-primary;
-                            font-size: Typography.base;
-                            font-weight: 600;
+                            font-size: Typography.sm;
+                            font-weight: Typography.semibold;
                             vertical-alignment: center;
+                            overflow: elide;
                         }
 
                         // Reply count badge
@@ -254,12 +254,12 @@ export component ThreadPanel inherits Rectangle {
                             width: badge-text.preferred-width + Spacing.sm;
                             height: Spacing.badge-md;
                             y: (parent.height - self.height) / 2;
-                            background: Colors.primary.with-alpha(0.15);
-                            border-radius: self.height / 2;
+                            background: Colors.surface-control;
+                            border-radius: Spacing.radius-full;
 
                             badge-text := Text {
                                 text: root.reply-count;
-                                color: Colors.primary;
+                                color: Colors.text-secondary;
                                 font-size: Typography.xs;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
@@ -267,38 +267,28 @@ export component ThreadPanel inherits Rectangle {
                         }
                     }
 
-                    // Channel name (small, muted)
                     if root.channel-name != "": Text {
                         text: (root.conversation-kind == ConversationKind.channel && !root.private-channel ? "# " : "")
                             + root.channel-name;
                         color: Colors.text-muted;
-                        font-size: Typography.xs;
+                        font-size: 11px * Appearance.text-scale;
+                        overflow: elide;
                     }
                 }
 
-                // Docked side panel on desktop → X, trailing edge. Exactly one
-                // of these two ever exists.
+                // The docked panel closes from the trailing edge.
                 if !root.mobile: DismissButton {
                     back: false;
                     clicked => { root.close-clicked(); }
                 }
             }
-
-            // Bottom border
-            Rectangle {
-                height: 1px;
-                y: parent.height - 1px;
-                background: Colors.divider;
-            }
         }
 
-        // Root message preview (64px max)
-        Rectangle {
-            x: (1 - root.panel-progress) * 12px;
-            height: root.pinned-mode ? 0px : 64px;
-            visible: !root.pinned-mode;
+        if !root.pinned-mode: Rectangle {
+            height: max(64px, preview-layout.preferred-height);
+            border-radius: Spacing.radius-panel;
             clip: true;
-            background: Colors.surface-hover;
+            background: Colors.surface-card;
             transform-scale-x: root-preview-touch.pressed ? 98% : 100%;
             transform-scale-y: root-preview-touch.pressed ? 96% : 100%;
             animate transform-scale-x { duration: root-preview-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
@@ -307,9 +297,15 @@ export component ThreadPanel inherits Rectangle {
             accessible-label: @tr("Original message from {0}: {1}", root.root-sender-name, root.root-content-preview);
             accessible-action-default => { root.message-clicked(root.root-message-id); }
 
+            KeyFocus {
+                border-radius: Spacing.radius-panel;
+                activate => { root.message-clicked(root.root-message-id); }
+            }
+
             root-preview-touch := TouchArea {
                 width: 100%;
                 height: 100%;
+                mouse-cursor: pointer;
                 clicked => {
                     root.message-clicked(root.root-message-id);
                 }
@@ -320,7 +316,7 @@ export component ThreadPanel inherits Rectangle {
                 y: Spacing.sm;
                 width: 48px;
                 height: 48px;
-                border-radius: Spacing.radius-sm;
+                border-radius: Spacing.radius-control;
                 clip: true;
                 Image {
                     width: 100%;
@@ -330,7 +326,7 @@ export component ThreadPanel inherits Rectangle {
                 }
             }
 
-            VerticalLayout {
+            preview-layout := VerticalLayout {
                 padding: Spacing.sm;
                 padding-left: root.root-has-thumbnail ? Spacing.sm + 48px + Spacing.sm : Spacing.sm;
                 spacing: Spacing.xxs;
@@ -339,9 +335,9 @@ export component ThreadPanel inherits Rectangle {
                 Text {
                     accessible-role: none;
                     text: root.root-sender-name;
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: 600;
+                    color: Colors.text-secondary;
+                    font-size: 13px * Appearance.text-scale;
+                    font-weight: Typography.semibold;
                     overflow: elide;
                 }
 
@@ -349,24 +345,17 @@ export component ThreadPanel inherits Rectangle {
                 Text {
                     accessible-role: none;
                     text: root.root-content-preview;
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
                     overflow: elide;
                     vertical-stretch: 1;
                 }
             }
         }
 
-        // Divider
-        Rectangle {
-            height: 1px;
-            background: Colors.divider;
-        }
-
         // Reply list area
         Rectangle {
             vertical-stretch: 1;
-            background: Materials.ambient;
 
             // Loading state
             if root.loading: VerticalLayout {
@@ -419,8 +408,9 @@ export component ThreadPanel inherits Rectangle {
 
                     Text {
                         text: root.pinned-mode ? @tr("No pinned messages") : @tr("No replies yet");
-                        color: Colors.text-secondary;
+                        color: Colors.text-primary;
                         font-size: Typography.sm;
+                        font-weight: Typography.semibold;
                         horizontal-alignment: center;
                     }
 
@@ -428,6 +418,7 @@ export component ThreadPanel inherits Rectangle {
                         text: root.pinned-mode
                             ? (root.touch ? @tr("Long-press a message and choose Pin") : @tr("Right-click a message and choose Pin"))
                             : @tr("Be the first to reply!");
+                        wrap: word-wrap;
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
@@ -438,16 +429,15 @@ export component ThreadPanel inherits Rectangle {
             // Keep the load control outside the virtualized rows. It remains
             // visible while earlier pages are available.
             if !root.loading && root.replies.length > 0
-                    && root.replies.length < root.reply-count: Rectangle {
-                // A plain Rectangle parent centres fixed-size children; pin it
-                // to the top, where the list leaves room (replies-view.y).
+                    && root.replies.length < root.reply-count: Button {
                 x: 0px;
                 y: 0px;
                 height: Spacing.button-height;
                 width: 100%;
-                accessible-role: button;
-                accessible-label: @tr("Load earlier replies");
-                accessible-action-default => {
+                text: @tr("Load earlier replies");
+                variant: "ghost";
+                touch: root.touch;
+                clicked => {
                     replies-view.following-tail = false;
                     replies-view.anchor-count = root.replies.length;
                     replies-view.anchor-first = root.replies[0].message-id;
@@ -456,27 +446,6 @@ export component ThreadPanel inherits Rectangle {
                         + replies-view.anchor-index * replies-view.viewport-height / root.replies.length;
                     replies-view.preserving-anchor = true;
                     root.load-more-replies();
-                }
-                Text {
-                    accessible-role: none;
-                    text: @tr("Load earlier replies");
-                    color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
-                    font-size: Typography.xs;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                more-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        replies-view.following-tail = false;
-                        replies-view.anchor-count = root.replies.length;
-                        replies-view.anchor-first = root.replies[0].message-id;
-                        replies-view.anchor-index = replies-view.top-row();
-                        replies-view.anchor-offset = replies-view.viewport-y
-                            + replies-view.anchor-index * replies-view.viewport-height / root.replies.length;
-                        replies-view.preserving-anchor = true;
-                        root.load-more-replies();
-                    }
                 }
             }
 
@@ -716,14 +685,12 @@ export component ThreadPanel inherits Rectangle {
             }
         }
 
-        if root.pinned-mode && root.replies.length > 0: HorizontalLayout {
-            padding: Spacing.panel-gutter;
-            Button {
-                text: @tr("Unpin message" | "Unpin all {n} messages" % root.replies.length);
-                touch: root.touch;
-                border-radius: Spacing.radius-control;
-                clicked => { root.unpin-all(); }
-            }
+        if root.pinned-mode && root.replies.length > 0: Button {
+            height: Spacing.touch-target-min;
+            text: @tr("Unpin message" | "Unpin all {n} messages" % root.replies.length);
+            touch: root.touch;
+            border-radius: Spacing.radius-control;
+            clicked => { root.unpin-all(); }
         }
 
         composer := MessageComposer {
@@ -736,7 +703,7 @@ export component ThreadPanel inherits Rectangle {
             mobile: root.touch;
             enter-sends: root.composer-enter-sends;
             keyboard-open: root.keyboard-open;
-            available-pane-height: root.height;
+            available-pane-height: max(0px, root.height - header.height - 2 * Spacing.panel-gutter);
             composer-scope: "thread";
             thread-root-id: root.root-message-id;
             picker-open: root.emoji-open;
@@ -765,18 +732,21 @@ export component ThreadPanel inherits Rectangle {
             input-focused => { root.emoji-open = false; }
             mention-triggered(query) => { root.mention-triggered(query); }
         }
-        if root.mobile: Rectangle { height: Spacing.sm; }
     }
+
+    // Use the measured composer position, including the frame inset and any
+    // previews, so popups sit above it as the island changes height.
+    private property <length> popup-top: header.y + header.height + Spacing.panel-gutter;
+    private property <length> popup-bottom: composer.y - Spacing.panel-gutter;
+    private property <length> popup-height: max(0px, root.popup-bottom - root.popup-top);
 
     if root.emoji-open: EmojiPicker {
         show: true;
         touch: root.mobile;
-        x: max(0px, root.width - self.width - Spacing.sm);
-        y: max(root.mobile ? Spacing.header-height-touch : Spacing.header-height,
-            root.height - composer.height - self.height - Spacing.sm);
-        max-picker-width: min(280px, root.width - 2 * Spacing.sm);
-        max-picker-height: max(0px, min(320px,
-            root.height - composer.height - (root.mobile ? Spacing.header-height-touch : Spacing.header-height) - Spacing.sm));
+        x: max(Spacing.panel-gutter, root.width - self.width - Spacing.panel-gutter);
+        y: max(root.popup-top, root.popup-bottom - self.height);
+        max-picker-width: min(280px, root.width - 2 * Spacing.panel-gutter);
+        max-picker-height: min(320px, root.popup-height);
         emoji-list: root.emoji-list;
         selected-category <=> root.emoji-category;
         search-query <=> root.emoji-search;
@@ -789,12 +759,10 @@ export component ThreadPanel inherits Rectangle {
     }
     if root.mention-visible: MentionAutocomplete {
         show: root.mention-visible;
-        x: Spacing.sm;
-        y: max(root.mobile ? Spacing.header-height-touch : Spacing.header-height,
-            root.height - composer.height - self.height);
-        max-popup-width: min(240px, root.width - 2 * Spacing.sm);
-        max-popup-height: max(0px, root.height - composer.height
-            - (root.mobile ? Spacing.header-height-touch : Spacing.header-height));
+        x: Spacing.panel-gutter;
+        y: max(root.popup-top, root.popup-bottom - self.height);
+        max-popup-width: min(240px, root.width - 2 * Spacing.panel-gutter);
+        max-popup-height: root.popup-height;
         suggestions: root.mention-suggestions;
         selected-index: root.mention-selected-index;
         suggestion-selected(id, display) => { root.mention-selected(id, display); }

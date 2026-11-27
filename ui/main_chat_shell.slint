@@ -36,6 +36,7 @@ export component MainChatShell inherits Rectangle {
     in property <length> chat-traffic-lights-lead;
     in-out property <float> chat-push-progress;
     in property <bool> compact-layout;
+    private property <length> thread-panel-width: 320px;
     in property <length> top-inset;
     in-out property <string> composer-composed-text;
     in-out property <bool> composer-composing;
@@ -206,7 +207,7 @@ export component MainChatShell inherits Rectangle {
             // canvas across their whole page so list rows cannot show through.
             // With full opaque child coverage the base is never sampled, even
             // if the two ambient gradients have different local coordinates.
-            background: root.chat-layout-covers-panel ? transparent : Materials.ambient;
+            background: ChatPane.thread-panel-visible || root.chat-layout-covers-panel ? transparent : Materials.ambient;
             // Reserve the complete control bar and unmount the covered sidebar.
             x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
                 : root.call-hides-sidebar || root.normal-sidebar-offset == 0px ? Spacing.panel-gutter : root.normal-sidebar-offset;
@@ -218,7 +219,7 @@ export component MainChatShell inherits Rectangle {
             width: root.compact-layout ? parent.width : parent.width - self.x - Spacing.panel-gutter;
             height: root.compact-layout ? parent.height : parent.height - 2 * Spacing.panel-gutter;
             border-radius: root.compact-layout ? 0px : Spacing.radius-panel;
-            border-width: root.compact-layout ? 0px : 1px;
+            border-width: root.compact-layout || ChatPane.thread-panel-visible ? 0px : 1px;
             border-color: Colors.border;
             visible: true;
             // Clip this area to prevent inner panels from overflowing the whole app
@@ -228,14 +229,15 @@ export component MainChatShell inherits Rectangle {
             // exactly the row width — the layout solver never gets to give
             // the chat column 100% and push the panel past the clipped edge
             // (the "thread opens but never appears" bug, 2026-07-19).
-            // Beside a 320px panel the chat column needs room for its composer;
-            // a narrower row (the 800px default window with the sidebar open)
-            // gives the thread the whole row instead, as phones do.
+            // Reserve 400px for the chat and 320px for the thread before
+            // allowing a docked layout, with room for the gutter between them.
             property <bool> thread-covers-chat: ChatPane.thread-panel-visible
-                && (ChatPane.thread-pinned-mode || root.is-small-screen || self.width < 720px);
+                && (ChatPane.thread-pinned-mode || root.is-small-screen || self.width < 720px + Spacing.panel-gutter);
+            property <bool> thread-docked: ChatPane.thread-panel-visible && !self.thread-covers-chat;
+            property <length> max-thread-width: clamp(self.width - 400px - Spacing.panel-gutter, 320px, 500px);
             property <length> thread-panel-w: !ChatPane.thread-panel-visible ? 0px
                 : self.thread-covers-chat ? self.width
-                : 320px;
+                : min(root.thread-panel-width, self.max-thread-width);
 
                 // Chat column: call dock (when active) on top of ChatLayout.
                 // The dock collapses to 0px when no call is active so the chat
@@ -245,17 +247,25 @@ export component MainChatShell inherits Rectangle {
                 // geometry doesn't feed the constraint solver, which both
                 // avoids a binding loop and guarantees column + panel tile
                 // the row exactly.
-                VerticalLayout {
-                    x: 0;
-                    y: 0;
-                    // Hidden behind a full-width thread it keeps its width:
-                    // collapsed to 0px, every row re-laid out and closing the
-                    // thread dropped the reader at the newest messages
-                    // instead of where they were (S9).
-                    width: chat-panel-area.thread-covers-chat ? parent.width
-                        : parent.width - chat-panel-area.thread-panel-w;
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    // Keep the hidden column at full width so closing a
+                    // covering thread restores its scroll position.
+                    width: chat-panel-area.thread-docked
+                        ? parent.width - chat-panel-area.thread-panel-w - Spacing.panel-gutter
+                        : parent.width;
                     height: 100%;
                     visible: !chat-panel-area.thread-covers-chat;
+                    background: chat-panel-area.thread-docked ? Colors.background : transparent;
+                    border-radius: chat-panel-area.thread-docked ? Spacing.radius-panel : 0px;
+                    border-width: chat-panel-area.thread-docked ? 1px : 0px;
+                    border-color: Colors.border;
+                    clip: chat-panel-area.thread-docked;
+
+                VerticalLayout {
+                    width: 100%;
+                    height: 100%;
 
                     AppCallDock {
                         active-call-data: CallView.active-call-data;
@@ -530,6 +540,7 @@ export component MainChatShell inherits Rectangle {
                     }
                 }
                 } // end VerticalLayout (call dock + ChatLayout)
+                } // end chat-column
 
             // Thread panel (side panel on desktop, full-screen overlay on mobile).
             // Its width is shared with the chat column so the row stays filled.
@@ -537,11 +548,11 @@ export component MainChatShell inherits Rectangle {
                 visible: ChatPane.thread-panel-visible;
                 composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
                 touch: root.is-mobile-platform;
-                // Pinned pages share the conversation chrome's desktop gutter.
-                property <length> page-inset: ChatPane.thread-pinned-mode && !root.compact-layout ? Spacing.xs : 0px;
-                x: parent.width - self.width - self.page-inset;
-                y: 0;
-                width: max(0px, chat-panel-area.thread-panel-w - 2 * self.page-inset);
+                panel-width <=> root.thread-panel-width;
+                max-panel-width: chat-panel-area.max-thread-width;
+                x: parent.width - self.width;
+                y: 0px;
+                width: chat-panel-area.thread-panel-w;
                 height: 100%;
                 context-menu-anchor-bottom <=> root.context-menu-anchor-bottom;
                 context-menu-anchor-left <=> root.context-menu-anchor-left;
