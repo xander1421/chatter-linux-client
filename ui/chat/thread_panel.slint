@@ -29,6 +29,7 @@ component ListView inherits Flickable {
 }
 
 export component ThreadPanel inherits Rectangle {
+    private property <length> root-thumbnail-size: 48px;
     out property <length> composer-top: composer.absolute-position.y;
     property <bool> entered: false;
     property <float> panel-progress: 0;
@@ -286,8 +287,8 @@ export component ThreadPanel inherits Rectangle {
             if root.root-has-thumbnail: Rectangle {
                 x: Spacing.sm;
                 y: Spacing.sm;
-                width: 48px;
-                height: 48px;
+                width: root.root-thumbnail-size;
+                height: root.root-thumbnail-size;
                 border-radius: Spacing.radius-control;
                 clip: true;
                 Image {
@@ -300,7 +301,7 @@ export component ThreadPanel inherits Rectangle {
 
             preview-layout := VerticalLayout {
                 padding: Spacing.sm;
-                padding-left: root.root-has-thumbnail ? Spacing.sm + 48px + Spacing.sm : Spacing.sm;
+                padding-left: root.root-has-thumbnail ? 2 * Spacing.sm + root.root-thumbnail-size : Spacing.sm;
                 spacing: Spacing.xxs;
 
                 // Sender name

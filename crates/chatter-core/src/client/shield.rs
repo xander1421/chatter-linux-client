@@ -109,6 +109,12 @@ impl ChatterClient {
         self.anon_mode.load(Ordering::Acquire)
     }
 
+    /// Set the presentation flag for offline visibility tests without switching transport.
+    #[cfg(feature = "testing")]
+    pub fn testing_set_anon_mode_for_visibility(&self, enabled: bool) {
+        self.anon_mode.store(enabled, Ordering::Release);
+    }
+
     /// Flip the in-memory anon-mode flag. Callers (the UI handler) are
     /// responsible for re-running sidebar refresh helpers after flip;
     /// this method does not emit a domain event because the flag is a

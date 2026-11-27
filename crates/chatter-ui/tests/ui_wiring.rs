@@ -899,9 +899,13 @@ fn message_reply_in_thread_button_is_wired() {
     // action row (so ANY message can start a thread), firing thread-clicked.
     let slint_src = include_str!("../../../ui/chat/message_actions.slint");
     let item_src = include_str!("../../../ui/chat/message_item.slint");
+    let marker = "if root.can-thread: thread-btn := IconAction {";
+    let start = slint_src
+        .find(marker)
+        .expect("Reply-in-thread hover action");
+    let thread_action = block_around(slint_src, start + marker.len(), 1);
     assert!(
-        slint_src.contains("thread-btn := IconAction {")
-            && slint_src.contains(r#"label: "Reply in thread""#)
+        thread_action.contains(r#"label: @tr("Reply in thread");"#)
             && item_src.contains("if root.is-hovered && !root.selection-mode: MessageActions {")
             && item_src.contains("thread-clicked(a0) => { root.thread-clicked(a0); }"),
         "the message hover actions must include a Reply-in-thread button so a \
@@ -914,7 +918,7 @@ fn message_reply_in_thread_button_is_wired() {
             .contains("accessible-action-default => { if root.enabled { root.clicked(); } }")
     );
     assert!(
-        slint_src.contains("root.thread-clicked(root.message-id)"),
+        squash(thread_action).contains("clicked => { root.thread-clicked(root.message-id);"),
         "the Reply-in-thread button must fire thread-clicked with the message id"
     );
 }
@@ -2099,7 +2103,7 @@ fn presence_status_picker_reaches_core() {
     let modal = include_str!("../../../ui/modals/user_profile.slint");
     let picker = include_str!("../../../ui/modals/profile_status_picker.slint");
     assert!(
-        picker.contains("clicked => { root.change-status(opt.mode); }")
+        picker.contains("clicked => { root.change-status(opt.mode); root.expanded = false; }")
             && modal.contains("change-status(mode) => { root.change-status(mode); }"),
         "STATUS pills must fire change-status"
     );
@@ -2208,7 +2212,8 @@ fn connection_banner_is_dismissible_without_hiding_the_outage() {
         "app does not handle the banner's dismissed callback (dead close button)"
     );
     assert!(
-        notices.contains("suppressed: root.connection-dismissed;"),
+        notices.contains("suppressed: root.connection-dismissed || root.mesh-view;")
+            && banner.contains("should-show: !root.suppressed && ("),
         "the banner is not gated on the dismissal flag, so closing it does nothing"
     );
 
@@ -2864,15 +2869,17 @@ fn back_scope_does_not_steal_focus_from_text_input() {
     // beside it at the window's top level, or Back is lost while that thing's
     // TextInput holds focus.
     let after = &app[at..];
-    // The one allowed sibling is the Shield wash: a bare gradient Rectangle
-    // (ui/anon_mode/shield_wash.slint) that can neither hold focus nor take a
-    // pointer, layered over everything by z.
+    // The wash and desktop window rim are decorative overlays.
     assert!(
         after
             .lines()
             .skip(1)
             .filter(|l| l.starts_with("    ") && !l.starts_with("     "))
-            .all(|l| l == "    }" || l == "    ShieldWash {"),
+            .all(|l| matches!(
+                l.trim(),
+                "}" | "ShieldWash {" | "if DesktopChrome.frame-inset > 0px: Rectangle {"
+            ) || l.trim().is_empty()
+                || l.trim_start().starts_with("//")),
         "an element was added beside back-scope instead of inside it"
     );
     let wash = include_str!("../../../ui/anon_mode/shield_wash.slint");
@@ -2882,6 +2889,13 @@ fn back_scope_does_not_steal_focus_from_text_input() {
             "ShieldWash sits beside back-scope, so it must stay non-interactive ({focusable})"
         );
     }
+    let rim = "if DesktopChrome.frame-inset > 0px: Rectangle {";
+    let start = after.find(rim).expect("desktop window rim");
+    let rim_body = block_around(after, start + rim.len(), 1);
+    assert!(
+        !rim_body[1..rim_body.len() - 1].contains('{'),
+        "the window rim beside back-scope must stay a leaf Rectangle"
+    );
     // Shortcuts live in AppShortcuts (ui/app_shortcuts.slint) since the app split.
     let main = &after[..after
         .find("shortcuts := AppShortcuts {")
@@ -3245,9 +3259,12 @@ fn message_selection_toggle_reaches_the_selection_store() {
     // L2 static (Slint): the discoverable route, for anyone who never finds the
     // longer hold.
     let menu_src = include_str!("../../../ui/chat/message_context_menu.slint");
+    let marker = "if root.can-select: MenuItem {";
+    let start = menu_src.find(marker).expect("Select menu item");
+    let select = block_around(menu_src, start + marker.len(), 1);
     assert!(
-        menu_src.contains(r#"label: "Select""#)
-            && menu_src.contains("root.select-clicked(root.message-id)"),
+        select.contains(r#"label: @tr("Select");"#)
+            && squash(select).contains("clicked => { root.select-clicked(root.message-id);"),
         "the message menu must carry a Select item wired to select-clicked"
     );
 }
@@ -3752,7 +3769,11 @@ fn folders_hide_identified_conversations_while_anon_mode_is_on() {
         "the folder holds the channel"
     );
 
-    client.set_anon_mode_enabled(true);
+    client.testing_set_anon_mode_for_visibility(true);
+    assert!(
+        client.anon_mode_enabled(),
+        "the folder must be read with Shield on"
+    );
     let hidden = client
         .list_sections_with_conversations()
         .expect("list sections");
@@ -4189,9 +4210,10 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
 
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert!(
-        layout.contains(
-            r#"&& root.conversation-kind == ConversationKind.server-dm: IdentityChangeBar"#
-        ),
+        squash(layout).contains(concat!(
+            "if root.identity-change-visible && (root.conversation-kind == ConversationKind.server-dm ",
+            "|| root.conversation-kind == ConversationKind.anon-dm): IdentityChangeBar {"
+        )),
         "the bar must render inside the conversation, gated on conversation-kind so a \
          prompt cannot survive a switch into a channel, group or mesh room"
     );
@@ -5299,6 +5321,9 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     settle_view_handoff();
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
 
+    // Boot has no startup feature wiring. Enable the optional AI row under test.
+    w.global::<chatter_ui::JarvisGlobal>().set_enabled(true);
+
     // ---- Channel Settings > Notifications: Mute + AI ------------------------
     let muted = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
     let m = muted.clone();
@@ -5824,13 +5849,17 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
         // With the keyboard up the composer ends the viewport, so the inset
         // drops to 0 (4336bff2).
         chat.contains("top-inset: top-chrome.height;")
-            && chat.contains("bottom-inset: root.keyboard-open ? 0px\n            : bottom-chrome.height + composer.list-clearance-extra")
+            && squash(chat).contains(concat!(
+                "bottom-inset: root.keyboard-open ? 0px : bottom-chrome.height ",
+                "- composer.action-lift-height - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px);"
+            ))
+            && chat.contains("bottom-chrome.y + composer.action-lift-height")
     );
     assert!(chat.contains("y: root.height - self.height - root.drawer-occupied-height;"));
     assert!(list.contains("padding-top: idx == 0 ? root.top-inset + Spacing.md : Spacing.none;"));
     // The FAB clearance under the last row is the layout's tail-clearance (50ff37cf).
     assert!(list.contains("? root.bottom-inset + root.tail-clearance"));
-    assert!(chat.contains("tail-clearance: root.keyboard-open ? Spacing.sm : Spacing.md + Spacing.touch-target-min;"));
+    assert!(chat.contains("tail-clearance: Spacing.md + Spacing.touch-target-min;"));
     assert!(list.contains("(self.viewport-height - root.bottom-inset) + self.viewport-y"));
     assert!(
         list.contains("changed bottom-inset =>")
@@ -5948,8 +5977,8 @@ fn inline_gifs_animate_only_visible_rows() {
     );
 }
 
-/// Chrome over the message list stops re-blurring the moving rows every frame
-/// while the list scrolls, and keeps its at-rest material unchanged.
+/// Chrome over the message list receives the scrolling signal while keeping
+/// its optical treatment steady.
 #[test]
 fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
     // Since f997bbaa the material no longer fades while paused: it stays
@@ -5958,8 +5987,9 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
     // signal is still wired to every surface below.
     let glass = squash(include_str!("../../../ui/components/glass_surface.slint"));
     assert!(glass.contains("in property <bool> backdrop-paused: false;"));
-    let backdrop = &glass[glass.find("if root.material-enabled: Backdrop {").expect("backdrop layer")..];
-    let backdrop = &backdrop[..backdrop.find("Rectangle {").unwrap()];
+    let marker = "if root.material-enabled && Appearance.glass-effects: Backdrop {";
+    let start = glass.find(marker).expect("backdrop layer");
+    let backdrop = block_around(&glass, start + marker.len(), 1);
     assert!(
         !backdrop.contains("backdrop-paused"),
         "blur/saturation/refraction must not change while the list scrolls"
@@ -5973,13 +6003,27 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
         "jump pill"
     );
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
-    assert_eq!(
-        layout
-            .matches("backdrop-paused: message-list.scrolling;")
-            .count(),
-        4,
-        "header, pinned bar, composer notice and composer"
-    );
+    for marker in [
+        "if !root.hide-header: ChatHeader {",
+        "if root.composer-notice != \"\": GlassSurface {",
+        "composer := MessageComposer {",
+    ] {
+        let start = layout.find(marker).expect("chat chrome element");
+        let chrome = block_around(layout, start + marker.len(), 1);
+        assert!(
+            chrome.contains("backdrop-paused: message-list.scrolling;"),
+            "{marker}"
+        );
+    }
+    // The pinned bar is a solid card with plain controls.
+    let pinned = include_str!("../../../ui/chat/pinned_bar.slint");
+    assert!(layout.contains("if root.has-pinned-messages: PinnedBar {"));
+    assert!(pinned.contains("PinnedBar inherits Rectangle {"));
+    assert!(pinned.contains("background: Colors.surface-card;"));
+    assert!(!pinned.contains("GlassSurface") && !pinned.contains("Backdrop"));
+    for (pos, marker) in pinned.match_indices("HeaderButton {") {
+        assert!(block_around(pinned, pos + marker.len(), 1).contains("plain: true;"));
+    }
     let header = include_str!("../../../ui/chat/chat_header.slint");
     assert_eq!(
         header.matches("HeaderButton {").count(),
@@ -6319,7 +6363,7 @@ fn polish_shared_controls_and_rc28_regressions() {
     ));
     // D3 and the notification-inbox portion of D9 were already migrated to
     // the shared shell before this pass; protect the title and that route.
-    assert!(source("settings/account_menu.slint").contains("title: \"Profile\";"));
+    assert!(source("settings/account_menu.slint").contains(r#"title: @tr("Profile");"#));
     assert!(source("server_records/screen.slint").contains("Modal {"));
     assert!(source("components/modal.slint").contains("title: root.title;"));
     // D4: a modal scrim must sort above the conversation's floating controls.
@@ -6327,16 +6371,22 @@ fn polish_shared_controls_and_rc28_regressions() {
     // D6: the narrow DM column must retain the word that conveys the status.
     assert!(
         source("chat/chat_header.slint")
-            .contains("root.mobile && root.is-dm ? \"Typing\" : root.typing-indicator")
+            .contains("root.mobile && root.is-dm ? @tr(\"Typing\") : root.typing-indicator")
     );
     // D7: both cut edges are faded, and tabs share the ordinary Button family.
     let settings = source("settings/settings_screen.slint");
     assert!(settings.contains("if tabs.viewport-x < 0px: Rectangle"));
-    assert!(settings.contains("if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle"));
-    // The open tab is the neutral pill every tab bar uses, not the action fill.
     assert!(
-        settings.contains("variant: root.active-section == item.id ? \"secondary\" : \"ghost\";")
+        settings
+            .contains("if tab-layout.preferred-width + tabs.viewport-x > tabs.width: Rectangle")
     );
+    // Compact tabs share Button and select via its tint.
+    let marker = "component SectionTab inherits Button {";
+    let start = settings.find(marker).expect("shared settings tab control");
+    let tab = block_around(settings, start + marker.len(), 1);
+    assert!(tab.contains(r#"variant: "ghost";"#));
+    assert!(tab.contains("selected: self.active == self.section;"));
+    assert!(squash(button).contains("else if selected { Colors.tint-strong"));
 }
 
 /// D10: every call entry point delegates duration to the core connected clock.
@@ -6384,7 +6434,7 @@ fn call_duration_uses_core_connection_time() {
 /// Owner decision 2026-10-04: a Shield toggle on the sign-in and create-account
 /// screens, so an account can be made and used over the onion service without
 /// the server ever seeing the device's IP. It must be the chat list's Shield
-/// control (HeaderButton + shield glyph), disabled where the build cannot
+/// control (HeaderButton + onion glyph), disabled where the build cannot
 /// route over Tor, and must reach core's fail-closed `set_shield_before_login`.
 #[test]
 fn shield_toggle_on_sign_in_and_create_account() {
@@ -6405,8 +6455,12 @@ fn shield_toggle_on_sign_in_and_create_account() {
         );
     }
     let toggle = include_str!("../../../ui/anon_mode/shield_onboarding.slint");
+    let sidebar = include_str!("../../../ui/sidebar/sidebar_footer.slint");
     assert!(
-        toggle.contains("HeaderButton {") && toggle.contains("icon: Icons.shield;"),
+        toggle.contains("HeaderButton {")
+            && toggle.contains("icon: Icons.onion;")
+            && sidebar.contains("SidebarShieldToggle inherits HeaderButton {")
+            && sidebar.contains("icon: Icons.onion;"),
         "the sign-in Shield must reuse the chat-list Shield control"
     );
     let glue = include_str!("../src/bin_ui/features/auth/shield.rs");
@@ -6920,8 +6974,9 @@ struct GifHarness {
 
 impl GifHarness {
     fn new() -> Self {
-            no_keyring();
-        enter_test_rt();
+        no_keyring();
+        let rt = enter_test_rt();
+        chatter_ui::init_rt_handle(rt.handle().clone());
         let tmp = tempfile::tempdir().unwrap();
         headless_dir(tmp.path());
         let w = boot();
