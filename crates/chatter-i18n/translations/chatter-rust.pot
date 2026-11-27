@@ -3446,3 +3446,6 @@ msgstr ""
 
 msgid "Waiting for contact's new key"
 msgstr ""
+
+msgid "Not delivered: contact's key changed"
+msgstr ""

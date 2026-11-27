@@ -51,13 +51,19 @@ pub(super) fn validate_sealed_plaintext_size(encoded_len: usize) -> Result<(), M
     Ok(())
 }
 
-/// Receipts and typing indicators travel sealed or not at all: each is sent
-/// automatically, and an identified one names us as the sender of exactly
-/// the timing signal sealed sender exists to hide (NDSS'21 §III-IV). Without
-/// a UAK the server accepts they are dropped, never sent with Basic auth.
+/// Automatic traffic travels sealed or not at all: receipts, typing
+/// indicators, call hangups and NullMessages are sent without the user
+/// acting, and an identified one names us as the sender of exactly the
+/// timing signal sealed sender exists to hide (NDSS'21 §III-IV). A server
+/// can even provoke some of them. Without a UAK the server accepts they are
+/// dropped, never sent with Basic auth. Decryption-error reports and resends
+/// take the same rule at their own call sites (`sealed_only = true`).
 fn is_sealed_only_content(content: &chatter_proto::content_v1::Content) -> bool {
     use chatter_proto::content_v1::content::Content as Body;
-    matches!(&content.content, Some(Body::Receipt(_) | Body::Typing(_)))
+    matches!(
+        &content.content,
+        Some(Body::Receipt(_) | Body::Typing(_) | Body::CallHangup(_) | Body::NullMessage(_))
+    )
 }
 
 /// A sealed-only send that found no sealed access was dropped, not failed.

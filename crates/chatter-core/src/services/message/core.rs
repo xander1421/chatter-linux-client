@@ -30,6 +30,9 @@ pub(crate) const VERIFYING_KEY: &str = "Verifying key";
 /// A queued DM whose recipient rejected our UAK: it waits, sealed, for the
 /// recipient's next message to bring their new profile key.
 pub(crate) const WAITING_FOR_CONTACT_KEY: &str = "Waiting for contact's new key";
+/// A queued DM whose every attempt the server refused on our stale UAK,
+/// past its replay window: definitely not delivered, and retryable.
+pub(crate) const KEY_CHANGED_NOT_DELIVERED: &str = "Not delivered: contact's key changed";
 pub(crate) const IDENTITY_CHANGED: &str = "Identity changed";
 pub(crate) const SHIELD_VERIFYING_KEY: &str = "Verifying key over Tor";
 
@@ -83,6 +86,9 @@ impl MessageError {
             }
             Self::DmError(reason) if reason.as_str() == DELIVERY_UNCONFIRMED => {
                 Some(DELIVERY_UNCONFIRMED)
+            }
+            Self::DmError(reason) if reason.as_str() == KEY_CHANGED_NOT_DELIVERED => {
+                Some(KEY_CHANGED_NOT_DELIVERED)
             }
             Self::RecipientIdentityChanged { .. } => Some(IDENTITY_CHANGED),
             Self::RecipientKeyVerifying { .. } => None,

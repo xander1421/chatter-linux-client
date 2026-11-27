@@ -3991,3 +3991,6 @@ msgstr "Не зараз"
 
 msgid "Waiting for contact's new key"
 msgstr "Очікування нового ключа співрозмовника"
+
+msgid "Not delivered: contact's key changed"
+msgstr "Не доставлено: ключ співрозмовника змінився"

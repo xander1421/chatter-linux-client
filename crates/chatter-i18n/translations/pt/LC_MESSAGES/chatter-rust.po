@@ -3975,3 +3975,6 @@ msgstr "Agora não"
 
 msgid "Waiting for contact's new key"
 msgstr "Aguardando a nova chave do contato"
+
+msgid "Not delivered: contact's key changed"
+msgstr "Não entregue: a chave do contato mudou"

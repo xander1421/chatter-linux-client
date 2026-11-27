@@ -165,6 +165,11 @@ impl AnonInboxBackend for AnonGroupService {
     fn emit_receipts(&self) -> bool {
         true
     }
+
+    /// The mutual "delivery receipts" setting, as for secret DMs.
+    fn accepts_delivery_receipts(&self) -> bool {
+        crate::services::configuration_sync::delivery_receipts_enabled(&self.settings_repo)
+    }
 }
 
 impl AnonGroupService {

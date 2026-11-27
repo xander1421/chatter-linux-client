@@ -348,6 +348,7 @@ impl MessageService {
         recipient_id: &str,
         ciphertexts: std::collections::HashMap<u32, Vec<u8>>,
         uak: Option<&[u8; 16]>,
+        sealed_only: bool,
     ) -> DepositOutcome {
         let timestamp = crate::util::time::TimestampNanos::now_anonymized().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
@@ -369,6 +370,7 @@ impl MessageService {
 
         // Only a deposit without a UAK goes identified; a rejected one fails.
         let identified = uak.is_none()
+            && !sealed_only
             && !self.current_user_id().is_ok_and(|me| me.to_string() == recipient_id)
             && !self.shield_mode.load(std::sync::atomic::Ordering::Acquire);
         let mut error = None;
@@ -383,7 +385,7 @@ impl MessageService {
                     messages.clone(),
                     SealedDelivery::NamedDevices,
                     uak,
-                    false,
+                    sealed_only,
                     &client_request_id,
                 )
                 .await
@@ -479,9 +481,12 @@ impl MessageService {
     /// with [`NetworkError::SealedAccessUnavailable`]: a queued DM waits for
     /// the peer's next message to bring the new key, a receipt is dropped.
     ///
-    /// With no UAK, `sealed_only` content (receipts, typing) and everything
-    /// sent while Shield is on fail the same way instead of going identified.
-    /// Deposits to our own account are identified by design.
+    /// With no UAK, `sealed_only` content (receipts, typing, call hangups,
+    /// NullMessages, decryption-error reports, resends) fails the same way
+    /// instead of going identified. In Shield a deposit without a UAK is
+    /// authorized by a single-use blind mailbox credential instead, so it is
+    /// never identified either. Deposits to our own account are identified by
+    /// design (own-device sync).
     ///
     /// Friend DMs are sealed even though the server already stores the
     /// friendship: a static friendship graph is not a behavioural delivery
@@ -530,9 +535,30 @@ impl MessageService {
             let is_self = self
                 .current_user_id()
                 .is_ok_and(|me| me.to_string() == recipient_id);
-            if !is_self
-                && (sealed_only || self.shield_mode.load(std::sync::atomic::Ordering::Acquire))
-            {
+            if !is_self && self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+                // Shield: authorize with a single-use blind mailbox credential,
+                // as private posts do (`send_private_distribution`), so an
+                // SKDM, resend or repair to a member whose profile key we
+                // lack still reaches them without naming us.
+                let token = self.token_manager.claim_budgeted_credential(
+                    super::super::group_send::RESERVED_MAILBOX_CREDENTIALS,
+                    |_| Ok(()),
+                )?;
+                return self
+                    .grpc_pool
+                    .anonymous_message_client()
+                    .send_with_anonymous_credential(
+                        client_request_id,
+                        recipient_id,
+                        messages,
+                        delivery,
+                        0,
+                        &token.public_key,
+                        &token.signature,
+                    )
+                    .await;
+            }
+            if !is_self && sealed_only {
                 tracing::info!(
                     recipient = recipient_id,
                     "Sealed send: no UAK for the recipient; identified delivery refused"

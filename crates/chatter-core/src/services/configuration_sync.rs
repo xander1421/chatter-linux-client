@@ -23,19 +23,19 @@ pub fn current(settings: &SettingsRepository) -> ConfigurationSync {
     ConfigurationSync {
         read_receipts: read(keys::SEND_READ_RECEIPTS),
         typing_indicators: read(keys::SHOW_TYPING_INDICATORS),
-        delivery_receipts: read(keys::SEND_DELIVERY_RECEIPTS),
+        delivery_receipts: delivery_receipts_enabled(settings),
     }
 }
 
-/// Whether we send delivery receipts and honour incoming ones (default on).
-/// A storage error reads as on, as the receipt paths always have.
+/// Whether we send delivery receipts and honour incoming ones (default on
+/// when never set). Fails closed: a storage error reads as off, so an
+/// unreadable setting never sends a receipt the user may have turned off.
 #[must_use]
 pub fn delivery_receipts_enabled(settings: &SettingsRepository) -> bool {
-    settings
-        .get_bool(keys::SEND_DELIVERY_RECEIPTS)
-        .ok()
-        .flatten()
-        .unwrap_or(true)
+    match settings.get_bool(keys::SEND_DELIVERY_RECEIPTS) {
+        Ok(value) => value.unwrap_or(true),
+        Err(_) => false,
+    }
 }
 
 /// The `Content` to send our other devices, stamped `sent_at`.

@@ -16,7 +16,12 @@
 //! the receiver checks that certificate at the server's (fresh) timestamp. So
 //! an envelope is replayed only inside [`REPLAY_WINDOW_SECONDS`] of sealing.
 //! Past it the entry fails closed as "Delivery unconfirmed" with the stored
-//! envelope dropped, and the user decides whether to retry. Sealing again on
+//! envelope dropped, and the user decides whether to retry. The exception is
+//! an entry the server only ever refused at the door: every attempt that
+//! sent its envelope was a rejected UAK (or provably never left), so no copy
+//! can have landed. That one fails as [`super::core::KEY_CHANGED_NOT_DELIVERED`]
+//! instead, and a manual retry seals it again under the same `sent_at` for
+//! the original devices, which is safe because nothing was queued. Sealing again on
 //! our own would be a second deposit under a new GUID: if the first copy did
 //! land, the receiver's only guard is its live (sender, sent_at) row, which a
 //! delete-for-me or an expiry hard-deletes, so the message would come back.
@@ -149,6 +154,9 @@ struct Entry {
     uak: Option<Vec<u8>>,
     devices: Option<Vec<u32>>,
     sealed_at: Option<i64>,
+    /// No attempt can have queued the envelope, and at least one was a UAK
+    /// refusal (see [`attempt_verdict`]).
+    refused_only: bool,
 }
 
 /// Outcome of the attempt made inside the composing send.
@@ -165,6 +173,32 @@ fn transient(error: &MessageError) -> bool {
     matches!(error, MessageError::Network(NetworkError::RequestNotSent(_)))
         || error.permanent_send_failure_reason().is_none()
         || matches!(error, MessageError::Storage(_))
+}
+
+/// What an attempt that failed with `error` says about its envelope:
+/// `(key_refused, may_have_landed)`. A rejected UAK is refused by the
+/// server's auth middleware before anything is queued; a request that never
+/// left, or a device-set mismatch, queues nothing either. Anything else
+/// (a timeout, a dropped connection, a server error) may have landed.
+fn attempt_verdict(error: &MessageError) -> (bool, bool) {
+    match error {
+        MessageError::Network(NetworkError::SealedAccessUnavailable) => (true, false),
+        MessageError::Network(
+            NetworkError::RequestNotSent(_)
+            | NetworkError::MismatchedDevices { .. }
+            | NetworkError::AnonymousCredentialsUnavailable,
+        ) => (false, false),
+        _ => (false, true),
+    }
+}
+
+/// The final verdict on a stored envelope that can no longer be replayed.
+fn unreplayable_error(refused_only: bool) -> MessageError {
+    MessageError::DmError(if refused_only {
+        super::core::KEY_CHANGED_NOT_DELIVERED.into()
+    } else {
+        super::core::DELIVERY_UNCONFIRMED.into()
+    })
 }
 
 fn refused_before_submission(error: &MessageError, submission_started: bool) -> bool {
@@ -231,7 +265,8 @@ impl MessageService {
         let conn = self.database.read_connection()?;
         let row = conn
             .query_row(
-                "SELECT peer_id,device_id,request_id,content,request,uak,devices,sealed_at FROM dm_outbox
+                "SELECT peer_id,device_id,request_id,content,request,uak,devices,sealed_at,
+                        key_refused=1 AND may_have_landed=0 FROM dm_outbox
                  WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
                 params![owner, id, generation],
                 |r| {
@@ -244,11 +279,12 @@ impl MessageService {
                         r.get::<_, Option<Vec<u8>>>(5)?,
                         r.get::<_, Option<String>>(6)?,
                         r.get::<_, Option<i64>>(7)?,
+                        r.get::<_, bool>(8)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((peer, device, request_id, content, request, uak, devices, sealed_at)) = row
+        let Some((peer, device, request_id, content, request, uak, devices, sealed_at, refused_only)) = row
         else {
             return Ok(None);
         };
@@ -263,6 +299,7 @@ impl MessageService {
                 .map(|d| serde_json::from_str(&d).map_err(|_| invalid("Invalid outbox devices")))
                 .transpose()?,
             sealed_at,
+            refused_only,
         }))
     }
 
@@ -296,9 +333,7 @@ impl MessageService {
                 message_id = %id,
                 "Sealed DM envelope past its certificate window; delivery unconfirmed"
             );
-            return Err(MessageError::DmError(
-                super::core::DELIVERY_UNCONFIRMED.into(),
-            ));
+            return Err(unreplayable_error(entry.refused_only));
         }
         let peer = entry.peer.to_string();
         let mut auth_client = self.auth_client();
@@ -321,14 +356,22 @@ impl MessageService {
                         .into_iter()
                         .filter_map(|m| Some((m.device_id, m.sealed_message?.sealed_body)))
                         .collect();
-                    let uak: Option<[u8; 16]> =
-                        entry.uak.as_deref().and_then(|k| k.try_into().ok());
+                    // The UAK is only the request's authorization, not part
+                    // of the envelope: derive it from the key we hold now,
+                    // so a key that arrived since (or a rotation) is used.
+                    // The stored one is kept only when we hold no key, e.g.
+                    // the random key of a peer who accepts sealed sender
+                    // from anyone.
+                    let uak: Option<[u8; 16]> = self.sealed_access_key(&peer, false).or_else(|| {
+                        entry.uak.as_deref().and_then(|k| k.try_into().ok())
+                    });
                     return Ok::<_, MessageError>(
                         self.deposit_sealed_ciphertexts(
                             &mut message_client,
                             &peer,
                             ciphertexts,
                             uak.as_ref(),
+                            false,
                         )
                         .await,
                     );
@@ -357,6 +400,7 @@ impl MessageService {
                             &peer,
                             ciphertexts,
                             uak.as_ref(),
+                            false,
                         )
                         .await
                     }
@@ -449,10 +493,13 @@ impl MessageService {
                 } else {
                     "Waiting for connection"
                 };
+                let (key_refused, may_have_landed) = attempt_verdict(error);
                 let waiting = tx.execute(
-                    "UPDATE dm_outbox SET attempts=MIN(attempts+1,6), next_attempt_at=?4+(5 << MIN(attempts,6))
+                    "UPDATE dm_outbox SET attempts=MIN(attempts+1,6), next_attempt_at=?4+(5 << MIN(attempts,6)),
+                         key_refused=MAX(key_refused,?5),
+                         may_have_landed=MAX(may_have_landed, CASE WHEN request IS NULL THEN 0 ELSE ?6 END)
                      WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
-                    params![owner, id.to_string(), generation, now()],
+                    params![owner, id.to_string(), generation, now(), key_refused, may_have_landed],
                 )? == 1;
                 if waiting {
                     tx.execute("UPDATE messages SET failure_reason=?2 WHERE id=?1 AND delivery_status='sending'",
@@ -510,7 +557,7 @@ impl MessageService {
         } else {
             let owner = self.current_user_id()?.to_string();
             self.database.connection()?.execute(
-                "UPDATE dm_outbox SET next_attempt_at=?4, attempts=6 WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
+                "UPDATE dm_outbox SET next_attempt_at=?4, attempts=6, may_have_landed=1 WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
                 params![owner, id.to_string(), generation, now()],
             )?;
         }
@@ -519,14 +566,14 @@ impl MessageService {
 }
 
 /// Why an expired entry (past retention, or from a previous device) failed.
-/// One holding a stored envelope may have landed, so it reads like a replay
-/// past its certificate window; one without never reached the network.
-fn expired_error(envelope_stored: bool) -> MessageError {
-    MessageError::DmError(if envelope_stored {
-        super::core::DELIVERY_UNCONFIRMED.into()
+/// One holding a stored envelope reads like a replay past its certificate
+/// window ([`unreplayable_error`]); one without never reached the network.
+fn expired_error(envelope_stored: bool, refused_only: bool) -> MessageError {
+    if envelope_stored {
+        unreplayable_error(refused_only)
     } else {
-        "expired".into()
-    })
+        MessageError::DmError("expired".into())
+    }
 }
 
 /// Claimed entries of `owner` that are due: leased to a fresh generation in
@@ -541,7 +588,7 @@ fn claim_due(
 ) -> Result<
     (
         Vec<(MessageId, String, ChannelId, u64)>,
-        Vec<(MessageId, String, ChannelId, u64, bool)>,
+        Vec<(MessageId, String, ChannelId, u64, bool, bool)>,
     ),
     StorageError,
 > {
@@ -557,19 +604,20 @@ fn claim_due(
             AND EXISTS (SELECT 1 FROM messages m WHERE m.id=dm_outbox.message_id AND m.failure_reason=?2)",
             params![owner_s, super::core::VERIFYING_KEY])?;
     }
-    let rows: Vec<(String, i64, u32, bool)> = {
+    let rows: Vec<(String, i64, u32, bool, bool)> = {
         let mut stmt = tx.prepare(
-            "SELECT message_id,created_at,device_id,request IS NOT NULL FROM dm_outbox
+            "SELECT message_id,created_at,device_id,request IS NOT NULL,
+                    key_refused=1 AND may_have_landed=0 FROM dm_outbox
              WHERE owner_id=?1 AND next_attempt_at<=?2
              ORDER BY created_at,message_id LIMIT ?3",
         )?;
         let mapped = stmt.query_map(params![owner_s, now(), BATCH], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })?;
         mapped.collect::<Result<_, _>>()?
     };
     let (mut due, mut expired) = (Vec::new(), Vec::new());
-    for (id, created, entry_device, envelope_stored) in rows {
+    for (id, created, entry_device, envelope_stored, refused_only) in rows {
         // Only the account's own live friend-DM row is ever sent.
         let stored: Option<(String, i64)> = tx
             .query_row(
@@ -604,6 +652,7 @@ fn claim_due(
                 conversation,
                 sent_at as u64,
                 envelope_stored,
+                refused_only,
             ));
             continue;
         }
@@ -685,14 +734,14 @@ pub(crate) fn spawn_dm_send_recovery<C: super::SendRecoveryClient>(
                     Err(error) => tracing::warn!(%error, "Sealed DM failure not recorded"),
                 }
             };
-            for (id, generation, conversation, sent_at, envelope_stored) in expired {
+            for (id, generation, conversation, sent_at, envelope_stored, refused_only) in expired {
                 tracing::warn!(message_id = %id, envelope_stored, "Sealed DM unconfirmed past retention or from a previous device; marked failed");
                 fail(
                     &id,
                     &generation,
                     conversation,
                     sent_at,
-                    expired_error(envelope_stored),
+                    expired_error(envelope_stored, refused_only),
                 );
             }
             for (id, generation, conversation, sent_at) in due {
@@ -802,18 +851,48 @@ mod tests {
     /// Either way the verdict is final, so the worker settles it.
     #[test]
     fn expired_entry_with_stored_envelope_reads_delivery_unconfirmed() {
-        let stored = expired_error(true);
+        let stored = expired_error(true, false);
         assert_eq!(
             stored.permanent_send_failure_reason(),
             Some(super::super::core::DELIVERY_UNCONFIRMED)
         );
         assert!(!transient(&stored));
-        let never_sent = expired_error(false);
+        let never_sent = expired_error(false, false);
         assert_eq!(
             never_sent.permanent_send_failure_reason(),
             Some("Cannot send message")
         );
         assert!(!transient(&never_sent));
+    }
+
+    /// Every attempt refused at the door (a rejected UAK, or nothing sent):
+    /// no copy can have landed, so the verdict is definite and retryable,
+    /// never "Delivery unconfirmed". One ambiguous attempt keeps it unconfirmed.
+    #[test]
+    fn refused_only_envelope_fails_as_not_delivered() {
+        let refused = MessageError::Network(NetworkError::SealedAccessUnavailable);
+        assert_eq!(attempt_verdict(&refused), (true, false));
+        assert_eq!(
+            attempt_verdict(&MessageError::Network(NetworkError::RequestNotSent("x".into()))),
+            (false, false)
+        );
+        assert_eq!(
+            attempt_verdict(&MessageError::Network(NetworkError::Timeout)),
+            (false, true)
+        );
+        let verdict = expired_error(true, true);
+        assert_eq!(
+            verdict.permanent_send_failure_reason(),
+            Some(super::super::core::KEY_CHANGED_NOT_DELIVERED)
+        );
+        assert!(!transient(&verdict));
+        assert_eq!(
+            unreplayable_error(false).permanent_send_failure_reason(),
+            Some(super::super::core::DELIVERY_UNCONFIRMED)
+        );
+        // Waiting on a rejected UAK is still transient: the entry keeps its
+        // envelope and retries until the window closes.
+        assert!(transient(&refused));
     }
 
     /// Only the generation that owns the entry may store envelopes, only for

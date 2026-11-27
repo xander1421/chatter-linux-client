@@ -329,7 +329,7 @@ impl MessageService {
             }
         };
         let outcome = self
-            .deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None)
+            .deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None, false)
             .await;
         // What that device's DecryptionErrorMessage will name
         // (`resend_dm_on_decryption_error`).
@@ -803,6 +803,8 @@ impl MessageService {
                 &peer,
                 ciphertexts,
                 uak.as_ref(),
+                // Automatic: dropped rather than sent identified.
+                true,
             )
             .await;
         if outcome.delivered == 0 {

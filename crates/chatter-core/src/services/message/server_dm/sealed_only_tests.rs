@@ -18,6 +18,8 @@ use tonic::body::Body;
 enum Auth {
     Basic,
     AccessKey(String),
+    /// A single-use blind mailbox credential (`x-anonymous-credential`).
+    Credential,
 }
 
 struct Probe {
@@ -83,6 +85,7 @@ async fn start_server(probe: Arc<Mutex<Probe>>) -> String {
             let headers = request.headers();
             let auth = match headers.get("unidentified-access-key") {
                 Some(key) => Auth::AccessKey(key.to_str().unwrap().to_owned()),
+                None if headers.contains_key("x-anonymous-credential") => Auth::Credential,
                 None if headers.contains_key(http::header::AUTHORIZATION) => Auth::Basic,
                 None => return Ok(grpc_status(tonic::Code::Unauthenticated)),
             };
@@ -215,28 +218,37 @@ async fn rejected_uak_retries_sealed_with_the_newer_stored_key() {
     );
 }
 
-/// Without any UAK, receipts/typing and everything in Shield are dropped
-/// before the network; only an ordinary message to a peer whose key we never
-/// had still degrades to identified delivery.
+/// Without any UAK: sealed-only traffic is dropped before the network
+/// outside Shield; in Shield every deposit (an SKDM or resend to a member
+/// whose key we lack included) goes with a blind mailbox credential, never
+/// identified; only an ordinary message outside Shield still degrades to
+/// identified delivery.
 #[tokio::test]
 async fn no_uak_goes_identified_only_for_ordinary_content_outside_shield() {
     let f = fixture(None).await;
     let error = f.send(None, true).await.unwrap_err();
     assert!(matches!(error, NetworkError::SealedAccessUnavailable), "{error:?}");
-    f.client
-        .messages()
-        .shield_mode
-        .store(true, std::sync::atomic::Ordering::Release);
-    let error = f.send(None, false).await.unwrap_err();
-    assert!(matches!(error, NetworkError::SealedAccessUnavailable), "{error:?}");
     assert!(f.sends().is_empty(), "nothing reached the server: {:?}", f.sends());
 
-    f.client
-        .messages()
-        .shield_mode
-        .store(false, std::sync::atomic::Ordering::Release);
+    let shield = |on: bool| {
+        f.client
+            .messages()
+            .shield_mode
+            .store(on, std::sync::atomic::Ordering::Release)
+    };
+    shield(true);
+    // No credential in the pool: waits (retryable), never identified.
+    let error = f.send(None, false).await.unwrap_err();
+    assert!(matches!(error, NetworkError::AnonymousCredentialsUnavailable), "{error:?}");
+    assert!(f.sends().is_empty(), "nothing reached the server: {:?}", f.sends());
+    crate::services::message::dm_bootstrap::tests::seed_tokens(f.client.messages(), 10);
+    f.send(None, false).await.expect("credential deposit");
+    f.send(None, true).await.expect("sealed-only credential deposit");
+    assert_eq!(f.sends(), vec![Auth::Credential, Auth::Credential]);
+
+    shield(false);
     f.send(None, false).await.expect("identified degradation");
-    assert_eq!(f.sends(), vec![Auth::Basic]);
+    assert_eq!(f.sends().last(), Some(&Auth::Basic));
 }
 }
 
@@ -246,5 +258,7 @@ fn receipts_and_typing_are_sealed_only() {
     let only = |body| is_sealed_only_content(&Content { content: Some(body), ..Default::default() });
     assert!(only(Body::Receipt(ReceiptMessage::default())));
     assert!(only(Body::Typing(TypingMessage::default())));
+    assert!(only(Body::CallHangup(Default::default())));
+    assert!(only(Body::NullMessage(Default::default())));
     assert!(!only(Body::DataMessage(Default::default())));
 }
