@@ -678,6 +678,12 @@ msgstr "{} a ieșit de pe canal"
 msgid "{} is no longer a member"
 msgstr "{} nu mai este membru"
 
+msgid "Not delivered to {}: no registered device"
+msgstr "Nelivrat către {}: niciun dispozitiv înregistrat"
+
+msgid "has no registered device"
+msgstr "nu are niciun dispozitiv înregistrat"
+
 #: crates/chatter-core/src/domain/message/system.rs:167
 msgid "{} created the channel"
 msgstr "{} a creat canalul"

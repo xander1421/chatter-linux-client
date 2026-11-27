@@ -15,6 +15,10 @@ pub enum SystemMessage {
     /// This member is gone from the roster and no verified signed change says
     /// why: "{user} is no longer a member". Never worded as a leave.
     UserGone(UserId),
+    /// A private-channel post went out without this member: the server holds
+    /// no prekey bundle for any of their devices (a deleted account, or keys
+    /// never uploaded). Rendered with the member as sender.
+    NoRegisteredDevice(UserId),
     ChannelCreated,
     ChannelRenamed {
         old_name: String,
@@ -164,6 +168,9 @@ impl SystemMessage {
             Self::UserLeft(_) => chatter_i18n::trf("{} left the channel", &[&actor]),
             Self::AnonGroupUserLeft { .. } => chatter_i18n::trf("{} left the group", &[&actor]),
             Self::UserGone(_) => chatter_i18n::trf("{} is no longer a member", &[&actor]),
+            Self::NoRegisteredDevice(_) => {
+                chatter_i18n::trf("Not delivered to {}: no registered device", &[&actor])
+            }
             Self::ChannelCreated => chatter_i18n::trf("{} created the channel", &[&actor]),
             Self::ChannelPhotoChanged => {
                 chatter_i18n::trf("{} changed the channel photo", &[&actor])
@@ -236,6 +243,7 @@ impl SystemMessage {
             Self::UserLeft(_) => chatter_i18n::tr("left the channel"),
             Self::AnonGroupUserLeft { .. } => chatter_i18n::tr("left the group"),
             Self::UserGone(_) => chatter_i18n::tr("is no longer a member"),
+            Self::NoRegisteredDevice(_) => chatter_i18n::tr("has no registered device"),
             Self::ChannelCreated => chatter_i18n::tr("created the channel"),
             Self::ChannelPhotoChanged => chatter_i18n::tr("changed the channel photo"),
             Self::ChannelRenamed { old_name, new_name } => chatter_i18n::trf(

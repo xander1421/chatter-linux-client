@@ -92,6 +92,9 @@ struct Cached {
     expiration: u64,
     checked_at: u64,
     token: Vec<u8>,
+    /// The serialized endorsement response the token was combined from, so a
+    /// send that omits members can combine a token for the rest.
+    endorsements: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -115,10 +118,57 @@ impl TokenCache {
     }
 
     pub(super) fn put(&self, channel_id: &ChannelId, state_hash: StateHash, expiration: u64, token: Vec<u8>) {
+        self.put_endorsed(channel_id, state_hash, expiration, token, Vec::new());
+    }
+
+    fn put_endorsed(
+        &self, channel_id: &ChannelId, state_hash: StateHash, expiration: u64, token: Vec<u8>, endorsements: Vec<u8>,
+    ) {
         if let Ok(mut map) = self.0.lock() {
-            map.insert(*channel_id, Cached { state_hash, expiration, checked_at: now_secs(), token });
+            map.insert(*channel_id, Cached { state_hash, expiration, checked_at: now_secs(), token, endorsements });
         }
     }
+
+    fn endorsements(&self, channel_id: &ChannelId, state_hash: &StateHash, now: u64) -> Option<Vec<u8>> {
+        let map = self.0.lock().ok()?;
+        map.get(channel_id)
+            .filter(|c| c.state_hash == *state_hash && c.expiration > now + REFRESH_MARGIN_SECS)
+            .map(|c| c.endorsements.clone())
+            .filter(|e| !e.is_empty())
+    }
+}
+
+/// Strict discoveries that found no prekey bundle for a member, or the time
+/// since the first, before a post leaves that member out (server
+/// `group_send.go`: a send may omit exactly the members without one).
+const NO_BUNDLE_MISSES: u32 = 3;
+const NO_BUNDLE_SECS: u64 = 10 * 60;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct NoBundle {
+    first_at: u64,
+    misses: u32,
+    /// The channel was told this member is left out.
+    noticed: bool,
+}
+
+impl NoBundle {
+    fn omitted(self, now: u64) -> bool {
+        self.misses >= NO_BUNDLE_MISSES
+            || (self.misses > 0 && now.saturating_sub(self.first_at) >= NO_BUNDLE_SECS)
+    }
+
+    fn missed(self, now: u64) -> Self {
+        Self {
+            first_at: if self.misses == 0 { now } else { self.first_at },
+            misses: self.misses.saturating_add(1),
+            noticed: self.noticed,
+        }
+    }
+}
+
+fn no_bundle_key(channel_id: &ChannelId, member: &str) -> String {
+    format!("private.no-bundle:{channel_id}:{member}")
 }
 
 fn now_secs() -> u64 {
@@ -213,7 +263,7 @@ impl MessageService {
         )
         .map_err(invalid)?;
         crate::state::send_session::check_send_session()?;
-        self.group_send_tokens.put(channel_id, verified.state_hash, expiration, token);
+        self.group_send_tokens.put_endorsed(channel_id, verified.state_hash, expiration, token, resp.endorsements);
         Ok(())
     }
 
@@ -394,6 +444,11 @@ impl MessageService {
         // Do not send a subset of lookups. A cold roster scan covers
         // every member, including accounts whose sessions are already warm.
         let holders = self.private_post_holders(&channel_id, distribution).await?.unwrap_or_default();
+        let now = now_secs();
+        let mut omitted: HashSet<String> = members.iter()
+            .filter(|member| **member != me && self.no_bundle(&channel_id, member).omitted(now))
+            .cloned()
+            .collect();
         let mut refresh_roster = false;
         let mut fanout = 0;
         for member in &members {
@@ -422,16 +477,33 @@ impl MessageService {
                 match self.signal_service.require_group_device_sessions(&mut prekeys, member).await
                     .map_err(|error| MessageError::from_signal_send(error, "group session discovery"))
                 {
-                    Ok(devices) if devices.is_empty() => return Err(NetworkError::Unavailable.into()),
-                    Ok(_) => {}
+                    // No bundle (the server's NotFound, or no device): wait,
+                    // then leave the member out.
+                    Ok(devices) if devices.is_empty() => {
+                        self.missing_bundle(&channel_id, member, &me, now, &mut omitted)?;
+                    }
+                    Err(MessageError::Network(NetworkError::NotFound(_))) => {
+                        self.missing_bundle(&channel_id, member, &me, now, &mut omitted)?;
+                    }
+                    Ok(_) => {
+                        self.settings_repo.delete(&no_bundle_key(&channel_id, member))?;
+                        omitted.remove(member);
+                    }
                     Err(error @ MessageError::RecipientKeyVerifying { .. }) => blocked = Some(error),
-                    Err(error) => return Err(retryable_discovery(error)),
+                    Err(error) => return Err(error),
                 }
             }
             if let Some(error) = blocked {
                 return Err(error);
             }
         }
+        // Everyone else is addressed; a token for exactly them.
+        let recipients: Vec<String> = members.iter().filter(|m| !omitted.contains(*m)).cloned().collect();
+        let token = if omitted.is_empty() {
+            token
+        } else {
+            self.subset_token(&channel_id, &verified, &recipients, now)?
+        };
         let mut auth_client = self.auth_client();
         // Discovery can await the network while the local sender key advances.
         let holders = self.private_post_holders(&channel_id, distribution).await?;
@@ -441,7 +513,7 @@ impl MessageService {
         let mut distributed = HashSet::new();
         for round in 0..=MAX_RECONCILE_ROUNDS {
             let mut fanout = Vec::new();
-            for member in &members {
+            for member in &recipients {
                 let devices = self.private_post_devices(member, &me).await?;
                 if devices.into_iter().any(|(device, registration)| {
                     !distributed.contains(&(member.clone(), device))
@@ -474,7 +546,7 @@ impl MessageService {
             }
             let (sealed, destinations) = self
                 .signal_service
-                .seal_group_message(&channel_id, contents.clone(), &members)
+                .seal_group_message(&channel_id, contents.clone(), &recipients)
                 .await
                 .map_err(|e| MessageError::from_signal_send(e, "group seal"))?;
             crate::services::gateway::submission::mark_submission_started()?;
@@ -497,6 +569,11 @@ impl MessageService {
                         .map_err(invalid)?;
                     self.snapshot_private_resend_targets(channel_id, original.timestamp, &destinations)?;
                 }
+                for member in &omitted {
+                    if let Err(error) = self.notice_omitted(&channel_id, member) {
+                        tracing::warn!(%channel_id, %error, "Could not file the left-out-member notice");
+                    }
+                }
                 return self.sent_group_message(request, resp.server_timestamp);
             }
             if resp.mismatched.is_empty() || round == MAX_RECONCILE_ROUNDS {
@@ -507,7 +584,7 @@ impl MessageService {
                 .sum();
             charge_private_repairs(count)?;
             for account in &resp.mismatched {
-                if !members.contains(&account.user_id) {
+                if !recipients.contains(&account.user_id) {
                     return Err(invalid("device mismatch for an account outside the verified channel"));
                 }
                 let d = account.devices.clone().unwrap_or_default();
@@ -518,6 +595,67 @@ impl MessageService {
             }
         }
         unreachable!("the loop returns on its last round")
+    }
+
+    fn no_bundle(&self, channel_id: &ChannelId, member: &str) -> NoBundle {
+        self.settings_repo.get::<NoBundle>(&no_bundle_key(channel_id, member)).ok().flatten().unwrap_or_default()
+    }
+
+    /// Strict discovery found no prekey bundle for `member`. Keep the post
+    /// waiting (`Unavailable`, retried by the journal) until that has held
+    /// for [`NO_BUNDLE_MISSES`] discoveries or [`NO_BUNDLE_SECS`], then leave
+    /// the member out. Our own account always has this device's bundle.
+    fn missing_bundle(
+        &self, channel_id: &ChannelId, member: &str, me: &str, now: u64, omitted: &mut HashSet<String>,
+    ) -> Result<(), MessageError> {
+        if member == me {
+            return Err(NetworkError::Unavailable.into());
+        }
+        let state = self.no_bundle(channel_id, member).missed(now);
+        self.settings_repo.set(&no_bundle_key(channel_id, member), &state)?;
+        if !state.omitted(now) {
+            return Err(NetworkError::Unavailable.into());
+        }
+        omitted.insert(member.to_owned());
+        Ok(())
+    }
+
+    /// A group send token for `recipients` only, from the cached endorsements
+    /// (`full_token` combines any subset of them).
+    fn subset_token(
+        &self, channel_id: &ChannelId, verified: &VerifiedChannel, recipients: &[String], now: u64,
+    ) -> Result<Vec<u8>, MessageError> {
+        let endorsements = self.group_send_tokens
+            .endorsements(channel_id, &verified.state_hash, now)
+            .ok_or(NetworkError::Unavailable)?;
+        let recipients: Vec<uuid::Uuid> = recipients.iter()
+            .map(|id| uuid::Uuid::parse_str(id))
+            .collect::<Result<_, _>>()
+            .map_err(invalid)?;
+        let server = group_send::pinned_server_params().map_err(invalid)?;
+        group_send::full_token(&endorsements, &channel_id.to_string(), &verified.state_hash, &recipients, now, &server)
+            .map_err(invalid)
+    }
+
+    /// Tell the channel, once, that its posts go out without `member`.
+    fn notice_omitted(&self, channel_id: &ChannelId, member: &str) -> Result<(), MessageError> {
+        use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
+        let key = no_bundle_key(channel_id, member);
+        let state = self.no_bundle(channel_id, member);
+        if state.noticed {
+            return Ok(());
+        }
+        let user: crate::domain::UserId = member.parse().map_err(invalid)?;
+        let mut notice = Message::new_text(
+            *channel_id, ConversationType::Channel, Some(user), String::new(),
+            crate::util::time::TimestampNanos::now().as_u64(),
+        );
+        notice.content = MessageContent::System(SystemMessage::NoRegisteredDevice(user));
+        notice.is_read = true;
+        self.message_repo.insert_or_ignore(&notice)?;
+        self.settings_repo.set(&key, &NoBundle { noticed: true, ..state })?;
+        self.event_bus.emit_domain(crate::events::DomainEvent::MessageReceived { message: notice });
+        Ok(())
     }
 
     /// The journal's record of an accepted anonymous send.
@@ -604,17 +742,6 @@ fn check_distribution(
     }
 }
 
-/// The server answers a member with no prekey bundle (`ErrNoPreKeyBundle`)
-/// as `NotFound`, the same state as an empty device list: a member between
-/// registrations, not a refusal of the post. Both keep the journal retrying
-/// instead of failing the post for every member.
-fn retryable_discovery(error: MessageError) -> MessageError {
-    match error {
-        MessageError::Network(NetworkError::NotFound(_)) => NetworkError::Unavailable.into(),
-        error => error,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,16 +758,19 @@ mod tests {
         assert_eq!(cache.get(&ChannelId::new(), &h1, 1_000), None);
     }
 
-    /// A member with no bundle yet keeps the post queued; other refusals
-    /// keep their meaning.
+    /// A member without a bundle is left out only after three discoveries
+    /// or ten minutes, whichever comes first.
     #[test]
-    fn missing_bundle_during_discovery_is_retryable() {
-        let retryable = |e: &MessageError| matches!(e, MessageError::Network(n) if n.is_retryable());
-        assert!(!retryable(&MessageError::Network(NetworkError::NotFound("no bundle".into()))));
-        assert!(retryable(&retryable_discovery(MessageError::Network(NetworkError::NotFound("no bundle".into())))));
-        assert!(matches!(
-            retryable_discovery(MessageError::Network(NetworkError::PermissionDenied)),
-            MessageError::Network(NetworkError::PermissionDenied)
-        ));
+    fn a_member_without_a_bundle_is_omitted_after_a_bounded_wait() {
+        let t0 = 1_000;
+        let once = NoBundle::default().missed(t0);
+        assert_eq!(once.first_at, t0);
+        assert!(!once.omitted(t0));
+        let twice = once.missed(t0 + 30);
+        assert_eq!(twice.first_at, t0, "the wait is measured from the first miss");
+        assert!(!twice.omitted(t0 + 30));
+        assert!(twice.missed(t0 + 60).omitted(t0 + 60), "third discovery");
+        assert!(once.omitted(t0 + NO_BUNDLE_SECS), "ten minutes");
+        assert!(!NoBundle::default().omitted(t0 + NO_BUNDLE_SECS), "never missed");
     }
 }

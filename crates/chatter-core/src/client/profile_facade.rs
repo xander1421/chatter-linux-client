@@ -49,6 +49,9 @@ impl ChatterClient {
             auth.settings_repo.clone(),
             auth.auth_interceptor.clone(),
         );
+        // A wrong password stops here, before any channel is left.
+        account.verify_password(password).await?;
+        self.leave_channels_before_deletion().await;
         let suspension = self.suspend_presence(revision).await;
         account.delete_acct(password).await?;
         suspension.commit();
@@ -71,6 +74,26 @@ impl ChatterClient {
             result.map_err(crate::services::account_service::AccountError::Storage)?;
         }
         Ok(())
+    }
+
+    /// Sign our LEFT in every private channel we do not own, so the deleted
+    /// account drops out of the signed rosters. Best effort: a channel we
+    /// could not leave keeps us as a member without devices, which posts
+    /// leave out (`group_send.rs` `missing_bundle`).
+    async fn leave_channels_before_deletion(&self) {
+        let Some(me) = self.session_current_user_id() else { return };
+        let channels = match self.channels().get_channels_for_user() {
+            Ok(channels) => channels,
+            Err(error) => {
+                tracing::warn!(%error, "Could not list channels to leave before account deletion");
+                return;
+            }
+        };
+        for channel_id in crate::services::account_service::channels_to_leave_before_deletion(&channels, me) {
+            if let Err(error) = self.leave_channel(&channel_id).await {
+                tracing::warn!(%channel_id, %error, "Could not leave a private channel before account deletion");
+            }
+        }
     }
 
     /// Get a user's display name.

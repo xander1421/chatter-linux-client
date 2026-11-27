@@ -677,6 +677,12 @@ msgstr "{} вийшов(-ла) з каналу"
 msgid "{} is no longer a member"
 msgstr "{} більше не в каналі"
 
+msgid "Not delivered to {}: no registered device"
+msgstr "Не доставлено {}: немає зареєстрованих пристроїв"
+
+msgid "has no registered device"
+msgstr "немає зареєстрованих пристроїв"
+
 #: crates/chatter-core/src/domain/message/system.rs:167
 msgid "{} created the channel"
 msgstr "{} створив(-ла) канал"

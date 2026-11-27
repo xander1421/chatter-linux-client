@@ -681,6 +681,12 @@ msgstr "{} hat den Kanal verlassen"
 msgid "{} is no longer a member"
 msgstr "{} ist kein Mitglied mehr"
 
+msgid "Not delivered to {}: no registered device"
+msgstr "Nicht an {} zugestellt: kein registriertes Gerät"
+
+msgid "has no registered device"
+msgstr "hat kein registriertes Gerät"
+
 #: crates/chatter-core/src/domain/message/system.rs:167
 msgid "{} created the channel"
 msgstr "{} hat den Kanal erstellt"
