@@ -10,8 +10,6 @@ import { EmojiData } from "../components/mod.slint";
 // Conversation view wiring stays close to ChatLayout, while MainWindow owns state.
 export component AppConversationLayout inherits Rectangle {
     out property <length> composer-top: chat-layout.composer-top;
-    out property <length> composer-left: chat-layout.composer-left;
-    changed composer-left => { ChatPane.mention-composer-left = root.composer-left; }
     changed composer-top => { ChatPane.mention-composer-top = root.composer-top; }
     in property <bool> active-call-fullscreen;
     in property <bool> active-call-visible;

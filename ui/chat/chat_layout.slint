@@ -61,8 +61,7 @@ export component ChatLayout inherits Rectangle {
     // window-level overlay and clamps to this, so neither the menu nor the
     // highlighted bubble covers the title or the pinned bar.
     out property <length> content-top: root.absolute-position.y + top-chrome.height;
-    out property <length> composer-top: composer.absolute-position.y;
-    out property <length> composer-left: composer.absolute-position.x;
+    out property <length> composer-top: bottom-chrome.absolute-position.y;
     out property <length> menu-anchor-top: message-list.menu-anchor-top;
     out property <length> menu-anchor-bottom: message-list.menu-anchor-bottom;
     out property <length> menu-anchor-left: message-list.menu-anchor-left;
@@ -166,7 +165,7 @@ export component ChatLayout inherits Rectangle {
         : root.mobile ? max(0px, root.drawer-height - root.keyboard-inset)
         // Desktop popover: never taller than the gap between header and
         // composer, so a short window shrinks it rather than covering the title.
-        : min(root.drawer-height, max(0px, root.drawer-search-room - 2 * Spacing.panel-gutter));
+        : min(root.drawer-height, max(0px, root.drawer-search-room - Spacing.xs));
     // On touch the drawer replaces the IME's occupied space. Drive both the
     // composer and list from this one value, including during the IME handover.
     property <length> drawer-occupied-height: root.mobile && root.drawer-visible
@@ -633,9 +632,9 @@ export component ChatLayout inherits Rectangle {
         width: root.width;
         height: self.preferred-height;
         y: root.height - self.height - root.drawer-occupied-height;
-        padding-left: root.mobile ? Spacing.sm : Spacing.panel-gutter;
+        padding-left: Spacing.sm;
         padding-right: self.padding-left;
-        padding-bottom: root.mobile ? Spacing.none : Spacing.panel-gutter;
+        padding-bottom: root.mobile ? Spacing.none : Spacing.sm;
         // Floating composer — placed directly in VerticalLayout so its
         // explicit height drives the layout slot. A wrapping plain Rectangle
         // does not auto-size from children, which collapses the hit-test
@@ -825,15 +824,14 @@ export component ChatLayout inherits Rectangle {
         // conversation — the input stays pinned at the bottom and nothing
         // reserves a row beside it (RC87). No wider than a picker needs:
         // across a 1600px pane two GIF tiles were 10:1 strips (RC86).
-        x: bottom-chrome.padding-left;
-        width: max(0px, min(root.width - 2 * self.x, root.mobile ? root.width : 420px));
+        x: root.mobile ? Spacing.sm : 0px;
+        width: root.mobile ? root.width - 2 * Spacing.sm : min(root.width, 420px);
         y: root.mobile ? root.height - Spacing.sm - root.drawer-occupied-height
-            : root.height - bottom-chrome.height - Spacing.panel-gutter - root.drawer-space;
+            : root.height - bottom-chrome.height - Spacing.xs - root.drawer-space;
         height: root.mobile ? root.drawer-occupied-height : root.drawer-space;
         opacity: root.drawer-visible ? 1 : 0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
         elevation: root.mobile ? 3 : 4;
-        border-radius: root.mobile && !root.rounded-page-top ? Spacing.radius-chrome : Spacing.radius-panel;
         clip: true;
         // Derive chrome from the independent drawer budget, never from
         // a layout's measured height. Keep room for embedded picker chrome
@@ -880,8 +878,8 @@ export component ChatLayout inherits Rectangle {
                 y: picker-drawer.search-y;
                 width: parent.width - 2 * picker-drawer.drawer-padding;
                 height: picker-drawer.control-height;
-                border-radius: Spacing.radius-control;
-                background: Colors.surface-control;
+                border-radius: Spacing.radius-md;
+                background: Colors.inset;
                 HorizontalLayout {
                     padding-left: Spacing.sm;
                     padding-right: Spacing.xs;
@@ -991,7 +989,7 @@ export component ChatLayout inherits Rectangle {
                     background: current ? Colors.tint-strong
                         : tab-touch.pressed ? Materials.pressed
                         : tab-touch.has-hover ? Materials.hover : transparent;
-                    border-radius: Spacing.radius-control;
+                    border-radius: Spacing.radius-md;
                     // `tab` is the repeater variable above, so the bare enum name resolves to that string.
                     accessible-role: AccessibleRole.tab;
                     accessible-label: tab;

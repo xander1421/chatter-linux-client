@@ -71,10 +71,10 @@ export component MentionAutocomplete inherits GlassSurface {
         x: 0;
         y: root.height - self.height;
         width: 44px + (root.max-popup-width - 44px) * root.reveal;
-        height: min(root.height, 12px + (root.height - 12px) * root.reveal);
+        height: 12px + (root.height - 12px) * root.reveal;
         material-level: 3;
         elevation: 4;
-        border-radius: min(Spacing.radius-panel, self.height / 2);
+        border-radius: min(Spacing.radius-xl, self.height / 2);
 
         Rectangle {
             width: 100%;
@@ -95,7 +95,7 @@ export component MentionAutocomplete inherits GlassSurface {
 
                 for suggestion[index] in root.suggestions: Rectangle {
                     height: Spacing.button-height * Appearance.text-grow;
-                    border-radius: Spacing.radius-control;
+                    border-radius: Spacing.radius-sm;
                     background: index == root.selected-index ? Colors.tint-strong : (item-area.pressed ? Materials.pressed : item-area.has-hover ? Materials.hover : transparent);
                     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                     accessible-role: list-item;
@@ -130,7 +130,7 @@ export component MentionAutocomplete inherits GlassSurface {
                             width: 28px;
                             height: 28px;
                             y: (parent.height - self.height) / 2;
-                            border-radius: Spacing.radius-control;
+                            border-radius: Spacing.radius-sm;
                             background: Colors.surface-control;
                             // Channel icon
                             if suggestion.mention-type == "channel": Text {
@@ -182,6 +182,15 @@ export component MentionAutocomplete inherits GlassSurface {
                                 font-size: Typography.xs;
                                 overflow: elide;
                             }
+                        }
+
+                        // Selection indicator for keyboard navigation
+                        if index == root.selected-index: Rectangle {
+                            width: 4px;
+                            height: 20px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 2px;
+                            background: Colors.primary;
                         }
                     }
 

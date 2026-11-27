@@ -1,5 +1,5 @@
 import { InputPolicy } from "../theme/input_policy.slint";
-import { IconAction } from "../components/icon_action.slint";
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { VoiceRecording } from "voice_recording.slint";
 import { ComposerFormatToolbar } from "composer_format_toolbar.slint";
@@ -37,11 +37,11 @@ export component MessageComposer inherits GlassSurface {
     in property <string> composer-scope: "main";
     in property <string> thread-root-id: "";
     property <bool> recording-here: VoiceRecording.active && VoiceRecording.owner == root.composer-scope;
-    material-tint: Materials.chat-chrome;
-    darkening: Materials.chat-darkening;
+    material-enabled: false;
+    background: transparent;
     material-level: 2;
     elevation: 3;
-    border-radius: Spacing.radius-panel;
+    border-radius: Spacing.radius-chrome;
 
     in property <bool> collapsed: false;
     // Collapsed but still holding its height, so the list above does not
@@ -325,7 +325,7 @@ export component MessageComposer inherits GlassSurface {
     property <length> max-input-height: root.mobile
         ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
             available-pane-height * 0.4 - edit-bar-height
-                - format-bar-height - raised-toolbar-height - row-padding * 2 - accessory-inset))
+                - format-bar-height - raised-toolbar-height - row-padding * 2))
         // Desktop: 400px, but never more than half the pane — in an 800x600
         // window a long draft grew over two thirds of it and hid the chat.
         : max(min-input-height, min(400px, available-pane-height * 0.5));
@@ -435,15 +435,13 @@ export component MessageComposer inherits GlassSurface {
     // 48px touch target, so the row is already tall enough to breathe on its own
     // — 16px on top of it made the composer 65px for one line of text and left
     // the screen looking bottom-heavy. The buttons are untouched.
-    // The inset leaves the control corners concentric with the island.
+    // The same inset on all four sides of the row, so the field and the
+    // buttons are concentric with the shell (Spacing.radius-chrome-inner).
     property <length> row-padding: Spacing.chrome-inset;
 
-    private property <length> accessory-inset: root.is-editing || root.show-formatting ? row-padding : 0px;
-
-    // The outer island follows the height of every visible composer row.
+    // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(80px, Spacing.touch-target-min + row-padding * 2);
-    height: root.collapsed && !root.keep-height ? 0px : root.recording-here ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2
-        + accessory-inset;
+    height: root.collapsed && !root.keep-height ? 0px : root.recording-here ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
     // inside its bounds between consecutive key events.
@@ -451,30 +449,42 @@ export component MessageComposer inherits GlassSurface {
     in property <bool> mobile: false;
     in property <bool> enter-sends: true;
 
+    // Accessories retain their own material when the raised main row is transparent.
+    accessory-surface := GlassSurface {
+        // Slint centers fixed-size children by default. Anchor the accessory
+        // material to its indicators, or an edit paints a full-width empty bar
+        // behind the raised action row instead of behind the edit indicator.
+        y: 0px;
+        visible: root.raised-actions && !root.recording-here && self.height > 0px;
+        width: root.width;
+        height: root.edit-bar-height + root.format-bar-height;
+        material-level: root.material-level;
+        material-tint: Materials.chat-chrome;
+        darkening: Materials.chat-darkening;
+        elevation: root.elevation;
+        backdrop-paused: root.backdrop-paused;
+    }
+
     idle-composer := VerticalLayout {
         // 100% width for proper text wrapping in children
         width: 100%;
-        padding-top: root.accessory-inset;
         opacity: min(1, max(0, 1 - root.recording-reveal));
 
-        if root.is-editing: HorizontalLayout {
-            padding-left: root.row-padding;
-            padding-right: root.row-padding;
+        // Edit mode indicator bar
+        if root.is-editing: ComposerEditBar {
+            width: 100%;
             height: root.edit-bar-height;
-            ComposerEditBar {
-                cancel-edit => { root.reset-composition(); root.cancel-edit(); }
-            }
+            cancel-edit => { root.reset-composition(); root.cancel-edit(); }
         }
 
-        if root.show-formatting: HorizontalLayout {
-            padding-left: root.row-padding;
-            padding-right: root.row-padding;
+        // Formatting toolbar (toggled)
+        if root.show-formatting: ComposerFormatToolbar {
+            width: 100%;
             height: root.format-bar-height;
-            ComposerFormatToolbar {
-                apply-format(fmt) => { root.apply-format(fmt); }
-            }
+            apply-format(fmt) => { root.apply-format(fmt); }
         }
 
+        // Populated actions have compact shells with transparent space between them.
         // Absolute geometry changes neither the native input nor focus/selection.
         Rectangle {
             width: 100%;
@@ -484,6 +494,20 @@ export component MessageComposer inherits GlassSurface {
                     - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
+            // One quiet shell behind the native input; raised actions keep their slots.
+            GlassSurface {
+                x: 0px;
+                y: root.raised-toolbar-height;
+                width: parent.width;
+                height: parent.height - self.y;
+                border-radius: Spacing.radius-chrome;
+                material-level: root.material-level;
+                material-tint: Materials.chat-chrome;
+                darkening: Materials.chat-darkening;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+                visible: !root.recording-here;
+            }
             // Reply preview directly above the field, beneath the raised
             // action controls. Its own row remains reserved during the lift.
             if root.is-replying: ComposerReplyPreview {
@@ -504,7 +528,6 @@ export component MessageComposer inherits GlassSurface {
                 reply-thumbnail: root.reply-thumbnail;
                 reply-to-sender: root.reply-to-sender;
                 reply-to-preview: root.reply-to-preview;
-                opaque: false;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -527,6 +550,9 @@ export component MessageComposer inherits GlassSurface {
                 show-attachment-action: root.show-attachment-action;
                 disabled: root.disabled;
                 pending-attachments: root.pending-attachments;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
                 remove-attachment(id) => { root.remove-attachment(id); }
                 attachment-clicked => { root.attachment-clicked(); }
             }
@@ -535,12 +561,18 @@ export component MessageComposer inherits GlassSurface {
             // shared plain HeaderButton at the 48px touch box on every
             // platform; the glyph keeps the composer's 20px.
             HeaderButton {
-                x: root.row-padding;
+                x: root.row-padding * (1 - root.lift-layout);
                 y: parent.action-y;
                 height: Spacing.touch-target-min;
                 touch: true;
                 plain: true;
                 glyph: 20px;
+                // Above the shell, an opaque neutral plate keeps media out of
+                // the glyph. Inline controls share the shell, so the plate
+                // fades with the travel: held opaque until the row landed, it
+                // showed as a grey disc inside the shell on the way down.
+                background: Colors.surface.with-alpha(root.lift-layout);
+                border-radius: self.height / 2;
                 enabled: !root.disabled;
                 // On a phone the open drawer stands where the keyboard was, so
                 // the button offers the keyboard back; a desktop window has no
@@ -564,9 +596,13 @@ export component MessageComposer inherits GlassSurface {
                     - (root.lift-layout * root.lower-terminal-width
                         + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width + Spacing.xs));
                 height: root.content-height;
+                // Share the shell surface rather than nesting a second bright pill.
                 // The native TextInput stays mounted while controls lift and settle.
-                background: Colors.surface-control;
-                border-radius: Spacing.radius-control;
+                background: transparent;
+                // Concentric with the shell: radius-chrome − chrome-inset.
+                border-radius: Spacing.radius-chrome-inner;
+                // The glass shell supplies the resting silhouette. Keep a
+                // physical-pixel focus cue without a second permanent rim.
                 border-width: text-input.has-focus ? 1phx : 0px;
                 border-color: Colors.primary;
                 opacity: root.disabled ? 0.5 : 1.0;
@@ -709,13 +745,15 @@ export component MessageComposer inherits GlassSurface {
             // Noise-sealed, and core refuses a directed file for exactly that
             // reason. Hidden while editing: an edit changes text only.
             if root.show-attachment-action: HeaderButton {
-                x: parent.width - root.row-padding - Spacing.touch-target-min
+                x: parent.width - root.row-padding * (1 - root.lift-layout) - Spacing.touch-target-min
                     - (1 - root.lift-layout) * root.inline-terminal-width;
                 y: parent.action-y;
                 height: Spacing.touch-target-min;
                 touch: true;
                 plain: true;
                 glyph: 20px;
+                background: Colors.surface.with-alpha(root.lift-layout);
+                border-radius: self.height / 2;
                 enabled: !root.disabled;
                 icon: Icons.paperclip;
                 label: @tr("Attach file");
@@ -724,37 +762,83 @@ export component MessageComposer inherits GlassSurface {
 
             // Tap starts recording. The recording bar owns Cancel and Send;
             // lifting a finger never sends or discards the voice note.
-            if !root.is-editing && MeshGlobal.active-id == "": HeaderButton {
+            if !root.is-editing && MeshGlobal.active-id == "": Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
+                // Stay beside the field while the attachment control changes rows.
                 y: parent.lower-action-y;
-                opacity: root.raised-actions && !root.can-send ? 1
-                    : min(1, max(0, (0.4 - root.lift-layout) / 0.4));
-                touch: true;
-                plain: true;
-                glyph: 20px;
-                enabled: !root.disabled && !root.can-send;
-                icon: Icons.mic;
-                label: @tr("Record voice message");
-                clicked => { root.start-recording(); }
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                // On the fall, wait for Send to vanish before revealing the mic.
+                opacity: (root.raised-actions && !root.can-send ? 1
+                    : min(1, max(0, (0.4 - root.lift-layout) / 0.4)))
+                    * (root.disabled ? 0.5 : 1);
+                accessible-role: button;
+                accessible-label: @tr("Record voice message");
+                accessible-enabled: !root.disabled && !root.can-send;
+                accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); } }
+                KeyFocus { enabled: !root.disabled && !root.can-send; border-radius: self.height / 2; activate => { root.start-recording(); } }
+                Image {
+                    source: Icons.mic;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-secondary;
+                }
+                TouchArea {
+                    enabled: !root.disabled && !root.can-send;
+                    clicked => { root.start-recording(); }
+                }
             }
 
             // Send stays at the normal bottom action position beside the native field.
-            if root.can-send || (!root.raised-actions && root.lift-layout > 0): IconAction {
+            if root.can-send || (!root.raised-actions && root.lift-layout > 0): Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
                 y: parent.lower-action-y;
-                active: true;
-                icon: Icons.send;
-                label: @tr("Send message");
-                enabled: !root.disabled && root.can-send && !root.recording-here;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
+                // Circular, like the emoji/attach/mic buttons it shares the row with.
+                border-radius: self.height / 2;
                 // The two glyphs share a landing slot. Leave a small blank beat
                 // between them instead of painting both at half alpha.
-                opacity: min(1, max(0, (root.lift-layout - 0.45) / 0.55));
-                clicked => {
+                opacity: min(1, max(0, (root.lift-layout - 0.45) / 0.55))
+                    * (root.disabled ? 0.5 : 1);
+                accessible-role: button;
+                accessible-label: @tr("Send message");
+                accessible-action-default => {
                     if (root.is-editing) {
                         root.send-edit(root.edit-message-id, root.outgoing-text);
                         root.reset-after-send();
                     } else {
                         if root.send(root.outgoing-text) { root.reset-after-send(); }
+                    }
+                }
+
+                // SVG, not a glyph: "\u{27A4}" has no coverage in the Android
+                // system font and rendered as a tofu box on device.
+                // 20px, matching the emoji and attach glyphs beside it — at 18px
+                // it was the smallest icon in the row while sitting in the only
+                // filled button, which read as a mismatch rather than a hierarchy.
+                Image {
+                    source: Icons.send;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.on-action;
+                }
+
+                send-touch := TouchArea {
+                    enabled: !root.disabled && root.can-send && !root.recording-here;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.is-editing) {
+                            root.send-edit(root.edit-message-id, root.outgoing-text);
+                            root.reset-after-send();
+                        } else {
+                            if root.send(root.outgoing-text) { root.reset-after-send(); }
+                        }
                     }
                 }
             }
@@ -772,6 +856,8 @@ export component MessageComposer inherits GlassSurface {
         height: parent.height;
         recording-reveal: root.recording-reveal;
         row-padding: root.row-padding;
+        surface-material-level: root.material-level;
+        surface-elevation: root.elevation;
         surface-backdrop-paused: root.backdrop-paused;
     }
 
