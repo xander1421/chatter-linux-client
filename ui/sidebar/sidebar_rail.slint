@@ -17,31 +17,6 @@ component RailSurface inherits GlassSurface {
     material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
 }
 
-component RailButton inherits RailSurface {
-    in property <image> icon;
-    in property <string> label;
-    in property <bool> touch;
-    in property <bool> accent;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    if root.accent: Rectangle {
-        border-radius: parent.border-radius;
-        background: Colors.tint-strong;
-    }
-    HeaderButton {
-        width: root.width;
-        height: root.height;
-        icon: root.icon;
-        label: root.label;
-        touch: root.touch;
-        active: root.accent;
-        enabled: root.enabled;
-        plain: true;
-        clicked => { root.clicked(); }
-    }
-}
-
 component RailItem inherits Rectangle {
     in property <string> label;
     in property <string> emoji;
@@ -265,22 +240,36 @@ export component SidebarRail inherits Rectangle {
         padding-bottom: root.bottom-inset;
         spacing: Spacing.panel-gutter;
 
-        RailButton {
+        RailSurface {
             height: root.action-height;
-            icon: Icons.search;
-            label: @tr("Search");
-            touch: root.touch;
             opacity: root.search-overlay-open ? 0 : 1;
-            enabled: !root.search-overlay-open;
-            clicked => { root.search(); }
+            HeaderButton {
+                width: parent.width;
+                height: parent.height;
+                icon: Icons.search;
+                label: @tr("Search");
+                touch: root.touch;
+                enabled: !root.search-overlay-open;
+                plain: true;
+                clicked => { root.search(); }
+            }
         }
-        RailButton {
+        RailSurface {
             height: root.action-height;
-            icon: Icons.plus;
-            accent: true;
-            label: @tr("Create");
-            touch: root.touch;
-            clicked => { root.create(); }
+            Rectangle {
+                border-radius: parent.border-radius;
+                background: Colors.tint-strong;
+            }
+            HeaderButton {
+                width: parent.width;
+                height: parent.height;
+                icon: Icons.plus;
+                label: @tr("Create");
+                touch: root.touch;
+                active: true;
+                plain: true;
+                clicked => { root.create(); }
+            }
         }
         scroll := Flickable {
             vertical-stretch: 1;
@@ -345,12 +334,17 @@ export component SidebarRail inherits Rectangle {
                 return reject;
             }
         }
-        RailButton {
+        RailSurface {
             height: root.action-height;
-            icon: Icons.chevron-right;
-            label: @tr("Expand sidebar");
-            touch: root.touch;
-            clicked => { root.expand(); }
+            HeaderButton {
+                width: parent.width;
+                height: parent.height;
+                icon: Icons.chevron-right;
+                label: @tr("Expand sidebar");
+                touch: root.touch;
+                plain: true;
+                clicked => { root.expand(); }
+            }
         }
     }
 
