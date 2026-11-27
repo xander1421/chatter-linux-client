@@ -6086,7 +6086,6 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
     let recording = include_str!("../../../ui/chat/composer_recording_panel.slint");
     for (src, marker, binding) in [
         (composer, "GlassSurface {", "backdrop-paused: root.backdrop-paused;"),
-        (composer, "ComposerReplyPreview {", "backdrop-paused: root.backdrop-paused;"),
         (composer, "ComposerAttachmentStrip {", "backdrop-paused: root.backdrop-paused;"),
         (composer, "ComposerRecordingPanel {", "surface-backdrop-paused: root.backdrop-paused;"),
         (recording, "GlassSurface {", "backdrop-paused: root.surface-backdrop-paused;"),

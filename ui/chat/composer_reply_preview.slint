@@ -1,76 +1,34 @@
 import { HeaderButton } from "../components/header_button.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
-import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
-import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { MessageQuote } from "message_quote.slint";
 
-// Reply preview directly above the field, beneath the raised
-// action circles. Its own row remains reserved during the lift.
-export component ComposerReplyPreview inherits GlassSurface {
+export component ComposerReplyPreview inherits Rectangle {
     in property <length> row-padding;
-    in property <length> action-shell-height;
-    in property <length> attachment-band-height;
-    in property <length> raised-toolbar-height;
-    in property <length> reply-row-height;
     in property <float> reply-reveal;
-    in property <bool> has-attachments;
     in property <bool> reply-has-thumbnail;
     in property <image> reply-thumbnail;
     in property <string> reply-to-sender;
     in property <string> reply-to-preview;
     callback cancel-reply();
+
     opacity: min(1, max(0, root.reply-reveal));
-    border-radius: Spacing.radius-control;
     clip: true;
-    material-enabled: false;
-    background: transparent;
-    border-width: 1px;
-    border-color: Colors.border;
 
     HorizontalLayout {
-        padding-left: Spacing.sm;
         padding-right: root.row-padding;
         spacing: Spacing.sm;
 
-        // Thumbnail preview for image replies
-        if root.reply-has-thumbnail: VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: 36px;
-                height: 36px;
-                border-radius: Spacing.radius-sm;
-                clip: true;
-                background: Colors.surface-hover;
-
-                Image {
-                    width: 100%;
-                    height: 100%;
-                    source: root.reply-thumbnail;
-                    image-fit: cover;
-                }
-            }
-        }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: Spacing.xxs;
-
-            Text {
-                text: @tr("Reply to {}", root.reply-to-sender);
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                font-weight: Typography.semibold;
-                overflow: elide;
-            }
-
-            Text {
-                text: root.reply-to-preview;
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                overflow: elide;
-            }
+        MessageQuote {
+            border-radius: Spacing.radius-chrome-inner;
+            reply-to-sender-name: @tr("Reply to {}", root.reply-to-sender);
+            reply-to-preview: root.reply-to-preview;
+            reply-to-has-thumbnail: root.reply-has-thumbnail;
+            reply-to-thumbnail: root.reply-thumbnail;
+            reply-to-thumbnail-width: 1;
+            reply-to-thumbnail-height: 1;
+            thumbnail-max-height: 36px;
+            thumbnail-max-width: 36px;
         }
 
         HeaderButton {

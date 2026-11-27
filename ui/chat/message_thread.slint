@@ -1,3 +1,4 @@
+import { ActivityGlobal } from "../activity/activity_global.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -9,20 +10,17 @@ export component MessageThreadIndicator inherits HorizontalLayout {
     in property <string> reply-count-text;
     callback thread-clicked(string);
 
-    spacing: Spacing.sm;
-    alignment: root.is-own ? end : start;
-    padding-left: Spacing.xs;
-    padding-right: Spacing.xs;
+    private property <bool> unread: ActivityGlobal.is-thread-unread(ActivityGlobal.unread-thread-roots, root.message-id);
+    private property <brush> label-color: root.unread ? Colors.primary : Colors.text-secondary;
 
-    // Pill button (not bare text) so the thread entry point
-    // reads as clickable.
+    alignment: root.is-own ? end : start;
     Rectangle {
-        height: Spacing.button-height;
-        width: thread-layout.preferred-width + Spacing.sm * 2;
-        border-radius: self.height / 2;
-        background: thread-touch.has-hover
-            ? Colors.primary.transparentize(0.75)
-            : Colors.primary.transparentize(0.9);
+        height: max(24px, thread-layout.preferred-height);
+        width: thread-layout.preferred-width;
+        border-radius: Spacing.radius-full;
+        border-width: 1px;
+        border-color: Colors.border;
+        background: thread-touch.has-hover || thread-touch.pressed ? Colors.surface-control : transparent;
         accessible-role: button;
         accessible-label: @tr("Open thread: {}", root.reply-count-text);
         accessible-action-default => { root.thread-clicked(root.message-id); }
@@ -30,7 +28,9 @@ export component MessageThreadIndicator inherits HorizontalLayout {
         thread-layout := HorizontalLayout {
             height: parent.height;
             spacing: Spacing.xs;
+            padding: Spacing.xxs;
             padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
             alignment: center;
 
             // A y on a layout child fights the layout; centre
@@ -41,13 +41,13 @@ export component MessageThreadIndicator inherits HorizontalLayout {
                     width: 12px;
                     height: 12px;
                     source: Icons.message-circle;
-                    colorize: Colors.primary;
+                    colorize: root.label-color;
                 }
             }
 
             Text {
                 text: root.reply-count-text;
-                color: Colors.primary;
+                color: root.label-color;
                 font-size: Typography.xs;
                 vertical-alignment: center;
             }

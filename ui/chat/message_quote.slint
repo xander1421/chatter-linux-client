@@ -24,15 +24,26 @@ export component MessageQuote inherits Rectangle {
     in property <int> reply-to-thumbnail-height;
     in property <int> reply-to-thumbnail-width;
     in property <[int]> reply-to-waveform;
-    in property <length> text-max-width;
+    in property <length> content-max-width;
+    in property <length> thumbnail-max-height: 60px;
+    in property <length> thumbnail-max-width: 96px;
+    private property <bool> can-jump: !root.reply-to-not-found && root.reply-to-message-id != "";
     callback quote-clicked(string);
     callback open-other-attachment(string);
     callback audio-seek(string, float);
 
-    background: Colors.bubble-inset;
-    border-radius: Spacing.radius-control;
-    max-width: root.text-max-width;
-    height: quote-row.preferred-height + Spacing.xs;
+    background: transparent;
+    clip: true;
+    min-width: 0px;
+    preferred-width: min(quote-row.preferred-width, root.content-max-width);
+    preferred-height: quote-row.preferred-height;
+    horizontal-stretch: 1;
+
+    Rectangle {
+        width: 2px;
+        height: parent.height;
+        background: Colors.border;
+    }
 
     // Tap the quote to jump to the original message.
     // Suppressed when the parent is gone/unknown.
@@ -42,29 +53,17 @@ export component MessageQuote inherits Rectangle {
     // TouchAreas (inside quote-row, above this) consume
     // their own clicks, while taps on text/thumbnail —
     // which carry no TouchArea — fall through here to jump.
-    quote-touch := TouchArea {
+    if root.can-jump: TouchArea {
         accessible-role: button;
         accessible-label: @tr("Go to quoted message from {}", root.reply-to-sender-name);
-        accessible-enabled: !root.reply-to-not-found && root.reply-to-message-id != "";
-        accessible-action-default => {
-            if (!root.reply-to-not-found && root.reply-to-message-id != "") {
-                root.quote-clicked(root.reply-to-message-id);
-            }
-        }
-        mouse-cursor: (root.reply-to-not-found || root.reply-to-message-id == "") ? default : pointer;
-        clicked => {
-            if (!root.reply-to-not-found && root.reply-to-message-id != "") {
-                root.quote-clicked(root.reply-to-message-id);
-            }
-        }
+        accessible-action-default => { root.quote-clicked(root.reply-to-message-id); }
+        mouse-cursor: pointer;
+        clicked => { root.quote-clicked(root.reply-to-message-id); }
     }
 
-    // Compact Signal/Telegram-style quote: small media
-    // thumbnail on the LEFT, sender + label/player filling
-    // the right. A thin strip — no big block that leaves a
-    // wasted L-shape when the reply body is wide.
     quote-row := HorizontalLayout {
         padding: Spacing.xs;
+        padding-left: Spacing.sm + 2px;
         spacing: Spacing.sm;
         alignment: stretch;
 
@@ -75,9 +74,7 @@ export component MessageQuote inherits Rectangle {
             property <float> aspect: root.reply-to-thumbnail-width > 0 && root.reply-to-thumbnail-height > 0
                 ? root.reply-to-thumbnail-width / root.reply-to-thumbnail-height
                 : 1.4;
-            property <length> max-h: 60px;
-            property <length> max-w: 96px;
-            height: min(self.max-h, self.max-w / self.aspect);
+            height: min(root.thumbnail-max-height, root.thumbnail-max-width / self.aspect);
             width: self.height * self.aspect;
             border-radius: 4px;
             clip: true;
@@ -131,7 +128,7 @@ export component MessageQuote inherits Rectangle {
         // Right column — sender name + label/player, fills
         // the width beside the thumbnail (no empty gap).
         VerticalLayout {
-            spacing: Spacing.xs;
+            spacing: Spacing.xxs;
             horizontal-stretch: 1;
             alignment: center;
 
@@ -150,7 +147,7 @@ export component MessageQuote inherits Rectangle {
             if root.reply-to-category == "audio": AudioPlayer {
                 mobile: root.mobile;
                 compact: true;
-                content-max-width: max(0px, root.text-max-width - 2 * Spacing.xs);
+                content-max-width: max(0px, root.content-max-width - quote-row.padding-left - quote-row.padding-right);
                 attachment-id: root.reply-to-attachment-id;
                 filename: root.reply-to-filename;
                 waveform: root.reply-to-waveform;
@@ -168,6 +165,7 @@ export component MessageQuote inherits Rectangle {
             // right of the thumbnail. Guard the empty edge so
             // the quote is never just a bare sender name.
             if root.reply-to-category != "audio": Text {
+                wrap: no-wrap;
                 text: root.reply-to-preview != ""
                     ? root.reply-to-preview
                     : (root.reply-to-category != "" ? @tr("📎 Attachment") : @tr("message preview" => "Message"));
@@ -188,7 +186,7 @@ export component MessageQuote inherits Rectangle {
     }
 
     KeyFocus {
-        enabled: !root.reply-to-not-found && root.reply-to-message-id != "";
+        enabled: root.can-jump;
         border-radius: root.border-radius;
         activate => { root.quote-clicked(root.reply-to-message-id); }
     }

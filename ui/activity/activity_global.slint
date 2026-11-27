@@ -9,6 +9,8 @@ export struct ActivityItemData {
 }
 export global ActivityGlobal {
     in-out property <[ActivityItemData]> items: [];
+    in-out property <[string]> unread-thread-roots: [];
+    pure callback is-thread-unread([string], string) -> bool;
     in-out property <bool> loading: true;
     in-out property <bool> read-error: false;
     in-out property <int> unread-count: 0;
