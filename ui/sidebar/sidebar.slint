@@ -71,6 +71,7 @@ export component Sidebar inherits Rectangle {
         if row.kind == "calls" { return @tr("Calls"); }
         if row.kind == "requests" { return @tr("Requests"); }
         if row.kind == "search" { return @tr("Search"); }
+        if row.kind == "channel-actions" { return @tr("Create"); }
         if row.kind == "archive-entry" { return @tr("Archived chats"); }
         if row.kind == "archive-back" { return @tr("Back to chats"); }
         return row.kind;
@@ -85,6 +86,10 @@ export component Sidebar inherits Rectangle {
 
     // ── Properties: State ──
     in-out property <bool> collapsed: false;
+    property <bool> desktop-rail: root.collapsed && !root.touch;
+    changed desktop-rail => {
+        if (sidebar-keys.has-focus) { root.focus-step(-2); }
+    }
     in-out property <bool> hidden: false;
     // The overlay animates from this row; the row stays in layout but its
     // glass and label recede while the one native search input takes over.
@@ -159,10 +164,11 @@ export component Sidebar inherits Rectangle {
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
     callback focus-composer();
-    callback focus-target(int, int, bool, bool, bool) -> int;
+    callback focus-target(int, int, bool, bool, bool, bool) -> int;
     function focus-step(move-by: int) {
         root.focus-index = root.focus-target(root.focus-index, move-by,
-            root.mobile-mode || (root.collapsed && root.touch), AnonMode.enabled, root.total-pending-requests > 0);
+            root.mobile-mode || (root.collapsed && root.touch), AnonMode.enabled,
+            root.total-pending-requests > 0, root.desktop-rail);
         if (move-by == -2) {
             central-scroll.viewport-y = 0px;
         } else if (move-by == 2) {
@@ -175,6 +181,11 @@ export component Sidebar inherits Rectangle {
     function open-focused() {
         if (root.focus-index < 0 || root.focus-index >= root.flat-rows.length) { return; }
         let entry = root.flat-rows[root.focus-index];
+        if (root.desktop-rail) {
+            if (entry.kind == "search") { root.search-clicked(); return; }
+            if (entry.kind == "channel-actions") { root.create-clicked(); return; }
+            if (entry.kind != "chat" && entry.kind != "section-chat" && entry.kind != "archived-chat") { return; }
+        }
         if (entry.kind == "saved") { root.saved-messages-clicked(); }
         else if (entry.kind == "friends") { root.friends-clicked(); }
         else if (entry.kind == "calls") { root.calls-clicked(); }
@@ -278,18 +289,17 @@ export component Sidebar inherits Rectangle {
     property <length> rail-slot-size: DesktopChrome.macos ? 36px : 44px;
     property <length> rail-gap: DesktopChrome.macos ? DesktopChrome.rail-gap : Spacing.sm;
     property <length> rail-divider-height: DesktopChrome.macos ? 8px : Spacing.md;
-    property <length> rail-footer-height: DesktopChrome.macos
+    property <length> rail-footer-height: root.desktop-rail ? root.rail-icon-size + Spacing.sm
+        : DesktopChrome.macos
         ? root.rail-button-count * root.rail-icon-size + root.rail-button-count * root.rail-gap
             + root.rail-divider-height + Spacing.sm
         : root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm
             + Spacing.lg + Spacing.md + Spacing.sm;
     property <length> rail-slot-radius: Spacing.radius-lg;
     property <brush> rail-slot-bg: DesktopChrome.macos ? transparent : Colors.surface-control;
-    // Activity, profile, Settings; touch adds the Shield and expand. AI and
-    // Mesh when enabled. Every slot the footer draws must be counted here,
-    // or the profile avatar hangs off the bottom.
-    property <int> rail-button-count: (root.touch ? 5 : 3) + (MeshGlobal.enabled ? 1 : 0)
-        + (JarvisGlobal.enabled && JarvisGlobal.opted-in ? 1 : 0);
+    // The desktop rail has a single footer control. Touch retains its cluster.
+    property <int> rail-button-count: root.touch ? 5 + (MeshGlobal.enabled ? 1 : 0)
+        + (JarvisGlobal.enabled && JarvisGlobal.opted-in ? 1 : 0) : 1;
 
     // ── Sizing ──
     // Always a side panel, on every platform: collapsed to the icon rail or
@@ -356,7 +366,7 @@ export component Sidebar inherits Rectangle {
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
         central-scroll := ListView {
-            visible: root.active-tab != "mesh";
+            visible: root.active-tab != "mesh" || root.desktop-rail;
             width: root.width;
             height: root.height;
             immediate-child-press: true;
@@ -389,7 +399,7 @@ export component Sidebar inherits Rectangle {
                         : (root.collapsed ? root.rail-footer-height : Spacing.button-height)
                             + Spacing.md)
                     : Spacing.none;
-                if entry.kind == "archive-entry" || entry.kind == "archive-back": Rectangle {
+                if !root.desktop-rail && (entry.kind == "archive-entry" || entry.kind == "archive-back"): Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
                     accessible-label: entry.kind == "archive-back" ? @tr("Back to chats") : @tr("Archived chats");
@@ -442,15 +452,17 @@ export component Sidebar inherits Rectangle {
                         clicked => { root.archive-view-changed(entry.kind == "archive-entry"); }
                     }
                 }
-                if entry.kind == "archive-empty": Text {
+                if entry.kind == "archive-empty" && !root.desktop-rail: Text {
                     text: @tr("No archived chats");
                     color: Colors.text-muted;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
                     height: root.quick-link-height;
                 }
-                if entry.kind == "search" && root.collapsed: Rectangle {
+                if entry.kind == "search" && root.collapsed && (!SidebarPane.archive-open || root.desktop-rail): Rectangle {
                     height: root.quick-link-height;
+                    border-width: parent.roving-highlight ? 2px : 0px;
+                    border-color: Colors.focus-ring;
                     opacity: root.search-overlay-open ? 0 : 1;
                     animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
                     accessible-role: button;
@@ -465,7 +477,7 @@ export component Sidebar inherits Rectangle {
                 }
 
 
-                if entry.kind == "saved" && !AnonMode.enabled: Rectangle {
+                if entry.kind == "saved" && !root.desktop-rail && !AnonMode.enabled: Rectangle {
                     height: root.show-saved-preview
                         ? (root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs
                         : root.quick-link-height;
@@ -604,13 +616,13 @@ export component Sidebar inherits Rectangle {
                 // is the duplication that made the phone layout read as two
                 // navigation systems at once.
 
-                if entry.kind == "friends" && !root.mobile-mode && (!root.collapsed || !root.touch): Rectangle {
+                if entry.kind == "friends" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
                     Rectangle {
-                        x: root.collapsed ? 0px : Spacing.xs;
+                        x: Spacing.xs;
                         width: parent.width - 2 * self.x;
                         height: parent.height;
-                        border-radius: root.collapsed ? 0px : Spacing.radius-md;
+                        border-radius: Spacing.radius-md;
                         background: friends-touch.pressed ? Colors.surface-control-hover
                             : friends-touch.has-hover ? Colors.surface-hover : transparent;
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
@@ -620,17 +632,12 @@ export component Sidebar inherits Rectangle {
                     accessible-action-default => { root.friends-clicked(); }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
-                    if !root.collapsed: HorizontalLayout {
+                    HorizontalLayout {
                         padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
                         Text { text: AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                    }
-                    if root.collapsed: TooltipArea {
-                        width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: AnonMode.enabled ? @tr("Add contact") : @tr("Friends"); tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
                 }
@@ -640,13 +647,13 @@ export component Sidebar inherits Rectangle {
                 // Friends); on a two-pane tablet or desktop there is no tab
                 // bar, and this row is the only way in.
 
-                if entry.kind == "calls" && !root.mobile-mode && (!root.collapsed || !root.touch): Rectangle {
+                if entry.kind == "calls" && !root.mobile-mode && !root.collapsed: Rectangle {
                     height: root.quick-link-height;
                     Rectangle {
-                        x: root.collapsed ? 0px : Spacing.xs;
+                        x: Spacing.xs;
                         width: parent.width - 2 * self.x;
                         height: parent.height;
-                        border-radius: root.collapsed ? 0px : Spacing.radius-md;
+                        border-radius: Spacing.radius-md;
                         background: calls-touch.pressed ? Colors.surface-control-hover
                             : calls-touch.has-hover ? Colors.surface-hover : transparent;
                         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
@@ -656,7 +663,7 @@ export component Sidebar inherits Rectangle {
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
                     accessible-action-default => { root.calls-clicked(); }
-                    if !root.collapsed: HorizontalLayout {
+                    HorizontalLayout {
                         padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: Icons.phone; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
@@ -681,20 +688,6 @@ export component Sidebar inherits Rectangle {
                             }
                         }
                     }
-                    if root.collapsed: TooltipArea {
-                        width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: @tr("Calls"); tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
-                            width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
-                            Image { source: Icons.phone; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 20px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                            if root.missed-call-count > 0: Rectangle {
-                                x: parent.width - 8px; y: -2px;
-                                width: 12px; height: 12px; border-radius: 6px;
-                                border-width: 1px; border-color: Colors.surface;
-                                background: Colors.error;
-                            }
-                        } } }
-                    }
                     calls-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calls-clicked(); } }
                 }
 
@@ -713,7 +706,7 @@ export component Sidebar inherits Rectangle {
                 // tab (requests-sub-tab: received/sent/private/groups/
                 // channels) — nothing lost, just not all surfaced at once.
 
-                if entry.kind == "requests" && root.total-pending-requests > 0: Rectangle {
+                if entry.kind == "requests" && !root.desktop-rail && root.total-pending-requests > 0: Rectangle {
                     height: root.quick-link-height;
                     accessible-role: list-item;
                     accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
@@ -796,25 +789,28 @@ export component Sidebar inherits Rectangle {
                 // newer activity never rose above a DM; creating a chat or a
                 // channel lives in the top row's Create menu (and the phone's
                 // floating button), not in per-block headers.
-                // Collapsed channel-action rail: new-channel / new-section.
+                // The collapsed rail keeps the create action within reach.
 
-                if entry.kind == "channel-actions" && root.collapsed && !AnonMode.enabled: VerticalLayout {
+                if entry.kind == "channel-actions" && root.collapsed
+                    && (root.desktop-rail || (!SidebarPane.archive-open && !AnonMode.enabled)): VerticalLayout {
                     spacing: Spacing.xs;
                     padding-top: DesktopChrome.macos ? 0px : Spacing.xs;
                     padding-bottom: DesktopChrome.macos ? 0px : Spacing.xs;
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: @tr("New channel"); tooltip-enabled: true; placement: "right";
+                        tooltip-text: root.desktop-rail ? @tr("Create") : @tr("New channel"); tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-new-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
+                            border-width: root.desktop-rail && sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx ? 2px : 0px;
+                            border-color: Colors.focus-ring;
                             accessible-role: button;
-                            accessible-label: @tr("New channel");
-                            accessible-action-default => { root.create-channel-clicked(); }
+                            accessible-label: root.desktop-rail ? @tr("Create") : @tr("New channel");
+                            accessible-action-default => { if root.desktop-rail { root.create-clicked(); } else { root.create-channel-clicked(); } }
                             Image { source: Icons.plus; width: DesktopChrome.macos ? DesktopChrome.rail-glyph : 16px; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-new-touch.has-hover ? Colors.text-primary : DesktopChrome.macos ? Colors.text-secondary : Colors.text-muted; }
-                            c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-channel-clicked(); } }
+                            c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { if root.desktop-rail { root.create-clicked(); } else { root.create-channel-clicked(); } } }
                         } }
                     }
 
@@ -891,7 +887,7 @@ export component Sidebar inherits Rectangle {
                         }
                     }
                 }
-                if entry.kind == "section-header": CustomSectionHeader {
+                if entry.kind == "section-header" && !root.desktop-rail: CustomSectionHeader {
                     keyboard-highlight: parent.roving-highlight;
                     section-id: entry.section.section-id;
                     name: entry.section.name;
@@ -941,7 +937,7 @@ export component Sidebar inherits Rectangle {
                 }
             }
         }
-        if root.active-tab == "mesh" && MeshGlobal.enabled: Flickable {
+        if root.active-tab == "mesh" && MeshGlobal.enabled && !root.desktop-rail: Flickable {
             width: root.width;
             height: root.height;
             viewport-height: mesh-content.preferred-height;
@@ -985,7 +981,7 @@ export component Sidebar inherits Rectangle {
             width: 1px;
             height: 1px;
             focus-on-click: false;
-            enabled: !root.touch && root.active-tab == "chats" && !root.hidden;
+            enabled: !root.touch && (root.active-tab == "chats" || root.desktop-rail) && !root.hidden;
             changed has-focus => { if (self.has-focus) { root.focus-step(-2); } }
             accessible-role: list;
             accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0

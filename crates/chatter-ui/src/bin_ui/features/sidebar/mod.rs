@@ -185,6 +185,8 @@ pub(crate) fn refresh_flat_rows(window: &MainWindow) {
     };
     if pane.get_archive_open() {
         rows.clear();
+        rows.push(empty("search"));
+        rows.push(empty("channel-actions"));
         rows.push(empty("archive-back"));
         for chat in archived.iter() {
             rows.push(crate::SidebarRowData {
@@ -278,16 +280,18 @@ fn settle_arrivals(
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let focus_window = window.as_weak();
-    window.global::<crate::SidebarPane>().on_sidebar_focus_target(move |current, move_by, mobile, shield, requests| {
+    window.global::<crate::SidebarPane>().on_sidebar_focus_target(move |current, move_by, mobile, shield, requests, desktop_rail| {
         use slint::Model;
         let Some(window) = focus_window.upgrade() else { return current; };
         let rows = window.global::<crate::SidebarPane>().get_flat_rows();
         let visible: Vec<_> = (0..rows.row_count()).filter(|&index| {
             rows.row_data(index).is_some_and(|row| match row.kind.as_str() {
-                "saved" => !shield,
-                "friends" | "calls" => !mobile,
-                "requests" => requests,
-                "chat" | "section-chat" | "archived-chat" | "archive-entry" | "archive-back" | "section-header" => true,
+                "search" | "channel-actions" => desktop_rail,
+                "saved" => !shield && !desktop_rail,
+                "friends" | "calls" => !mobile && !desktop_rail,
+                "requests" => requests && !desktop_rail,
+                "chat" | "section-chat" | "archived-chat" => true,
+                "archive-entry" | "archive-back" | "section-header" => !desktop_rail,
                 _ => false,
             })
         }).collect();
