@@ -18,7 +18,11 @@
 //!    sharing or re-uploading under the old one;
 //! 5. the server UAK moves to the new key;
 //! 6. our profile is re-encrypted and re-uploaded under it;
-//! 7. the pending flag clears and sharing resumes, per the new setting.
+//! 7. the pending flag clears and sharing resumes, per the new setting;
+//! 8. every accepted friend gets the new key in a sealed profile-key
+//!    handshake ([`policy::key_rotation_recipients`]), whatever the setting:
+//!    it is also their UAK for us, so without it they could no longer reach
+//!    us sealed. Under "nobody" the profile they could open is empty.
 //!
 //! Steps 4-6 are idempotent and re-run by [`ChatterClient::finish_profile_key_rotation`]
 //! at every `start()` until they all succeed.
@@ -69,6 +73,12 @@ impl ChatterClient {
             if visibility != current {
                 visibility.store(settings).map_err(storage)?;
                 self.sync_profile_key_to_own_devices().await;
+                // Leaving "nobody": friends already hold the key, the server
+                // profile was empty; upload the real one (the server pushes
+                // it to them).
+                if current == ProfileVisibility::Nobody {
+                    self.reupload_own_profile().await?;
+                }
             }
             return Ok(());
         }
@@ -197,7 +207,26 @@ impl ChatterClient {
 
         policy::clear_rotation_pending(settings).map_err(storage)?;
         tracing::info!("profile key rotation finished");
+        self.push_rotated_key_to_friends();
         Ok(())
+    }
+
+    /// Send every accepted friend our new key (step 8). In the background:
+    /// each handshake retries with backoff on its own
+    /// (`send_profile_key_handshake`), sealed under the friend's UAK, or over
+    /// the Shield mailbox when Shield is on.
+    fn push_rotated_key_to_friends(&self) {
+        let messages = std::sync::Arc::clone(self.messages());
+        let friends = policy::key_rotation_recipients(&messages.settings_repo, &messages.user_repo);
+        tracing::info!(friends = friends.len(), "sending the rotated profile key to friends");
+        for friend in friends {
+            let messages = std::sync::Arc::clone(&messages);
+            self.services.runtime_handle.spawn(async move {
+                if let Err(error) = messages.send_profile_key_handshake(&friend).await {
+                    tracing::warn!(%friend, %error, "rotated profile key not delivered to friend");
+                }
+            });
+        }
     }
 
     /// Tell our other devices the current key and setting. Best effort, like
