@@ -386,12 +386,12 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
             let (weak, client) = (weak.clone(), client.clone());
             tokio::spawn(async move {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                let picked = chatter_core::media::FilePicker::pick_file(
+                let picked = crate::bin_ui::ui_helpers::picker_or_cancel(&weak, chatter_core::media::FilePicker::pick_file(
                     chatter_core::media::FilePickerConfig::new()
                         .with_title(chatter_i18n::tr("Select profile picture"))
                         .with_filter(chatter_core::media::FileFilter::images()),
                 )
-                .await;
+                .await);
                 #[cfg(target_os = "android")]
                 let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
                     .await

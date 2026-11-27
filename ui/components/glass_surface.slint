@@ -53,16 +53,19 @@ component GlassMaterial inherits Rectangle {
         border-radius: root.border-radius;
         background: Materials.opaque;
     }
-    // SLINT1 builtin integration is intentionally confined to this one element.
-    if root.material-enabled: Backdrop {
+    if root.material-enabled && !Appearance.glass-effects: Rectangle {
         border-radius: root.border-radius;
-        blur: Appearance.glass-effects ? (root.material-level == 4 ? Materials.blur-header
-            : root.material-level == 3 ? Materials.blur-thick : Materials.blur-regular) : 0px;
-        saturation: Appearance.glass-effects ? Materials.saturation : 1.0;
-        brightness: (Appearance.glass-effects && root.material-level >= 2
-            ? Materials.chrome-brightness * root.darkening : 0.0);
+        background: root.material-tint;
+    }
+    // SLINT1 builtin integration is intentionally confined to this one element.
+    if root.material-enabled && Appearance.glass-effects: Backdrop {
+        border-radius: root.border-radius;
+        blur: root.material-level == 4 ? Materials.blur-header
+            : root.material-level == 3 ? Materials.blur-thick : Materials.blur-regular;
+        saturation: Materials.saturation;
+        brightness: root.material-level >= 2 ? Materials.chrome-brightness * root.darkening : 0.0;
         // The lens and its directional rim share the same rounded outline.
-        refraction: Appearance.glass-effects && root.show-edge ? Materials.refraction : 0.0;
+        refraction: root.show-edge ? Materials.refraction : 0.0;
         Rectangle {
             border-radius: root.border-radius;
             background: root.material-tint;

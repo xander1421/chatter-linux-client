@@ -53,7 +53,7 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     let sidebar = w.global::<SidebarPane>();
     // Production sidebar wiring populates the virtualized row model. This
     // headless window only wires Back, so provide the quick-link rows here.
-    let rows: Vec<_> = ["search", "saved", "friends", "calls", "bottom"]
+    let rows: Vec<_> = ["search", "saved", "friends", "calls", "channel-actions", "bottom"]
         .into_iter()
         .map(|kind| SidebarRowData {
             key: kind.into(),
@@ -104,12 +104,14 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     drag(&w, &[240.0, 100.0]);
     width(&w, 68.0);
     assert!(sidebar.get_sidebar_user_collapsed());
-    // The desktop rail keeps its navigation; the Shield stays in the header.
-    for label in ["Profile", "Settings", "Activity", "Friends", "Calls"] {
-        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_some(),
-            "{label} should be reachable from the collapsed rail");
+    for label in ["Saved messages", "Profile", "Settings", "Activity", "Friends", "Calls", "Anon mode"] {
+        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_none(),
+            "{label} should be absent from the collapsed desktop rail");
     }
-    assert!(ElementHandle::find_by_accessible_label(&w, "Anon mode").next().is_none());
+    for label in ["Search", "Create", "Expand sidebar"] {
+        assert!(ElementHandle::find_by_accessible_label(&w, label).next().is_some(),
+            "{label} should be reachable from the collapsed desktop rail");
+    }
     // Retain the last expanded width, rather than saving the 68px rail.
     assert_eq!(sidebar.get_sidebar_preferred_width(), 240.0);
     // Keep the same pointer capture while the handle jumps from rail to list.
@@ -118,6 +120,11 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     assert!(!sidebar.get_sidebar_user_collapsed());
     size(&w, 700.0);
     width(&w, 68.0);
+    ElementHandle::find_by_accessible_label(&w, "Expand sidebar")
+        .next().unwrap().invoke_accessible_default_action();
+    settle(&w);
+    assert!(w.get_sidebar_panel_width() > 68.0);
+
     size(&w, 1100.0);
     width(&w, 300.0);
 

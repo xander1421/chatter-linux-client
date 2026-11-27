@@ -53,7 +53,7 @@ export component SidebarFooter inherits GlassSurface {
 
             // The list reservation and footer use the same stack height.
             height: root.collapsed
-                ? DesktopChrome.macos ? root.rail-footer-height
+                ? !root.touch || DesktopChrome.macos ? root.rail-footer-height
                     : root.rail-button-count * root.rail-icon-size
                         + (root.rail-button-count - 1) * 8px + 16px + Spacing.md + 8px
                 : DesktopChrome.macos ? 48px : 44px;
@@ -227,7 +227,7 @@ export component SidebarFooter inherits GlassSurface {
                 }
                 // Bottom cluster, in order: AI, Chats, Mesh, Activity, then
                 // profile, Settings, expand.
-                if JarvisGlobal.enabled && JarvisGlobal.opted-in: TooltipArea {
+                if root.touch && JarvisGlobal.enabled && JarvisGlobal.opted-in: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("AI"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -245,7 +245,7 @@ export component SidebarFooter inherits GlassSurface {
                     } }
                 }
 
-                if root.mesh-available: TooltipArea {
+                if root.touch && root.mesh-available: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("Mesh"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -265,7 +265,7 @@ export component SidebarFooter inherits GlassSurface {
                 }
 
                 // Activity, as in the expanded footer: the rail had no way in.
-                TooltipArea {
+                if root.touch: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("Activity"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -293,7 +293,7 @@ export component SidebarFooter inherits GlassSurface {
                 // in one unbroken stack read as one big undifferentiated
                 // block; a hairline plus extra breathing room lets the eye
                 // parse two small groups instead, without hiding anything.
-                Rectangle {
+                if root.touch: Rectangle {
                     height: root.rail-divider-height;
                     Rectangle {
                         y: parent.height / 2;
@@ -307,7 +307,7 @@ export component SidebarFooter inherits GlassSurface {
                 // Same order as the expanded footer (profile … settings,
                 // collapse): the chevron is last in both, so it does not jump
                 // to the middle of the cluster when the panel collapses.
-                Rectangle {
+                if root.touch: Rectangle {
                     height: root.rail-icon-size;
                     accessible-role: button; accessible-label: @tr("Profile");
                     accessible-action-default => { root.profile-clicked(); }
@@ -322,7 +322,7 @@ export component SidebarFooter inherits GlassSurface {
                         }
                     }
                 }
-                TooltipArea {
+                if root.touch: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: @tr("Settings"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: @tr("Settings");
@@ -345,7 +345,7 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }
-                if root.touch: TooltipArea {
+                TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: root.collapsed ? @tr("Expand sidebar") : @tr("Collapse sidebar"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -353,7 +353,7 @@ export component SidebarFooter inherits GlassSurface {
                         accessible-action-default => { root.toggle-collapsed(); }
                         KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
                         border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
+                        rail-expand-keys := FocusScope { width: 0px; height: 0px; enabled: root.touch;
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;

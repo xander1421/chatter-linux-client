@@ -4176,3 +4176,12 @@ msgid ""
 msgstr ""
 "Ваші повідомлення й далі надсилаються. Перш ніж довіряти новому ключу, "
 "звірте номери безпеки з контактами."
+
+msgid "Checking their security key. Try again in a moment."
+msgstr "Перевіряємо ключ безпеки контакту. Спробуйте ще раз за мить."
+
+msgid "This contact’s security key could not be trusted."
+msgstr "Ключ безпеки цього контакту не є довіреним."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "Діалог вибору файлів недоступний. Переконайтеся, що портал вибору файлів установлено й запущено."

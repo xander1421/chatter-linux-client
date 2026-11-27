@@ -86,7 +86,7 @@ export global SidebarPane {
     callback private-group-selected(string);
     callback saved-messages-clicked();
     callback navigate-chat(int /* 1 next, -1 previous */);
-    callback sidebar-focus-target(int /* current */, int /* move */, bool /* mobile */, bool /* shield */, bool /* requests */) -> int;
+    callback sidebar-focus-target(int /* current */, int /* move */, bool /* mobile */, bool /* shield */, bool /* requests */, bool /* desktop rail */) -> int;
     callback settings-clicked();
     callback profile-clicked();
     callback change-user-status(string /* status */);

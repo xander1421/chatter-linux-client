@@ -174,10 +174,10 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let selected = {
                     use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
-                    FilePicker::pick_files(FilePickerConfig::new()
+                    crate::bin_ui::ui_helpers::picker_or_cancel(&weak, FilePicker::pick_files(FilePickerConfig::new()
                         .with_title(chatter_i18n::tr("Select attachment"))
                         .with_filter(FileFilter::all())
-                        .with_multiple(true)).await
+                        .with_multiple(true)).await)
                 };
                 #[cfg(target_os = "android")]
                 let selected = crate::platform::android::file_picker::pick_files(&["*/*"]).await;

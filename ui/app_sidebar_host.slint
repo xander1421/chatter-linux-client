@@ -90,8 +90,8 @@ export component AppSidebarHost inherits Rectangle {
         custom-sections: SidebarPane.custom-sections;
         flat-rows: SidebarPane.flat-rows;
         focus-index <=> SidebarPane.sidebar-focus-index;
-        focus-target(current, move-by, mobile, shield, requests) => {
-            return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests);
+        focus-target(current, move-by, mobile, shield, requests, desktop-rail) => {
+            return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests, desktop-rail);
         }
         focus-composer => { root.focus-composer(); }
         user-display-name: SidebarPane.user-display-name;

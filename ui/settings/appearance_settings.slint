@@ -339,7 +339,7 @@ export component AppearanceSettings inherits VerticalLayout {
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Glass effects");
-            checked <=> Appearance.glass-effects;
+            checked <=> Appearance.prefer-glass-effects;
             toggled(value) => { Appearance.glass-effects-changed(value); }
 
             Text {

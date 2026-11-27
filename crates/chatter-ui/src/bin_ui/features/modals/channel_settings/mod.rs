@@ -1029,7 +1029,7 @@ fn wire_pick_icon(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let config = chatter_core::media::FilePickerConfig::new()
                         .with_title(chatter_i18n::tr("Select channel icon"))
                         .with_filter(chatter_core::media::FileFilter::images());
-                    chatter_core::media::FilePicker::pick_file(config).await
+                    crate::bin_ui::ui_helpers::picker_or_cancel(&weak, chatter_core::media::FilePicker::pick_file(config).await)
                 };
                 #[cfg(target_os = "android")]
                 let picked = crate::platform::android::file_picker::pick_files(&["image/*"])

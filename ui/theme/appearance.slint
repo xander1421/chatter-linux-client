@@ -33,7 +33,9 @@ export global Appearance {
     in-out property <float> animation-speed: 1.0;
     callback animation-speed-changed(float);
     // Disable expensive material optics on slow devices.
-    in-out property <bool> glass-effects: true;
+    in-out property <bool> prefer-glass-effects: true;
+    in property <bool> backdrop-effects-available: true;
+    out property <bool> glass-effects: prefer-glass-effects && backdrop-effects-available;
     callback glass-effects-changed(bool);
 
     // "system" | "light" | "dark"

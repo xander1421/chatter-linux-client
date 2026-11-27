@@ -257,11 +257,9 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["http2"
 # ============================================================================
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 notify-rust = { version = "4", optional = true }
-# gtk3 backend (in-process GtkFileChooserDialog) instead of the xdg-portal
-# default. Hyprland and other wlroots-derived compositors removed
-# `xdg_foreign`, which makes the portal FileChooser hang waiting for a
-# parent surface that can never be exported. gtk3 dialogs sidestep that.
-rfd = { version = "0.17.2", default-features = false, features = ["gtk3"], optional = true }
+# The Linux portal presents the system file chooser. rfd 0.17 uses pollster
+# internally for this backend and needs no application runtime feature.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
 open = { version = "5.3.3", optional = true }
 
 # ============================================================================

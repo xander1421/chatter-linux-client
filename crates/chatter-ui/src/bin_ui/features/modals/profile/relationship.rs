@@ -62,7 +62,8 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 };
 
                 let notice: (String, &'static str) = match tokio::time::timeout(
-                    crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                    // Core may wait up to 20 seconds for the contact key.
+                    std::time::Duration::from_secs(40),
                     ui_ctx.send_friend_request(&friend_id, None),
                 )
                 .await
@@ -75,11 +76,8 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         (chatter_i18n::tr("Friend request sent"), "success")
                     }
                     Ok(Err(e)) => {
-                        tracing::error!("Failed to send friend request: {}", e);
-                        (
-                            chatter_i18n::tr("The friend request was not sent. Try again."),
-                            "error",
-                        )
+                        tracing::warn!("Failed to send friend request: {}", e);
+                        (e.user_message(), "error")
                     }
                     Err(_) => {
                         tracing::error!("Friend request timed out");

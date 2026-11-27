@@ -4178,3 +4178,12 @@ msgid ""
 msgstr ""
 "Tus mensajes se siguen enviando. Compara los números de seguridad con tus "
 "contactos antes de confiar en una clave nueva."
+
+msgid "Checking their security key. Try again in a moment."
+msgstr "Estamos verificando su clave de seguridad. Inténtalo de nuevo en un momento."
+
+msgid "This contact’s security key could not be trusted."
+msgstr "No se pudo confiar en la clave de seguridad de este contacto."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "El selector de archivos no está disponible. Comprueba que haya un portal de selección de archivos instalado y en ejecución."

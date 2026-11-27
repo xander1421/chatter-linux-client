@@ -303,6 +303,25 @@ fn peer_identity_wait_reason(error: &MessageError) -> Option<&'static str> {
 }
 
 impl MessageService {
+    pub(super) fn wake_private_channel_sends(
+        &self,
+        owner: UserId,
+        channel: ChannelId,
+    ) -> Result<(), StorageError> {
+        let changed = self.database.connection()?.execute(
+            "UPDATE settings SET value=json_set(value,'$.next_at',0)
+             WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'
+             AND json_extract(value,'$.entry.row.conversation_id')=?2
+             AND json_extract(value,'$.credential_retry_at') IS NULL
+             AND json_extract(value,'$.private_key_retry_at') IS NULL",
+            params![format!("{PREFIX}{owner}:%"), channel.to_string()],
+        )?;
+        if changed != 0 {
+            self.group_send_tokens.retry_ready.notify_one();
+        }
+        Ok(())
+    }
+
     /// Explicit delete-for-everyone of a bubble: record the intent on a
     /// channel send the journal still owns, then delete the bubble locally.
     /// Without the intent a deleted bubble never touches the server copy; a
@@ -860,7 +879,9 @@ impl MessageService {
                 // A later preconnect miss does not undo an earlier ambiguous
                 // deposit. Keep replaying its exact request in that case.
                 let identity_wait = peer_identity_wait_reason(&error);
+                let endorsements_pending = matches!(error, MessageError::PrivateChannelEndorsementsPending);
                 let transient = identity_wait.is_some()
+                    || endorsements_pending
                     || crate::state::send_session::check_send_session().is_err()
                     || if request_not_sent {
                         !first_attempt
@@ -917,7 +938,17 @@ impl MessageService {
                     tx.commit()?;
                 }
                 tracing::warn!(%error, message_id=%row.id, %phase, "Channel send retained");
-                self.finish_retry_row(&row.id, status, reason)
+                let result = self.finish_retry_row(&row.id, status, reason);
+                // A refresh may have completed while this journal was leased.
+                // Recheck after requeueing so either side can schedule its retry.
+                if endorsements_pending
+                    && let Some(owner) = row.sender_id
+                    && self.has_private_channel_endorsements(&row.conversation_id)
+                    && let Err(error) = self.wake_private_channel_sends(owner, row.conversation_id)
+                {
+                    tracing::warn!(channel = %row.conversation_id, %error, "Could not wake private-channel sends");
+                }
+                result
             }
         }
     }
@@ -1034,6 +1065,7 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
     let weak = Arc::downgrade(client);
     let mut connectivity = client.offline_state().subscribe();
     let mut keys = client.event_bus().subscribe_domain();
+    let endorsements = client.messages().group_send_tokens.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1041,6 +1073,7 @@ pub(crate) fn spawn_channel_send_recovery<C: super::SendRecoveryClient>(
         loop {
             let key_updated = tokio::select! {
                 _ = ticker.tick() => false,
+                _ = endorsements.retry_ready.notified() => false,
                 _ = super::core::wait_for_key_verification(&mut keys) => true,
             };
             let Some(client) = weak.upgrade() else {

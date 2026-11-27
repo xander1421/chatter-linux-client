@@ -295,7 +295,7 @@ pub(crate) fn wire_attachment_clicked(
                         .with_filter(FileFilter::documents())
                         .with_multiple(true);
 
-                    let selected_files = FilePicker::pick_files(config).await;
+                    let selected_files = crate::bin_ui::ui_helpers::picker_or_cancel(&weak, FilePicker::pick_files(config).await);
                     finish_picker(&weak, &chat_state, conversation, revision);
 
                     if selected_files.is_empty() {

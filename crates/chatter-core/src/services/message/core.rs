@@ -94,7 +94,7 @@ impl MessageError {
                 Some(KEY_CHANGED_NOT_DELIVERED)
             }
             Self::RecipientIdentityChanged { .. } => Some(IDENTITY_CHANGED),
-            Self::RecipientKeyVerifying { .. } => None,
+            Self::RecipientKeyVerifying { .. } | Self::PrivateChannelEndorsementsPending => None,
             Self::RecipientKeyUnverified { .. } => Some("Key not verified"),
             Self::MembershipNotVerified { .. } => Some("Membership not verified"),
             Self::ChannelNotFound(_) | Self::Network(NetworkError::NotFound(_)) => {
