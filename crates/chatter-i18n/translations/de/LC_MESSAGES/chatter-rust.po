@@ -4088,3 +4088,11 @@ msgstr "Der Identitätsschlüssel deines Kontos hat sich im Transparenzprotokoll
 #: crates/chatter-core/src/client/mod.rs
 msgid "An unexpected key was published for your account. Check your safety number with your contacts."
 msgstr "Für dein Konto wurde ein unerwarteter Schlüssel veröffentlicht. Vergleiche deine Sicherheitsnummer mit deinen Kontakten."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr "Schlüsselverzeichnis-Prüfungen für einige Kontakte schlagen weiterhin fehl."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Your messages still send. Compare safety numbers with your contacts before you trust a new key."
+msgstr "Deine Nachrichten werden weiterhin gesendet. Vergleiche die Sicherheitsnummern mit deinen Kontakten, bevor du einem neuen Schlüssel vertraust."

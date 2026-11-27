@@ -152,6 +152,31 @@ fn record_kt_head(store: &SignalStore, sender: &str, plaintext: &[u8]) {
     }
 }
 
+/// Whether an outgoing `Content` is a message the user wrote: the only kind
+/// that may spend a "send anyway once" permit. Receipts, typing, sync and
+/// control traffic never do.
+fn user_authored(plaintext: &[u8]) -> bool {
+    use chatter_proto::content_v1::{Content, content::Content as Body};
+    use prost::Message;
+    fn authored(body: Option<&Body>) -> bool {
+        match body {
+            // Flag-only data messages (profile key, timer announcements) are automatic.
+            Some(Body::DataMessage(data)) => !data.body.is_empty() || !data.attachments.is_empty(),
+            Some(Body::Edit(_) | Body::Attachment(_)) => true,
+            _ => false,
+        }
+    }
+    let Ok(content) = Content::decode(plaintext) else {
+        return false;
+    };
+    match content.content.as_ref() {
+        Some(Body::AnonDmMessage(message)) => {
+            authored(message.inner_content.as_ref().and_then(|inner| inner.content.as_ref()))
+        }
+        body => authored(body),
+    }
+}
+
 /// Device inbox envelopes can contain either a regular post or an anonymous
 /// bootstrap. Their wire type is private until after the ratchet decrypt.
 fn receive_kt_route(route: KtRoute, plaintext: &[u8]) -> KtRoute {

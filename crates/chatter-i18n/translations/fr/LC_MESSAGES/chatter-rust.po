@@ -4055,3 +4055,11 @@ msgstr "La clé d’identité de votre compte a changé dans le journal de trans
 #: crates/chatter-core/src/client/mod.rs
 msgid "An unexpected key was published for your account. Check your safety number with your contacts."
 msgstr "Une clé inattendue a été publiée pour votre compte. Vérifiez votre numéro de sécurité avec vos contacts."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr "Les vérifications de l’annuaire de clés échouent toujours pour certains contacts."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Your messages still send. Compare safety numbers with your contacts before you trust a new key."
+msgstr "Vos messages sont toujours envoyés. Comparez les numéros de sécurité avec vos contacts avant de faire confiance à une nouvelle clé."

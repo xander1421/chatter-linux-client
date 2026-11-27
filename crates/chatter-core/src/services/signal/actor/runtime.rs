@@ -158,7 +158,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptSealed { plaintext, sender_cert, recipient_address, permit, response } => {
-                            store.set_send_digest(&plaintext);
+                            store.set_send(&plaintext, user_authored(&plaintext));
                             let plaintext = gossip::attach(&settings_repo, route, plaintext);
                             let res = if let Some(permit) = permit {
                                 SealedSenderManager::encrypt_for_submission(
@@ -180,14 +180,14 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, shape, permit, response } => {
-                            store.set_send_digest(&plaintext);
+                            store.set_send(&plaintext, group_id.is_none() && user_authored(&plaintext));
                             let plaintext = gossip::attach(&settings_repo, route, plaintext);
                             let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), shape, &store, &permit).await;
                             let _ = response.send(res);
                         }
 
                         SignalCommand::EncryptMultiRecipient { contents, sender_cert, destinations, group_id, echo_registration, response } => {
-                            store.set_send_digest(&contents);
+                            store.set_send(&contents, false);
                             let local_address = match local_protocol_address(&settings_repo) {
                                 Ok(a) => a,
                                 Err(e) => { let _ = response.send(Err(e)); continue; }
@@ -223,7 +223,7 @@ impl SignalActorHandle {
                         }
 
                         SignalCommand::EncryptIdentified { plaintext, recipient_address, response } => {
-                            store.set_send_digest(&plaintext);
+                            store.set_send(&plaintext, user_authored(&plaintext));
                             let plaintext = gossip::attach(&settings_repo, route, plaintext);
                             let local_address = match local_protocol_address(&settings_repo) {
                                 Ok(a) => a,

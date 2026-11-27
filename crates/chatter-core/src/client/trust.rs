@@ -35,6 +35,22 @@ impl ChatterClient {
                 action: None,
             }));
         }
+        // Warn-only: checks for some contacts went unanswered for a day while
+        // identified requests verified. Sends are not blocked.
+        if self
+            .signal()
+            .key_store
+            .kt_suspect_exists()
+            .map_err(crate::error::ServiceError::Storage)?
+        {
+            return Ok(Some(OwnIdentityWarning {
+                title: chatter_i18n::tr("Key directory checks for some contacts keep failing."),
+                detail: chatter_i18n::tr(
+                    "Your messages still send. Compare safety numbers with your contacts before you trust a new key.",
+                ),
+                action: Some(chatter_i18n::tr("View your safety number")),
+            }));
+        }
         Ok(None)
     }
 

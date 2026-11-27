@@ -4028,3 +4028,11 @@ msgstr "A chave de identidade da sua conta mudou no registo de transparência"
 #: crates/chatter-core/src/client/mod.rs
 msgid "An unexpected key was published for your account. Check your safety number with your contacts."
 msgstr "Uma chave inesperada foi publicada para sua conta. Confira seu número de segurança com seus contatos."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr "As verificações do diretório de chaves de alguns contatos continuam falhando."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Your messages still send. Compare safety numbers with your contacts before you trust a new key."
+msgstr "Suas mensagens continuam sendo enviadas. Compare os números de segurança com seus contatos antes de confiar em uma chave nova."

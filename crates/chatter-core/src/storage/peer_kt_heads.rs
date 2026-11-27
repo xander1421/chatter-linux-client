@@ -12,7 +12,8 @@ pub(crate) const WITHHELD_LIMIT: u32 = 3;
 /// unverified block, or any block on our own account.
 pub(crate) const CLEAR_AFTER: u32 = 3;
 /// An undecided streak this long, while identified KT requests succeed,
-/// counts as one withheld check.
+/// raises a warning. It never blocks sends: the streak is measured against
+/// the account route, not the route that failed (docs/OPEN-ITEMS.md).
 pub(crate) const UNDECIDED_LIMIT: u32 = 6;
 pub(crate) const UNDECIDED_WINDOW_SECS: i64 = 24 * 60 * 60;
 
@@ -47,6 +48,19 @@ pub(crate) enum HeadSettle {
 pub(crate) enum KtBlock {
     Split,
     Unverified,
+}
+
+/// What the message an actor command encrypts may do with a "send anyway
+/// once" permit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PermitUse {
+    /// No message, such as session setup: allowed while a permit exists, and
+    /// nothing is spent.
+    Setup,
+    /// Receipts, typing, sync, group sends: never covered.
+    Other,
+    /// A message the user wrote, by digest: spends the permit.
+    Message([u8; 32]),
 }
 
 impl KeyStore {
@@ -146,7 +160,7 @@ impl KeyStore {
                     // like an unverified block.
                     let cleared = tx.execute(
                         "DELETE FROM peer_kt_split_views
-                         WHERE account=?1 AND route=?2 AND (kind='unverified' OR EXISTS (
+                         WHERE account=?1 AND route=?2 AND (kind IN ('unverified','suspect') OR EXISTS (
                              SELECT 1 FROM settings
                              WHERE key='auth.current_user_id' AND value=json_quote(?1)))",
                         params![peer, route],
@@ -203,15 +217,29 @@ impl KeyStore {
                     )
                     .optional()?;
                 // Head checks that never get an answer while identified KT
-                // requests keep verifying are withholding, not an outage.
-                withheld = streak.is_some_and(|(count, since)| {
+                // requests keep verifying look like withholding. The account
+                // route is not the route that failed, so this only warns.
+                let suspect = streak.is_some_and(|(count, since)| {
                     since.is_some_and(|since| {
                         count >= UNDECIDED_LIMIT
                             && now - since >= UNDECIDED_WINDOW_SECS
                             && identified_at.is_some_and(|at| at > since)
                     })
                 });
-                false
+                if suspect {
+                    tx.execute(
+                        "UPDATE peer_kt_heads SET undecided=0,undecided_since=NULL
+                         WHERE account=?1 AND route=?2",
+                        params![peer, route],
+                    )?;
+                    tx.execute(
+                        "INSERT OR IGNORE INTO peer_kt_split_views (account,kind,route,detected_at)
+                         VALUES (?1,'suspect',?2,?3)",
+                        params![peer, route, now],
+                    )? == 1
+                } else {
+                    false
+                }
             }
         };
         let changed = if withheld {
@@ -231,8 +259,10 @@ impl KeyStore {
                 .unwrap_or(0);
             count >= WITHHELD_LIMIT
                 && tx.execute(
-                    "INSERT OR IGNORE INTO peer_kt_split_views (account,kind,route,detected_at)
-                     VALUES (?1,'unverified',?2,?3)",
+                    "INSERT INTO peer_kt_split_views (account,kind,route,detected_at)
+                     VALUES (?1,'unverified',?2,?3)
+                     ON CONFLICT(account) DO UPDATE SET kind='unverified',route=?2,detected_at=?3
+                     WHERE peer_kt_split_views.kind='suspect'",
                     params![peer, route, now],
                 )? == 1
         } else {
@@ -255,9 +285,21 @@ impl KeyStore {
             .optional()?;
         Ok(match kind.as_deref() {
             Some("split") => Some(KtBlock::Split),
-            Some(_) => Some(KtBlock::Unverified),
-            None => None,
+            Some("unverified") => Some(KtBlock::Unverified),
+            _ => None,
         })
+    }
+
+    /// Whether any account's head checks raised the warn-only streak.
+    pub(crate) fn kt_suspect_exists(&self) -> Result<bool, StorageError> {
+        Ok(self
+            .db
+            .read_connection()?
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM peer_kt_split_views WHERE kind='suspect')",
+                [],
+                |row| row.get(0),
+            )?)
     }
 
     /// The user's explicit decision on the block. A split is cleared. An
@@ -278,22 +320,22 @@ impl KeyStore {
         Ok(false)
     }
 
-    /// Whether the "send anyway once" permit covers this send. The permit is
-    /// spent on the first message (`digest`) it releases and then covers only
-    /// that message's other devices and retries. A check without a message,
-    /// such as session setup, neither needs nor spends it.
-    pub(crate) fn use_kt_permit(&self, peer: &str, digest: Option<[u8; 32]>) -> bool {
+    /// Whether the "send anyway once" permit covers this send. Only a message
+    /// the user wrote spends it, and then it covers only that message's other
+    /// devices and retries.
+    pub(crate) fn use_kt_permit(&self, peer: &str, send: PermitUse) -> bool {
         let mut permits = self.kt_permits.lock();
         let Some(permit) = permits.get_mut(peer) else {
             return false;
         };
-        match (digest, *permit) {
-            (None, _) => true,
-            (Some(digest), None) => {
+        match (send, *permit) {
+            (PermitUse::Setup, _) => true,
+            (PermitUse::Other, _) => false,
+            (PermitUse::Message(digest), None) => {
                 *permit = Some(digest);
                 true
             }
-            (Some(digest), Some(spent)) => digest == spent,
+            (PermitUse::Message(digest), Some(spent)) => digest == spent,
         }
     }
 }

@@ -44,15 +44,26 @@ pub(crate) fn attach(settings: &SettingsRepository, route: KtRoute, plaintext: V
     };
     let mut head = to_gossip(&pinned.head);
     head.anonymous = route == KtRoute::AnonymousTor;
-    let padded = !content.padding.is_empty();
+    // A padded message either has padding or landed on a bucket exactly.
+    let padded = !content.padding.is_empty() || BUCKETS.contains(&plaintext.len());
     content.kt_head = Some(head);
-    if padded {
-        // Re-pad with the head included: the same bucket when it fits, the
-        // next one when it does not.
-        crate::services::message::MessageService::pad_content_to_bucket(&mut content);
+    if !padded {
+        return content.encode_to_vec();
     }
-    content.encode_to_vec()
+    // Re-pad with the head included: the same bucket when it fits, the next
+    // one when it does not. Past the largest bucket the message goes without
+    // a head rather than leave its bucket.
+    crate::services::message::MessageService::pad_content_to_bucket(&mut content);
+    let sent = content.encode_to_vec();
+    if BUCKETS.contains(&sent.len()) {
+        sent
+    } else {
+        plaintext
+    }
 }
+
+/// `MessageService::pad_content_to_bucket`'s sizes.
+const BUCKETS: [usize; 4] = [256, 512, 1024, 4096];
 
 /// The head carried by a decrypted `Content`, if any.
 pub(crate) fn received(plaintext: &[u8]) -> Option<KtHeadGossip> {
@@ -134,10 +145,12 @@ pub(crate) enum Verdict {
     /// The check failed between two routine requests on the same connection
     /// that were answered and verified.
     Withheld,
-    /// Nothing was learned: a routine request failed, or there is no label
-    /// to monitor yet. Only a long streak while identified requests succeed
-    /// counts (`storage::peer_kt_heads`).
+    /// Nothing was learned: a routine request failed. A long streak while
+    /// identified requests succeed raises a warning (`storage::peer_kt_heads`).
     Undecided,
+    /// No check was sent: this pin monitors no label to blend in, or holds no
+    /// data for it yet. Counts toward nothing.
+    Skipped,
 }
 
 /// Check a contact's head against this device's pin on `scope`'s route. Each
@@ -205,11 +218,11 @@ async fn reconcile_at(
     // The check has the shape of routine contact monitoring: one label this
     // pin already monitors, chosen at random and never our own.
     let Some(label) = cover_label(&pin, own_label)? else {
-        return Ok(Verdict::Undecided);
+        return Ok(Verdict::Skipped);
     };
     let observations = pin.observations(&label)?;
     let Some(data) = observations.data.clone() else {
-        return Ok(Verdict::Undecided);
+        return Ok(Verdict::Skipped);
     };
     let baseline = pin.last_head().unwrap_or(&pin.distinguished.head).clone();
     let checkpoint = pin.distinguished.head.clone();

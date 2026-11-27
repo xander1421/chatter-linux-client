@@ -15,6 +15,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::error::{CryptoError, IdentityChangeSource, StorageError};
+use crate::storage::peer_kt_heads::PermitUse;
 use crate::storage::peer_verification::{KtRoute, PeerVerification};
 use crate::storage::KeyStore;
 #[cfg(feature = "mesh")]
@@ -52,9 +53,9 @@ pub struct SignalStore {
     outbound_kt_due_at: i64,
     inbound_kt_due_at: i64,
     authenticated_whisper_receive: bool,
-    /// Digest of the message this actor command encrypts, for the one-message
-    /// "send anyway once" permit. `None` outside encryption.
-    send_digest: Option<[u8; 32]>,
+    /// What the message this actor command encrypts may do with a "send
+    /// anyway once" permit.
+    send: PermitUse,
     /// Mesh ratchets have a device-local address space per signed-in account.
     /// Identity keys remain keyed by the ordinary account ID.
     mesh_owner: Option<String>,
@@ -71,7 +72,7 @@ impl SignalStore {
             outbound_kt_due_at: 0,
             inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
-            send_digest: None,
+            send: PermitUse::Setup,
             mesh_owner: None,
             #[cfg(feature = "mesh")]
             mesh_binding: None,
@@ -93,7 +94,7 @@ impl SignalStore {
             outbound_kt_due_at: 0,
             inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
-            send_digest: None,
+            send: PermitUse::Setup,
             mesh_owner: Some(owner),
             mesh_binding: Some((binding_store, peer)),
         }
@@ -150,14 +151,18 @@ impl SignalStore {
         self.kt_route = Some(route);
         self.inbound_kt_due_at = 0;
         self.authenticated_whisper_receive = false;
-        self.send_digest = None;
+        self.send = PermitUse::Setup;
     }
 
-    /// Name the message this command encrypts (its bytes before the actor
-    /// adds a transparency head).
-    pub(crate) fn set_send_digest(&mut self, plaintext: &[u8]) {
+    /// Name the message this command encrypts (its bytes before the actor adds
+    /// a transparency head). Only a message the user wrote can spend a permit.
+    pub(crate) fn set_send(&mut self, plaintext: &[u8], user_message: bool) {
         use sha2::Digest;
-        self.send_digest = Some(sha2::Sha256::digest(plaintext).into());
+        self.send = if user_message {
+            PermitUse::Message(sha2::Sha256::digest(plaintext).into())
+        } else {
+            PermitUse::Other
+        };
     }
 
     pub(crate) fn defer_outbound_kt_until(&mut self, due_at: i64) {
@@ -227,7 +232,7 @@ impl SignalStore {
         match self.key_store.peer_kt_block(peer)? {
             None => {}
             Some(crate::storage::peer_kt_heads::KtBlock::Unverified)
-                if self.key_store.use_kt_permit(peer, self.send_digest) => {}
+                if self.key_store.use_kt_permit(peer, self.send) => {}
             Some(_) => return Err(untrusted_send(peer, device, None)),
         }
         let state = self.key_store.peer_verification(peer, key)?;

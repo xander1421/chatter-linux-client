@@ -4044,3 +4044,11 @@ msgstr "Ключ ідентифікації вашого облікового з
 #: crates/chatter-core/src/client/mod.rs
 msgid "An unexpected key was published for your account. Check your safety number with your contacts."
 msgstr "Для вашого облікового запису опубліковано неочікуваний ключ. Звірте свій номер безпеки з контактами."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr "Перевірки каталогу ключів для деяких контактів і далі завершуються помилкою."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Your messages still send. Compare safety numbers with your contacts before you trust a new key."
+msgstr "Ваші повідомлення й далі надсилаються. Перш ніж довіряти новому ключу, звірте номери безпеки з контактами."

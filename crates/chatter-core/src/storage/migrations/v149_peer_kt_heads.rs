@@ -28,7 +28,7 @@ impl Migration for V149PeerKtHeads {
         );
         CREATE TABLE peer_kt_split_views (
             account TEXT PRIMARY KEY,
-            kind TEXT NOT NULL CHECK (kind IN ('split', 'unverified')),
+            kind TEXT NOT NULL CHECK (kind IN ('split', 'unverified', 'suspect')),
             route INTEGER NOT NULL CHECK (route IN (0, 1)),
             detected_at INTEGER NOT NULL
         );

@@ -4027,3 +4027,11 @@ msgstr "La chiave di identità del tuo account è cambiata nel registro di trasp
 #: crates/chatter-core/src/client/mod.rs
 msgid "An unexpected key was published for your account. Check your safety number with your contacts."
 msgstr "È stata pubblicata una chiave inattesa per il tuo account. Verifica il tuo numero di sicurezza con i tuoi contatti."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr "I controlli dell’elenco di chiavi continuano a non riuscire per alcuni contatti."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Your messages still send. Compare safety numbers with your contacts before you trust a new key."
+msgstr "I tuoi messaggi vengono ancora inviati. Confronta i numeri di sicurezza con i tuoi contatti prima di fidarti di una nuova chiave."

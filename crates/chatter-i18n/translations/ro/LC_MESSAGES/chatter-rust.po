@@ -4058,3 +4058,11 @@ msgstr "Cheia de identitate a contului tău s-a schimbat în jurnalul de transpa
 #: crates/chatter-core/src/client/mod.rs
 msgid "An unexpected key was published for your account. Check your safety number with your contacts."
 msgstr "A fost publicată o cheie neașteptată pentru contul tău. Verifică numărul tău de siguranță cu contactele tale."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr "Verificările directorului de chei pentru unele contacte eșuează în continuare."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Your messages still send. Compare safety numbers with your contacts before you trust a new key."
+msgstr "Mesajele tale se trimit în continuare. Compară numerele de siguranță cu contactele tale înainte să ai încredere într-o cheie nouă."

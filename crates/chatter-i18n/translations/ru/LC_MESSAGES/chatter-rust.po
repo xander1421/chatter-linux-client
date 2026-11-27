@@ -4022,3 +4022,11 @@ msgstr "Ключ идентификации вашего аккаунта изм
 #: crates/chatter-core/src/client/mod.rs
 msgid "An unexpected key was published for your account. Check your safety number with your contacts."
 msgstr "Для вашего аккаунта опубликован неожиданный ключ. Сверьте свой номер безопасности с контактами."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr "Проверки каталога ключей для некоторых контактов продолжают завершаться ошибкой."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Your messages still send. Compare safety numbers with your contacts before you trust a new key."
+msgstr "Ваши сообщения по-прежнему отправляются. Прежде чем доверять новому ключу, сверьте номера безопасности с контактами."

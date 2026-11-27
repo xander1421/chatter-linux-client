@@ -277,6 +277,10 @@ fn settle_peer_head(
             tracing::warn!(peer = %job.peer, "An account shared a transparency head without a valid signature");
             HeadSettle::Invalid
         }
+        Ok(Verdict::Skipped) => {
+            delay_peer_head(service, &job);
+            return;
+        }
         Ok(Verdict::Undecided) | Err(_) => {
             if let Err(error) = verdict {
                 tracing::debug!(%error, peer = %job.peer, "Contact head check will retry");
@@ -306,6 +310,10 @@ fn settle_peer_head(
                     peer_user_id,
                     attributed: false,
                 });
+                // A raised or cleared streak warning shows in the account banner.
+                if matches!(outcome, HeadSettle::Consistent | HeadSettle::Undecided { .. }) {
+                    events.emit_domain(DomainEvent::OwnIdentityChanged { user_id: owner });
+                }
             }
         }
         Ok(false) => {}
@@ -500,11 +508,15 @@ mod kt_pin_tests {
         (dir, service, owner, peer)
     }
 
-    /// The gate for one message, as an actor encryption command sees it.
-    fn sends(service: &SignalService, peer: &crate::domain::UserId, message: &[u8]) -> bool {
+    /// The gate for one send, as an actor encryption command sees it.
+    fn sends_as(service: &SignalService, peer: &crate::domain::UserId, message: &[u8], user: bool) -> bool {
         let mut store = crate::crypto::SignalStore::new(service.key_store.clone());
-        store.set_send_digest(message);
+        store.set_send(message, user);
         store.require_sendable_key(&peer.to_string(), &[5; 33]).is_ok()
+    }
+
+    fn sends(service: &SignalService, peer: &crate::domain::UserId, message: &[u8]) -> bool {
+        sends_as(service, peer, message, true)
     }
 
     fn blocked(service: &SignalService, peer: &crate::domain::UserId) -> bool {
@@ -550,6 +562,8 @@ mod kt_pin_tests {
         // Send anyway once: the first message spends the permit; its other
         // devices and retries still go, the next message does not.
         assert!(service.key_store.accept_peer_kt_block(&peer.to_string()).unwrap());
+        // Receipts, typing and group sends never use the permit.
+        assert!(!sends_as(&service, &peer, b"receipt", false));
         assert!(sends(&service, &peer, b"first"));
         assert!(sends(&service, &peer, b"first"));
         assert!(!sends(&service, &peer, b"second"));
@@ -577,7 +591,7 @@ mod kt_pin_tests {
     }
 
     #[test]
-    fn a_long_undecided_streak_counts_as_withheld_while_identified_requests_verify() {
+    fn a_long_undecided_streak_only_warns_and_withheld_checks_still_block() {
         use crate::storage::peer_kt_heads::{HeadSettle, UNDECIDED_LIMIT, UNDECIDED_WINDOW_SECS, WITHHELD_LIMIT};
         let (_dir, service, _owner, peer) = sendable_peer();
         let keys = &service.key_store;
@@ -595,14 +609,18 @@ mod kt_pin_tests {
         // No identified request verified since the streak began: an outage.
         assert!(!streak(0, None));
         assert!(!streak(1_000_000, Some(-1)));
+        assert!(!keys.kt_suspect_exists().unwrap());
+        // The account route kept verifying: a warning, never a block.
+        assert!(streak(2_000_000, Some(2_000_001)));
+        assert!(keys.kt_suspect_exists().unwrap());
         assert!(!blocked(&service, &peer));
-        // The account route kept verifying: each long streak is one withheld check.
-        let mut start = 2_000_000;
-        for round in 1..=WITHHELD_LIMIT {
-            assert_eq!(streak(start, Some(start + 1)), round == WITHHELD_LIMIT);
-            start += 2 * UNDECIDED_WINDOW_SECS;
+        assert!(!streak(3_000_000, Some(3_000_001)), "a standing warning does not warn again");
+        // Control-bracketed withheld checks still fail closed and replace it.
+        for _ in 0..WITHHELD_LIMIT {
+            keys.settle_peer_kt_head(&due(&service), HeadSettle::Withheld, 4_000_000).unwrap();
         }
         assert!(blocked(&service, &peer));
+        assert!(!keys.kt_suspect_exists().unwrap());
     }
 
     #[tokio::test]

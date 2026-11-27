@@ -309,9 +309,10 @@ async fn the_check_never_monitors_our_own_label() {
     let fixture = Fixture::new();
     let alice = fixture.device("H bob at 4").await;
     let bob = fixture.device("H bob at 5").await;
-    // Bob's only observed label is his own, so there is nothing to blend in.
+    // Bob's only observed label is his own, so there is nothing to blend in:
+    // no request is sent and nothing is counted.
     let mut operator = Operator::default();
-    assert_eq!(bob.check(&fixture, &mut operator, &alice.send(), BOB).await, Verdict::Undecided);
+    assert_eq!(bob.check(&fixture, &mut operator, &alice.send(), BOB).await, Verdict::Skipped);
 }
 
 #[tokio::test]
@@ -351,11 +352,19 @@ async fn a_padded_content_stays_on_an_exact_bucket_and_names_its_route() {
         content.encode_to_vec()
     };
     // The head fits the 256 bucket, or moves the message to the next bucket.
-    for (body, bucket) in [(10, 256), (200, 512), (420, 1024)] {
+    // A 250-byte body encodes to exactly 256 bytes with no padding at all.
+    for (body, bucket) in [(10, 256), (200, 512), (250, 512), (420, 1024)] {
         let before = padded(body);
         let sent = attach(&device.settings, KtRoute::Normal, before.clone());
         assert_eq!(sent.len(), bucket, "body {body}, {} bytes before the head", before.len());
     }
+    assert_eq!(padded(250).len(), 256);
+    // Past the largest bucket the message keeps its size and goes without a head.
+    let large = padded(4000);
+    assert_eq!(large.len(), 4096);
+    let sent = attach(&device.settings, KtRoute::Normal, large.clone());
+    assert_eq!(sent, large);
+    assert!(received(&sent).is_none());
     let head = received(&attach(&device.settings, KtRoute::Normal, padded(10))).unwrap();
     assert_eq!(route(&head), KtRoute::Normal);
     // This device has no anonymous pin, so a Tor send carries nothing.
