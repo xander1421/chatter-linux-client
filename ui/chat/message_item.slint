@@ -545,6 +545,9 @@ export component MessageItem inherits Rectangle {
                 spacing: Spacing.xs;
                 max-width: root.bubble-max-width;
 
+                HorizontalLayout {
+                    alignment: root.is-own ? end : start;
+
                 // The stationary wrapper observes presses before any child.
                 // Only a confirmed reply drag cancels the child's pointer grab.
                 TouchArea {
@@ -828,9 +831,11 @@ export component MessageItem inherits Rectangle {
 
                         // Quote / reply-to bubble
                         if root.is-reply: HorizontalLayout {
-                            width: root.photo-message ? root.photo-width : self.preferred-width;
-                            padding: root.photo-message ? Spacing.sm : Spacing.none;
+                            property <length> inset: root.photo-message ? Spacing.sm : Spacing.sm + Spacing.xxs;
+                            padding: root.photo-message ? self.inset : Spacing.none;
+
                             MessageQuote {
+                                border-radius: max(0px, root.r-round - parent.inset);
                                 audio-elapsed: root.audio-elapsed;
                                 audio-progress: root.audio-progress;
                                 current-playing-attachment-id: root.current-playing-attachment-id;
@@ -849,7 +854,10 @@ export component MessageItem inherits Rectangle {
                                 reply-to-thumbnail-height: root.reply-to-thumbnail-height;
                                 reply-to-thumbnail-width: root.reply-to-thumbnail-width;
                                 reply-to-waveform: root.reply-to-waveform;
-                                text-max-width: root.photo-message ? root.photo-width - Spacing.sm * 2 : root.text-max-width;
+                                content-max-width: max(0px, root.photo-message
+                                    ? root.photo-width - 2 * parent.inset
+                                    : root.bubble-max-width - bubble-content.padding-left
+                                        - bubble-content.padding-right - (root.is-ai ? 4px : 0px));
                                 quote-clicked(a0) => { root.quote-clicked(a0); }
                                 open-other-attachment(a0) => { root.open-other-attachment(a0); }
                                 audio-seek(a0, a1) => { root.audio-seek(a0, a1); }
@@ -1032,7 +1040,8 @@ export component MessageItem inherits Rectangle {
                     thread-clicked(a0) => { root.thread-clicked(a0); }
                     request-menu(a0, a1, a2, a3, a4, a5) => { root.request-menu(a0, a1, a2, a3, a4, a5); }
                 }
-                } // end wrapper
+                } // end swipe area
+                } // end bubble row
 
                 // Thread replies indicator (below bubble)
                 if root.reply-count > 0: MessageThreadIndicator {

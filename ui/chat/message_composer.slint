@@ -518,19 +518,11 @@ export component MessageComposer inherits GlassSurface {
                 height: min(root.reply-row-height,
                     max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
                 row-padding: root.row-padding;
-                action-shell-height: root.action-shell-height;
-                attachment-band-height: root.attachment-band-height;
-                raised-toolbar-height: root.raised-toolbar-height;
-                reply-row-height: root.reply-row-height;
                 reply-reveal: root.reply-reveal;
-                has-attachments: root.has-attachments;
                 reply-has-thumbnail: root.reply-has-thumbnail;
                 reply-thumbnail: root.reply-thumbnail;
                 reply-to-sender: root.reply-to-sender;
                 reply-to-preview: root.reply-to-preview;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
                 cancel-reply => { root.cancel-reply(); }
             }
 

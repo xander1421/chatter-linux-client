@@ -290,7 +290,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         composer_src.contains("border-radius: Spacing.radius-chrome;"),
         "shell radius"
     );
-    // The field, the reply chip's cancel (649b152a) and the attachment tray's
+    // The field, the reply quote and the attachment tray's
     // remove and add-more boxes (ae492dbb) are concentric with the shell. The
     // chip and tray moved to their own files in e1dde46a; emoji and attach
     // became free circular droplets in 08e7ca06 and send a circle in 15919403.
@@ -305,7 +305,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert_eq!(
         concentric,
         [1, 1, 2],
-        "field, reply cancel, attachment remove and add-more are concentric with the shell"
+        "field, reply quote, attachment remove and add-more are concentric with the shell"
     );
     w.global::<chatter_ui::ModalHostState>()
         .set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<

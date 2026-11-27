@@ -21,6 +21,16 @@ pub struct ActivityItem {
     pub unread: bool,
 }
 
+impl ActivityItem {
+    /// Thread roots use the same stable ID as mark_thread_read, regardless of
+    /// whether the activity label is a direct reply or a followed thread.
+    pub fn unread_thread_root(&self) -> Option<&str> {
+        self.id
+            .strip_prefix(THREAD_ACTIVITY_PREFIX)
+            .filter(|_| self.unread)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ActivityTarget {
     pub kind: String,

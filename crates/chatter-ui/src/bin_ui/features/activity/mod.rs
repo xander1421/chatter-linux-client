@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chatter_core::client::ChatterClient;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::{ActivityGlobal, ActivityItemData, MainWindow};
 
@@ -46,6 +46,10 @@ fn refresh(window: &MainWindow, client: &Arc<ChatterClient>) {
                     return;
                 }
             };
+            let unread_thread_roots = items
+                .iter()
+                .filter_map(|item| item.unread_thread_root().map(SharedString::from))
+                .collect::<Vec<_>>();
             let rows = items.into_iter().map(|item| ActivityItemData {
                 id: item.id.into(),
                 kind: item.kind.into(),
@@ -57,6 +61,7 @@ fn refresh(window: &MainWindow, client: &Arc<ChatterClient>) {
             }).collect::<Vec<_>>();
             let global = window.global::<ActivityGlobal>();
             global.set_items(ModelRc::new(VecModel::from(rows)));
+            global.set_unread_thread_roots(ModelRc::new(VecModel::from(unread_thread_roots)));
             global.set_unread_count(count.min(i32::MAX as u32) as i32);
             global.set_read_error(false);
             global.set_loading(false);
@@ -65,6 +70,9 @@ fn refresh(window: &MainWindow, client: &Arc<ChatterClient>) {
 }
 
 pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
+    window
+        .global::<ActivityGlobal>()
+        .on_is_thread_unread(|roots, id| roots.iter().any(|root| root == id));
     let weak = window.as_weak();
     let client_retry = client.clone();
     window.global::<ActivityGlobal>().on_retry(move || {
