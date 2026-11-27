@@ -239,7 +239,7 @@ export component MessageComposer inherits GlassSurface {
     }
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || (MeshGlobal.active-kind != "dm" && MeshGlobal.active-kind != "private-channel"));
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
-    property <length> action-shell-height: Spacing.touch-target-min + row-padding * 2;
+    property <length> action-shell-height: Spacing.composer-bar-height;
     property <length> attachment-chip-height: Spacing.touch-target-min;
     property <length> attachment-band-height: attachment-chip-height + Spacing.sm * 2;
     // Raised controls, attachment strip, then reply preview each own a row;

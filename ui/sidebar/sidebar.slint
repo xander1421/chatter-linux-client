@@ -553,7 +553,7 @@ export component Sidebar inherits Rectangle {
                     : entry.kind == "bottom" && !root.framed-archive
                     ? (root.mobile-mode
                         ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
-                        : (root.collapsed ? root.rail-footer-height : Spacing.button-height)
+                        : (root.collapsed ? root.rail-footer-height : Spacing.composer-bar-height + Spacing.panel-gutter)
                             + Spacing.md)
                     : Spacing.none;
                 if !root.desktop-rail && (entry.kind == "archive-entry" || entry.kind == "archive-back"): GlassSurface {
@@ -1021,7 +1021,7 @@ export component Sidebar inherits Rectangle {
             x: root.expanded-frame-inset;
             y: root.card-top-clearance;
             width: max(0px, root.width - self.x - Spacing.panel-gutter);
-            height: max(0px, root.height - self.y - Spacing.xxxl - root.expanded-frame-inset - Spacing.panel-gutter);
+            height: max(0px, root.height - self.y - Spacing.composer-bar-height - root.expanded-frame-inset - 2 * Spacing.panel-gutter);
             viewport-height: max(self.height, card-column.preferred-height);
             viewport-y <=> root.card-viewport-y;
             immediate-child-press: true;

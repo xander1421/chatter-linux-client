@@ -83,7 +83,9 @@ export component SidebarFooter inherits GlassSurface {
             clip: true;
             x: 0;
             width: root.panel-width;
-            y: root.panel-height - self.height;
+            // Expanded: one gutter up, level with the composer island that
+            // sits one gutter inside the chat container.
+            y: root.panel-height - self.height - (root.collapsed ? 0px : Spacing.panel-gutter);
             material-level: 2;
             material-tint: root.collapsed || Appearance.glass-effects ? Materials.regular : Colors.surface-card;
             material-enabled: !DesktopChrome.macos;
@@ -97,7 +99,7 @@ export component SidebarFooter inherits GlassSurface {
                 ? !root.touch || DesktopChrome.macos ? root.rail-footer-height
                     : root.rail-button-count * root.rail-icon-size
                         + (root.rail-button-count - 1) * 8px + 16px + Spacing.md + 8px
-                : 48px;
+                : Spacing.composer-bar-height;
 
             if !root.collapsed: HorizontalLayout {
                 padding-left: Spacing.sm;

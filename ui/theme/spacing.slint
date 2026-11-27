@@ -64,6 +64,9 @@ export global Spacing {
 
     // Mobile-specific
     out property <length> touch-target-min: 48px;
+    // One-line composer island; the sidebar footer matches it so the two
+    // bottom bars share top and bottom edges on desktop.
+    out property <length> composer-bar-height: touch-target-min + 2 * chrome-inset;
     // ONE geometry for a touch row that shows a person or a conversation —
     // the sidebar's chat list, the Contacts screen, Saved Messages. These
     // were each carrying their own numbers (52px/32px here, 56px/40px there)
