@@ -81,8 +81,27 @@ pub fn full_token(
     now: u64,
     server: &ServerPublicParams,
 ) -> Result<Vec<u8>, GroupSendError> {
-    if members.is_empty() {
+    subset_token(response, channel_id, state_hash, members, members, now, server)
+}
+
+/// The token for `recipients`, a subset of the `members` the response was
+/// issued for: the issuance is verified over all of them (its proof covers
+/// the whole set), then only the recipients' endorsements and the epoch's
+/// are combined. A send that leaves members out uses it.
+pub fn subset_token(
+    response: &[u8],
+    channel_id: &str,
+    state_hash: &[u8; 32],
+    members: &[uuid::Uuid],
+    recipients: &[uuid::Uuid],
+    now: u64,
+    server: &ServerPublicParams,
+) -> Result<Vec<u8>, GroupSendError> {
+    if members.is_empty() || recipients.is_empty() {
         return Err(GroupSendError::NoMembers);
+    }
+    if recipients.iter().any(|r| !members.contains(r)) {
+        return Err(GroupSendError::Verification);
     }
     let response = zkgroup::deserialize::<GroupSendEndorsementsResponse>(response)
         .map_err(|_| GroupSendError::Malformed)?;
@@ -96,7 +115,11 @@ pub fn full_token(
     let received = response
         .receive_with_service_ids(set, Timestamp::from_epoch_seconds(now), &params, server)
         .map_err(|_| GroupSendError::Verification)?;
-    let combined = GroupSendEndorsement::combine(received.iter().map(|e| e.decompressed));
+    // `received` follows `set`: the members in order, then the epoch.
+    let keep = members.iter().map(|m| recipients.contains(m)).chain([true]);
+    let combined = GroupSendEndorsement::combine(
+        received.iter().zip(keep).filter(|(_, keep)| *keep).map(|(e, _)| e.decompressed),
+    );
     Ok(zkgroup::serialize(
         &combined.to_token(params).into_full_token(expiration),
     ))
@@ -148,6 +171,29 @@ mod tests {
         let resp = issue(&secret, &[9u8; 32], &members(3), [4u8; 32]);
         let token = full_token(&resp, CH, &[9u8; 32], &members(3), NOW, &secret.get_public_params()).unwrap();
         assert_eq!(hex::encode(token), GO_TOKEN_VECTOR);
+    }
+
+    /// A send that leaves members out combines a token for the rest from the
+    /// full issuance. Endorsements are per member, so it equals the token of
+    /// an issuance to exactly those members, the form the Go server verifies
+    /// (`VerifyGroupSendToken` over the submitted recipients).
+    #[test]
+    fn a_subset_token_is_the_token_for_exactly_that_subset() {
+        let secret = ServerSecretParams::generate([3u8; 32]);
+        let public = secret.get_public_params();
+        let h = [9u8; 32];
+        let all = issue(&secret, &h, &members(3), [4u8; 32]);
+        let subset = subset_token(&all, CH, &h, &members(3), &members(2), NOW, &public).unwrap();
+        let direct = issue(&secret, &h, &members(2), [5u8; 32]);
+        assert_eq!(subset, full_token(&direct, CH, &h, &members(2), NOW, &public).unwrap());
+        assert_ne!(subset, full_token(&all, CH, &h, &members(3), NOW, &public).unwrap());
+        // Verification still needs the whole issued set.
+        assert_eq!(full_token(&all, CH, &h, &members(2), NOW, &public).unwrap_err(), GroupSendError::Verification);
+        let outsider = [uuid::Uuid::from_bytes([9; 16])];
+        assert_eq!(
+            subset_token(&all, CH, &h, &members(3), &outsider, NOW, &public).unwrap_err(),
+            GroupSendError::Verification
+        );
     }
 
     #[test]

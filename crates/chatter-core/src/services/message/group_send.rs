@@ -621,20 +621,22 @@ impl MessageService {
     }
 
     /// A group send token for `recipients` only, from the cached endorsements
-    /// (`full_token` combines any subset of them).
+    /// (issued for every active member; `subset_token` combines the rest).
     fn subset_token(
         &self, channel_id: &ChannelId, verified: &VerifiedChannel, recipients: &[String], now: u64,
     ) -> Result<Vec<u8>, MessageError> {
         let endorsements = self.group_send_tokens
             .endorsements(channel_id, &verified.state_hash, now)
             .ok_or(NetworkError::Unavailable)?;
-        let recipients: Vec<uuid::Uuid> = recipients.iter()
-            .map(|id| uuid::Uuid::parse_str(id))
-            .collect::<Result<_, _>>()
-            .map_err(invalid)?;
+        let uuids = |ids: &[String]| -> Result<Vec<uuid::Uuid>, MessageError> {
+            ids.iter().map(|id| uuid::Uuid::parse_str(id)).collect::<Result<_, _>>().map_err(invalid)
+        };
         let server = group_send::pinned_server_params().map_err(invalid)?;
-        group_send::full_token(&endorsements, &channel_id.to_string(), &verified.state_hash, &recipients, now, &server)
-            .map_err(invalid)
+        group_send::subset_token(
+            &endorsements, &channel_id.to_string(), &verified.state_hash,
+            &uuids(&active_members(verified))?, &uuids(recipients)?, now, &server,
+        )
+        .map_err(invalid)
     }
 
     /// Tell the channel, once, that its posts go out without `member`.
