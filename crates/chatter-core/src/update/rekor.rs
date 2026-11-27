@@ -27,9 +27,15 @@
 //! Consistency: the client keeps the newest checkpoint it accepted and, when
 //! a release names a larger tree, requires an RFC 6962 consistency proof from
 //! that size (Rekor serves them at `GET /api/v1/log/proof?firstSize=&lastSize=
-//! &treeID=`; the publisher copies them into `consistency.json`). Ceiling: a
-//! checkpoint for a DIFFERENT tree (Rekor rotates shards; the origin line
-//! changes) is accepted fresh, because no proof can span shards.
+//! &treeID=`; the publisher copies them into `consistency.json`). No proof can
+//! span Rekor shards (a rotation changes the origin line), so every checkpoint
+//! must name an origin in the build's pinned, ordered rotation list
+//! (`config::REKOR_ORIGINS`). A device moves only forward through that list;
+//! the new shard starts with no proof from the old one. A shard this build
+//! does not list is refused, so a real rotation needs a client release (and
+//! one manual install for clients already in the field) first. A stored
+//! checkpoint from an unlisted shard is refused as well: its order against
+//! the list is unknown, so leaving it could be a rollback.
 
 use base64::Engine;
 use p256::ecdsa::signature::Verifier;
@@ -336,18 +342,35 @@ pub fn needs_consistency_proof(stored: Option<&Checkpoint>, new: &Checkpoint) ->
     stored.is_some_and(|s| s.origin == new.origin && s.size < new.size)
 }
 
-/// Refuse a checkpoint that rolls back, forks, or extends the tree this device
-/// last accepted without a proof that it is an extension.
+/// Refuse a checkpoint from an unpinned shard, or one that rolls back, forks,
+/// or extends the tree this device last accepted without a proof that it is an
+/// extension. `origins` is the pinned rotation list, oldest shard first.
 pub fn check_consistency(
     stored: Option<&Checkpoint>,
     new: &Checkpoint,
     proofs: Option<&ConsistencyFile>,
+    origins: &[&str],
 ) -> Result<(), String> {
+    let rank = |origin: &str| origins.iter().position(|o| *o == origin);
+    let Some(new_rank) = rank(&new.origin) else {
+        return Err("Rekor checkpoint is from a log shard this build does not pin".into());
+    };
     let Some(stored) = stored else {
         return Ok(());
     };
     if stored.origin != new.origin {
-        tracing::warn!(old = %stored.origin, new = %new.origin, "Rekor tree changed; pinning the new shard");
+        // Order is known only between listed shards. A stored origin outside
+        // the list could be newer than every listed one, so moving off it
+        // could be a rollback: refuse rather than guess.
+        let Some(old_rank) = rank(&stored.origin) else {
+            return Err(
+                "Rekor checkpoint already seen is from a shard this build does not pin".into(),
+            );
+        };
+        if old_rank > new_rank {
+            return Err("Rekor checkpoint is from a shard this device already rotated past".into());
+        }
+        tracing::warn!(old = %stored.origin, new = %new.origin, "Rekor shard rotated to the next pinned origin");
         return Ok(());
     }
     if new.size < stored.size {
@@ -599,23 +622,58 @@ mod tests {
             }],
         };
         assert!(needs_consistency_proof(Some(&old), &new));
-        check_consistency(Some(&old), &new, Some(&file)).unwrap();
+        check_consistency(
+            Some(&old),
+            &new,
+            Some(&file),
+            crate::config::PUBLIC_GOOD_REKOR_ORIGINS,
+        )
+        .unwrap();
 
         // A forged old root (a device that saw a different history) fails.
         let mut forked = old.clone();
         forked.root[0] ^= 1;
-        assert!(check_consistency(Some(&forked), &new, Some(&file)).is_err());
+        assert!(
+            check_consistency(
+                Some(&forked),
+                &new,
+                Some(&file),
+                crate::config::PUBLIC_GOOD_REKOR_ORIGINS
+            )
+            .is_err()
+        );
         // A tampered path fails.
         let mut bad = file.clone();
         bad.proofs[0].hashes[0] = "22".repeat(32);
-        assert!(check_consistency(Some(&old), &new, Some(&bad)).is_err());
+        assert!(
+            check_consistency(
+                Some(&old),
+                &new,
+                Some(&bad),
+                crate::config::PUBLIC_GOOD_REKOR_ORIGINS
+            )
+            .is_err()
+        );
         // No proof at all fails.
-        assert!(check_consistency(Some(&old), &new, None).is_err());
+        assert!(
+            check_consistency(
+                Some(&old),
+                &new,
+                None,
+                crate::config::PUBLIC_GOOD_REKOR_ORIGINS
+            )
+            .is_err()
+        );
         // Going back to the older checkpoint is a rollback.
         assert!(
-            check_consistency(Some(&new), &old, None)
-                .unwrap_err()
-                .contains("older")
+            check_consistency(
+                Some(&new),
+                &old,
+                None,
+                crate::config::PUBLIC_GOOD_REKOR_ORIGINS
+            )
+            .unwrap_err()
+            .contains("older")
         );
     }
 
@@ -766,22 +824,55 @@ mod tests {
             size,
             root: [root; 32],
         };
+        let pins = ["log - 1", "log - 2"];
+        let check =
+            |stored: Option<&Checkpoint>, new: &Checkpoint, proofs: Option<&ConsistencyFile>| {
+                check_consistency(stored, new, proofs, &pins)
+            };
         let a = cp("log - 1", 10, 1);
-        // First use pins whatever verified.
-        assert!(check_consistency(None, &a, None).is_ok());
+        // First use pins any size of a pinned shard.
+        assert!(check(None, &a, None).is_ok());
+        // Even on first use, a shard outside the pinned list is refused.
+        let rogue = cp("rogue - 7", 1, 1);
+        assert!(
+            check(None, &rogue, None)
+                .unwrap_err()
+                .contains("does not pin")
+        );
+        assert!(
+            check(Some(&a), &rogue, None)
+                .unwrap_err()
+                .contains("does not pin")
+        );
         assert!(!needs_consistency_proof(None, &a));
         // Same tree head again.
-        assert!(check_consistency(Some(&a), &a, None).is_ok());
+        assert!(check(Some(&a), &a, None).is_ok());
         // Same size, different root: a fork.
         assert!(
-            check_consistency(Some(&a), &cp("log - 1", 10, 2), None)
+            check(Some(&a), &cp("log - 1", 10, 2), None)
                 .unwrap_err()
                 .contains("forks")
         );
-        // A shard rotation is accepted fresh (documented ceiling).
+        // Rotation to the next pinned shard starts fresh (no proof spans shards).
         let b = cp("log - 2", 3, 9);
         assert!(!needs_consistency_proof(Some(&a), &b));
-        assert!(check_consistency(Some(&a), &b, None).is_ok());
+        assert!(check(Some(&a), &b, None).is_ok());
+        // ...but never back to a shard this device rotated past.
+        assert!(
+            check(Some(&b), &a, None)
+                .unwrap_err()
+                .contains("rotated past")
+        );
+        // A stored shard outside the list has no known order, so leaving it
+        // could be a rollback: refused, for every listed shard.
+        let unlisted = cp("retired - 0", 50, 4);
+        for listed in [&a, &b] {
+            assert!(
+                check(Some(&unlisted), listed, None)
+                    .unwrap_err()
+                    .contains("does not pin")
+            );
+        }
         // Proof file for some other checkpoint.
         let newer = cp("log - 1", 12, 3);
         let stale = ConsistencyFile {
@@ -789,7 +880,7 @@ mod tests {
             proofs: vec![],
         };
         assert!(
-            check_consistency(Some(&a), &newer, Some(&stale))
+            check(Some(&a), &newer, Some(&stale))
                 .unwrap_err()
                 .contains("another checkpoint")
         );
@@ -802,7 +893,7 @@ mod tests {
             }],
         };
         assert!(
-            check_consistency(Some(&a), &newer, Some(&unrelated))
+            check(Some(&a), &newer, Some(&unrelated))
                 .unwrap_err()
                 .contains("missing")
         );

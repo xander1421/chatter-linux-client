@@ -147,6 +147,25 @@ pub const REKOR_LOG_PUBLIC_KEY: [u8; 65] = PUBLIC_GOOD_REKOR_LOG_PUBLIC_KEY;
 #[cfg(feature = "dev-trust-root")]
 pub const REKOR_LOG_PUBLIC_KEY: [u8; 65] = DEV_REKOR_LOG_PUBLIC_KEY;
 
+/// Pinned Rekor shard rotation list, oldest first: the checkpoint origin lines
+/// (`{hostname} - {tree ID}`) a release entry may come from. A device moves
+/// only forward through it (`update::rekor::check_consistency`). Add Sigstore's
+/// next shard here before it goes live; a shard missing from this list cannot
+/// deliver updates to this build. Never remove a retired shard: a device whose
+/// stored checkpoint names an unlisted origin refuses every update, because
+/// its order against the listed shards is unknown. Mirrored in `scripts/publish-update.py`
+/// (server repo) `PUBLIC_REKOR_ORIGINS`.
+pub const PUBLIC_GOOD_REKOR_ORIGINS: &[&str] = &["rekor.sigstore.dev - 1193050959916656506"];
+
+/// Origin of `publish-update.py --test-dev-seed`'s mock log (`DEV_LOG_ORIGIN`).
+pub const DEV_REKOR_ORIGINS: &[&str] = &["chatter-dev-rekor - 1"];
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const REKOR_ORIGINS: &[&str] = PUBLIC_GOOD_REKOR_ORIGINS;
+
+#[cfg(feature = "dev-trust-root")]
+pub const REKOR_ORIGINS: &[&str] = DEV_REKOR_ORIGINS;
+
 /// Derived from the development release-update seed.
 const DEV_RELEASE_TRANSPARENCY_PUBLIC_KEY: [u8; 65] = decode_hex65(
     "045c988a4c22744d60f5bf4ce414a33b51d7f467600ba1fbec3a1fad12d25c70b5ad2478b1ce8b4955dc9d933f1139c82403b3ddec0dab33d6ef10d97ce120cac7",

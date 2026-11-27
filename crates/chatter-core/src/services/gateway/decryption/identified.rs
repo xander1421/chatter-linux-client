@@ -58,10 +58,12 @@ impl MessageGateway {
                 "No session available for an identified sender".into(),
             )));
         }
-        // libsignal's SessionRecord keeps the archived states and, for a
-        // Whisper message the current state cannot open, tries them and
-        // promotes the one that decrypts (libsignal `session_management.rs`
-        // `try_decrypt_from_record`).
+        // libsignal's SessionRecord keeps up to three archived states
+        // (`consts.rs` `MAX_ARCHIVED_SESSIONS`). A Whisper message the current
+        // state cannot open is tried against them; an archived state that
+        // decrypts is updated in place and never promoted to current
+        // (libsignal v0.108.5 `session_management.rs`
+        // `try_decrypt_with_all_sessions`).
         let mut plaintext = signal
             .decrypt_message_identified(envelope, &sender_id.to_string(), sender_device_id)
             .await?;

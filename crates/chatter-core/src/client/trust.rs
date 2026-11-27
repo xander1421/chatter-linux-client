@@ -1,5 +1,27 @@
 use super::*;
 
+/// Consecutive failed own-identity checks before the user is told the log
+/// history is unverified.
+const OWNER_FAILURE_ALERT: u32 = 3;
+
+/// Persist the failure streak of the own-identity monitor and return its new
+/// length. The streak survives restarts: a process killed every few minutes
+/// (Android) would otherwise never reach the alert.
+fn record_owner_check(
+    settings: &crate::storage::repositories::SettingsRepository,
+    label: &str,
+    ok: bool,
+) -> Result<u32, crate::error::StorageError> {
+    let key = format!("kt.owner_monitor.failures.{label}");
+    if ok {
+        settings.delete(&key)?;
+        return Ok(0);
+    }
+    let streak = settings.get::<u32>(&key)?.unwrap_or(0).saturating_add(1);
+    settings.set(&key, &streak)?;
+    Ok(streak)
+}
+
 impl ChatterClient {
     /// Whether this account has a durably recorded transparency mismatch.
     pub fn own_identity_change_detected(&self) -> Result<bool, crate::error::ServiceError> {
@@ -26,7 +48,7 @@ impl ChatterClient {
             };
             let label = user_id.to_string();
             let mut last_mismatch = None;
-            let mut consecutive_failures = 0u8;
+            let mut alerted = false;
             while client.session_revision() == session.session_revision {
                 let check = async {
                     let expected = client.signal().get_identity_public_key().await?;
@@ -55,7 +77,12 @@ impl ChatterClient {
                 }
                 let delay = match result {
                     Ok(mismatch) => {
-                        consecutive_failures = 0;
+                        alerted = false;
+                        if let Err(error) =
+                            record_owner_check(&client.signal().settings_repo, &label, true)
+                        {
+                            tracing::warn!(%error, "Could not clear the transparency failure streak");
+                        }
                         if last_mismatch != Some(mismatch) {
                             last_mismatch = Some(mismatch);
                             client
@@ -65,9 +92,14 @@ impl ChatterClient {
                         Duration::from_secs(60 * 60)
                     }
                     Err(error) => {
-                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        // A settings failure alerts too: the streak can no
+                        // longer be counted, so the history is not vouched for.
+                        let consecutive_failures =
+                            record_owner_check(&client.signal().settings_repo, &label, false)
+                                .unwrap_or(u32::MAX);
                         tracing::warn!(%error, consecutive_failures, "Own identity transparency check failed");
-                        if consecutive_failures == 3 {
+                        if consecutive_failures >= OWNER_FAILURE_ALERT && !alerted {
+                            alerted = true;
                             client
                                 .event_bus()
                                 .emit_domain(DomainEvent::KeyTransparencyHistoryUnverified);
@@ -244,5 +276,37 @@ impl ChatterClient {
     /// safety-number flows).
     pub async fn my_identity_fingerprint(&self) -> Result<String, crate::error::ServiceError> {
         self.signal().get_identity_fingerprint().await
+    }
+}
+
+#[cfg(test)]
+mod owner_monitor_tests {
+    use super::{OWNER_FAILURE_ALERT, record_owner_check};
+    use crate::storage::{Database, repositories::SettingsRepository};
+    use std::sync::Arc;
+
+    #[test]
+    fn failure_streak_survives_a_restart_and_resets_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust.db");
+        let open = || {
+            let db = Database::open(&path, "trust tests").unwrap();
+            db.run_migrations().unwrap();
+            SettingsRepository::new(Arc::new(db))
+        };
+        {
+            let settings = open();
+            assert_eq!(record_owner_check(&settings, "owner", false).unwrap(), 1);
+            assert_eq!(record_owner_check(&settings, "owner", false).unwrap(), 2);
+        }
+        // A fresh process continues the streak and reaches the alert.
+        let settings = open();
+        assert_eq!(
+            record_owner_check(&settings, "owner", false).unwrap(),
+            OWNER_FAILURE_ALERT
+        );
+        assert_eq!(record_owner_check(&settings, "other", false).unwrap(), 1);
+        assert_eq!(record_owner_check(&settings, "owner", true).unwrap(), 0);
+        assert_eq!(record_owner_check(&settings, "owner", false).unwrap(), 1);
     }
 }
