@@ -206,10 +206,11 @@ export component MessageFooter inherits HorizontalLayout {
                 accessible-label: root.delivery-status == "upload-queued" ? @tr("Queued behind an earlier send; upload has not started") : root.delivery-status == "waiting-tor" ? @tr("Waiting for Tor") : @tr("Sending");
             }
 
-            if root.is-own && !root.mesh-delivery && (root.delivery-status == "verifying-key" || root.delivery-status == "key-not-verified" || root.delivery-status == "identity-changed" || root.delivery-status == "waiting-anonymous-credentials"): Text {
+            if root.is-own && !root.mesh-delivery && (root.delivery-status == "verifying-key" || root.delivery-status == "key-not-verified" || root.delivery-status == "identity-changed" || root.delivery-status == "waiting-anonymous-credentials" || root.delivery-status == "waiting-group-settings"): Text {
                 text: root.delivery-status == "verifying-key" ? @tr("Verifying key")
                     : root.delivery-status == "key-not-verified" ? @tr("Key not verified")
                     : root.delivery-status == "identity-changed" ? @tr("Identity changed")
+                    : root.delivery-status == "waiting-group-settings" ? @tr("Waiting for group settings")
                     : @tr("Waiting for anonymous credentials");
                 color: root.overlay-media ? #ffffff : Colors.text-muted;
                 font-size: Typography.xs;
@@ -293,7 +294,7 @@ export component MessageFooter inherits HorizontalLayout {
             }
 
             if root.is-own && !root.mesh-delivery && root.delivery-status != "upload-queued" && root.delivery-status != "sending" && root.delivery-status != "waiting-tor" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked"
-                && root.delivery-status != "verifying-key" && root.delivery-status != "key-not-verified" && root.delivery-status != "identity-changed" && root.delivery-status != "waiting-anonymous-credentials": ticks := Rectangle {
+                && root.delivery-status != "verifying-key" && root.delivery-status != "key-not-verified" && root.delivery-status != "identity-changed" && root.delivery-status != "waiting-anonymous-credentials" && root.delivery-status != "waiting-group-settings": ticks := Rectangle {
                 // Only a receipt earns the second tick; an own row whose
                 // status is still empty (a Saved photo just sent) is "sent".
                 property <bool> double-tick: root.delivery-status == "delivered" || root.delivery-status == "read";

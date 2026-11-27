@@ -182,7 +182,8 @@ impl MessageService {
     /// Record exactly the devices an SKDM deposit reached (`deposits` of its
     /// [`super::super::server_dm::DepositOutcome`]), each under the registration id
     /// of the session it was encrypted with (`registration_ids`). A device
-    /// without one is not recorded, so it still counts as lacking our key.
+    /// without one is recorded under 0, which no session has: it still counts
+    /// as lacking our key, but it holds it, so its removal rotates the key.
     pub(in crate::services::message) fn record_sender_key_holders(
         &self,
         channel_id: &ChannelId,
@@ -192,12 +193,12 @@ impl MessageService {
         let devices: Vec<(u32, u32)> = outcome
             .deposits
             .iter()
-            .filter_map(|&(device, _)| {
+            .map(|&(device, _)| {
                 let registration_id = outcome.registration_ids.get(&device).copied();
                 if registration_id.is_none() {
-                    tracing::warn!(%channel_id, member_id, device, "SKDM deposit without a registration id — not recorded as held");
+                    tracing::warn!(%channel_id, member_id, device, "SKDM deposit without a registration id — recorded as held, still lacking");
                 }
-                registration_id.map(|r| (device, r))
+                (device, registration_id.unwrap_or(0))
             })
             .collect();
         {

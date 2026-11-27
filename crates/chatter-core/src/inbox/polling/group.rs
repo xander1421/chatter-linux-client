@@ -398,31 +398,28 @@ async fn process_sealed_sender_group_message(
             );
             return group_desync_decision(group_id, sender_id, envelope_ts_ns, message_repo, domain_tx);
         }
-        // A member's retry request that arrived here rather than in the
-        // device inbox is answered all the same.
-        SealedSenderResult::ResendRequested {
-            peer_id,
-            peer_device_id,
-            timestamp_ms,
-        } => {
-            let _ = event_tx.send(InboxEvent::GroupResendRequested {
-                peer_id,
-                peer_device_id,
-                timestamp_ms,
-            });
+        // A retry request that arrives through a group mailbox is not
+        // answered: the answer (the resent post, or a NullMessage) is a
+        // deposit into the requester's device inbox right after this fetch,
+        // which links this device to the anonymous post. Honest clients send
+        // no such request here (`group_desync_decision`). The session the
+        // request names is still healed.
+        SealedSenderResult::ResendRequested { peer_id, peer_device_id, .. } => {
+            tracing::info!(group_id = %group_id, %peer_id, peer_device_id,
+                "Retry request via group mailbox not answered");
         }
         SealedSenderResult::SessionHealed {
             peer_id,
             peer_device_id,
             archived,
-            timestamp_ms,
+            ..
         } => {
             tracing::info!(
                 group_id = %group_id,
                 message_id = %message_id,
                 peer_id = %peer_id,
                 archived,
-                "DecryptionErrorMessage processed via group mailbox path"
+                "DecryptionErrorMessage via group mailbox: session healed, no resend"
             );
             if let Some(tx) = domain_tx {
                 let _ = tx.send(DomainEvent::DmSessionHealed {
@@ -431,11 +428,6 @@ async fn process_sealed_sender_group_message(
                     archived,
                 });
             }
-            let _ = event_tx.send(InboxEvent::DmResendRequested {
-                peer_id,
-                peer_device_id,
-                timestamp_ms,
-            });
         }
         // SKDMs ride the device inbox (sealed sender), not the group mailbox;
         // if one lands here the key is still installed by the gateway. There is

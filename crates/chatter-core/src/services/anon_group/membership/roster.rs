@@ -1,5 +1,8 @@
 use super::*;
 
+/// Tries to queue the group timer for a joiner before giving up.
+const JOIN_TIMER_QUEUE_ATTEMPTS: u32 = 3;
+
 impl AnonGroupService {
     /// Handle a JoinAck from an invitee: record its mailbox key, device and
     /// profile, and broadcast the updated member list.
@@ -49,13 +52,19 @@ impl AnonGroupService {
         // The joiner starts with no timer and cannot tell "off" from "not yet
         // heard", so tell it the group's timer ahead of anything else we hold
         // for it: queued here, it rides the drain below and survives restarts.
+        // The joiner holds its posts until this arrives, so a failed queue
+        // write is retried, a bounded number of times.
         if let Some(update) = self.join_timer_update(&group_id, timestamp)? {
-            if let Err(e) = self.anon_group_repo.enqueue_pending_message(
-                &group_id,
-                &joiner_id,
-                &update.encode_to_vec(),
-            ) {
-                tracing::warn!(error = %e, "Failed to queue group timer for joiner");
+            let update = update.encode_to_vec();
+            for attempt in 1..=JOIN_TIMER_QUEUE_ATTEMPTS {
+                match self.anon_group_repo.enqueue_pending_message(&group_id, &joiner_id, &update) {
+                    Ok(_) => break,
+                    Err(e) if attempt < JOIN_TIMER_QUEUE_ATTEMPTS => {
+                        tracing::warn!(error = %e, attempt, "Failed to queue group timer for joiner; retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(200 * u64::from(attempt))).await;
+                    }
+                    Err(e) => tracing::error!(error = %e, "Failed to queue group timer for joiner; its posts wait for a member's post"),
+                }
             }
         }
 

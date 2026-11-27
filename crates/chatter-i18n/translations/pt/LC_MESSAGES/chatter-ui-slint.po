@@ -5987,6 +5987,9 @@ msgstr "Não foi possível ligar ao servidor através do Tor. O Shield continua 
 msgid "Waiting for anonymous credentials"
 msgstr "A aguardar credenciais anónimas"
 
+msgid "Waiting for group settings"
+msgstr "A aguardar as definições do grupo"
+
 msgid "Incoming calls on the lock screen"
 msgstr "Chamadas recebidas na tela de bloqueio"
 

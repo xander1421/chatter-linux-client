@@ -6025,6 +6025,9 @@ msgstr "Не вдалося з’єднатися із сервером чере
 msgid "Waiting for anonymous credentials"
 msgstr "Очікування анонімних облікових даних"
 
+msgid "Waiting for group settings"
+msgstr "Очікування налаштувань групи"
+
 msgid "Incoming calls on the lock screen"
 msgstr "Вхідні виклики на екрані блокування"
 

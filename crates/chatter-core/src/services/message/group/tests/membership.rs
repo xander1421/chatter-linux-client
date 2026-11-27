@@ -577,7 +577,7 @@
     /// A device whose registration id is unknown lacks our key, and an
     /// SKDM deposit without one is not recorded as held.
     #[tokio::test]
-    async fn device_without_registration_id_is_never_a_holder() {
+    async fn device_without_registration_id_still_lacks_the_key_but_is_recorded() {
         let t = two_members();
         let alice = t.alice.messages();
         let (channel, bob) = (t.channel_id, t.bob_id.to_string());
@@ -588,13 +588,10 @@
         let mut outcome = reached(&[(1, 101)]);
         outcome.registration_ids.clear();
         alice.record_sender_key_holders(&channel, &bob, &outcome);
-        assert!(
-            alice
-                .signal_service
-                .sender_key_holders(&channel)
-                .unwrap()
-                .is_empty()
-        );
+        let held = alice.signal_service.sender_key_holders(&channel).unwrap();
+        // Recorded for removal checks under 0, which matches no session.
+        assert_eq!(held, [(bob.clone(), 1, 0)].into());
+        assert!(lacks_sender_key(&held, &bob, &[(1, Some(101))], false));
     }
 
     /// Our own device list, as `own_device_ids` would have fetched it.
@@ -727,6 +724,27 @@
         let extra = chatter_proto::chat_v1::MismatchedDevices { extra_devices: vec![1], ..Default::default() };
         alice.signal_service.reconcile_private_post_devices(&mut source, &bob, &extra).await.unwrap();
         assert!(alice.signal_service.check_and_clear_rotation_needed(&other).unwrap());
+    }
+
+    /// An accepted post is addressed to every registered device. A holder it
+    /// did not address is gone, even when no `extra` ever named it (its
+    /// session was archived first): the next post rotates.
+    #[tokio::test]
+    async fn a_holder_the_accepted_post_did_not_address_rotates_the_key() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(1, 101), (2, 202)]));
+        let me = alice.signal_service.get_our_address().unwrap();
+        let addressed = |devices: &[u32]| -> std::collections::HashSet<(String, u32)> {
+            devices.iter().map(|&d| (bob.clone(), d))
+                .chain([(me.name().to_owned(), u32::from(me.device_id()))])
+                .collect()
+        };
+        alice.signal_service.rotate_if_holders_unaddressed(&channel, &addressed(&[1, 2])).unwrap();
+        assert!(!alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
+        alice.signal_service.rotate_if_holders_unaddressed(&channel, &addressed(&[1])).unwrap();
+        assert!(alice.signal_service.check_and_clear_rotation_needed(&channel).unwrap());
     }
 
     /// A new key has reached nobody: rotation clears every holder. The old

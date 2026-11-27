@@ -453,7 +453,7 @@ fn group_transient_failure_is_not_acked() {
 /// and the loop never dispatches the repair report: that report is a deposit
 /// into the poster's own device inbox, which would name the anonymous poster.
 #[test]
-fn group_desync_is_marked_and_sends_no_repair_report_to_the_poster() {
+fn group_mailbox_sends_no_repair_report_or_resend_to_a_member() {
     let (_d, repo) = repo();
     let group = ChannelId::new();
     let decision =
@@ -465,7 +465,16 @@ fn group_desync_is_marked_and_sends_no_repair_report_to_the_poster() {
     );
     // The report event is what makes the inbox processor deposit to the
     // poster (`services/inbox_processor/protocol.rs`); this loop must not emit it.
-    assert!(!include_str!("group.rs").contains("InboxEvent::DmDecryptionErrorNeedsReport"));
+    // Nor does it answer a retry request: the resend or NullMessage would be
+    // a deposit from the poster to the requester's device inbox.
+    let source = include_str!("group.rs");
+    for event in [
+        "InboxEvent::DmDecryptionErrorNeedsReport",
+        "InboxEvent::GroupResendRequested",
+        "InboxEvent::DmResendRequested",
+    ] {
+        assert!(!source.contains(event), "group mailbox emits {event}");
+    }
 }
 
 // ===========================================================================

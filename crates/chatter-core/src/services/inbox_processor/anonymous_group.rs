@@ -540,6 +540,7 @@ impl InboxEventProcessor {
         let inner_content_ref = inner_content.clone();
 
         let _ = tokio::task::spawn_blocking(move || {
+            let timer_was_known = anon_group_service.group_timer_known(&anon_group_id);
             match anon_group_service.process_incoming_content(
                 &anon_group_id,
                 &peer_id,
@@ -566,6 +567,18 @@ impl InboxEventProcessor {
                             ));
                         }
                         event_bus.emit_domain(event);
+                    }
+                    if applied_roster.is_none() && !timer_was_known {
+                        // Posts held for the group timer go as soon as it is known.
+                        let service = anon_group_service.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) = service
+                                .release_held_if_timer_learned(&anon_group_id, timer_was_known)
+                                .await
+                            {
+                                tracing::warn!(%error, "Held group post retry after timer failed");
+                            }
+                        });
                     }
                     if let Some(members) = applied_roster {
                         tokio::spawn(async move {

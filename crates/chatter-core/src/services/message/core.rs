@@ -26,6 +26,9 @@ pub(crate) const NO_TOR_ROUTE: &str = "No Tor route";
 pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
 pub(crate) const WAITING_FOR_ANONYMOUS_CREDENTIALS: &str = "Waiting for anonymous credentials";
+/// A private-group post held until this device learns the group's
+/// disappearing timer (`anon_group/messaging.rs` `post_hold_reason`).
+pub(crate) const WAITING_FOR_GROUP_SETTINGS: &str = "Waiting for group settings";
 pub(crate) const VERIFYING_KEY: &str = "Verifying key";
 pub(crate) const IDENTITY_CHANGED: &str = "Identity changed";
 pub(crate) const SHIELD_VERIFYING_KEY: &str = "Verifying key over Tor";

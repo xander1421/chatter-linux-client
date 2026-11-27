@@ -6024,6 +6024,9 @@ msgstr "Serverul nu a putut fi accesat prin Tor. Shield rămâne activ."
 msgid "Waiting for anonymous credentials"
 msgstr "Se așteaptă credențiale anonime"
 
+msgid "Waiting for group settings"
+msgstr "Se așteaptă setările grupului"
+
 msgid "Incoming calls on the lock screen"
 msgstr "Apeluri primite pe ecranul de blocare"
 

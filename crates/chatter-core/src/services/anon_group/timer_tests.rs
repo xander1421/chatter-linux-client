@@ -258,18 +258,30 @@ async fn a_joiners_post_waits_for_the_timer_and_is_armed_at_release() {
     let ephemeral = EphemeralRepository::new(svc.settings_repo.database().clone());
     let id = row.as_str().parse().unwrap();
     assert!(ephemeral.get(&id).unwrap().is_none(), "nothing to arm before the timer is known");
+    // The bubble says why it waits.
+    let stored = svc.message_service.message_repo.get(&id).unwrap().unwrap();
+    assert_eq!(
+        crate::services::message::display_delivery_status(&stored.delivery_status, stored.failure_reason.as_deref()),
+        "waiting-group-settings"
+    );
 
     // Released while the timer is still unknown: it keeps waiting.
     svc.retry_held_posts_for_group(&f.group_id).await.unwrap();
     assert_eq!(super::send_ledger::held_posts(&svc.message_service.database, &f.group_id.to_string()).unwrap().len(), 1);
 
+    // Learning the timer releases the held post at once (the inbox
+    // processor calls this after every group message). No server here:
+    // release stamps and arms it, clears the waiting reason, and delivery
+    // then stays pending.
+    let was_known = svc.group_timer_known(&f.group_id);
     svc.process_incoming_content(&f.group_id, &f.owner, &timer_update_content(timer(30, 2), 1_000))
         .unwrap();
     assert!(secret_chat_timer_known(&svc.settings_repo, chat));
-    // No server here: release stamps and arms, then delivery stays pending.
-    let _ = svc.retry_held_posts_for_group(&f.group_id).await;
+    let _ = svc.release_held_if_timer_learned(&f.group_id, was_known).await;
     let armed = ephemeral.get(&id).unwrap().expect("armed at release");
     assert_eq!(armed.ttl.as_secs(), 30);
+    let stored = svc.message_service.message_repo.get(&id).unwrap().unwrap();
+    assert_ne!(stored.failure_reason.as_deref(), Some(crate::services::message::core::WAITING_FOR_GROUP_SETTINGS));
 
     let me = svc.current_user_id().unwrap().to_string();
     let (_, unstamped) = &held[0];

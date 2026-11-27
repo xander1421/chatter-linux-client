@@ -484,6 +484,13 @@ impl MessageService {
                 .send_group_message(&request.channel_id, token.clone(), sealed, &request.client_request_id)
                 .await?;
             if resp.success {
+                let addressed = destinations.iter()
+                    .map(|a| (a.name().to_owned(), u32::from(a.device_id())))
+                    .collect();
+                // The post is accepted: a failure here must not fail (and so resend) it.
+                if let Err(error) = self.signal_service.rotate_if_holders_unaddressed(&channel_id, &addressed) {
+                    tracing::error!(%channel_id, %error, "Could not check sender-key holders after a private post");
+                }
                 if retain_resend_targets {
                     use prost::Message as _;
                     let original = chatter_proto::content_v1::GroupEncrypted::decode(contents.as_slice())

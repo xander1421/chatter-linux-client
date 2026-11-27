@@ -403,6 +403,32 @@ impl SignalService {
         Ok(())
     }
 
+    /// The server accepted a post addressed to `addressed`. It refuses a
+    /// group send unless the recipients are every active member and each
+    /// member's devices are exactly its registered ones, so `addressed` is the
+    /// channel's current device list. A holder outside it was removed (also
+    /// one whose session we archived first, which never shows up as `extra`):
+    /// rotate before the next post (Signal-Desktop `removedFromMemberDevices`).
+    pub(crate) fn rotate_if_holders_unaddressed(
+        &self,
+        channel_id: &ChannelId,
+        addressed: &std::collections::HashSet<(String, u32)>,
+    ) -> Result<(), ServiceError> {
+        let ours = self.get_our_address()?;
+        let ours = (ours.name().to_owned(), u32::from(ours.device_id()));
+        let gone: Vec<(String, u32)> = self
+            .sender_key_holders(channel_id)?
+            .into_iter()
+            .map(|(user, device, _)| (user, device))
+            .filter(|holder| *holder != ours && !addressed.contains(holder))
+            .collect();
+        if !gone.is_empty() {
+            tracing::info!(%channel_id, ?gone, "Sender-key holder no longer registered: rotation required");
+            self.mark_channel_for_rotation(channel_id)?;
+        }
+        Ok(())
+    }
+
     /// Mark a channel as needing sender key rotation.
     pub fn mark_channel_for_rotation(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
         let key = format!("sender_key_rotation_needed:{}", channel_id);
