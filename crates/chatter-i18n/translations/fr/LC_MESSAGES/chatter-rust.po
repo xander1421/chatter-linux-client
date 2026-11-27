@@ -4198,3 +4198,6 @@ msgstr "Vérification de sa clé de sécurité en cours. Réessaie dans un insta
 
 msgid "This contact’s security key could not be trusted."
 msgstr "La clé de sécurité de ce contact ne peut pas être considérée comme fiable."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "Le sélecteur de fichiers est indisponible. Vérifie qu’un portail de sélection de fichiers est installé et actif."

@@ -4184,3 +4184,6 @@ msgstr "Estamos verificando su clave de seguridad. Inténtalo de nuevo en un mom
 
 msgid "This contact’s security key could not be trusted."
 msgstr "No se pudo confiar en la clave de seguridad de este contacto."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "El selector de archivos no está disponible. Comprueba que haya un portal de selección de archivos instalado y en ejecución."

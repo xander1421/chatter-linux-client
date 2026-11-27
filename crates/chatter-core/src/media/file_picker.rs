@@ -2,13 +2,8 @@
 //!
 //! Native file dialogs using rfd (Rusty File Dialogs).
 //!
-//! On Linux rfd is built with the `gtk3` backend (in-process
-//! `GtkFileChooserDialog` via gtk-sys) rather than the portal/ashpd path.
-//! Hyprland and other wlroots-derived compositors removed `xdg_foreign`
-//! support, which makes the portal FileChooser unusable: without an
-//! exportable parent surface, xdg-desktop-portal-gtk's FileChooser impl
-//! hangs forever waiting for one. gtk3 dialogs render their own toplevel
-//! and don't need a parent identifier.
+//! Linux uses the XDG FileChooser portal. Dialogs are left unparented so
+//! Wayland compositors without xdg-foreign can open them.
 
 use std::path::PathBuf;
 
@@ -163,27 +158,62 @@ fn dialogs_available() -> bool {
     if cfg!(target_os = "linux") {
         let x11 = std::env::var_os("DISPLAY").is_some();
         let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-        // GTK honours GDK_BACKEND strictly: naming a backend whose display is
-        // absent makes gtk_init fail, and rfd's dialog future then never
-        // resolves, leaving every later pick waiting behind it.
-        return match std::env::var("GDK_BACKEND").ok().as_deref() {
-            Some("wayland") => wayland,
-            Some("x11") => x11,
-            _ => x11 || wayland,
-        };
+        return x11 || wayland;
     }
     true
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FilePickerError {
+    #[error("XDG desktop FileChooser portal is unavailable")]
+    PortalUnavailable,
+}
+
+impl FilePickerError {
+    pub fn user_message(&self) -> String {
+        chatter_i18n::tr(
+            "The desktop file picker is unavailable. Check that a file chooser portal is installed and running.",
+        )
+    }
+}
+
+// rfd returns None both for cancellation and for portal/Zenity failure.
+// Probe the actual FileChooser interface before handing off to rfd.
+async fn check_file_chooser() -> Result<(), FilePickerError> {
+    #[cfg(target_os = "linux")]
+    {
+        let probe = async {
+            let connection = zbus::Connection::session().await?;
+            let chooser = zbus::Proxy::new(
+                &connection,
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.FileChooser",
+            )
+            .await?;
+            chooser.get_property::<u32>("version").await
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(5), probe).await {
+            Ok(Ok(_)) => {}
+            error => {
+                tracing::warn!(?error, "XDG desktop FileChooser unavailable");
+                return Err(FilePickerError::PortalUnavailable);
+            }
+        }
+    }
+    Ok(())
 }
 
 impl FilePicker {
     /// Open a single file selection dialog.
     ///
     /// Returns `None` if the user cancels the dialog.
-    pub async fn pick_file(config: FilePickerConfig) -> Option<PathBuf> {
+    pub async fn pick_file(config: FilePickerConfig) -> Result<Option<PathBuf>, FilePickerError> {
         if !dialogs_available() {
             tracing::debug!("[file_picker] headless — pick_file resolves to cancelled");
-            return None;
+            return Ok(None);
         }
+        check_file_chooser().await?;
         tracing::info!("[file_picker] pick_file — opening rfd dialog");
         let result = build_dialog(&config)
             .pick_file()
@@ -193,17 +223,18 @@ impl FilePicker {
             picked = result.is_some(),
             "[file_picker] pick_file returned"
         );
-        result
+        Ok(result)
     }
 
     /// Open a multiple file selection dialog.
     ///
     /// Returns an empty vector if the user cancels the dialog.
-    pub async fn pick_files(config: FilePickerConfig) -> Vec<PathBuf> {
+    pub async fn pick_files(config: FilePickerConfig) -> Result<Vec<PathBuf>, FilePickerError> {
         if !dialogs_available() {
             tracing::debug!("[file_picker] headless — pick_files resolves to none");
-            return Vec::new();
+            return Ok(Vec::new());
         }
+        check_file_chooser().await?;
         tracing::info!("[file_picker] pick_files — opening rfd dialog");
         let result: Vec<PathBuf> = build_dialog(&config)
             .pick_files()
@@ -211,34 +242,36 @@ impl FilePicker {
             .map(|files| files.into_iter().map(|f| f.path().to_path_buf()).collect())
             .unwrap_or_default();
         tracing::info!(count = result.len(), "[file_picker] pick_files returned");
-        result
+        Ok(result)
     }
 
     /// Open a folder selection dialog.
     ///
     /// Returns `None` if the user cancels the dialog.
-    pub async fn pick_folder(title: Option<&str>) -> Option<PathBuf> {
+    pub async fn pick_folder(title: Option<&str>) -> Result<Option<PathBuf>, FilePickerError> {
         if !dialogs_available() {
             tracing::debug!("[file_picker] headless — pick_folder resolves to cancelled");
-            return None;
+            return Ok(None);
         }
+        check_file_chooser().await?;
         let mut dialog = rfd::AsyncFileDialog::new();
 
         if let Some(title) = title {
             dialog = dialog.set_title(title);
         }
 
-        dialog.pick_folder().await.map(|f| f.path().to_path_buf())
+        Ok(dialog.pick_folder().await.map(|f| f.path().to_path_buf()))
     }
 
     /// Open a save file dialog.
     ///
     /// Returns `None` if the user cancels the dialog.
-    pub async fn save_file(config: FilePickerConfig) -> Option<PathBuf> {
+    pub async fn save_file(config: FilePickerConfig) -> Result<Option<PathBuf>, FilePickerError> {
         if !dialogs_available() {
             tracing::debug!("[file_picker] headless — save_file resolves to cancelled");
-            return None;
+            return Ok(None);
         }
+        check_file_chooser().await?;
         let mut dialog = rfd::AsyncFileDialog::new();
 
         if let Some(title) = &config.title {
@@ -263,7 +296,7 @@ impl FilePicker {
             dialog = dialog.add_filter(&filter.name, &extensions);
         }
 
-        dialog.save_file().await.map(|f| f.path().to_path_buf())
+        Ok(dialog.save_file().await.map(|f| f.path().to_path_buf()))
     }
 }
 
@@ -330,17 +363,20 @@ mod headless_tests {
         assert!(
             FilePicker::pick_file(FilePickerConfig::new())
                 .await
+                .unwrap()
                 .is_none()
         );
         assert!(
             FilePicker::pick_files(FilePickerConfig::new())
                 .await
+                .unwrap()
                 .is_empty()
         );
-        assert!(FilePicker::pick_folder(None).await.is_none());
+        assert!(FilePicker::pick_folder(None).await.unwrap().is_none());
         assert!(
             FilePicker::save_file(FilePickerConfig::new())
                 .await
+                .unwrap()
                 .is_none()
         );
     }

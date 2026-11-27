@@ -121,6 +121,11 @@ and the session audio service. Package availability and ABI versions must be
 checked on the chosen release distribution. Build hosts additionally need the
 matching development headers/pkg-config packages, Rust, clang and mold.
 
+File dialogs use the desktop session's XDG FileChooser portal. Install
+`xdg-desktop-portal`, a FileChooser backend for the desktop environment, and the
+D-Bus shared library (`libdbus-1-3` on Debian/Ubuntu). The system-library checker
+can run outside a graphical session.
+
 After unpacking, run on the destination host before copying or launching:
 
 ```sh

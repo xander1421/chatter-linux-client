@@ -118,7 +118,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let config = chatter_core::media::FilePickerConfig::new()
                         .with_title(chatter_i18n::tr("Select channel icon"))
                         .with_filter(chatter_core::media::FileFilter::images());
-                    chatter_core::media::FilePicker::pick_file(config).await
+                    crate::bin_ui::ui_helpers::picker_or_cancel(&weak, chatter_core::media::FilePicker::pick_file(config).await)
                 };
                 // Android has no `rfd` backend; go through the SAF bridge (§112p).
                 #[cfg(target_os = "android")]

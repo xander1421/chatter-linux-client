@@ -4182,3 +4182,6 @@ msgstr "Перевіряємо ключ безпеки контакту. Спр�
 
 msgid "This contact’s security key could not be trusted."
 msgstr "Ключ безпеки цього контакту не є довіреним."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "Діалог вибору файлів недоступний. Переконайтеся, що портал вибору файлів установлено й запущено."

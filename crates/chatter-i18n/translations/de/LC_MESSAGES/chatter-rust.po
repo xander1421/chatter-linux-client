@@ -4238,3 +4238,6 @@ msgstr "Der Sicherheitsschlüssel des Kontakts wird geprüft. Versuche es gleich
 
 msgid "This contact’s security key could not be trusted."
 msgstr "Der Sicherheitsschlüssel dieses Kontakts ist nicht vertrauenswürdig."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "Die Dateiauswahl ist nicht verfügbar. Prüfe, ob ein Dateiauswahlportal installiert und aktiv ist."

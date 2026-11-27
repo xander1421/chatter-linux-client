@@ -4161,3 +4161,6 @@ msgstr "Проверяем ключ безопасности контакта. �
 
 msgid "This contact’s security key could not be trusted."
 msgstr "Ключ безопасности этого контакта не является доверенным."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "Диалог выбора файлов недоступен. Проверьте, что портал выбора файлов установлен и запущен."

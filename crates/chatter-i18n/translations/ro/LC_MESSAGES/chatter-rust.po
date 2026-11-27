@@ -4203,3 +4203,6 @@ msgstr "Verificăm cheia de securitate a contactului. Încearcă din nou peste c
 
 msgid "This contact’s security key could not be trusted."
 msgstr "Cheia de securitate a acestui contact nu este de încredere."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "Selectorul de fișiere nu este disponibil. Verifică dacă portalul de selectare a fișierelor este instalat și rulează."

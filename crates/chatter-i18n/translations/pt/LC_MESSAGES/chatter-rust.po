@@ -4167,3 +4167,6 @@ msgstr "A verificar a chave de segurança do contacto. Tenta novamente dentro de
 
 msgid "This contact’s security key could not be trusted."
 msgstr "A chave de segurança deste contacto não é fiável."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "O seletor de ficheiros não está disponível. Verifica se existe um portal de seleção de ficheiros instalado e em execução."
