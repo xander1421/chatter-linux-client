@@ -299,6 +299,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_System_Memory",
     "Win32_System_Threading",
+    "Win32_System_SystemInformation",
     "Win32_System_Diagnostics_Debug",
 ] }
 tray-icon = { version = "0.26.1", optional = true }
@@ -327,6 +328,11 @@ chatter-attachment-crypto = { path = "../chatter-attachment-crypto", features = 
 # `test_plaintext` for unit tests.
 chatter-proto = { path = "../chatter-proto", features = ["testing"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The integration tests in `tests/` link this crate without `cfg(test)`; they
+# run headless with the keyring opted out, so their build carries the opt-out.
+# Consequence: `cargo test --release` (or any release-inheriting profile) stops
+# in build.rs. Tests run in the dev profile.
+chatter-core = { path = ".", default-features = false, features = ["insecure-no-keyring"] }
 # Paused-clock tests (heartbeat.rs `start_paused`).
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"
@@ -439,6 +445,12 @@ testing = ["chatter-mesh-noise?/testing", "chatter-proto/testing"]
 # with no feature at all; this exists for the integration tests in `tests/`,
 # which link chatter-core as an ordinary dependency with `cfg(test)` unset.
 insecure-test-anchors = []
+# Compiles in the keyring opt-outs (`CHATTER_NO_KEYRING`, the `no-keyring`
+# marker, `CHATTER_DB_PASSPHRASE_FILE`; system/keyring.rs). With them the
+# database passphrase is a plaintext file beside the database. For headless
+# development and test rigs only: build.rs refuses it in a release profile, and
+# without it those switches do nothing.
+insecure-no-keyring = []
 
 [package.metadata.docs.rs]
 # `testing` so the widened accessors appear; `insecure-test-anchors` so the

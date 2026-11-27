@@ -104,7 +104,9 @@ mac() {
   [ -n "$id" ] || fail "no codesigning identity; see ./ship.sh doctor"
 
   say "cargo build -p chatter-ui ($PROFILE)"
-  ( cd "$ROOT" && cargo build -p chatter-ui $( [ "$PROFILE" = release ] && echo --release ) )
+  # The env passphrase below only works in an insecure-no-keyring build, which
+  # chatter-core refuses in a release profile: a release bundle uses the keychain.
+  ( cd "$ROOT" && cargo build -p chatter-ui $( [ "$PROFILE" = release ] && echo --release || echo --features insecure-no-keyring ) )
 
   say "bundle + sign"
   "$ROOT/macos/bundle.sh" "$PROFILE" "$id"
@@ -113,7 +115,7 @@ mac() {
   codesign --verify --deep --strict "$app"
   echo "signed ok: $app"
 
-  # CHATTER_DB_PASSPHRASE bypasses the keyring (keyring.rs:81). Without it the
+  # CHATTER_DB_PASSPHRASE bypasses the keyring (dev builds only). Without it the
   # Developer-signed bundle is a different code identity from the binary that
   # created the keychain item, so macOS raises a blocking modal and startup
   # hangs until a human clicks Always Allow.

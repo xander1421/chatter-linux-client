@@ -1,6 +1,7 @@
 //! UnifiedPush JNI bridge.
 //!
-//! When the user has a UnifiedPush distributor app installed (e.g. ntfy), that
+//! Once the user has picked a UnifiedPush distributor app (e.g. ntfy) in the
+//! Activity's consent prompt (`MainActivity.maybeShowUnifiedPushPrompt`), that
 //! app holds the single persistent push socket and delivers wakes to Chatter
 //! through `UnifiedPushReceiver` (Kotlin), which calls these entry points. The
 //! core then drops its own ntfy SSE socket (see `push_config.rs`), so the device
@@ -68,6 +69,29 @@ pub extern "system" fn Java_com_chatter_client_UnifiedPushReceiver_nativeOnUnreg
             });
         }
         Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+/// A distributor was saved without the user's consent and has just been
+/// unregistered (`UnifiedPushReceiver.chosenDistributor`). Clear the server
+/// endpoint and this device's flag so the core's own socket comes back. Returns
+/// false while the core is not up yet; Kotlin keeps the reset pending.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_UnifiedPushReceiver_nativeResetEndpoint(
+    mut env: jni::EnvUnowned<'_>,
+    _class: JClass,
+) -> jni::sys::jboolean {
+    env.with_env(|_env| -> jni::errors::Result<_> {
+        let Some(client) = crate::android_client() else {
+            return Ok(false);
+        };
+        crate::rt_handle().spawn(async move {
+            if let Err(e) = client.disable_unified_push().await {
+                tracing::warn!(error = %e, "UnifiedPush consent reset failed");
+            }
+        });
+        Ok(true)
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
 }

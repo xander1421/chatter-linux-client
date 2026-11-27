@@ -750,6 +750,7 @@ class MainActivity : GameActivity() {
             MessagingService.setSignedIn(this, signedIn)
             messagingSignedIn = signedIn
             updateMessagingService()
+            maybeShowUnifiedPushPrompt()
         }
     }
 
@@ -771,6 +772,10 @@ class MainActivity : GameActivity() {
     override fun onPause() {
         // Start while the Activity still has foreground-start eligibility.
         activityResumed = false
+        // The UnifiedPush prompt waits for core to report the app unlocked again
+        // after this pause (App Lock may engage while away).
+        unifiedPushPrompt = null
+        unifiedPushDialog?.dismiss()
         messagingBackground = true
         meshBleAppVisible = false
         nativeSetAppVisible(false)
@@ -785,6 +790,7 @@ class MainActivity : GameActivity() {
         applySecureScreen()
         refreshFullScreenCallState()
         maybeShowFullScreenCallPrompt()
+        maybeShowUnifiedPushPrompt()
         // A prelaunched Activity can be resumed without ever gaining focus.
         updateAppVisibility(window.decorView.hasWindowFocus())
         if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)
@@ -795,12 +801,14 @@ class MainActivity : GameActivity() {
         if (hasFocus && activityResumed) {
             refreshFullScreenCallState()
             maybeShowFullScreenCallPrompt()
+            maybeShowUnifiedPushPrompt()
         }
         updateAppVisibility(hasFocus)
     }
 
     private fun updateAppVisibility(hasFocus: Boolean) {
-        val visible = activityResumed && (hasFocus || fullScreenCallDialog?.isShowing == true)
+        val visible = activityResumed && (hasFocus || fullScreenCallDialog?.isShowing == true ||
+            unifiedPushDialog?.isShowing == true)
         messagingBackground = !visible
         meshBleAppVisible = visible
         nativeSetAppVisible(visible)
@@ -1465,7 +1473,7 @@ class MainActivity : GameActivity() {
     private fun maybeShowFullScreenCallPrompt() {
         val prompt = fullScreenCallPrompt ?: return
         if (!activityResumed || !window.decorView.hasWindowFocus() || runtimePermissionRequests.hasRequests() ||
-            isFinishing || isDestroyed || lockScreenCallId != null ||
+            isFinishing || isDestroyed || lockScreenCallId != null || unifiedPushDialog != null ||
             getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return
 
         val prefs = getPreferences(MODE_PRIVATE)
@@ -1512,6 +1520,64 @@ class MainActivity : GameActivity() {
     }
 
     private external fun nativeFullScreenCallState(state: Int)
+
+    // --- UnifiedPush consent -----------------------------------------------------
+    // An installed distributor (e.g. ntfy) is only used once the user picks it
+    // here: it would see when every wake arrives. Declining keeps Chatter's own
+    // socket and is remembered per distributor; a newly installed one is offered.
+    // Core hands the prompt over on every App Lock refresh, with `unlocked`
+    // false while App Lock covers the app, so it never shows over the lock.
+    private data class UnifiedPushPrompt(val title: String, val decline: String)
+    private var unifiedPushPrompt: UnifiedPushPrompt? = null
+    private var unifiedPushDialog: android.app.AlertDialog? = null
+
+    @androidx.annotation.Keep
+    fun prepareUnifiedPushPrompt(title: String, decline: String, unlocked: Boolean) {
+        runOnUiThread {
+            // Core is up (it called us), so a pending consent reset can run.
+            UnifiedPushReceiver.flushReset(this)
+            if (!unlocked) {
+                unifiedPushPrompt = null
+                unifiedPushDialog?.dismiss()
+                return@runOnUiThread
+            }
+            unifiedPushPrompt = UnifiedPushPrompt(title, decline)
+            maybeShowUnifiedPushPrompt()
+        }
+    }
+
+    private fun maybeShowUnifiedPushPrompt() {
+        val prompt = unifiedPushPrompt ?: return
+        if (!messagingSignedIn || !activityResumed || !window.decorView.hasWindowFocus() ||
+            runtimePermissionRequests.hasRequests() || fullScreenCallDialog != null ||
+            unifiedPushDialog != null || isFinishing || isDestroyed || lockScreenCallId != null) return
+        val offered = UnifiedPushReceiver.distributorsToOffer(this)
+        if (offered.isEmpty()) return
+        // Label plus package name: an app can call itself "ntfy", it cannot
+        // take ntfy's package name.
+        val labels = offered.map { pkg ->
+            val label = try {
+                packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+            } catch (_: Exception) {
+                null
+            }
+            if (label == null || label == pkg) pkg else "$label\n$pkg"
+        }.toTypedArray()
+        // Not cancelable: only an explicit pick or decline is an answer, so a
+        // stray tap outside neither enrols nor silences the question.
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle(prompt.title)
+            .setItems(labels) { _, which -> UnifiedPushReceiver.choose(this, offered[which]) }
+            .setNegativeButton(prompt.decline) { _, _ -> UnifiedPushReceiver.decline(this, offered) }
+            .setCancelable(false)
+            .create()
+        dialog.setOnDismissListener {
+            unifiedPushDialog = null
+            updateAppVisibility(window.decorView.hasWindowFocus())
+        }
+        unifiedPushDialog = dialog
+        dialog.show()
+    }
 
     // --- Runtime permissions ---------------------------------------------------
     private val permissionRequest =

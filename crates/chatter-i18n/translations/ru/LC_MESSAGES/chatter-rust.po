@@ -4038,3 +4038,13 @@ msgstr "Это устройство было заменено. Локальны�
 
 msgid "New encryption keys published. Sign in again with your new PIN."
 msgstr "Новые ключи шифрования опубликованы. Войдите снова с новым ПИН-кодом."
+
+msgid ""
+"Deliver notifications through one of these apps? It will see when messages "
+"arrive, not what they say."
+msgstr ""
+"Доставлять уведомления через одно из этих приложений? Оно будет видеть, "
+"когда приходят сообщения, но не их содержание."
+
+msgid "Keep Chatter's own connection"
+msgstr "Оставить собственное соединение Chatter"

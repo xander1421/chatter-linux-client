@@ -4059,3 +4059,13 @@ msgstr "Цей пристрій було замінено. Локальні да
 
 msgid "New encryption keys published. Sign in again with your new PIN."
 msgstr "Нові ключі шифрування опубліковано. Увійдіть знову з новим PIN-кодом."
+
+msgid ""
+"Deliver notifications through one of these apps? It will see when messages "
+"arrive, not what they say."
+msgstr ""
+"Доставляти сповіщення через один із цих застосунків? Він бачитиме, коли "
+"надходять повідомлення, але не їхній зміст."
+
+msgid "Keep Chatter's own connection"
+msgstr "Залишити власне з’єднання Chatter"

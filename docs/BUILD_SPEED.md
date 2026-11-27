@@ -31,7 +31,7 @@ tools/ui-live-preview.sh --features mesh,dev-trust-root,dev-auto-register
 
 The script sets `SLINT_LIVE_PREVIEW=1`, `CHATTER_NO_KEYRING=1` and a separate
 `XDG_DATA_HOME` (default `~/.cache/chatter-ui-preview/data`), then runs
-`cargo run -p chatter-ui --bin chatter-ui --features slint/live-preview`
+`cargo run -p chatter-ui --bin chatter-ui --features slint/live-preview,insecure-no-keyring`
 (see [Slint's live-preview guide](https://docs.slint.dev/latest/docs/slint/guide/tooling/live-preview/)).
 Preview is not a default feature. It does not copy existing accounts or
 credentials. Auto-registration additionally requires the `CHATTER_DEV=1`

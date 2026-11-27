@@ -16,9 +16,37 @@ const SERVICE: &str = APP_ID;
 /// Name of the opt-out marker, looked for beside the database file.
 pub const NO_KEYRING_MARKER: &str = "no-keyring";
 
+/// Whether this build carries the keyring opt-outs at all: unit tests, and
+/// builds with the `insecure-no-keyring` feature, which `build.rs` refuses in a
+/// release profile. Anywhere else the environment variables
+/// (`CHATTER_NO_KEYRING`, `CHATTER_DB_PASSPHRASE_FILE`, `CHATTER_DB_PASSPHRASE`,
+/// `CHATTER_MESH_SEAL_KEY`) and the marker below are inert, so neither a file
+/// planted in the user's home nor a doctored launch environment moves a shipped
+/// client's keys out of its keyring.
+const OPT_OUT_COMPILED_IN: bool = cfg!(any(test, feature = "insecure-no-keyring"));
+
+/// A key handed in through the environment (`CHATTER_DB_PASSPHRASE`,
+/// `CHATTER_MESH_SEAL_KEY`), honoured only where the opt-outs are compiled in.
+/// A release build ignores it: otherwise whoever can set the launch environment
+/// (an `environment.d` file, a `.desktop` override) chooses the database key,
+/// and the unreadable-database recovery path would rebuild the database under
+/// it.
+#[must_use]
+pub(crate) fn dev_env_key(name: &str) -> Option<String> {
+    dev_env_key_in(OPT_OUT_COMPILED_IN, name)
+}
+
+fn dev_env_key_in(opt_out_compiled_in: bool, name: &str) -> Option<String> {
+    if !opt_out_compiled_in {
+        return None;
+    }
+    std::env::var(name).ok()
+}
+
 /// Whether this machine has opted out of the OS keyring entirely.
 ///
-/// True when `CHATTER_NO_KEYRING` is set, or when a `no-keyring` file sits beside
+/// Always false unless the build carries the opt-out ([`OPT_OUT_COMPILED_IN`]).
+/// Then true when `CHATTER_NO_KEYRING` is set, or when a `no-keyring` file sits beside
 /// the database. The marker exists because the environment variable only helps
 /// when whoever launched the process remembered to set it: a desktop entry, a bare
 /// `cargo run`, or a debugger all start the app without it and land back on a
@@ -35,6 +63,13 @@ pub const NO_KEYRING_MARKER: &str = "no-keyring";
 /// key files, if the material should be gone) to go back to the keyring.
 #[must_use]
 pub fn keyring_disabled(db_path: &std::path::Path) -> bool {
+    keyring_disabled_in(OPT_OUT_COMPILED_IN, db_path)
+}
+
+fn keyring_disabled_in(opt_out_compiled_in: bool, db_path: &std::path::Path) -> bool {
+    if !opt_out_compiled_in {
+        return false;
+    }
     if std::env::var("CHATTER_NO_KEYRING").is_ok() {
         return true;
     }
@@ -149,6 +184,9 @@ impl Keyring {
     /// 2. Local `.passphrase` file IFF `CHATTER_DB_PASSPHRASE_FILE` is set
     /// 3. System Keyring (default — Secret Service / Keychain / Cred Manager)
     ///
+    /// 1 and 2 exist only in a build that carries the opt-outs
+    /// ([`OPT_OUT_COMPILED_IN`]); a release build always uses 3.
+    ///
     /// SECURITY: the keyring is the secure default. The local-file mode
     /// (`CHATTER_DB_PASSPHRASE_FILE=1`) is naked — the passphrase sits at
     /// `<db>.passphrase` mode 0600, so anything that can read the user's home
@@ -157,7 +195,7 @@ impl Keyring {
     /// boxes with no Secret Service daemon (some minimal WMs, headless CI),
     /// and prefer `CHATTER_DB_PASSPHRASE` there instead.
     pub fn get_passphrase(&self) -> Result<String, SystemError> {
-        if let Ok(passphrase) = std::env::var("CHATTER_DB_PASSPHRASE") {
+        if let Some(passphrase) = dev_env_key("CHATTER_DB_PASSPHRASE") {
             return Ok(passphrase);
         }
 
@@ -173,9 +211,11 @@ impl Keyring {
     ///
     /// Either by `CHATTER_DB_PASSPHRASE_FILE` for a single run, or by the
     /// [`keyring_disabled`] marker, which persists the same choice for every
-    /// launch however it happens.
+    /// launch however it happens. Both only in a build that carries the
+    /// opt-out ([`OPT_OUT_COMPILED_IN`]).
     fn use_local_file(&self) -> bool {
-        std::env::var("CHATTER_DB_PASSPHRASE_FILE").is_ok() || keyring_disabled(&self.db_path)
+        dev_env_key("CHATTER_DB_PASSPHRASE_FILE").is_some()
+            || keyring_disabled(&self.db_path)
     }
 
     /// Read the on-disk default passphrase.
@@ -195,7 +235,7 @@ impl Keyring {
     ) -> Result<String, SystemError> {
         // Retry only matters for the keyring path (Secret Service unlock
         // prompt). Env var + local file are synchronous.
-        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || self.use_local_file() {
+        if dev_env_key("CHATTER_DB_PASSPHRASE").is_some() || self.use_local_file() {
             return self.get_passphrase();
         }
 
@@ -238,7 +278,7 @@ impl Keyring {
     /// it.
     #[must_use]
     pub fn passphrase_source(&self) -> &'static str {
-        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
+        if dev_env_key("CHATTER_DB_PASSPHRASE").is_some() {
             "CHATTER_DB_PASSPHRASE"
         } else if self.use_local_file() {
             "a plaintext file beside the database (keyring opted out)"
@@ -248,7 +288,7 @@ impl Keyring {
     }
 
     pub fn set_passphrase(&self, passphrase: &str) -> Result<(), SystemError> {
-        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
+        if dev_env_key("CHATTER_DB_PASSPHRASE").is_some() {
             return Ok(());
         }
 
@@ -295,7 +335,7 @@ impl Keyring {
     ) -> Result<(), SystemError> {
         // Retry only matters for the keyring path. Env var + local file
         // are synchronous.
-        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() || self.use_local_file() {
+        if dev_env_key("CHATTER_DB_PASSPHRASE").is_some() || self.use_local_file() {
             return self.set_passphrase(passphrase);
         }
 
@@ -338,7 +378,7 @@ impl Keyring {
     /// Returns `true` if a passphrase is stored or CHATTER_DB_PASSPHRASE is set.
     pub fn has_passphrase(&self) -> bool {
         // Check env var first
-        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
+        if dev_env_key("CHATTER_DB_PASSPHRASE").is_some() {
             return true;
         }
         self.get_passphrase().is_ok()
@@ -512,6 +552,26 @@ mod tests {
 
         assert_ne!(keyring1.username, keyring2.username);
         assert_ne!(keyring1.local_path, keyring2.local_path);
+    }
+
+    #[test]
+    fn marker_opt_out_is_inert_unless_compiled_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("chatter.db");
+        std::fs::write(dir.path().join(NO_KEYRING_MARKER), b"").unwrap();
+        // A release build ignores a planted marker (and the env var: the same
+        // early return runs before either is read).
+        assert!(!keyring_disabled_in(false, &db_path));
+        // A test or `insecure-no-keyring` build honours it.
+        assert!(keyring_disabled_in(true, &db_path));
+        assert!(OPT_OUT_COMPILED_IN);
+    }
+
+    #[test]
+    fn env_supplied_keys_are_ignored_unless_compiled_in() {
+        // PATH is always set, so the only thing that can hide it is the gate.
+        assert_eq!(dev_env_key_in(false, "PATH"), None);
+        assert!(dev_env_key_in(true, "PATH").is_some());
     }
 
     #[test]

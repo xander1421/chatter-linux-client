@@ -80,6 +80,7 @@ class MessagingService : Service() {
                     nativeStartupPending = false
                     if (ready && !stopRequested && wasSignedIn(this)) {
                         coreReadyInProcess = true
+                        UnifiedPushReceiver.flushReset(this)
                     } else if (pendingStarts == 0) {
                         stopSelf()
                     }
@@ -91,9 +92,9 @@ class MessagingService : Service() {
         // Keep a Doze-tolerant heartbeat armed so a backgrounded or killed
         // process (whose in-process ntfy SSE listener died with it) is revived.
         if (!stopRequested && wasSignedIn(this)) scheduleKeepAlive(this)
-        // Opt in to UnifiedPush if a distributor app is installed, so the core
-        // can drop its own SSE socket. No distributor → no-op (own-SSE path).
-        if (!stopRequested && wasSignedIn(this)) UnifiedPushReceiver.enableIfDistributorPresent(this)
+        // Re-register with the UnifiedPush distributor the user chose, so the
+        // core can drop its own SSE socket. None chosen → no-op (own-SSE path).
+        if (!stopRequested && wasSignedIn(this)) UnifiedPushReceiver.registerIfChosen(this)
         // START_STICKY: let the OS recreate the service (with a null intent,
         // handled above) after a low-memory kill, so push delivery resumes.
         return START_STICKY

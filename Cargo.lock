@@ -1975,6 +1975,7 @@ dependencies = [
  "cbc",
  "chacha20poly1305 0.11.0",
  "chatter-attachment-crypto",
+ "chatter-core",
  "chatter-i18n",
  "chatter-mesh",
  "chatter-mesh-android",

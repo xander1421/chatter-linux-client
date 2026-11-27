@@ -16,4 +16,4 @@ export XDG_DATA_HOME="${XDG_DATA_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/chatter-u
 export CHATTER_NO_KEYRING=1
 unset CARGO_INCREMENTAL
 export SLINT_LIVE_PREVIEW=1
-exec cargo run -p chatter-ui --bin chatter-ui --features slint/live-preview "$@"
+exec cargo run -p chatter-ui --bin chatter-ui --features slint/live-preview,insecure-no-keyring "$@"

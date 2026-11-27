@@ -3822,3 +3822,13 @@ msgstr ""
 
 msgid "New encryption keys published. Sign in again with your new PIN."
 msgstr ""
+
+#: crates/chatter-ui/src/platform/android/system_settings.rs
+msgid ""
+"Deliver notifications through one of these apps? It will see when messages "
+"arrive, not what they say."
+msgstr ""
+
+#: crates/chatter-ui/src/platform/android/system_settings.rs
+msgid "Keep Chatter's own connection"
+msgstr ""

@@ -4077,3 +4077,13 @@ msgstr "Acest dispozitiv a fost înlocuit. Se șterg datele locale…"
 msgid "New encryption keys published. Sign in again with your new PIN."
 msgstr ""
 "Cheile de criptare noi au fost publicate. Autentifică-te din nou cu noul PIN."
+
+msgid ""
+"Deliver notifications through one of these apps? It will see when messages "
+"arrive, not what they say."
+msgstr ""
+"Primești notificările printr-una dintre aceste aplicații? Va vedea când "
+"sosesc mesajele, nu ce conțin."
+
+msgid "Keep Chatter's own connection"
+msgstr "Păstrează conexiunea proprie Chatter"

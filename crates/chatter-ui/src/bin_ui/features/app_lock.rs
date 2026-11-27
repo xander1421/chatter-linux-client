@@ -192,10 +192,14 @@ fn clear_inputs(pane: &AppLockPane<'_>) {
 /// as core says it is locked.
 pub(crate) fn refresh(window: &MainWindow, ui_ctx: &ChatterClient) {
     let pane = window.global::<AppLockPane>();
-    pane.set_locked(ui_ctx.app_lock_is_locked());
+    let locked = ui_ctx.app_lock_is_locked();
+    pane.set_locked(locked);
     // Locking removes the chats from the system share sheet; unlocking restores them.
     #[cfg(target_os = "android")]
     crate::platform::android::share_targets::refresh_current();
+    // The UnifiedPush consent prompt is answerable only while unlocked.
+    #[cfg(target_os = "android")]
+    crate::platform::android::system_settings::prepare_unified_push_prompt(!locked);
     match ui_ctx.app_lock_settings() {
         Ok(settings) => {
             pane.set_enabled(settings.enabled);

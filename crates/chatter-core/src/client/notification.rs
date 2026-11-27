@@ -776,7 +776,8 @@ pub(crate) fn spawn_notification_listener(
                     if *approved_by_self {
                         continue;
                     }
-                    // This toast can remain visible after the app locks.
+                    // App Lock clears this toast on Android (`cancel_message_notifications`);
+                    // desktop toasts are untracked and stay until the shell expires them.
                     let body = chatter_i18n::tr("A new device was just linked to your account.");
                     tracing::info!(device_id, "DeviceLinked notification → surfacing toast");
                     let title = chatter_i18n::tr("New device linked");

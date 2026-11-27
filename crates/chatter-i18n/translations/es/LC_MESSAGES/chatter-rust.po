@@ -4058,3 +4058,13 @@ msgid "New encryption keys published. Sign in again with your new PIN."
 msgstr ""
 "Se publicaron las nuevas claves de cifrado. Vuelve a iniciar sesión con tu "
 "nuevo PIN."
+
+msgid ""
+"Deliver notifications through one of these apps? It will see when messages "
+"arrive, not what they say."
+msgstr ""
+"¿Entregar las notificaciones a través de una de estas apps? Verá cuándo "
+"llegan los mensajes, no lo que dicen."
+
+msgid "Keep Chatter's own connection"
+msgstr "Mantener la conexión propia de Chatter"

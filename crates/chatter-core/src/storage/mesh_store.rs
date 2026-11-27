@@ -431,8 +431,8 @@ impl MeshSealer {
         //
         // This is a plaintext key in the environment. It exists for development and
         // CI, exactly as the database passphrase override does, and must not be used
-        // to hold a real user's key.
-        if let Ok(hex_key) = std::env::var("CHATTER_MESH_SEAL_KEY") {
+        // to hold a real user's key: a release build ignores it (`dev_env_key`).
+        if let Some(hex_key) = crate::system::keyring::dev_env_key("CHATTER_MESH_SEAL_KEY") {
             let raw = Zeroizing::new(
                 hex::decode(hex_key.trim())
                     .map_err(|e| format!("CHATTER_MESH_SEAL_KEY is not hex: {e}"))?,
