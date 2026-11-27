@@ -66,8 +66,8 @@ and text/refraction optics before accepting any performance claim.
 
 Effects default ON. Set `SLINT_BACKDROP_EFFECTS=0` (also `off`/`false`) before
 process startup to bypass filters; children still render, with rounded clipping.
-The app's Appearance.glass-effects setting supplies neutral values at runtime:
-blur 0, saturation 1, brightness/refraction 0. Blur 0 alone only disables blur.
+The app uses flat material fills when the environment switch or the app's
+glass-effects preference disables the optics.
 
 Run from linux-client: `cargo test -p i-slint-renderer-skia --lib backdrop::tests -j 2`.
 The app demo is `crates/chatter-ui/examples/backdrop_demo.rs`, including a
