@@ -23,15 +23,57 @@ fn record_owner_check(
 }
 
 impl ChatterClient {
-    /// Whether this account has a durably recorded transparency mismatch.
-    pub fn own_identity_change_detected(&self) -> Result<bool, crate::error::ServiceError> {
+    /// The account-wide transparency warning, if any. A block recorded from
+    /// our own devices' shared heads clears only after consistent checks on
+    /// the route that raised it (`storage::peer_kt_heads`).
+    pub fn own_identity_warning(
+        &self,
+    ) -> Result<Option<OwnIdentityWarning>, crate::error::ServiceError> {
         let Some(owner) = self.auth_snapshot().current_user_id else {
-            return Ok(false);
+            return Ok(None);
         };
-        Ok(crate::services::signal::kt_anchor::own_mismatch(
+        let owner = owner.to_string();
+        let own_block = self
+            .signal()
+            .key_store
+            .peer_kt_block(&owner)
+            .map_err(crate::error::ServiceError::Storage)?;
+        if own_block.is_some() {
+            return Ok(Some(OwnIdentityWarning {
+                title: chatter_i18n::tr("Your account’s key directory looks inconsistent."),
+                detail: chatter_i18n::tr("Your other devices may be seeing different keys."),
+                action: Some(chatter_i18n::tr("View your safety number")),
+            }));
+        }
+        if crate::services::signal::kt_anchor::own_mismatch(
             &self.signal().settings_repo,
-            owner.to_string().as_bytes(),
-        )?)
+            owner.as_bytes(),
+        )? {
+            return Ok(Some(OwnIdentityWarning {
+                title: chatter_i18n::tr("Your account’s identity key changed in the transparency log"),
+                detail: chatter_i18n::tr(
+                    "An unexpected key was published for your account. Check your safety number with your contacts.",
+                ),
+                action: None,
+            }));
+        }
+        // Warn-only: checks for some contacts went unanswered for a day while
+        // identified requests verified. Sends are not blocked.
+        if self
+            .signal()
+            .key_store
+            .kt_suspect_exists()
+            .map_err(crate::error::ServiceError::Storage)?
+        {
+            return Ok(Some(OwnIdentityWarning {
+                title: chatter_i18n::tr("Key directory checks for some contacts keep failing."),
+                detail: chatter_i18n::tr(
+                    "Your messages still send. Compare safety numbers with your contacts before you trust a new key.",
+                ),
+                action: Some(chatter_i18n::tr("View your safety number")),
+            }));
+        }
+        Ok(None)
     }
 
     pub(super) fn spawn_own_identity_monitor(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
@@ -222,11 +264,23 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<Option<IdentityChangePrompt>, ClientError> {
-        Ok(self
-            .pending_identity_change(peer_user_id)?
-            .map(|attributed| {
-                IdentityChangePrompt::new(attributed, &self.display_name(peer_user_id))
-            }))
+        if let Some(attributed) = self.pending_identity_change(peer_user_id)? {
+            return Ok(Some(IdentityChangePrompt::new(
+                attributed,
+                &self.display_name(peer_user_id),
+            )));
+        }
+        use crate::storage::peer_kt_heads::KtBlock;
+        let block = self
+            .services
+            .signal_service
+            .key_store
+            .peer_kt_block(&peer_user_id.to_string())
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        Ok(block.map(|block| match block {
+            KtBlock::Split => IdentityChangePrompt::split_view(),
+            KtBlock::Unverified => IdentityChangePrompt::unverified_view(),
+        }))
     }
 
     /// Accept the peer's new identity key, unwedging the conversation in both
@@ -245,16 +299,32 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<u32, ClientError> {
-        let (new_identity_key, _source) = self
+        let pending = self
             .services
             .signal_service
             .pending_identity_change(&peer_user_id.to_string())
-            .map_err(|e| ClientError::Validation(e.to_string()))?
-            .ok_or_else(|| {
-                ClientError::Validation(
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        // The prompt shows a key change before a split view, so each accept
+        // answers the prompt the user is looking at.
+        let Some((new_identity_key, _source)) = pending else {
+            let cleared = self
+                .services
+                .signal_service
+                .key_store
+                .accept_peer_kt_block(&peer_user_id.to_string())
+                .map_err(|e| ClientError::Validation(e.to_string()))?;
+            if !cleared {
+                return Err(ClientError::Validation(
                     chatter_i18n::tr("no identity change is pending for this peer").into(),
-                )
-            })?;
+                ));
+            }
+            tracing::warn!(peer = %peer_user_id, "ACCEPTED a conversation blocked by a key transparency check");
+            self.event_bus()
+                .emit_domain(crate::events::DomainEvent::PeerKeyVerificationUpdated {
+                    peer_user_id: *peer_user_id,
+                });
+            return Ok(0);
+        };
 
         let dropped = self
             .services

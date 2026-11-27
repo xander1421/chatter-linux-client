@@ -142,6 +142,7 @@ impl AnonDmService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonDmAccept(accept)),
             ephemeral_reply_to: None,
             timestamp: TimestampNanos::now().as_u64(),

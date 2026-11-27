@@ -32,6 +32,10 @@ use crate::error::StorageError;
 /// its `identityKeys` table (the safety numbers the user saw).
 const LOCAL_IDENTITY_TABLES: &[&str] = &[
     "dm_outbox",
+    "peer_kt_jobs",
+    "peer_kt_archived_receives",
+    "peer_kt_heads",
+    "peer_kt_split_views",
     "dm_bootstrap_replies",
     "pending_dm_messages",
     "pending_channel_messages",

@@ -3400,8 +3400,12 @@ msgid "Your session ended. Sign in again before deleting your account."
 msgstr ""
 "Ваш сеанс завершився. Увійдіть знову, перш ніж видаляти обліковий запис."
 
-msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
-msgstr "Не вдалося вийти з приватних каналів: {}. Обліковий запис не видалено. Перевірте з’єднання та спробуйте ще раз."
+msgid ""
+"Could not leave {} private channel(s), so your account was not deleted. "
+"Check your connection and try again."
+msgstr ""
+"Не вдалося вийти з приватних каналів: {}. Обліковий запис не видалено. "
+"Перевірте з’єднання та спробуйте ще раз."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."
@@ -4084,3 +4088,91 @@ msgstr "Очікування нового ключа співрозмовник�
 
 msgid "Not delivered: contact's key changed"
 msgstr "Не доставлено: ключ співрозмовника змінився"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server showed you and this contact different key directories"
+msgstr "Сервер показав вам і цьому контакту різні каталоги ключів"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid ""
+"Either of you may be talking to someone intercepting this conversation. "
+"Sending is blocked until you trust this conversation — compare safety "
+"numbers with them over a call or in person first."
+msgstr ""
+"Можливо, хтось із вас листується з тим, хто перехоплює цю розмову. "
+"Надсилання заблоковано, доки ви не довіритеся цій розмові — спочатку "
+"порівняйте номери безпеки під час дзвінка або особисто."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Trust this conversation"
+msgstr "Довіряти цій розмові"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Accept new safety number"
+msgstr "Прийняти новий номер безпеки"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The key directory for this contact could not be verified"
+msgstr "Не вдалося перевірити каталог ключів цього контакту"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid ""
+"The server answered other key checks but not the one that compares your view "
+"with this contact's, which can hide an intercepted conversation. Sending is "
+"blocked — compare safety numbers with them over a call or in person, or send "
+"anyway once."
+msgstr ""
+"Сервер відповів на інші перевірки ключів, але не на ту, що порівнює ваше "
+"бачення з баченням цього контакту, — так можна приховати перехоплення "
+"розмови. Надсилання заблоковано — порівняйте номери безпеки під час дзвінка "
+"або особисто чи все одно надішліть один раз."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Send anyway once"
+msgstr "Все одно надіслати один раз"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Conversation trusted"
+msgstr "Розмові можна довіряти"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "You can send one message"
+msgstr "Можна надіслати одне повідомлення"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s key directory looks inconsistent."
+msgstr "Каталог ключів вашого облікового запису виглядає неузгодженим."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your other devices may be seeing different keys."
+msgstr "Ваші інші пристрої можуть бачити інші ключі."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "View your safety number"
+msgstr "Переглянути свій номер безпеки"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s identity key changed in the transparency log"
+msgstr ""
+"Ключ ідентифікації вашого облікового запису змінився в журналі прозорості"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid ""
+"An unexpected key was published for your account. Check your safety number "
+"with your contacts."
+msgstr ""
+"Для вашого облікового запису опубліковано неочікуваний ключ. Звірте свій "
+"номер безпеки з контактами."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr ""
+"Перевірки каталогу ключів для деяких контактів і далі завершуються помилкою."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid ""
+"Your messages still send. Compare safety numbers with your contacts before "
+"you trust a new key."
+msgstr ""
+"Ваші повідомлення й далі надсилаються. Перш ніж довіряти новому ключу, "
+"звірте номери безпеки з контактами."

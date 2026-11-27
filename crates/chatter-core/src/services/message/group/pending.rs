@@ -452,6 +452,7 @@ impl MessageService {
 
         // Wrap in Content proto
         let mut content = content_v1::Content {
+            kt_head: None,
             content: Some(content::Content::SenderKeyRequest(request.clone())),
             ephemeral_reply_to: None,
             timestamp,

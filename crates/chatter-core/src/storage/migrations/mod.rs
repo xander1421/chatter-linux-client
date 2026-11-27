@@ -139,6 +139,7 @@ mod v146_signed_channel_type;
 mod v147_private_channel_attachments;
 mod v148_gif_credentials;
 mod v149_dm_outbox_refusals;
+mod v150_peer_kt_heads;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -505,4 +506,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v147_private_channel_attachments::V147PrivateChannelAttachments)
         .register(v148_gif_credentials::V148GifCredentials)
         .register(v149_dm_outbox_refusals::V149DmOutboxRefusals)
+        .register(v150_peer_kt_heads::V150PeerKtHeads)
 }

@@ -349,6 +349,7 @@ mod tests {
         let conversation = crate::domain::anon_dm::AnonDmId::new();
         let inner = crate::services::gateway::builders::build_text_content("post", 7);
         let content = chatter_proto::content_v1::Content {
+            kt_head: None,
             content: Some(chatter_proto::content_v1::content::Content::AnonDmMessage(
                 Box::new(chatter_proto::content_v1::AnonDmMessage {
                     conversation_id: conversation.to_vec(),

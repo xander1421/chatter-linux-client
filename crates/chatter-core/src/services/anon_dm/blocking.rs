@@ -236,6 +236,7 @@ pub(super) fn end_content(conversation_id: &AnonDmId) -> chatter_proto::content_
     use chatter_proto::content_v1::{AnonDmEnd, AnonDmMessage, Content, content};
     let now = crate::util::time::TimestampNanos::now().as_u64();
     let inner = Content {
+        kt_head: None,
         content: Some(content::Content::AnonDmEnd(AnonDmEnd {
             conversation_id: conversation_id.to_vec(),
             timestamp: now,
@@ -245,6 +246,7 @@ pub(super) fn end_content(conversation_id: &AnonDmId) -> chatter_proto::content_
         padding: AnonDmService::generate_padding(256),
     };
     Content {
+        kt_head: None,
         content: Some(content::Content::AnonDmMessage(Box::new(AnonDmMessage {
             conversation_id: conversation_id.to_vec(),
             inner_content: Some(Box::new(inner)),

@@ -392,6 +392,7 @@ pub fn group_mailbox_rotation_plaintext(
     use prost::Message;
     let now = crate::util::time::TimestampNanos::now().as_u64();
     let mut content = chatter_proto::content_v1::Content {
+        kt_head: None,
         content: Some(
             chatter_proto::content_v1::content::Content::GroupMailboxAddress(
                 chatter_proto::content_v1::GroupMailboxAddress {

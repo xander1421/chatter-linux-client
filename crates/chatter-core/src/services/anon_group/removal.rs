@@ -58,6 +58,7 @@ impl AnonGroupService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupLeave(leave)),
             ephemeral_reply_to: None,
             timestamp,
@@ -167,6 +168,7 @@ impl AnonGroupService {
             .anon_group_repo
             .next_membership_timestamp(group_id, TimestampNanos::now().as_u64())?;
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupUpdate(
                 AnonGroupUpdate {
                     group_id: group_id.to_vec(),
@@ -266,6 +268,7 @@ impl AnonGroupService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupKick(kick)),
             ephemeral_reply_to: None,
             timestamp,

@@ -3380,8 +3380,12 @@ msgstr "Password errata. Riprova."
 msgid "Your session ended. Sign in again before deleting your account."
 msgstr "La sessione è terminata. Accedi di nuovo prima di eliminare l'account."
 
-msgid "Could not leave {} private channel(s), so your account was not deleted. Check your connection and try again."
-msgstr "Impossibile uscire da {} canale/i privato/i, quindi il tuo account non è stato eliminato. Controlla la connessione e riprova."
+msgid ""
+"Could not leave {} private channel(s), so your account was not deleted. "
+"Check your connection and try again."
+msgstr ""
+"Impossibile uscire da {} canale/i privato/i, quindi il tuo account non è "
+"stato eliminato. Controlla la connessione e riprova."
 
 #: crates/chatter-ui/src/bin_ui/features/modals/settings/account.rs:164
 msgid "Could not delete your account. Check your connection and try again."
@@ -4072,3 +4076,95 @@ msgstr "In attesa della nuova chiave del contatto"
 
 msgid "Not delivered: contact's key changed"
 msgstr "Non consegnato: la chiave del contatto è cambiata"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server showed you and this contact different key directories"
+msgstr ""
+"Il server ha mostrato a te e a questo contatto elenchi di chiavi diversi"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid ""
+"Either of you may be talking to someone intercepting this conversation. "
+"Sending is blocked until you trust this conversation — compare safety "
+"numbers with them over a call or in person first."
+msgstr ""
+"Uno di voi potrebbe parlare con qualcuno che sta intercettando questa "
+"conversazione. L’invio è bloccato finché non ti fidi di questa conversazione "
+"— prima confronta i numeri di sicurezza con questa persona in una chiamata o "
+"di persona."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Trust this conversation"
+msgstr "Fidati di questa conversazione"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Accept new safety number"
+msgstr "Accetta il nuovo numero di sicurezza"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The key directory for this contact could not be verified"
+msgstr "Non è stato possibile verificare l’elenco di chiavi di questo contatto"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid ""
+"The server answered other key checks but not the one that compares your view "
+"with this contact's, which can hide an intercepted conversation. Sending is "
+"blocked — compare safety numbers with them over a call or in person, or send "
+"anyway once."
+msgstr ""
+"Il server ha risposto agli altri controlli delle chiavi, ma non a quello che "
+"confronta la tua vista con quella di questo contatto, e questo può "
+"nascondere una conversazione intercettata. L’invio è bloccato — confronta i "
+"numeri di sicurezza con questa persona in una chiamata o di persona, oppure "
+"invia comunque una volta."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Send anyway once"
+msgstr "Invia comunque una volta"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Conversation trusted"
+msgstr "Conversazione considerata attendibile"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "You can send one message"
+msgstr "Puoi inviare un messaggio"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s key directory looks inconsistent."
+msgstr "L’elenco di chiavi del tuo account sembra incoerente."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your other devices may be seeing different keys."
+msgstr "I tuoi altri dispositivi potrebbero vedere chiavi diverse."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "View your safety number"
+msgstr "Visualizza il tuo numero di sicurezza"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s identity key changed in the transparency log"
+msgstr ""
+"La chiave di identità del tuo account è cambiata nel registro di trasparenza"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid ""
+"An unexpected key was published for your account. Check your safety number "
+"with your contacts."
+msgstr ""
+"È stata pubblicata una chiave inattesa per il tuo account. Verifica il tuo "
+"numero di sicurezza con i tuoi contatti."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid "Key directory checks for some contacts keep failing."
+msgstr ""
+"I controlli dell’elenco di chiavi continuano a non riuscire per alcuni "
+"contatti."
+
+#: crates/chatter-core/src/client/trust.rs
+msgid ""
+"Your messages still send. Compare safety numbers with your contacts before "
+"you trust a new key."
+msgstr ""
+"I tuoi messaggi vengono ancora inviati. Confronta i numeri di sicurezza con "
+"i tuoi contatti prima di fidarti di una nuova chiave."

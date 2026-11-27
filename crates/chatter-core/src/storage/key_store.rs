@@ -17,12 +17,15 @@ use std::sync::Arc;
 pub struct KeyStore {
     pub(super) db: Arc<Database>,
     pub(super) kt_work: tokio::sync::Notify,
+    /// "Send anyway once" permits for unverified blocks, by account. `None`
+    /// is unused; `Some(digest)` was spent on that message. Never persisted.
+    pub(super) kt_permits: parking_lot::Mutex<std::collections::HashMap<String, Option<[u8; 32]>>>,
 }
 
 impl KeyStore {
     /// Create a new KeyStore.
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db, kt_work: tokio::sync::Notify::new() }
+        Self { db, kt_work: tokio::sync::Notify::new(), kt_permits: Default::default() }
     }
 
     // ========================================================================
@@ -159,6 +162,8 @@ impl KeyStore {
         conn.execute("DELETE FROM remote_identities", [])?;
         conn.execute("DELETE FROM peer_kt_jobs", [])?;
         conn.execute("DELETE FROM peer_kt_archived_receives", [])?;
+        conn.execute("DELETE FROM peer_kt_heads", [])?;
+        conn.execute("DELETE FROM peer_kt_split_views", [])?;
         conn.execute("DELETE FROM peer_key_transparency", [])?;
         conn.execute("DELETE FROM local_identity", [])?;
 

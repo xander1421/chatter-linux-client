@@ -4,6 +4,7 @@ import { UpdateGlobal } from "update/update_global.slint";
 import { DesktopChrome } from "theme/desktop_chrome.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
+import { SettingsPane } from "app_settings_pane.slint";
 import { JarvisPane } from "app_jarvis_pane.slint";
 import { ChatPane } from "app_chat_pane.slint";
 import { CallView } from "app_call_view.slint";
@@ -51,6 +52,9 @@ export component MainChatShell inherits Rectangle {
     in property <bool> is-mobile-platform;
     in property <bool> is-small-screen;
     in property <bool> own-identity-mismatch;
+    in property <string> own-identity-title;
+    in property <string> own-identity-detail;
+    in property <string> own-identity-action;
     in property <bool> keyboard-open;
     in property <length> macos-titlebar-height;
     in property <length> macos-traffic-lights-width;
@@ -113,9 +117,16 @@ export component MainChatShell inherits Rectangle {
         y: root.top-inset + root.update-notice-height;
         width: parent.width;
         height: self.visible ? self.preferred-height : 0px;
-        allow-accept: false;
-        title: @tr("Your account’s identity key changed in the transparency log");
-        detail: @tr("An unexpected key was published for your account. Check your safety number with your contacts.");
+        // No accept: a user cannot vouch for their own account against the
+        // server. The only action opens this device's safety number.
+        allow-accept: root.own-identity-action != "";
+        title: root.own-identity-title;
+        detail: root.own-identity-detail;
+        accept-text: root.own-identity-action;
+        accept-clicked => {
+            ModalHostState.nav-push("settings");
+            SettingsPane.navigation-section = "encryption";
+        }
     }
 
     // Leaving or ending our call drops the channel's "Call in progress"
@@ -372,6 +383,7 @@ export component MainChatShell inherits Rectangle {
                     identity-change-attributed: ChatPane.identity-change-attributed;
                     identity-change-detail: ChatPane.identity-change-detail;
                     identity-change-title: ChatPane.identity-change-title;
+                    identity-change-accept: ChatPane.identity-change-accept;
                     identity-change-visible: ChatPane.identity-change-visible;
                     insert-serial: root.insert-serial;
                     inserted-emoji: root.inserted-emoji;

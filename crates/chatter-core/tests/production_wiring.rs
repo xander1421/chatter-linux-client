@@ -95,6 +95,36 @@ const TABLE: &[Entry] = &[
         why: "Client startup runs the durable verification worker that releases exact-key sends.",
     },
     Entry {
+        symbol: "gossip::attach",
+        defined_in: "chatter-core/src/services/signal/kt_anchor/gossip.rs",
+        expect: Expect::Wired,
+        why: "Pairwise encryption shares this device's signed KT head, so contacts can detect a split view.",
+    },
+    Entry {
+        symbol: "record_peer_kt_head",
+        defined_in: "chatter-core/src/storage/peer_kt_heads.rs",
+        expect: Expect::Wired,
+        why: "Decryption queues the head a contact shared for the split-view check.",
+    },
+    Entry {
+        symbol: "gossip::reconcile",
+        defined_in: "chatter-core/src/services/signal/kt_anchor/gossip.rs",
+        expect: Expect::Wired,
+        why: "The KT worker proves a contact's head and this device's pin belong to one log.",
+    },
+    Entry {
+        symbol: "peer_kt_block",
+        defined_in: "chatter-core/src/storage/peer_kt_heads.rs",
+        expect: Expect::Wired,
+        why: "The send trust check refuses a peer whose shared head exposed a split view or whose check the server kept withholding.",
+    },
+    Entry {
+        symbol: "fresh_anonymous_kt_client",
+        defined_in: "chatter-core/src/network/grpc/client_pool/anonymous_routes.rs",
+        expect: Expect::Wired,
+        why: "Contact-head checks run on a fresh unauthenticated connection per batch, never the account channel.",
+    },
+    Entry {
         symbol: "require_sendable_peer",
         defined_in: "chatter-core/src/crypto/signal/store.rs",
         expect: Expect::Wired,
@@ -859,7 +889,7 @@ fn delivery_paths_do_not_call_key_transparency_network_methods() {
         "/services/signal/session/devices.rs", "/inbox/", "/client/outgoing.rs",
     ];
     const NETWORK_METHODS: &[&str] = &[
-        "verify_peer_key", "kt_anchor::search", "get_proof", "get_key_transparency_proof", "get_consistency_proof",
+        "verify_peer_key", "kt_anchor::search", "gossip::reconcile", "get_proof", "get_key_transparency_proof", "get_consistency_proof",
     ];
     for path in rust_sources() {
         let filename = path.to_string_lossy().replace('\\', "/");

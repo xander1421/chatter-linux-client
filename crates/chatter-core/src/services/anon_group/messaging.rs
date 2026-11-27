@@ -525,6 +525,7 @@ impl AnonGroupService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
                 group_message,
             ))),
@@ -1032,6 +1033,7 @@ impl AnonGroupService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
                 group_message,
             ))),
@@ -1164,6 +1166,7 @@ where
         ));
     }
     let content = Content {
+        kt_head: None,
         content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
             content_v1::AnonGroupMessage {
                 group_id: group_id.to_vec(),

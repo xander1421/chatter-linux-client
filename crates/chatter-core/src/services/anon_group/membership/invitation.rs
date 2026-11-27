@@ -55,6 +55,7 @@ impl AnonGroupService {
         }
 
         let invite = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupInvite(
                 AnonGroupInvite {
                     group_id: group_id.to_vec(),
@@ -78,6 +79,7 @@ impl AnonGroupService {
             .and_then(|dm| dm.peer_mailbox_pk.map(|pk| (dm.id, dm.peer_device_id, pk)));
         if let Some((conversation_id, peer_device, peer_mailbox_pk)) = tunnel {
             let outer = Content {
+                kt_head: None,
                 content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
                     AnonDmMessageProto {
                         conversation_id: conversation_id.to_vec(),
@@ -173,6 +175,7 @@ impl AnonGroupService {
         };
 
         let content = Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonGroupJoinAck(ack)),
             ephemeral_reply_to: None,
             timestamp: TimestampNanos::now().as_u64(),

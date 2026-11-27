@@ -124,6 +124,7 @@ impl MessageService {
         skdm.state_hash = verified.state_hash().to_vec();
         skdm.profile_key = self.skdm_profile_key(verified, recipient);
         let mut skdm_content = content_v1::Content {
+            kt_head: None,
             ephemeral_reply_to: self.our_group_mailbox_pk(channel_id),
             timestamp: TimestampNanos::now().as_u64(),
             padding: vec![],

@@ -134,6 +134,7 @@ impl AnonGroupService {
         self.anon_group_repo.decline_exact_pending_invite(&invite)?;
         drop(admission);
         let content = chatter_proto::content_v1::Content {
+            kt_head: None,
             content: Some(
                 chatter_proto::content_v1::content::Content::AnonGroupDecline(
                     chatter_proto::content_v1::AnonGroupDecline {

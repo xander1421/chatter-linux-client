@@ -526,6 +526,7 @@ fn an_anon_dm_message_with_no_inner_content_cannot_be_left_to_redeliver_forever(
     let conversation = AnonDmId::new();
     let route = super::anon_dm::route_anon_dm_content(
         Content {
+            kt_head: None,
             content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
                 AnonDmMessage {
                     conversation_id: conversation.as_bytes().to_vec(),

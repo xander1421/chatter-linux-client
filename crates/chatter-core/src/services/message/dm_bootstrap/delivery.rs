@@ -252,6 +252,7 @@ impl MessageService {
 /// A bootstrap REQUEST: a KeyExchange with an empty ephemeral.
 pub(super) fn bootstrap_request(our_user_id: &UserId) -> Vec<u8> {
     chatter_proto::content_v1::Content {
+        kt_head: None,
         content: Some(chatter_proto::content_v1::content::Content::KeyExchange(
             chatter_proto::content_v1::KeyExchange {
                 ephemeral_pk: vec![], // 0 bytes = bootstrap REQUEST

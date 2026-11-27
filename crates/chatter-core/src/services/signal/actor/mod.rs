@@ -129,6 +129,54 @@ pub struct SignalActorHandle {
 }
 
 
+use crate::services::signal::kt_anchor::gossip;
+
+/// Queue the transparency head an account sent, after its ratchet decrypt
+/// authenticated the message. It is filed under the route the sender attached
+/// it for and checked 5 minutes to 2 hours later, in a batch with other
+/// heads, so the check's timing does not point at this message.
+fn record_kt_head(store: &SignalStore, sender: &str, plaintext: &[u8]) {
+    use prost::Message;
+    use rand::Rng;
+    let Some(head) = gossip::received(plaintext) else {
+        return;
+    };
+    let due_at = chrono::Utc::now().timestamp() + rand::rng().random_range(5 * 60..=2 * 60 * 60);
+    if let Err(error) = store.key_store().record_peer_kt_head(
+        sender,
+        gossip::route(&head),
+        &head.encode_to_vec(),
+        due_at,
+    ) {
+        tracing::warn!(%error, "Could not queue a contact's transparency head");
+    }
+}
+
+/// Whether an outgoing `Content` is a message the user wrote: the only kind
+/// that may spend a "send anyway once" permit. Receipts, typing, sync and
+/// control traffic never do.
+fn user_authored(plaintext: &[u8]) -> bool {
+    use chatter_proto::content_v1::{Content, content::Content as Body};
+    use prost::Message;
+    fn authored(body: Option<&Body>) -> bool {
+        match body {
+            // Flag-only data messages (profile key, timer announcements) are automatic.
+            Some(Body::DataMessage(data)) => !data.body.is_empty() || !data.attachments.is_empty(),
+            Some(Body::Edit(_) | Body::Attachment(_)) => true,
+            _ => false,
+        }
+    }
+    let Ok(content) = Content::decode(plaintext) else {
+        return false;
+    };
+    match content.content.as_ref() {
+        Some(Body::AnonDmMessage(message)) => {
+            authored(message.inner_content.as_ref().and_then(|inner| inner.content.as_ref()))
+        }
+        body => authored(body),
+    }
+}
+
 /// Device inbox envelopes can contain either a regular post or an anonymous
 /// bootstrap. Their wire type is private until after the ratchet decrypt.
 fn receive_kt_route(route: KtRoute, plaintext: &[u8]) -> KtRoute {
