@@ -5783,13 +5783,17 @@ fn glass_material_is_chrome_only_with_one_optical_edge() {
 #[test]
 fn sidebar_search_and_create_have_separate_controls() {
     let header = include_str!("../../../ui/sidebar/sidebar_header.slint");
-    assert!(header.contains("material-enabled: root.mobile-mode;"));
+    // Search and Create are the sidebar cards' glass, not flat fills.
+    let card_glass =
+        "material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;";
     assert!(header.contains("spacing: Spacing.panel-gutter;"));
-    let create = header.find("if !root.mobile-mode: HeaderButton {").unwrap();
+    let create = header.find("if !root.mobile-mode: GlassSurface {").unwrap();
     assert!(header[..create].contains("horizontal-stretch: 1;"));
+    assert!(header[..create].contains(card_glass));
     assert!(header[create..].contains("width: 40px;"));
+    assert!(header[create..].contains(card_glass));
+    assert!(header[create..].contains("background: Colors.tint-strong;"));
     assert!(header[create..].contains("control-radius: Spacing.radius-panel;"));
-    assert!(header[create..].contains("control-fill: Colors.primary.with-alpha(0.16);"));
 }
 
 /// Chrome must sample scrolling content, with clearance inside the scroll range.
@@ -6120,12 +6124,14 @@ fn secondary_chrome_exposes_its_shared_material() {
         "only the jump capsule floats over the list"
     );
     assert!(list.contains("export component MessageScrollPill inherits GlassSurface {"));
-    // Timeline chips use flat fills. Dates use the muted control token.
+    // Date chips are transparent with a rim: no grey control fill
+    // (docs/design-language.md, Controls).
     let separators = include_str!("../../../ui/chat/message_row_separators.slint");
     let (_, date) = separators
         .split_once("export component DateSeparator")
         .unwrap();
-    assert!(date.contains("background: Colors.surface-control;"));
+    assert!(date.contains("background: transparent;"));
+    assert!(date.contains("border-color: Colors.border;"));
     assert_eq!(
         list.matches("background: Materials.regular;").count(),
         2,

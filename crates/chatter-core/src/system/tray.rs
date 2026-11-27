@@ -157,21 +157,45 @@ impl TrayServiceImpl {
         }
     }
 
-    fn compute_icon_name(&self) -> String {
-        let count = self.state.unread_count.load(Ordering::Relaxed);
-        let status = TrayStatus::from_u8(self.state.status.load(Ordering::Relaxed));
-
-        if count > 0 {
-            "mail-unread".to_string()
+    /// Unread messages ask the host for attention; the icon stays Chatter's.
+    fn compute_status(&self) -> ksni::Status {
+        if self.state.unread_count.load(Ordering::Relaxed) > 0 {
+            ksni::Status::NeedsAttention
         } else {
-            match status {
-                TrayStatus::Offline => "user-offline".to_string(),
-                TrayStatus::Away => "user-away".to_string(),
-                TrayStatus::DoNotDisturb => "user-busy".to_string(),
-                TrayStatus::Online => "dialog-information".to_string(),
-            }
+            ksni::Status::Active
         }
     }
+}
+
+/// The Chatter app icon as StatusNotifierItem pixmaps (ARGB32, network byte
+/// order). Sent as pixmaps rather than an icon-theme name so the tray shows
+/// the real icon whether or not the hicolor icons are installed.
+fn app_icon_pixmaps() -> Vec<Icon> {
+    static ICONS: std::sync::OnceLock<Vec<Icon>> = std::sync::OnceLock::new();
+    ICONS
+        .get_or_init(|| {
+            [
+                &include_bytes!("../../../../assets/icon-32.png")[..],
+                &include_bytes!("../../../../assets/icon-64.png")[..],
+            ]
+            .iter()
+            .filter_map(|png| image::load_from_memory(png).ok())
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let data = rgba
+                    .pixels()
+                    .flat_map(|p| [p[3], p[0], p[1], p[2]])
+                    .collect();
+                Icon {
+                    width: width as i32,
+                    height: height as i32,
+                    data,
+                }
+            })
+            .collect()
+        })
+        .clone()
 }
 
 impl Tray for TrayServiceImpl {
@@ -183,12 +207,12 @@ impl Tray for TrayServiceImpl {
         APP_DISPLAY_NAME.to_string()
     }
 
-    fn icon_name(&self) -> String {
-        self.compute_icon_name()
+    fn status(&self) -> ksni::Status {
+        self.compute_status()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        vec![]
+        app_icon_pixmaps()
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
@@ -257,20 +281,22 @@ mod tests {
     }
 
     #[test]
-    fn test_tray_state_icon_name() {
+    fn test_tray_status_follows_unread() {
         let (tx, _rx) = mpsc::channel(1);
         let state = Arc::new(TrayState::default());
         let service = TrayServiceImpl::new(tx, state.clone());
 
-        assert_eq!(service.compute_icon_name(), "dialog-information");
-
+        assert_eq!(service.compute_status(), ksni::Status::Active);
         state.unread_count.store(5, Ordering::Relaxed);
-        assert_eq!(service.compute_icon_name(), "mail-unread");
+        assert_eq!(service.compute_status(), ksni::Status::NeedsAttention);
+    }
 
-        state.unread_count.store(0, Ordering::Relaxed);
-        state
-            .status
-            .store(TrayStatus::DoNotDisturb.as_u8(), Ordering::Relaxed);
-        assert_eq!(service.compute_icon_name(), "user-busy");
+    #[test]
+    fn test_tray_icon_is_the_app_icon() {
+        let icons = app_icon_pixmaps();
+        assert_eq!(icons.len(), 2);
+        for icon in icons {
+            assert_eq!(icon.data.len(), (icon.width * icon.height * 4) as usize);
+        }
     }
 }
