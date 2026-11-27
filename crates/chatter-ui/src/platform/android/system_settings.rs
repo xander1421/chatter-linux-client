@@ -145,8 +145,10 @@ pub fn prepare_full_screen_call_prompt() {
 
 /// Hand the Activity the translated UnifiedPush consent prompt. It asks once
 /// signed in and only when a distributor is installed that the user has not
-/// answered for; nothing enrols a distributor without that answer.
-pub fn prepare_unified_push_prompt() {
+/// answered for; nothing enrols a distributor without that answer. Called on
+/// every App Lock refresh: `unlocked` false withdraws the prompt, so no one
+/// without the PIN can answer it over the lock screen.
+pub fn prepare_unified_push_prompt(unlocked: bool) {
     let result = with_jni_env(|env| {
         let act = activity()?;
         let title = env.new_string(chatter_i18n::tr(
@@ -158,8 +160,8 @@ pub fn prepare_unified_push_prompt() {
         let result = env.call_method(
             &act,
             jni::jni_str!("prepareUnifiedPushPrompt"),
-            jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
-            &[JValue::Object(&title), JValue::Object(&decline)],
+            jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;Z)V"),
+            &[JValue::Object(&title), JValue::Object(&decline), JValue::Bool(unlocked)],
         );
         if result.is_err() {
             clear_exception(env);

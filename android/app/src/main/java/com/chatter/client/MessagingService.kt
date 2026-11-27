@@ -80,6 +80,7 @@ class MessagingService : Service() {
                     nativeStartupPending = false
                     if (ready && !stopRequested && wasSignedIn(this)) {
                         coreReadyInProcess = true
+                        UnifiedPushReceiver.flushReset(this)
                     } else if (pendingStarts == 0) {
                         stopSelf()
                     }

@@ -772,6 +772,10 @@ class MainActivity : GameActivity() {
     override fun onPause() {
         // Start while the Activity still has foreground-start eligibility.
         activityResumed = false
+        // The UnifiedPush prompt waits for core to report the app unlocked again
+        // after this pause (App Lock may engage while away).
+        unifiedPushPrompt = null
+        unifiedPushDialog?.dismiss()
         messagingBackground = true
         nativeSetAppVisible(false)
         updateMessagingService()
@@ -802,7 +806,8 @@ class MainActivity : GameActivity() {
     }
 
     private fun updateAppVisibility(hasFocus: Boolean) {
-        val visible = activityResumed && (hasFocus || fullScreenCallDialog?.isShowing == true)
+        val visible = activityResumed && (hasFocus || fullScreenCallDialog?.isShowing == true ||
+            unifiedPushDialog?.isShowing == true)
         messagingBackground = !visible
         nativeSetAppVisible(visible)
         updateMessagingService()
@@ -1518,13 +1523,22 @@ class MainActivity : GameActivity() {
     // An installed distributor (e.g. ntfy) is only used once the user picks it
     // here: it would see when every wake arrives. Declining keeps Chatter's own
     // socket and is remembered per distributor; a newly installed one is offered.
+    // Core hands the prompt over on every App Lock refresh, with `unlocked`
+    // false while App Lock covers the app, so it never shows over the lock.
     private data class UnifiedPushPrompt(val title: String, val decline: String)
     private var unifiedPushPrompt: UnifiedPushPrompt? = null
     private var unifiedPushDialog: android.app.AlertDialog? = null
 
     @androidx.annotation.Keep
-    fun prepareUnifiedPushPrompt(title: String, decline: String) {
+    fun prepareUnifiedPushPrompt(title: String, decline: String, unlocked: Boolean) {
         runOnUiThread {
+            // Core is up (it called us), so a pending consent reset can run.
+            UnifiedPushReceiver.flushReset(this)
+            if (!unlocked) {
+                unifiedPushPrompt = null
+                unifiedPushDialog?.dismiss()
+                return@runOnUiThread
+            }
             unifiedPushPrompt = UnifiedPushPrompt(title, decline)
             maybeShowUnifiedPushPrompt()
         }
@@ -1537,12 +1551,15 @@ class MainActivity : GameActivity() {
             unifiedPushDialog != null || isFinishing || isDestroyed || lockScreenCallId != null) return
         val offered = UnifiedPushReceiver.distributorsToOffer(this)
         if (offered.isEmpty()) return
+        // Label plus package name: an app can call itself "ntfy", it cannot
+        // take ntfy's package name.
         val labels = offered.map { pkg ->
-            try {
+            val label = try {
                 packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
             } catch (_: Exception) {
-                pkg
+                null
             }
+            if (label == null || label == pkg) pkg else "$label\n$pkg"
         }.toTypedArray()
         // Not cancelable: only an explicit pick or decline is an answer, so a
         // stray tap outside neither enrols nor silences the question.

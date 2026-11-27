@@ -330,6 +330,8 @@ chatter-proto = { path = "../chatter-proto", features = ["testing"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The integration tests in `tests/` link this crate without `cfg(test)`; they
 # run headless with the keyring opted out, so their build carries the opt-out.
+# Consequence: `cargo test --release` (or any release-inheriting profile) stops
+# in build.rs. Tests run in the dev profile.
 chatter-core = { path = ".", default-features = false, features = ["insecure-no-keyring"] }
 # Paused-clock tests (heartbeat.rs `start_paused`).
 tokio = { workspace = true, features = ["test-util"] }

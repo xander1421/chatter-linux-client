@@ -107,7 +107,7 @@ pub(crate) fn destroy_keys(directories: &Directories) -> Result<(), StorageError
 
     // The OS keyring entry, wherever the keyring is in use.
     if !cfg!(target_os = "android")
-        && std::env::var_os("CHATTER_DB_PASSPHRASE").is_none()
+        && crate::system::keyring::dev_env_key("CHATTER_DB_PASSPHRASE").is_none()
         && !crate::system::keyring::keyring_disabled(&db_path)
     {
         let deleted = crate::system::Keyring::new(db_path.clone())

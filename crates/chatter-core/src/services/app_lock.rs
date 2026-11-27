@@ -38,11 +38,20 @@
 //!
 //! The attempt backoff must not let a clock change *shorten* it, so it never
 //! reads wall time. It stores [`boot_clock`] (time since boot, counting
-//! suspend; no user can set it) at the last failure. Within one boot, now minus
-//! that is the real time elapsed. After a reboot the clock restarted, so the
-//! difference, or the current reading alone when it is smaller, undercounts
-//! the real time elapsed: a reboot never shortens a backoff, it can only make
-//! the holder wait longer.
+//! suspend; the settings app and `date` cannot move it) at the last failure.
+//! Within one boot, now minus that is the real time elapsed. After a reboot the
+//! clock restarted, so the difference, or the current reading alone when it is
+//! smaller, undercounts the real time elapsed: a reboot never shortens a
+//! backoff, it can only make the holder wait longer. A clock read that fails
+//! counts as a full backoff: no PIN is checked.
+//!
+//! Accepted residual (Linux desktop): an unprivileged process can start the app
+//! in a time namespace (`unshare -Ur -T --boottime <offset>`), which shifts
+//! `CLOCK_BOOTTIME` forward and skips the backoff, one relaunch per attempt.
+//! That needs code running as the user, which already reaches the database key
+//! through the keyring and could `LD_PRELOAD` the clock anyway; reading
+//! `/proc/self/timens_offsets` would not hold either, since the same user can
+//! mount over it. Android apps cannot create time namespaces.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -205,8 +214,9 @@ fn backoff(failed: u32) -> Duration {
         .min(MAX_BACKOFF)
 }
 
-/// Time since boot, counting suspend, from a clock no user can set.
-fn boot_clock() -> Duration {
+/// Time since boot, counting suspend, from a clock the device holder cannot set
+/// (module docs, "Clock"). `None` if the read failed.
+fn boot_clock() -> Option<Duration> {
     #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     {
         #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -217,16 +227,23 @@ fn boot_clock() -> Duration {
         let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
         // SAFETY: `ts` is a valid, writable timespec.
         if unsafe { libc::clock_gettime(CLOCK, &mut ts) } != 0 {
-            // Cannot happen for these clock ids; zero undercounts elapsed time.
-            return Duration::ZERO;
+            return None;
         }
-        Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+        Some(Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32))
     }
     #[cfg(target_os = "windows")]
     {
         // Milliseconds since boot, sleep and hibernation included.
-        Duration::from_millis(unsafe { windows::Win32::System::SystemInformation::GetTickCount64() })
+        Some(Duration::from_millis(unsafe {
+            windows::Win32::System::SystemInformation::GetTickCount64()
+        }))
     }
+}
+
+/// The boot clock for an attempt; a failed read throttles instead of letting
+/// a stamp of zero (or a "now" of zero) skew the backoff either way.
+fn attempt_clock(now: Option<Duration>) -> Result<Duration, AppLockError> {
+    now.ok_or(AppLockError::Throttled(MAX_BACKOFF))
 }
 
 fn as_ms(d: Duration) -> u64 {
@@ -427,7 +444,20 @@ impl AppLock {
 
     /// One attempt from the lock screen.
     pub fn attempt_unlock(&self, pin: &str) -> Result<UnlockAttempt, AppLockError> {
-        self.attempt_unlock_at(pin, boot_clock())
+        self.attempt_unlock_with(pin, boot_clock())
+    }
+
+    fn attempt_unlock_with(
+        &self,
+        pin: &str,
+        now: Option<Duration>,
+    ) -> Result<UnlockAttempt, AppLockError> {
+        match attempt_clock(now) {
+            Ok(now) => self.attempt_unlock_at(pin, now),
+            Err(_) => Ok(UnlockAttempt::Throttled {
+                retry_after: MAX_BACKOFF,
+            }),
+        }
     }
 
     /// `now` is a [`boot_clock`] reading.
@@ -532,7 +562,7 @@ impl AppLock {
             return Err(AppLockError::ConfirmationMismatch);
         }
         if self.stored()?.is_some() {
-            self.require_lock_pin(current.unwrap_or_default(), boot_clock())?;
+            self.require_lock_pin(current.unwrap_or_default(), attempt_clock(boot_clock())?)?;
         }
         let salt = random_salt()?;
         let lock_hash = *derive(pin, &salt)?;
@@ -550,7 +580,7 @@ impl AppLock {
 
     /// Turn the lock off. Drops the duress PIN with it.
     pub fn disable(&self, current: &str) -> Result<(), AppLockError> {
-        self.require_lock_pin(current, boot_clock())?;
+        self.require_lock_pin(current, attempt_clock(boot_clock())?)?;
         self.settings.delete(keys::APP_LOCK)?;
         let mut runtime = self.runtime.lock();
         runtime.locked = false;
@@ -583,7 +613,7 @@ impl AppLock {
         if duress == current {
             return Err(AppLockError::DuressEqualsLockPin);
         }
-        let mut stored = self.require_lock_pin(current, boot_clock())?;
+        let mut stored = self.require_lock_pin(current, attempt_clock(boot_clock())?)?;
         if !differs_from_account_pin(duress) {
             return Err(AppLockError::DuressEqualsAccountPin);
         }
@@ -593,7 +623,7 @@ impl AppLock {
     }
 
     pub fn clear_duress_pin(&self, current: &str) -> Result<(), AppLockError> {
-        let mut stored = self.require_lock_pin(current, boot_clock())?;
+        let mut stored = self.require_lock_pin(current, attempt_clock(boot_clock())?)?;
         stored.duress_hash = None;
         self.store(&stored)?;
         Ok(())
@@ -775,9 +805,29 @@ mod tests {
             UnlockAttempt::Unlocked
         );
 
-        let a = boot_clock();
+        let a = boot_clock().unwrap();
         assert!(a > Duration::ZERO);
-        assert!(boot_clock() >= a);
+        assert!(boot_clock().unwrap() >= a);
+    }
+
+    #[test]
+    fn a_failed_clock_read_throttles_without_checking_the_pin() {
+        let (lock, _dir) = lock();
+        lock.enable(None, PIN, PIN, LockTimeout::Immediate).unwrap();
+        lock.lock_now();
+        assert_eq!(
+            lock.attempt_unlock_with(PIN, None).unwrap(),
+            UnlockAttempt::Throttled {
+                retry_after: MAX_BACKOFF
+            }
+        );
+        assert_eq!(lock.attempt_unlock_with("111111", None).unwrap(), UnlockAttempt::Throttled {
+            retry_after: MAX_BACKOFF
+        });
+        // Nothing was recorded, and the lock is still engaged.
+        assert_eq!(lock.stored().unwrap().unwrap().failed_attempts, 0);
+        assert!(lock.is_locked());
+        assert!(matches!(attempt_clock(None), Err(AppLockError::Throttled(d)) if d == MAX_BACKOFF));
     }
 
     #[test]

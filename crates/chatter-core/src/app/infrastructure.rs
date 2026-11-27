@@ -431,7 +431,7 @@ impl InfrastructureContainer {
                         "Could not read the database passphrase. Refusing to continue: \
                          generating a new one here would make the existing database \
                          undecryptable and it would then be deleted as unrecoverable. \
-                         Unlock your keyring and try again, or set CHATTER_DB_PASSPHRASE."
+                         Unlock your keyring and try again."
                     );
                     return Err(e.into());
                 }
