@@ -18,14 +18,17 @@ export struct EmojiData {
 }
 
 export component EmojiPicker inherits GlassSurface {
-    material-level: 3;
+    material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+    border-width: root.draw-surface ? Spacing.stroke : 0px;
+    border-color: Colors.border;
     elevation: 4;
     border-radius: Spacing.radius-panel;
 
-    // Inside another surface (the composer drawer, the reaction popover):
-    // flat, no second material or shadow, and no search row of its own.
+    // The composer drawer supplies both search and glass. The reaction
+    // card supplies glass and keeps this picker’s search.
     in property <bool> embedded: false;
-    material-enabled: !root.embedded;
+    in property <bool> draw-surface: !root.embedded;
+    material-enabled: root.draw-surface;
     // Picker visibility
     in property <bool> show: false;
     property <float> reveal-progress: 0.0;
@@ -60,9 +63,6 @@ export component EmojiPicker inherits GlassSurface {
     callback category-changed(int);
     callback search-changed(string);
     callback skin-tone-changed(int);
-
-    // Internal state
-    property <bool> search-focused: search-input.has-focus;
 
     // Category icons: Recent (-1), Smileys (0), People (1), etc.
     // Only SMP Emoji_Presentation=Yes code points: 🏳 (U+1F3F3) is ≥ U+1F000 but
@@ -110,7 +110,7 @@ export component EmojiPicker inherits GlassSurface {
             border-radius: Spacing.radius-control;
             background: transparent;
             border-width: Spacing.stroke;
-            border-color: search-focused ? Colors.primary : Colors.border;
+            border-color: Colors.border;
 
             HorizontalLayout {
                 padding-left: Spacing.sm;
@@ -205,7 +205,7 @@ export component EmojiPicker inherits GlassSurface {
                         // All ten share the row: at a full cell each the last
                         // ones (Flags; from Objects in the reaction picker)
                         // sat past the edge, and a mouse cannot flick sideways.
-                        width: max(28px, min(root.cell,
+                        width: max(root.touch ? 28px : 0px, min(root.cell,
                             (category-flick.width - 2 * Spacing.xs) / root.category-icons.length));
                         height: root.cell;
                         border-radius: Spacing.radius-control;

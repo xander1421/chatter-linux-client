@@ -36,7 +36,9 @@ component GifTile inherits Rectangle {
     clip: true;
     opacity: root.reveal * (area.pressed ? 0.84 : 1.0);
     animate opacity { duration: Materials.motion-quick; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(root.stagger-index, 8) * 18ms / Appearance.animation-speed; }
-    background: root.ready && (area.has-hover || area.pressed) ? Materials.hover : Colors.inset;
+    background: area.pressed ? Materials.pressed : area.has-hover ? Materials.hover : transparent;
+    border-width: root.ready ? 0px : Spacing.stroke;
+    border-color: Colors.border;
     accessible-role: button;
     accessible-label: root.gif.failed ? @tr("GIF {}, preview unavailable", root.gif.id) : @tr("GIF {}", root.gif.id);
     accessible-enabled: root.ready;
