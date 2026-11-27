@@ -457,23 +457,49 @@ impl ChatterClient {
 
     /// Preferred expanded desktop sidebar width in logical pixels.
     pub fn sidebar_width(&self) -> Option<f32> {
-        use crate::storage::repositories::settings_repo::SettingsRepository;
-        use crate::storage::settings_keys;
-        SettingsRepository::new(self.services.database.clone())
-            .get::<f32>(settings_keys::SIDEBAR_WIDTH)
-            .ok()
-            .flatten()
-            .filter(|width| width.is_finite() && (220.0..=480.0).contains(width))
+        self.panel_width(crate::storage::settings_keys::SIDEBAR_WIDTH, 220.0..=480.0)
     }
 
     pub fn set_sidebar_width(&self, width: f32) {
-        if !width.is_finite() || !(220.0..=480.0).contains(&width) {
+        self.set_panel_width(
+            crate::storage::settings_keys::SIDEBAR_WIDTH,
+            width,
+            220.0..=480.0,
+        );
+    }
+
+    /// User's preferred docked thread panel width in logical pixels.
+    pub fn thread_panel_width(&self) -> Option<f32> {
+        self.panel_width(
+            crate::storage::settings_keys::THREAD_PANEL_WIDTH,
+            320.0..=500.0,
+        )
+    }
+
+    pub fn set_thread_panel_width(&self, width: f32) {
+        self.set_panel_width(
+            crate::storage::settings_keys::THREAD_PANEL_WIDTH,
+            width,
+            320.0..=500.0,
+        );
+    }
+
+    fn panel_width(&self, key: &str, bounds: std::ops::RangeInclusive<f32>) -> Option<f32> {
+        use crate::storage::repositories::settings_repo::SettingsRepository;
+        SettingsRepository::new(self.services.database.clone())
+            .get::<f32>(key)
+            .ok()
+            .flatten()
+            .filter(|width| bounds.contains(width))
+    }
+
+    fn set_panel_width(&self, key: &str, width: f32, bounds: std::ops::RangeInclusive<f32>) {
+        if !bounds.contains(&width) {
             return;
         }
         use crate::storage::repositories::settings_repo::SettingsRepository;
-        use crate::storage::settings_keys;
         let repo = SettingsRepository::new(self.services.database.clone());
-        let _ = repo.set(settings_keys::SIDEBAR_WIDTH, &width);
+        let _ = repo.set(key, &width);
     }
 
     /// Read the user's search-shortcut preference (defaults to `Both`).

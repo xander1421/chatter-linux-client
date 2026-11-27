@@ -4,6 +4,7 @@ import { EmojiData } from "components/emoji_picker.slint";
 import { GifData } from "components/gif_picker.slint";
 import { MentionSuggestion } from "components/mention_autocomplete.slint";
 import { PinnedItem } from "modals/pinned_messages.slint";
+import { Spacing } from "theme/spacing.slint";
 
 export global ChatPane {
     // ========== Chat properties ==========
@@ -284,6 +285,8 @@ export global ChatPane {
     callback pinned-go-to-message();
     // ========== Thread panel state ==========
     in property <bool> thread-panel-visible: false;
+    in-out property <length> thread-preferred-width: Spacing.thread-panel-min-width;
+    callback save-thread-width(length);
     // The side panel showing every pinned message of the open chat instead
     // of a thread (same list, no root strip, no composer).
     in property <bool> thread-pinned-mode: false;

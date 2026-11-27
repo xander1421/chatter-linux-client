@@ -11,8 +11,6 @@ export component AppThreadPanel inherits Rectangle {
     in-out property <bool> context-menu-from-thread;
     in-out property <bool> context-menu-mobile;
     in property <bool> is-small-screen;
-    in-out property <length> panel-width <=> thread-panel.panel-width;
-    in property <length> max-panel-width;
     // Same rule as the main composer (app_conversation_layout.slint).
     in property <bool> composer-enter-sends: true;
     in property <bool> touch;
@@ -27,7 +25,6 @@ export component AppThreadPanel inherits Rectangle {
         visible: root.visible;
         width: 100%;
         height: 100%;
-        max-panel-width: root.max-panel-width;
         // Same expression `thread-panel-w` uses to give the panel
         // the whole row: at that width it is a pushed page, so it
         // dismisses with a back chevron rather than an X.
