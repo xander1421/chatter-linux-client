@@ -103,10 +103,9 @@ export component MessageItem inherits Rectangle {
     property <bool> photo-only: root.photo-message && root.content == "" && !root.is-reply && !root.is-thread-reply;
     property <float> photo-aspect: root.photo-message && !root.album-message && root.attachments[0].height > 0
         ? root.attachments[0].width / max(1, root.attachments[0].height) : 1.5;
-    property <length> photo-width: root.album-message ? min(280px, root.width * 0.7 - Spacing.md) : root.photo-message
+    property <length> photo-width: min(root.bubble-max-width, root.album-message ? 280px : root.photo-message
         ? (root.attachments[0].width > 0 && root.attachments[0].height > 0
-            ? max(100px, min(min(280px, root.width * 0.7 - Spacing.md), 380px * root.photo-aspect))
-            : 180px) : 0px;
+            ? clamp(380px * root.photo-aspect, 100px, 280px) : 180px) : 0px);
 
     // Audio playback state
     in property <string> current-playing-attachment-id: "";
@@ -469,7 +468,7 @@ export component MessageItem inherits Rectangle {
             is-dm: root.is-dm;
             is-own: root.is-own;
             message-id: root.message-id;
-            message-width: root.width;
+            bubble-max-width: root.bubble-max-width;
             r-outer-bottom: root.r-outer-bottom;
             r-outer-top: root.r-outer-top;
             r-round: root.r-round;
@@ -908,12 +907,13 @@ export component MessageItem inherits Rectangle {
                             current-playing-attachment-id: root.current-playing-attachment-id;
                             is-media-playing: root.is-media-playing;
                             mobile: root.mobile;
-                            text-max-width: root.text-max-width;
+                            content-max-width: root.photo-message ? root.photo-width
+                                : max(0px, root.bubble-max-width - bubble-content.padding-left
+                                    - bubble-content.padding-right - (root.is-ai ? 4px : 0px));
                             bubble-height: bubble.height;
                             bubble-width: bubble.width;
                             bubble-x: bubble.absolute-position.x;
                             bubble-y: bubble.absolute-position.y;
-                            message-width: root.width;
                             open-image(a0, a1, a2, a3, a4) => { root.open-image(a0, a1, a2, a3, a4); }
                             open-other-attachment(a0) => { root.open-other-attachment(a0); }
                             request-menu(a0, a1, a2, a3, a4, a5) => { root.request-menu(a0, a1, a2, a3, a4, a5); }

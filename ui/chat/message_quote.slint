@@ -150,6 +150,7 @@ export component MessageQuote inherits Rectangle {
             if root.reply-to-category == "audio": AudioPlayer {
                 mobile: root.mobile;
                 compact: true;
+                content-max-width: max(0px, root.text-max-width - 2 * Spacing.xs);
                 attachment-id: root.reply-to-attachment-id;
                 filename: root.reply-to-filename;
                 waveform: root.reply-to-waveform;

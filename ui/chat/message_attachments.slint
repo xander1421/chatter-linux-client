@@ -20,9 +20,8 @@ export component MessageAttachments inherits VerticalLayout {
     in property <length> bubble-y;
     in property <string> current-playing-attachment-id;
     in property <bool> is-media-playing;
-    in property <length> message-width;
     in property <bool> mobile;
-    in property <length> text-max-width;
+    in property <length> content-max-width;
     in property <bool> edge-to-edge: false;
     in property <length> media-width: 0px;
     in property <bool> overlay-stamp: false;
@@ -207,13 +206,14 @@ export component MessageAttachments inherits VerticalLayout {
         // Let the media set the bubble's preferred width. The
         // row may grow with a wider caption, where image and
         // video attachments stay centered.
-        max-width: root.edge-to-edge ? root.media-width : root.text-max-width;
+        max-width: root.content-max-width;
+        property <length> card-max-width: max(0px, root.content-max-width - self.padding * 2);
         alignment: root.edge-to-edge ? start : attachment.is-image || attachment.category == "video" ? center : start;
 
         // Image attachments
         if attachment.is-image: Rectangle {
             property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.5;
-            property <length> max-w: min(280px, root.message-width * 0.7 - Spacing.md);
+            property <length> max-w: min(280px, card-max-width);
             property <length> max-h: 380px;
             property <length> calc-w: min(max-w, max-h * aspect-ratio);
             property <length> calc-h: min(max-h, calc-w / aspect-ratio);
@@ -221,7 +221,7 @@ export component MessageAttachments inherits VerticalLayout {
             // Reserve the final geometry from stored dimensions before
             // the thumbnail is decoded, so rows above the viewport do
             // not grow and pull the opening anchor away from the end.
-            width: root.edge-to-edge ? root.media-width : attachment.width > 0 && attachment.height > 0 ? max(100px, calc-w) : 180px;
+            width: root.edge-to-edge ? root.media-width : min(card-max-width, attachment.width > 0 && attachment.height > 0 ? max(100px, calc-w) : 180px);
             height: attachment.width > 0 && attachment.height > 0 ? max(60px, calc-h) : 140px;
             background: Colors.bubble-inset;
             border-radius: root.edge-to-edge ? 0px : Spacing.radius-sm;
@@ -405,6 +405,7 @@ export component MessageAttachments inherits VerticalLayout {
 
         // Audio attachments — shared inline player
         if attachment.category == "audio": AudioPlayer {
+            content-max-width: card-max-width;
             mobile: root.mobile;
             attachment-id: attachment.id;
             filename: attachment.filename;
@@ -428,12 +429,12 @@ export component MessageAttachments inherits VerticalLayout {
         // Video attachments
         if attachment.category == "video": Rectangle {
             property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.6;
-            property <length> max-w: min(280px, root.message-width * 0.7 - Spacing.md);
+            property <length> max-w: min(280px, card-max-width);
             property <length> max-h: 220px;
             property <length> calc-w: min(max-w, max-h * aspect-ratio);
             property <length> calc-h: min(max-h, calc-w / aspect-ratio);
 
-            width: attachment.width > 0 && attachment.height > 0 ? max(160px, calc-w) : 260px;
+            width: min(card-max-width, attachment.width > 0 && attachment.height > 0 ? max(160px, calc-w) : 260px);
             height: attachment.width > 0 && attachment.height > 0 ? max(100px, calc-h) : 160px;
             background: Colors.bubble-inset;
             border-radius: Spacing.radius-sm;
@@ -554,18 +555,22 @@ export component MessageAttachments inherits VerticalLayout {
 
         // File attachments
         if !attachment.is-image && attachment.category != "audio" && attachment.category != "video": Rectangle {
-            width: min(240px, root.message-width * 0.7 - Spacing.md);
+            property <length> file-icon-size: 36px;
+            property <length> download-icon-size: 28px;
+            // The labels can elide while the file and download icons keep their slots.
+            property <length> controls-width: file-icon-size + download-icon-size + Spacing.sm * 4;
+            width: max(controls-width, min(card-max-width, file-content.preferred-width));
             height: 52px;
             background: Colors.bubble-inset;
             border-radius: Spacing.radius-md;
 
-            HorizontalLayout {
+            file-content := HorizontalLayout {
                 padding: Spacing.sm;
                 spacing: Spacing.sm;
 
                 Rectangle {
-                    width: 36px;
-                    height: 36px;
+                    width: file-icon-size;
+                    height: file-icon-size;
                     border-radius: Spacing.radius-sm;
                     background: Colors.primary.transparentize(0.85);
 
@@ -581,6 +586,7 @@ export component MessageAttachments inherits VerticalLayout {
 
                 VerticalLayout {
                     horizontal-stretch: 1;
+                    min-width: 0px;
                     alignment: center;
                     spacing: Spacing.xxs;
 
@@ -592,14 +598,15 @@ export component MessageAttachments inherits VerticalLayout {
                     }
                     Text {
                         text: attachment.is-download-failed ? @tr("Download failed · tap to retry") : attachment.size-display;
+                        overflow: elide;
                         color: attachment.is-download-failed ? Colors.primary : Colors.text-muted;
                         font-size: Typography.xs;
                     }
                 }
 
                 Rectangle {
-                    width: 28px;
-                    height: 28px;
+                    width: download-icon-size;
+                    height: download-icon-size;
                     background: file-touch.has-hover ? Colors.surface-hover : transparent;
                     border-radius: Spacing.radius-sm;
 
