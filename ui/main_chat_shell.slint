@@ -209,10 +209,17 @@ export component MainChatShell inherits Rectangle {
             background: root.chat-layout-covers-panel ? transparent : Materials.ambient;
             // Reserve the complete control bar and unmount the covered sidebar.
             x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
-                : root.call-hides-sidebar ? 0px : root.normal-sidebar-offset;
-            y: 0px;
-            width: root.compact-layout ? parent.width : parent.width - self.x;
-            height: parent.height;
+                : root.call-hides-sidebar || root.normal-sidebar-offset == 0px ? Spacing.panel-gutter : root.normal-sidebar-offset;
+            // Desktop/tablet: the chat column is a framed container on the
+            // OLED-black page, inset by the card gutter and rounded like the
+            // sidebar cards (owner 2026-11-27: keep black, make it feel like a
+            // container). The phone stays full-bleed.
+            y: root.compact-layout ? 0px : Spacing.panel-gutter;
+            width: root.compact-layout ? parent.width : parent.width - self.x - Spacing.panel-gutter;
+            height: root.compact-layout ? parent.height : parent.height - 2 * Spacing.panel-gutter;
+            border-radius: root.compact-layout ? 0px : Spacing.radius-panel;
+            border-width: root.compact-layout ? 0px : 1px;
+            border-color: Colors.border;
             visible: true;
             // Clip this area to prevent inner panels from overflowing the whole app
             clip: true;
