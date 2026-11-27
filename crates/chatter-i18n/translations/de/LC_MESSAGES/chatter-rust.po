@@ -4232,3 +4232,9 @@ msgstr ""
 "Deine Nachrichten werden weiterhin gesendet. Vergleiche die "
 "Sicherheitsnummern mit deinen Kontakten, bevor du einem neuen Schlüssel "
 "vertraust."
+
+msgid "Checking their security key. Try again in a moment."
+msgstr "Der Sicherheitsschlüssel des Kontakts wird geprüft. Versuche es gleich noch einmal."
+
+msgid "This contact’s security key could not be trusted."
+msgstr "Der Sicherheitsschlüssel dieses Kontakts ist nicht vertrauenswürdig."

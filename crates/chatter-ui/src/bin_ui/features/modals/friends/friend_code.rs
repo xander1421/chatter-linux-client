@@ -584,6 +584,7 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                                 )
                                 | FriendCodeConnectionError::FriendRequest(
                                     chatter_core::client::UserError::UserNotFound(_)
+                                        | chatter_core::client::UserError::KeyVerificationPending
                                 )
                                 | FriendCodeConnectionError::SecretChat(
                                     chatter_core::client::AnonDmError::CannotMessageSelf

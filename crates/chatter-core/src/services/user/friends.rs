@@ -1,4 +1,45 @@
 use super::*;
+use crate::events::DomainEvent;
+use crate::network::grpc::client_pool::TransportMode;
+use std::time::Duration;
+use tokio::sync::broadcast::{error::RecvError, Receiver};
+
+const FRIEND_KEY_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(20);
+
+async fn wait_for_friend_request_key(
+    mut events: Receiver<DomainEvent>,
+    peer: &UserId,
+    check: impl Fn() -> Result<(), CryptoError>,
+) -> Result<(), UserError> {
+    let deadline = tokio::time::Instant::now() + FRIEND_KEY_VERIFICATION_TIMEOUT;
+    loop {
+        match check() {
+            Err(CryptoError::KeyVerificationPending { .. }) => {}
+            result => return result.map_err(UserError::Crypto),
+        }
+
+        let updated = async {
+            loop {
+                match events.recv().await {
+                    Ok(DomainEvent::PeerKeyVerificationUpdated { peer_user_id })
+                        if peer_user_id == *peer => break,
+                    Err(RecvError::Lagged(_)) => break,
+                    Err(RecvError::Closed) => std::future::pending::<()>().await,
+                    Ok(_) => {}
+                }
+            }
+        };
+        if tokio::time::Instant::now() >= deadline
+            || tokio::time::timeout_at(deadline, updated).await.is_err()
+        {
+            break;
+        }
+    }
+    match check() {
+        Err(CryptoError::KeyVerificationPending { .. }) => Err(UserError::KeyVerificationPending),
+        result => result.map_err(UserError::Crypto),
+    }
+}
 
 impl UserService {
     // ========================================================================
@@ -11,6 +52,10 @@ impl UserService {
         friend_id: &UserId,
         note: Option<&str>,
     ) -> Result<Friendship, UserError> {
+        let (mode, route) = self.grpc_pool.route_generation_snapshot();
+        if mode == TransportMode::Onion {
+            return Err(UserError::ForbiddenInAnonMode);
+        }
         let current_user = self.settings_repo.current_user_id()?;
 
         // E2E friend-request envelope, ECIES-encrypted to the recipient's
@@ -24,6 +69,12 @@ impl UserService {
             .await?;
 
         let mut user_client = self.user_client();
+        if route.is_cancelled() {
+            return Err(UserError::ForbiddenInAnonMode);
+        }
+        if self.settings_repo.current_user_id()? != current_user {
+            return Err(UserError::NotLoggedIn);
+        }
         let friend_id_str = friend_id.to_string();
         let mut stream = user_client
             .send_friend_request(&friend_id_str, Some(&envelope))
@@ -88,8 +139,27 @@ impl UserService {
             libsignal_protocol::IdentityKey::decode(&friend_request_identity_key(resp)?)
                 .map_err(|e| UserError::InvalidInput(format!("identity key decode failed: {e}")))?;
 
-        self.signal.require_sendable_key(&recipient.to_string(), &identity_key.serialize())
-            .map_err(UserError::Crypto)?;
+        // Subscribe before checking the key so a fast KT result cannot be missed.
+        let events = self.event_bus.subscribe_domain();
+        let peer = recipient.to_string();
+        let key = identity_key.serialize();
+        wait_for_friend_request_key(events, recipient, || {
+            match self.signal.require_sendable_key(&peer, &key) {
+                Err(CryptoError::KeyVerificationPending { .. })
+                    if self.signal.get_peer_identity(&peer)?
+                        .is_some_and(|pinned| pinned.as_slice() != key.as_ref()) =>
+                {
+                    Err(CryptoError::UntrustedIdentity {
+                        peer_id: peer.clone(),
+                        device_id: 0,
+                        new_identity_key: None,
+                        attribution: crate::error::IdentityChangeSource::ServerClaimed,
+                    })
+                }
+                result => result,
+            }
+        })
+        .await?;
 
         let mut plaintext = Vec::with_capacity(1 + 32 + note.len());
         plaintext.push(u8::from(profile_key.is_some()));
@@ -435,5 +505,51 @@ impl UserService {
         let _ = self.user_repo.delete_friendship(&current_user, friend_id);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use tokio::sync::broadcast;
+
+    #[tokio::test(start_paused = true)]
+    async fn friend_request_key_waits_for_peer_update() {
+        let peer = UserId(uuid::Uuid::new_v4());
+        let other = UserId(uuid::Uuid::new_v4());
+        let (tx, rx) = broadcast::channel(8);
+        let checks = Cell::new(0);
+        let result = wait_for_friend_request_key(rx, &peer, || {
+            checks.set(checks.get() + 1);
+            if checks.get() == 1 {
+                tx.send(DomainEvent::PeerKeyVerificationUpdated { peer_user_id: other })
+                    .unwrap();
+                tx.send(DomainEvent::PeerKeyVerificationUpdated { peer_user_id: peer })
+                    .unwrap();
+                return Err(CryptoError::KeyVerificationPending { peer_id: peer.to_string() });
+            }
+            assert!(tx.is_empty(), "the peer update must be consumed before rechecking");
+            Ok(())
+        })
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(checks.get(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn friend_request_key_wait_times_out() {
+        let peer = UserId(uuid::Uuid::new_v4());
+        let (_tx, rx) = broadcast::channel(8);
+        let start = tokio::time::Instant::now();
+        let result = wait_for_friend_request_key(rx, &peer, || {
+            Err(CryptoError::KeyVerificationPending { peer_id: peer.to_string() })
+        })
+        .await;
+
+        assert!(matches!(result, Err(UserError::KeyVerificationPending)));
+        assert!(start.elapsed() >= FRIEND_KEY_VERIFICATION_TIMEOUT);
+        assert!(start.elapsed() < FRIEND_KEY_VERIFICATION_TIMEOUT + Duration::from_secs(1));
     }
 }

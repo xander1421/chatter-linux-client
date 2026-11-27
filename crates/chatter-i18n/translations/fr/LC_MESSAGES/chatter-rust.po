@@ -4192,3 +4192,9 @@ msgid ""
 msgstr ""
 "Vos messages sont toujours envoyés. Comparez les numéros de sécurité avec "
 "vos contacts avant de faire confiance à une nouvelle clé."
+
+msgid "Checking their security key. Try again in a moment."
+msgstr "Vérification de sa clé de sécurité en cours. Réessaie dans un instant."
+
+msgid "This contact’s security key could not be trusted."
+msgstr "La clé de sécurité de ce contact ne peut pas être considérée comme fiable."

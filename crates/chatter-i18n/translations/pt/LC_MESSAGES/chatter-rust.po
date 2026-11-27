@@ -4161,3 +4161,9 @@ msgid ""
 msgstr ""
 "Suas mensagens continuam sendo enviadas. Compare os números de segurança com "
 "seus contatos antes de confiar em uma chave nova."
+
+msgid "Checking their security key. Try again in a moment."
+msgstr "A verificar a chave de segurança do contacto. Tenta novamente dentro de momentos."
+
+msgid "This contact’s security key could not be trusted."
+msgstr "A chave de segurança deste contacto não é fiável."

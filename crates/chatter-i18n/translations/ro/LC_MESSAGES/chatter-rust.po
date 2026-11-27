@@ -4197,3 +4197,9 @@ msgid ""
 msgstr ""
 "Mesajele tale se trimit în continuare. Compară numerele de siguranță cu "
 "contactele tale înainte să ai încredere într-o cheie nouă."
+
+msgid "Checking their security key. Try again in a moment."
+msgstr "Verificăm cheia de securitate a contactului. Încearcă din nou peste câteva momente."
+
+msgid "This contact’s security key could not be trusted."
+msgstr "Cheia de securitate a acestui contact nu este de încredere."
