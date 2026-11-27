@@ -201,7 +201,8 @@ pub(crate) fn refresh_flat_rows(window: &MainWindow) {
         }
         rows.push(empty("bottom"));
     } else if archived.row_count() > 0 {
-        rows.insert(1, empty("archive-entry"));
+        // Keep Saved and its pinned strip at the top of the phone list.
+        rows.insert(2, empty("archive-entry"));
     }
     let model = pane.get_flat_rows();
     if let Some(vec) = model.as_any().downcast_ref::<VecModel<crate::SidebarRowData>>() {
@@ -299,6 +300,31 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             )
             .map_or(current, |index| index as i32)
     });
+    // Cards and the phone pinned strip share the existing conversation entry points.
+    let card_window = window.as_weak();
+    window
+        .global::<crate::SidebarCards>()
+        .on_open_row(move |row_id| {
+            use slint::Model;
+            let Some(window) = card_window.upgrade() else {
+                return;
+            };
+            let cards = window.global::<crate::SidebarCards>().get_cards();
+            let row = cards.iter().find_map(|card| {
+                card.pinned
+                    .iter()
+                    .chain(card.rows.iter())
+                    .find(|row| row.conversation_id == row_id)
+            });
+            let Some(row) = row else { return };
+            let pane = window.global::<crate::SidebarPane>();
+            pane.set_mobile_show_chat(true);
+            if row.kind == "saved" {
+                pane.invoke_saved_messages_clicked();
+            } else {
+                pane.invoke_section_conversation_selected(row_id, row.chat_row.conversation_type);
+            }
+        });
     let navigation_client = ui_ctx.clone();
     let navigation_window = window.as_weak();
     window.global::<crate::SidebarPane>().on_navigate_chat(move |direction| {

@@ -17,6 +17,8 @@ import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
+import { SidebarCardRow as PhonePinnedRow } from "card_types.slint";
+import { PinnedStrip } from "pinned_strip.slint";
 import { ChatRow, ChatRowData } from "chat_list.slint";
 import { CustomSectionHeader, CustomSectionData, SidebarRowData } from "custom_section_list.slint";
 import { EmptyState } from "../components/empty_state.slint";
@@ -47,6 +49,7 @@ export component Sidebar inherits Rectangle {
     // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
     in property <[ChatRowData]> chat-rows: [];
     in property <[ChatRowData]> archived-rows: [];
+    in property <[PhonePinnedRow]> phone-pinned;
     in property <bool> archive-open: false;
     // Saved messages is the open conversation: its quick link is the
     // selected row, as a chat row is.
@@ -227,6 +230,22 @@ export component Sidebar inherits Rectangle {
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback set-conversation-archived(/* conversation-id */ string, /* archived */ bool);
     callback row-context-menu-opened(/* conversation-id */ string, /* kind */ ConversationKind);
+    function open-loose-row-menu(row: ChatRowData, x: length, y: length, row-y: length, archived: bool) {
+        SidebarPane.ctx-menu-row = row;
+        SidebarPane.ctx-menu-row-y = row-y - root.absolute-position.y;
+        SidebarPane.ctx-menu-conv-id = row.conversation-id;
+        SidebarPane.ctx-menu-conv-type = row.conversation-type;
+        SidebarPane.ctx-menu-is-pinned = row.is-pinned;
+        SidebarPane.ctx-menu-is-archived = archived;
+        SidebarPane.ctx-menu-can-leave = row.can-leave;
+        SidebarPane.ctx-menu-can-delete = row.can-delete;
+        SidebarPane.ctx-menu-x = x;
+        SidebarPane.ctx-menu-y = y;
+        SidebarPane.ctx-menu-current-section-id = "";
+        SidebarPane.section-context-menu-open = false;
+        root.row-context-menu-opened(row.conversation-id, row.conversation-type);
+        SidebarPane.row-context-menu-open = true;
+    }
     callback set-conversation-muted(/* conversation-id */ string, /* kind */ ConversationKind, /* muted */ bool);
     callback archive-view-changed(bool);
     // Unarchiving the last chat leaves nothing to show: go back to the list.
@@ -370,6 +389,8 @@ export component Sidebar inherits Rectangle {
             width: root.width;
             height: root.height;
             immediate-child-press: true;
+            // Leave predominantly horizontal swipes to the nested pinned strip.
+            drag-axis-lock: root.mobile-mode;
 
             for entry[idx] in root.flat-rows: VerticalLayout {
                 property <bool> roving-highlight: sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx;
@@ -783,6 +804,16 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
+                if entry.kind == "saved" && root.mobile-mode && root.phone-pinned.length > 0: PinnedStrip {
+                    rows: root.phone-pinned;
+                    touch: root.touch;
+                    immediate-child-press: root.touch;
+                    drag-axis-lock: root.touch;
+                    row-context-menu-requested(row, x, y, row-y) => {
+                        root.open-loose-row-menu(row, x, y, row-y, false);
+                    }
+                }
+
                 // 4. CHATS — one list of every loose conversation, newest
                 // activity first, pinned first (Signal/Telegram). It used to be
                 // a "Messages" block above a "Channels" block, so a channel with
@@ -850,7 +881,8 @@ export component Sidebar inherits Rectangle {
                     spacing: Spacing.xxs;
                     for placeholder in [0, 1, 2, 3, 4]: ChatListSkeleton { mobile-mode: root.touch; }
                 }
-                if entry.kind == "chat" || entry.kind == "archived-chat": Rectangle {
+                if entry.kind == "archived-chat" || (entry.kind == "chat"
+                    && !(root.mobile-mode && root.phone-pinned.length > 0 && entry.chat.is-pinned)): Rectangle {
                     height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs;
                     chat-row := ChatRow {
                         x: Spacing.xs;
@@ -870,20 +902,8 @@ export component Sidebar inherits Rectangle {
                         }
                         pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
                         context-menu-requested(x, y) => {
-                            SidebarPane.ctx-menu-row = entry.chat;
-                            SidebarPane.ctx-menu-row-y = chat-row.absolute-position.y - root.absolute-position.y;
-                            SidebarPane.ctx-menu-conv-id = entry.chat.conversation-id;
-                            SidebarPane.ctx-menu-conv-type = entry.chat.conversation-type;
-                            SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;
-                            SidebarPane.ctx-menu-is-archived = entry.kind == "archived-chat";
-                            SidebarPane.ctx-menu-can-leave = entry.chat.can-leave;
-                            SidebarPane.ctx-menu-can-delete = entry.chat.can-delete;
-                            SidebarPane.ctx-menu-x = x;
-                            SidebarPane.ctx-menu-y = y;
-                            SidebarPane.ctx-menu-current-section-id = "";
-                            SidebarPane.section-context-menu-open = false;
-                            root.row-context-menu-opened(entry.chat.conversation-id, entry.chat.conversation-type);
-                            SidebarPane.row-context-menu-open = true;
+                            root.open-loose-row-menu(entry.chat, x, y, chat-row.absolute-position.y,
+                                entry.kind == "archived-chat");
                         }
                     }
                 }
