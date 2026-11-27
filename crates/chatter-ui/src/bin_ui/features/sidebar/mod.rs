@@ -513,6 +513,20 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 pane.invoke_section_conversation_selected(row_id, row.chat_row.conversation_type);
             }
         });
+    let toggle_window = window.as_weak();
+    let toggle_client = ui_ctx.clone();
+    window
+        .global::<crate::SidebarCards>()
+        .on_toggle_collapsed(move |card_id| {
+            let Some(window) = toggle_window.upgrade() else {
+                return;
+            };
+            if let Err(error) = toggle_client.toggle_card_collapsed(&card_id) {
+                tracing::warn!(%error, card = %card_id, "Could not collapse or expand a sidebar card");
+                return;
+            }
+            refresh_sidebar_cards(&window, &toggle_client);
+        });
     let navigation_client = ui_ctx.clone();
     let navigation_window = window.as_weak();
     window.global::<crate::SidebarPane>().on_navigate_chat(move |direction| {
