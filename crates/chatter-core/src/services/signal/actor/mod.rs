@@ -131,17 +131,23 @@ pub struct SignalActorHandle {
 
 use crate::services::signal::kt_anchor::gossip;
 
-/// Queue the transparency head a peer sent, after its ratchet decrypt
-/// authenticated the message. The KT worker for `route` checks it.
-fn record_kt_head(store: &SignalStore, sender: &str, route: KtRoute, plaintext: &[u8]) {
+/// Queue the transparency head an account sent, after its ratchet decrypt
+/// authenticated the message. It is filed under the route the sender attached
+/// it for and checked 5 minutes to 2 hours later, in a batch with other
+/// heads, so the check's timing does not point at this message.
+fn record_kt_head(store: &SignalStore, sender: &str, plaintext: &[u8]) {
     use prost::Message;
+    use rand::Rng;
     let Some(head) = gossip::received(plaintext) else {
         return;
     };
-    if let Err(error) = store
-        .key_store()
-        .record_peer_kt_head(sender, route, &head.encode_to_vec())
-    {
+    let due_at = chrono::Utc::now().timestamp() + rand::rng().random_range(5 * 60..=2 * 60 * 60);
+    if let Err(error) = store.key_store().record_peer_kt_head(
+        sender,
+        gossip::route(&head),
+        &head.encode_to_vec(),
+        due_at,
+    ) {
         tracing::warn!(%error, "Could not queue a contact's transparency head");
     }
 }

@@ -1,9 +1,9 @@
 //! Split-view detection by contact gossip (docs/KT-LIBSIGNAL.md, server repo).
 //!
-//! Each pairwise `Content` carries the sender's pinned head for its route.
-//! The receiver proves that head and its own pin are prefixes of one signed
-//! head. ContactMonitoring has no auditor, so this is the only check that two
-//! devices were shown the same log.
+//! Each pairwise `Content` carries the sender's pinned head for the route it
+//! was sent on. The receiver later proves that head and its own pin are
+//! prefixes of one signed head. ContactMonitoring has no auditor, so this is
+//! the only check that two devices were shown the same log.
 
 use chatter_proto::content_v1::{Content, KtHeadGossip};
 use libsignal_keytrans::{Signature, TreeHead};
@@ -19,21 +19,57 @@ pub(crate) fn scope(route: KtRoute) -> PinScope {
     }
 }
 
+/// The route the sender attached `head` for. It is checked only there.
+pub(crate) fn route(head: &KtHeadGossip) -> KtRoute {
+    if head.anonymous {
+        KtRoute::AnonymousTor
+    } else {
+        KtRoute::Normal
+    }
+}
+
 /// Add this device's pinned head for `route` to an outgoing `Content`.
 /// Bytes that are not a `Content`, or a route with no pin yet, pass unchanged.
 pub(crate) fn attach(settings: &SettingsRepository, route: KtRoute, plaintext: Vec<u8>) -> Vec<u8> {
     let Ok(mut content) = Content::decode(plaintext.as_slice()) else {
         return plaintext;
     };
-    match load_head(settings, scope(route).head()) {
-        Ok(Some(pinned)) => {
-            content.kt_head = Some(to_gossip(&pinned.head));
-            content.encode_to_vec()
-        }
-        Ok(None) => plaintext,
+    let pinned = match load_head(settings, scope(route).head()) {
+        Ok(Some(pinned)) => pinned,
+        Ok(None) => return plaintext,
         Err(error) => {
             tracing::warn!(%error, "Could not read the transparency head to share");
-            plaintext
+            return plaintext;
+        }
+    };
+    let mut head = to_gossip(&pinned.head);
+    head.anonymous = route == KtRoute::AnonymousTor;
+    content.kt_head = Some(head);
+    fit_padding(&mut content, plaintext.len());
+    content.encode_to_vec()
+}
+
+/// Senders pad a `Content` to a size bucket before it reaches the actor. Take
+/// the head's bytes out of that padding so the message keeps its bucket.
+/// Content without padding grows by the head.
+fn fit_padding(content: &mut Content, target: usize) {
+    if content.padding.is_empty() {
+        return;
+    }
+    use rand::Rng;
+    // Each step changes the padding length prefix by at most one byte.
+    for _ in 0..4 {
+        let len = content.encoded_len();
+        if len > target {
+            let keep = content.padding.len().saturating_sub(len - target);
+            content.padding.truncate(keep);
+        } else if len < target {
+            let mut rng = rand::rng();
+            content
+                .padding
+                .extend((0..target - len).map(|_| rng.random::<u8>()));
+        } else {
+            return;
         }
     }
 }
@@ -54,6 +90,7 @@ fn to_gossip(head: &LastTreeHead) -> KtHeadGossip {
             .map(|signature| signature.signature.clone())
             .unwrap_or_default(),
         root: root.to_vec(),
+        anonymous: false,
     }
 }
 
@@ -109,49 +146,73 @@ fn check_signature(verifier: &KeyTransparency, head: &LastTreeHead) -> Result<()
 pub(crate) enum Verdict {
     /// This device's pin and the peer head are prefixes of one signed head.
     Consistent,
-    /// The operator signed two heads that cannot belong to one log.
+    /// Signed evidence of two logs: two heads of one size with different
+    /// roots, or a later-signed head smaller than the peer's.
     Split,
     /// The peer sent a head without a valid operator signature.
     Invalid,
+    /// The check failed while a routine request on the same connection was
+    /// answered and verified.
+    Withheld,
+    /// Nothing was learned: the route is down, or there is no label to
+    /// monitor yet. Counts toward nothing.
+    Undecided,
 }
 
-/// Check a contact's head against this device's pin on `scope`'s route.
-/// Transport failures and unclassified proof errors stay errors so the caller
-/// retries; only positive evidence of two histories is `Split`.
+/// Check a contact's head against this device's pin on `scope`'s route. Each
+/// request has its own `step` deadline, so a stalled check still leaves time
+/// for the control request that tells withholding from an outage.
 pub(crate) async fn reconcile(
     client: &mut AnonymousKtClient,
     settings: &SettingsRepository,
     scope: PinScope,
     peer: &KtHeadGossip,
-    deadline: Duration,
+    own_label: &str,
+    step: Duration,
 ) -> Result<Verdict, KtError> {
     let Ok(peer) = from_gossip(peer) else {
         return Ok(Verdict::Invalid);
     };
     let verifier = verifier()?;
-    with_deadline(deadline, async {
-        loop {
-            match reconcile_at(client, settings, scope, &peer, verifier, SystemTime::now()).await {
-                Err(KtError::PinChanged) => tokio::task::yield_now().await,
-                result => return result,
-            }
+    loop {
+        match reconcile_at(
+            client,
+            settings,
+            scope,
+            &peer,
+            own_label.as_bytes(),
+            verifier,
+            SystemTime::now(),
+            step,
+        )
+        .await
+        {
+            Err(KtError::PinChanged) => tokio::task::yield_now().await,
+            result => return result,
         }
-    })
-    .await
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reconcile_at(
     client: &mut impl KtTransport,
     settings: &SettingsRepository,
     scope: PinScope,
     peer: &LastTreeHead,
+    own_label: &[u8],
     verifier: &KeyTransparency,
     now: SystemTime,
+    step: Duration,
 ) -> Result<Verdict, KtError> {
     if check_signature(verifier, peer).is_err() {
         return Ok(Verdict::Invalid);
     }
-    let pin = Pin::load_at(client, settings, scope, verifier, now).await?;
+    let pin = match with_deadline(step, Pin::load_at(client, settings, scope, verifier, now)).await {
+        Ok(pin) => pin,
+        Err(KtError::Storage(error)) => return Err(error.into()),
+        Err(KtError::PinChanged) => return Err(KtError::PinChanged),
+        Err(_) => return Ok(Verdict::Undecided),
+    };
     for known in [pin.last_head(), Some(&pin.distinguished.head)].into_iter().flatten() {
         if known == peer {
             return Ok(Verdict::Consistent);
@@ -161,54 +222,112 @@ async fn reconcile_at(
             return Ok(Verdict::Split);
         }
     }
-    let baseline = pin.last_head().unwrap_or(&pin.distinguished.head);
-    let request = KtMonitorRequest {
-        keys: Vec::new(),
-        consistency: Some(KtConsistency {
-            last: Some(baseline.0.tree_size),
-            distinguished: Some(peer.0.tree_size),
-        }),
+    // The check has the shape of routine contact monitoring: one label this
+    // pin already monitors, chosen at random and never our own.
+    let Some(label) = cover_label(&pin, own_label)? else {
+        return Ok(Verdict::Undecided);
     };
-    let response = match client.monitor(request.clone()).await {
-        // The operator signed this size and now claims its log is smaller.
-        Err(NetworkError::InvalidRequest(_)) => return Ok(Verdict::Split),
-        result => result?,
+    let observations = pin.observations(&label)?;
+    let Some(data) = observations.data.clone() else {
+        return Ok(Verdict::Undecided);
     };
-    let request = MonitorRequest::decode(request.encode_to_vec().as_slice())?;
-    let response = MonitorResponse::decode(response.encode_to_vec().as_slice())?;
-    let update = match verifier.verify_monitor(
-        &request,
-        &response,
-        MonitorContext {
-            last_tree_head: Some(baseline),
-            last_distinguished_tree_head: peer,
-            data: HashMap::new(),
-        },
-        now,
-    ) {
-        Ok(update) => update,
-        Err(error) if history_unverified(&error) => return Ok(Verdict::Split),
-        Err(error) => return Err(error.into()),
+    let baseline = pin.last_head().unwrap_or(&pin.distinguished.head).clone();
+    if let Ok((head, data)) = pin
+        .monitor_with(client, &label, &data, &baseline, peer, step)
+        .await
+    {
+        // Keep the joint head: later proofs must extend it, so the operator
+        // cannot return to a branch the peer head is not on.
+        pin.save(head, observations, Some(data), |_| Ok(()))?;
+        return Ok(Verdict::Consistent);
+    }
+    // Control: the same request with the shared checkpoint in place of the
+    // peer head. An error code is not evidence; a signed head is.
+    let checkpoint = pin.distinguished.head.clone();
+    let Ok((head, data)) = pin
+        .monitor_with(client, &label, &data, &baseline, &checkpoint, step)
+        .await
+    else {
+        return Ok(Verdict::Undecided);
     };
-    // Keep the joint head: later proofs must extend it, so the operator cannot
-    // return to a branch the peer head is not on.
-    pin.save_head(LastTreeHead(update.tree_head, update.tree_root))?;
-    Ok(Verdict::Consistent)
+    let rollback = head.0.tree_size < peer.0.tree_size && head.0.timestamp > peer.0.timestamp;
+    pin.save(head, observations, Some(data), |_| Ok(()))?;
+    Ok(if rollback {
+        Verdict::Split
+    } else {
+        Verdict::Withheld
+    })
+}
+
+/// A random label with stored observations on this pin, excluding our own
+/// account and the checkpoint label.
+fn cover_label(pin: &Pin<'_>, own_label: &[u8]) -> Result<Option<Vec<u8>>, KtError> {
+    use rand::Rng;
+    let prefix = pin.scope.label_key("label", b"");
+    let conn = pin.settings.database().read_connection()?;
+    let mut query = conn
+        .prepare("SELECT key FROM settings WHERE key LIKE ?1 || '%'")
+        .map_err(StorageError::from)?;
+    let labels: Vec<Vec<u8>> = query
+        .query_map([&prefix], |row| row.get::<_, String>(0))
+        .map_err(StorageError::from)?
+        .filter_map(|key| {
+            key.ok()?
+                .strip_prefix(prefix.as_str())
+                .and_then(|label| hex::decode(label).ok())
+        })
+        .filter(|label| label.as_slice() != own_label && label.as_slice() != DISTINGUISHED)
+        .collect();
+    if labels.is_empty() {
+        return Ok(None);
+    }
+    let pick = rand::rng().random_range(0..labels.len());
+    Ok(labels.into_iter().nth(pick))
 }
 
 impl Pin<'_> {
-    fn save_head(&self, head: LastTreeHead) -> Result<(), KtError> {
-        let mut conn = self.settings.database().connection()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(StorageError::from)?;
-        check_setting(&tx, self.scope.head(), encoded_head(self.last.as_ref()))?;
-        check_setting(&tx, self.scope.distinguished(), Some(&self.distinguished.encoded))?;
-        if self.last_head() != Some(&head) {
-            SettingsRepository::set_with_connection(&tx, self.scope.head(), &encode_head(head, self.now))?;
-        }
-        tx.commit().map_err(StorageError::from)?;
-        Ok(())
+    /// Monitor one observed label with `baseline` and `second` as the two
+    /// client-held heads the response must extend.
+    async fn monitor_with(
+        &self,
+        client: &mut impl KtTransport,
+        label: &[u8],
+        data: &MonitoringData,
+        baseline: &LastTreeHead,
+        second: &LastTreeHead,
+        step: Duration,
+    ) -> Result<(LastTreeHead, MonitoringData), KtError> {
+        let request = KtMonitorRequest {
+            keys: vec![KtMonitorKey {
+                search_key: label.to_vec(),
+                entry_position: data.latest_log_position(),
+                commitment_index: data.index.to_vec(),
+            }],
+            consistency: Some(KtConsistency {
+                last: Some(baseline.0.tree_size),
+                distinguished: Some(second.0.tree_size),
+            }),
+        };
+        let response = tokio::time::timeout(step, client.monitor(request.clone()))
+            .await
+            .map_err(|_| NetworkError::Timeout)??;
+        let request = MonitorRequest::decode(request.encode_to_vec().as_slice())?;
+        let response = MonitorResponse::decode(response.encode_to_vec().as_slice())?;
+        let mut update = self.verifier.verify_monitor(
+            &request,
+            &response,
+            MonitorContext {
+                last_tree_head: Some(baseline),
+                last_distinguished_tree_head: second,
+                data: HashMap::from([(label.to_vec(), data.clone())]),
+            },
+            self.now,
+        )?;
+        let data = update
+            .monitoring_data
+            .remove(label)
+            .unwrap_or_else(|| data.clone());
+        Ok((LastTreeHead(update.tree_head, update.tree_root), data))
     }
 }
 

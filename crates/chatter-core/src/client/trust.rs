@@ -6,10 +6,19 @@ impl ChatterClient {
         let Some(owner) = self.auth_snapshot().current_user_id else {
             return Ok(false);
         };
-        Ok(crate::services::signal::kt_anchor::own_mismatch(
-            &self.signal().settings_repo,
-            owner.to_string().as_bytes(),
-        )?)
+        let owner = owner.to_string();
+        // Our own devices' shared heads are checked like a contact's; a block
+        // on our account cannot stop sends to ourselves, so it warns here.
+        let own_block = self
+            .signal()
+            .key_store
+            .peer_kt_block(&owner)
+            .map_err(crate::error::ServiceError::Storage)?;
+        Ok(own_block.is_some()
+            || crate::services::signal::kt_anchor::own_mismatch(
+                &self.signal().settings_repo,
+                owner.as_bytes(),
+            )?)
     }
 
     pub(super) fn spawn_own_identity_monitor(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
@@ -196,23 +205,17 @@ impl ChatterClient {
                 &self.display_name(peer_user_id),
             )));
         }
-        Ok(self
-            .peer_transparency_split(peer_user_id)?
-            .then(IdentityChangePrompt::split_view))
-    }
-
-    /// Whether a head this peer shared proved that the server showed the two
-    /// devices different transparency logs. Sends to the peer stay blocked
-    /// until the user accepts.
-    pub fn peer_transparency_split(
-        &self,
-        peer_user_id: &crate::domain::ids::UserId,
-    ) -> Result<bool, ClientError> {
-        self.services
+        use crate::storage::peer_kt_heads::KtBlock;
+        let block = self
+            .services
             .signal_service
             .key_store
-            .peer_kt_split(&peer_user_id.to_string())
-            .map_err(|e| ClientError::Validation(e.to_string()))
+            .peer_kt_block(&peer_user_id.to_string())
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        Ok(block.map(|block| match block {
+            KtBlock::Split => IdentityChangePrompt::split_view(),
+            KtBlock::Unverified => IdentityChangePrompt::unverified_view(),
+        }))
     }
 
     /// Accept the peer's new identity key, unwedging the conversation in both
@@ -243,14 +246,14 @@ impl ChatterClient {
                 .services
                 .signal_service
                 .key_store
-                .clear_peer_kt_split(&peer_user_id.to_string())
+                .accept_peer_kt_block(&peer_user_id.to_string())
                 .map_err(|e| ClientError::Validation(e.to_string()))?;
             if !cleared {
                 return Err(ClientError::Validation(
                     chatter_i18n::tr("no identity change is pending for this peer").into(),
                 ));
             }
-            tracing::warn!(peer = %peer_user_id, "ACCEPTED a conversation after a key transparency split view");
+            tracing::warn!(peer = %peer_user_id, "ACCEPTED a conversation blocked by a key transparency check");
             self.event_bus()
                 .emit_domain(crate::events::DomainEvent::PeerKeyVerificationUpdated {
                     peer_user_id: *peer_user_id,

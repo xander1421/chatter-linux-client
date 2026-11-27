@@ -4001,3 +4001,15 @@ msgstr "Confiar en esta conversación"
 #: crates/chatter-core/src/client/mod.rs
 msgid "Accept new safety number"
 msgstr "Aceptar el número de seguridad nuevo"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The key directory for this contact could not be verified"
+msgstr "No se pudo verificar el directorio de claves de este contacto"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server answered other key checks but not the one that compares your view with this contact's, which can hide an intercepted conversation. Sending is blocked — compare safety numbers with them over a call or in person, or send anyway once."
+msgstr "El servidor respondió otras comprobaciones de claves, pero no la que compara tu vista con la de este contacto, lo que puede ocultar una conversación interceptada. El envío está bloqueado — compara los números de seguridad con esa persona por teléfono o en persona, o envía de todos modos una vez."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Send anyway once"
+msgstr "Enviar de todos modos una vez"

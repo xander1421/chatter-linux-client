@@ -526,6 +526,19 @@ impl IdentityChangePrompt {
             accept: chatter_i18n::tr("Trust this conversation"),
         }
     }
+
+    /// The server kept answering other key checks on the route but not the
+    /// one for this contact's shared head.
+    fn unverified_view() -> Self {
+        Self {
+            attributed: false,
+            title: chatter_i18n::tr("The key directory for this contact could not be verified"),
+            detail: chatter_i18n::tr(
+                "The server answered other key checks but not the one that compares your view with this contact's, which can hide an intercepted conversation. Sending is blocked — compare safety numbers with them over a call or in person, or send anyway once.",
+            ),
+            accept: chatter_i18n::tr("Send anyway once"),
+        }
+    }
 }
 
 /// Actions available in the open conversation header.

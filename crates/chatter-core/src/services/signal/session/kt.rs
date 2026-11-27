@@ -3,7 +3,7 @@ use crate::error::NetworkError;
 use crate::events::{DomainEvent, EventBus};
 use crate::network::grpc::{AnonymousKtClient, client_pool::GrpcClientPool};
 use crate::state::AuthState;
-use crate::storage::peer_kt_heads::PeerKtHead;
+use crate::storage::peer_kt_heads::{HeadSettle, PeerKtHead};
 use crate::storage::peer_verification::{KtJob, KtRoute, KtUpdate, KtVerdict};
 use crate::services::signal::kt_anchor::gossip::{self, Verdict};
 use futures::StreamExt;
@@ -73,17 +73,20 @@ async fn run_peer_verifier(
             recovered_session = Some((owner, revision));
         }
         transport_epoch.borrow_and_update();
-        if route == KtRoute::Normal && service.actor.kt_route() == KtRoute::AnonymousTor {
-            continue;
-        }
-        let jobs = match service
-            .key_store
-            .due_kt_jobs(route, chrono::Utc::now().timestamp())
-        {
-            Ok(jobs) => jobs,
-            Err(error) => {
-                tracing::warn!(%error, "Could not load pending key verification");
-                continue;
+        // Identity lookups on the Normal route wait out Shield. Head checks
+        // carry no identity and follow Shield onto Tor.
+        let jobs = if route == KtRoute::Normal && service.actor.kt_route() == KtRoute::AnonymousTor {
+            Vec::new()
+        } else {
+            match service
+                .key_store
+                .due_kt_jobs(route, chrono::Utc::now().timestamp())
+            {
+                Ok(jobs) => jobs,
+                Err(error) => {
+                    tracing::warn!(%error, "Could not load pending key verification");
+                    continue;
+                }
             }
         };
         let heads = match service
@@ -97,10 +100,26 @@ async fn run_peer_verifier(
             }
         };
         let owner_key = &owner_key;
-        // At most one page of heads per tick, checked one at a time.
+        // One batch of due heads on one fresh connection, identical heads
+        // checked once, the largest first.
         let reconcile = async move {
-            for job in heads {
-                let verdict = service.reconcile_peer_head(pool, &job).await;
+            if heads.is_empty() {
+                return;
+            }
+            let mut client = match head_client(pool, route) {
+                Ok(client) => client,
+                Err(error) => {
+                    tracing::debug!(%error, ?route, "Contact head checks wait for their route");
+                    for job in &heads {
+                        delay_peer_head(service, job);
+                    }
+                    return;
+                }
+            };
+            for (head, jobs) in batch_heads(heads) {
+                let verdict = service
+                    .reconcile_peer_head(&mut client, route, &head, owner_key)
+                    .await;
                 let state = auth.get();
                 if state.current_user_id != Some(owner)
                     || state.session_ended
@@ -108,7 +127,9 @@ async fn run_peer_verifier(
                 {
                     return;
                 }
-                settle_peer_head(service, events, job, verdict);
+                for job in jobs {
+                    settle_peer_head(service, events, owner, job, &verdict);
+                }
             }
         };
         let verify = futures::stream::iter(jobs)
@@ -210,41 +231,74 @@ async fn settle_peer_verification(
     Ok(())
 }
 
-/// Record a contact-head verdict. A split blocks sends to the peer and raises
-/// the conversation's identity prompt; an unanswered check stays queued.
+/// Group due heads by their exact bytes, largest tree first: one check covers
+/// every account that shared the same head.
+fn batch_heads(heads: Vec<PeerKtHead>) -> Vec<(Vec<u8>, Vec<PeerKtHead>)> {
+    use prost::Message;
+    let mut batch: Vec<(Vec<u8>, Vec<PeerKtHead>)> = Vec::new();
+    for job in heads {
+        match batch.iter_mut().find(|(head, _)| *head == job.head) {
+            Some((_, jobs)) => jobs.push(job),
+            None => batch.push((job.head.clone(), vec![job])),
+        }
+    }
+    batch.sort_by_key(|(head, _)| {
+        std::cmp::Reverse(
+            chatter_proto::content_v1::KtHeadGossip::decode(head.as_slice())
+                .map(|head| head.tree_size)
+                .unwrap_or(0),
+        )
+    });
+    batch
+}
+
+fn delay_peer_head(service: &SignalService, job: &PeerKtHead) {
+    if let Err(error) = service
+        .key_store
+        .delay_peer_kt_head(job, chrono::Utc::now().timestamp())
+    {
+        tracing::warn!(%error, "Could not reschedule a contact head check");
+    }
+}
+
+/// Record a contact-head verdict. Events fire only when the block changes.
 fn settle_peer_head(
     service: &SignalService,
     events: &EventBus,
+    owner: crate::domain::UserId,
     job: PeerKtHead,
-    verdict: Result<Verdict, ServiceError>,
+    verdict: &Result<Verdict, ServiceError>,
 ) {
-    let split = match verdict {
-        Ok(Verdict::Split) => true,
-        Ok(Verdict::Consistent) => false,
+    let outcome = match verdict {
+        Ok(Verdict::Consistent) => HeadSettle::Consistent,
+        Ok(Verdict::Split) => HeadSettle::Split,
+        Ok(Verdict::Withheld) => HeadSettle::Withheld,
         Ok(Verdict::Invalid) => {
-            tracing::warn!(peer = %job.peer, "Contact shared a transparency head without a valid signature");
-            false
+            tracing::warn!(peer = %job.peer, "An account shared a transparency head without a valid signature");
+            HeadSettle::Invalid
+        }
+        Ok(Verdict::Undecided) => {
+            delay_peer_head(service, &job);
+            return;
         }
         Err(error) => {
             tracing::debug!(%error, peer = %job.peer, "Contact head check will retry");
-            match service
-                .key_store
-                .delay_peer_kt_head(&job, chrono::Utc::now().timestamp())
-            {
-                // An operator withholding the proof looks like an outage.
-                Ok(3) => {
-                    events.emit_domain(DomainEvent::KeyTransparencyHistoryUnverified);
-                }
-                Ok(_) => {}
-                Err(error) => tracing::warn!(%error, "Could not reschedule a contact head check"),
-            }
+            delay_peer_head(service, &job);
             return;
         }
     };
-    match service.key_store.settle_peer_kt_head(&job, split) {
+    match service
+        .key_store
+        .settle_peer_kt_head(&job, outcome, chrono::Utc::now().timestamp())
+    {
         Ok(true) => {
-            tracing::error!(peer = %job.peer, route = ?job.route, "Key transparency split view detected");
-            if let Ok(peer_user_id) = job.peer.parse() {
+            tracing::warn!(peer = %job.peer, route = ?job.route, ?outcome, "Key transparency block changed");
+            let Ok(peer_user_id) = job.peer.parse::<crate::domain::UserId>() else {
+                return;
+            };
+            if peer_user_id == owner {
+                events.emit_domain(DomainEvent::OwnIdentityChanged { user_id: owner });
+            } else {
                 events.emit_domain(DomainEvent::PeerIdentityChanged {
                     peer_user_id,
                     attributed: false,
@@ -253,6 +307,16 @@ fn settle_peer_head(
         }
         Ok(false) => {}
         Err(error) => tracing::warn!(%error, "Could not store a contact head verdict"),
+    }
+}
+
+/// Head checks never share a connection with identified queries: Normal heads
+/// use a fresh unauthenticated connection per batch (its own Tor circuit in
+/// Shield), anonymous heads the secret Tor route.
+fn head_client(pool: &GrpcClientPool, route: KtRoute) -> Result<AnonymousKtClient, NetworkError> {
+    match route {
+        KtRoute::Normal => Ok(pool.fresh_anonymous_kt_client()),
+        KtRoute::AnonymousTor => pool.secret_kt_client(),
     }
 }
 
@@ -287,31 +351,23 @@ impl SignalService {
         }
     }
 
-    /// Check a contact's shared head against this device's pin on its route.
+    /// Check a shared head against this device's pin on the route the sender
+    /// attached it for.
     async fn reconcile_peer_head(
         &self,
-        pool: &GrpcClientPool,
-        job: &PeerKtHead,
+        client: &mut AnonymousKtClient,
+        route: KtRoute,
+        head: &[u8],
+        owner: &str,
     ) -> Result<Verdict, ServiceError> {
         use prost::Message;
-        if job.route == KtRoute::Normal && self.actor.kt_route() == KtRoute::AnonymousTor {
-            return Err(NetworkError::Unavailable.into());
-        }
-        let head = chatter_proto::content_v1::KtHeadGossip::decode(job.head.as_slice())
+        let head = chatter_proto::content_v1::KtHeadGossip::decode(head)
             .map_err(|_| ServiceError::Validation("invalid stored contact head".into()))?;
-        let mut client = job_client(pool, job.route)?;
-        let deadline = match job.route {
+        let step = match route {
             KtRoute::Normal => kt_anchor::PIN_RPC_DEADLINE,
             KtRoute::AnonymousTor => kt_anchor::TOR_RPC_DEADLINE,
         };
-        Ok(gossip::reconcile(
-            &mut client,
-            &self.settings_repo,
-            gossip::scope(job.route),
-            &head,
-            deadline,
-        )
-        .await?)
+        Ok(gossip::reconcile(client, &self.settings_repo, gossip::scope(route), &head, owner, step).await?)
     }
 
     /// Verify the key claimed by a signed channel membership change.
@@ -391,62 +447,125 @@ mod kt_pin_tests {
         (dir, service, owner)
     }
 
-    #[tokio::test]
-    async fn a_contact_head_split_blocks_sends_until_the_user_accepts() {
+    fn head(size: u64) -> Vec<u8> {
         use prost::Message;
-        let (_dir, service, owner) = fixture();
-        let peer = crate::domain::UserId::new();
-        let peer_key = peer.to_string();
-        let key = [5; 33];
-        service.key_store.save_identity(&peer_key, &key).unwrap();
-        service.key_store.mark_peer_verified(&peer_key, &key).unwrap();
-        service.require_sendable_key(&peer_key, &key).unwrap();
-
-        let head = chatter_proto::content_v1::KtHeadGossip {
-            tree_size: 4,
+        chatter_proto::content_v1::KtHeadGossip {
+            tree_size: size,
             timestamp: 1,
             signature: vec![1; 64],
             root: vec![2; 32],
+            anonymous: false,
         }
-        .encode_to_vec();
-        // Our own devices' heads are not contact evidence.
-        service.key_store.record_peer_kt_head(&owner.to_string(), KtRoute::Normal, &head).unwrap();
-        assert!(service.key_store.due_peer_kt_heads(KtRoute::Normal, i64::MAX).unwrap().is_empty());
+        .encode_to_vec()
+    }
 
-        service.key_store.record_peer_kt_head(&peer_key, KtRoute::Normal, &head).unwrap();
+    fn due(service: &SignalService) -> crate::storage::peer_kt_heads::PeerKtHead {
+        service.key_store.due_peer_kt_heads(KtRoute::Normal, i64::MAX).unwrap().remove(0)
+    }
+
+    fn sendable_peer() -> (tempfile::TempDir, Arc<SignalService>, crate::domain::UserId, crate::domain::UserId) {
+        let (dir, service, owner) = fixture();
+        let peer = crate::domain::UserId::new();
+        service.key_store.save_identity(&peer.to_string(), &[5; 33]).unwrap();
+        service.key_store.mark_peer_verified(&peer.to_string(), &[5; 33]).unwrap();
+        service.require_sendable_key(&peer.to_string(), &[5; 33]).unwrap();
+        (dir, service, owner, peer)
+    }
+
+    fn blocked(service: &SignalService, peer: &crate::domain::UserId) -> bool {
+        matches!(
+            service.require_sendable_key(&peer.to_string(), &[5; 33]),
+            Err(CryptoError::UntrustedIdentity { new_identity_key: None, .. })
+        )
+    }
+
+    fn changed_for(rx: &mut tokio::sync::broadcast::Receiver<DomainEvent>, peer: crate::domain::UserId) -> bool {
+        matches!(
+            rx.try_recv(),
+            Ok(DomainEvent::PeerIdentityChanged { peer_user_id, attributed: false }) if peer_user_id == peer
+        )
+    }
+
+    #[tokio::test]
+    async fn withheld_checks_fail_closed_and_a_new_head_does_not_reset_the_count() {
+        let (_dir, service, owner, peer) = sendable_peer();
         let events = EventBus::new();
         let mut rx = events.subscribe_domain();
-        // An unanswered check stays queued and warns on the third failure.
-        for attempt in 1..=3 {
-            let job = service.key_store.due_peer_kt_heads(KtRoute::Normal, i64::MAX).unwrap().remove(0);
-            assert_eq!(job.attempts, attempt - 1);
-            settle_peer_head(&service, &events, job, Err(NetworkError::Timeout.into()));
+        let withheld = || Ok(Verdict::Withheld);
+
+        service.key_store.record_peer_kt_head(&peer.to_string(), KtRoute::Normal, &head(4), 0).unwrap();
+        // An outage teaches nothing and counts toward nothing.
+        settle_peer_head(&service, &events, owner, due(&service), &Err(NetworkError::Timeout.into()));
+        settle_peer_head(&service, &events, owner, due(&service), &Ok(Verdict::Undecided));
+        for _ in 0..2 {
+            settle_peer_head(&service, &events, owner, due(&service), &withheld());
         }
-        assert!(matches!(rx.try_recv().unwrap(), DomainEvent::KeyTransparencyHistoryUnverified));
-        service.require_sendable_key(&peer_key, &key).unwrap();
+        assert!(rx.try_recv().is_err());
+        assert!(!blocked(&service, &peer));
 
-        let job = service.key_store.due_peer_kt_heads(KtRoute::Normal, i64::MAX).unwrap().remove(0);
-        settle_peer_head(&service, &events, job, Ok(Verdict::Split));
-        assert!(matches!(
-            rx.try_recv().unwrap(),
-            DomainEvent::PeerIdentityChanged { peer_user_id, attributed: false } if peer_user_id == peer
-        ));
-        assert!(matches!(
-            service.require_sendable_key(&peer_key, &key),
-            Err(CryptoError::UntrustedIdentity { new_identity_key: None, .. })
-        ));
+        // The peer's next head keeps the count, so the third check fails closed.
+        service.key_store.record_peer_kt_head(&peer.to_string(), KtRoute::Normal, &head(5), 0).unwrap();
+        settle_peer_head(&service, &events, owner, due(&service), &withheld());
+        assert!(changed_for(&mut rx, peer));
+        assert!(blocked(&service, &peer));
+        settle_peer_head(&service, &events, owner, due(&service), &withheld());
+        assert!(rx.try_recv().is_err(), "a standing block does not warn again");
 
-        // The checked head does not queue again, so accepting is not undone by
-        // the peer's next message; a different head is checked again.
-        service.key_store.record_peer_kt_head(&peer_key, KtRoute::Normal, &head).unwrap();
+        // Send anyway once: allowed until the next withheld check.
+        assert!(service.key_store.accept_peer_kt_block(&peer.to_string()).unwrap());
+        assert!(!blocked(&service, &peer));
+        settle_peer_head(&service, &events, owner, due(&service), &withheld());
+        assert!(changed_for(&mut rx, peer));
+        assert!(blocked(&service, &peer));
+
+        // A proven check clears the block and the count.
+        settle_peer_head(&service, &events, owner, due(&service), &Ok(Verdict::Consistent));
+        assert!(changed_for(&mut rx, peer));
+        assert!(!blocked(&service, &peer));
+        service.key_store.record_peer_kt_head(&peer.to_string(), KtRoute::Normal, &head(6), 0).unwrap();
+        settle_peer_head(&service, &events, owner, due(&service), &withheld());
+        assert!(!blocked(&service, &peer));
+    }
+
+    #[tokio::test]
+    async fn a_split_blocks_until_accepted_and_our_own_devices_are_checked_too() {
+        let (_dir, service, owner, peer) = sendable_peer();
+        let events = EventBus::new();
+        let mut rx = events.subscribe_domain();
+
+        service.key_store.record_peer_kt_head(&peer.to_string(), KtRoute::Normal, &head(4), 0).unwrap();
+        settle_peer_head(&service, &events, owner, due(&service), &Ok(Verdict::Split));
+        assert!(changed_for(&mut rx, peer));
+        assert!(blocked(&service, &peer));
+        // A consistent check of another head never clears a split.
+        service.key_store.record_peer_kt_head(&peer.to_string(), KtRoute::Normal, &head(5), 0).unwrap();
+        settle_peer_head(&service, &events, owner, due(&service), &Ok(Verdict::Consistent));
+        assert!(blocked(&service, &peer));
+
+        // A checked head does not queue again, so accepting is not undone by
+        // the peer's next message; heads queue per route.
+        service.key_store.record_peer_kt_head(&peer.to_string(), KtRoute::Normal, &head(5), 0).unwrap();
         assert!(service.key_store.due_peer_kt_heads(KtRoute::Normal, i64::MAX).unwrap().is_empty());
-        assert!(service.key_store.clear_peer_kt_split(&peer_key).unwrap());
-        service.require_sendable_key(&peer_key, &key).unwrap();
-        let mut next = chatter_proto::content_v1::KtHeadGossip::decode(head.as_slice()).unwrap();
-        next.tree_size = 5;
-        service.key_store.record_peer_kt_head(&peer_key, KtRoute::Normal, &next.encode_to_vec()).unwrap();
-        assert_eq!(service.key_store.due_peer_kt_heads(KtRoute::Normal, i64::MAX).unwrap().len(), 1);
+        assert!(service.key_store.accept_peer_kt_block(&peer.to_string()).unwrap());
+        assert!(!blocked(&service, &peer));
         assert!(service.key_store.due_peer_kt_heads(KtRoute::AnonymousTor, i64::MAX).unwrap().is_empty());
+
+        // Our own devices' heads are checked; a split there raises our own warning.
+        service.key_store.record_peer_kt_head(&owner.to_string(), KtRoute::Normal, &head(7), 0).unwrap();
+        settle_peer_head(&service, &events, owner, due(&service), &Ok(Verdict::Split));
+        assert!(matches!(rx.try_recv(), Ok(DomainEvent::OwnIdentityChanged { user_id }) if user_id == owner));
+    }
+
+    #[test]
+    fn a_pending_head_keeps_its_due_time_when_a_newer_one_arrives() {
+        let (_dir, service, _owner, peer) = sendable_peer();
+        let peer = peer.to_string();
+        service.key_store.record_peer_kt_head(&peer, KtRoute::Normal, &head(4), 100).unwrap();
+        service.key_store.record_peer_kt_head(&peer, KtRoute::Normal, &head(5), 9_000).unwrap();
+        assert!(service.key_store.due_peer_kt_heads(KtRoute::Normal, 99).unwrap().is_empty());
+        let jobs = service.key_store.due_peer_kt_heads(KtRoute::Normal, 100).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].head, head(5));
     }
 
     #[tokio::test]

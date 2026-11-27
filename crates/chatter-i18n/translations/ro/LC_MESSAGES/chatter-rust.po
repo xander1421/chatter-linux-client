@@ -4018,3 +4018,15 @@ msgstr "Ai încredere în această conversație"
 #: crates/chatter-core/src/client/mod.rs
 msgid "Accept new safety number"
 msgstr "Acceptă noul număr de siguranță"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The key directory for this contact could not be verified"
+msgstr "Directorul de chei al acestui contact nu a putut fi verificat"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server answered other key checks but not the one that compares your view with this contact's, which can hide an intercepted conversation. Sending is blocked — compare safety numbers with them over a call or in person, or send anyway once."
+msgstr "Serverul a răspuns la celelalte verificări de chei, dar nu la cea care compară ce vezi tu cu ce vede acest contact, iar asta poate ascunde o conversație interceptată. Trimiterea este blocată — compară numerele de siguranță cu persoana, într-un apel sau față în față, sau trimite totuși o dată."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Send anyway once"
+msgstr "Trimite totuși o dată"

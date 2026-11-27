@@ -1,5 +1,6 @@
-//! A simulated split operator and an honest one, replaying responses from
-//! TestSplitViewVectors in the Go keytransparency service.
+//! A simulated split operator, a restored log and an honest operator,
+//! replaying responses from TestSplitViewVectors in the Go keytransparency
+//! service.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use super::*;
 use crate::storage::Database;
 
 const BOB: &[u8] = b"00000000-0000-4000-8000-000000000002";
+const STEP: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize)]
 struct Vector {
@@ -24,6 +26,10 @@ struct Fixture {
     verifier: KeyTransparency,
     vectors: Vec<Vector>,
     now: SystemTime,
+}
+
+fn decode(encoded: &str) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD.decode(encoded).unwrap()
 }
 
 impl Fixture {
@@ -51,23 +57,29 @@ impl Fixture {
         }
     }
 
-    fn bytes(&self, name: &str, monitor: bool) -> Vec<u8> {
-        let vector = self.vectors.iter().find(|vector| vector.name == name).unwrap();
-        let encoded = if monitor { vector.monitor.as_deref().unwrap() } else { &vector.proof };
-        base64::engine::general_purpose::STANDARD.decode(encoded).unwrap()
-    }
-
     fn search(&self, name: &str) -> KtSearchResponse {
-        KtSearchResponse::decode(self.bytes(name, false).as_slice()).unwrap()
+        let vector = self.vectors.iter().find(|vector| vector.name == name).unwrap();
+        KtSearchResponse::decode(decode(&vector.proof).as_slice()).unwrap()
     }
 
-    /// The operator's answer to a joint-head request, and the request it
-    /// answers, so the transport can check what the device asked for.
-    fn joint(&self, name: &str) -> (KtMonitorRequest, Result<KtMonitorResponse, NetworkError>) {
-        (
-            KtMonitorRequest::decode(self.bytes(name, true).as_slice()).unwrap(),
-            Ok(KtMonitorResponse::decode(self.bytes(name, false).as_slice()).unwrap()),
-        )
+    /// The operator's answers to one monitor request, one per entry position
+    /// the device may hold for Bob's label.
+    fn monitor(&self, name: &str) -> Answer {
+        let prefix = format!("{name} @");
+        let answers: Vec<_> = self
+            .vectors
+            .iter()
+            .filter(|vector| vector.name.starts_with(&prefix))
+            .map(|vector| {
+                (
+                    KtMonitorRequest::decode(decode(vector.monitor.as_deref().unwrap()).as_slice())
+                        .unwrap(),
+                    KtMonitorResponse::decode(decode(&vector.proof).as_slice()).unwrap(),
+                )
+            })
+            .collect();
+        assert!(!answers.is_empty(), "no vectors named {name}");
+        Answer::Vectors(answers)
     }
 
     /// A fresh device whose first lookup of Bob pins the head in `search`.
@@ -105,28 +117,50 @@ impl Device {
         load_head(&self.settings, HEAD).unwrap().unwrap().head.0.tree_size
     }
 
-    async fn receive(&self, fixture: &Fixture, operator: &mut Operator, head: &KtHeadGossip) -> Verdict {
+    async fn check(
+        &self,
+        fixture: &Fixture,
+        operator: &mut Operator,
+        head: &KtHeadGossip,
+        own_label: &[u8],
+    ) -> Verdict {
         let peer = from_gossip(head).unwrap();
         let verdict = reconcile_at(
             operator,
             &self.settings,
             PinScope::Account,
             &peer,
+            own_label,
             &fixture.verifier,
             fixture.now,
+            STEP,
         )
         .await
         .unwrap();
         assert!(operator.searches.is_empty() && operator.monitors.is_empty());
         verdict
     }
+
+    async fn receive(&self, fixture: &Fixture, answers: Vec<Answer>, head: &KtHeadGossip) -> Verdict {
+        let mut operator = Operator {
+            monitors: answers.into(),
+            ..Default::default()
+        };
+        self.check(fixture, &mut operator, head, b"").await
+    }
+}
+
+enum Answer {
+    Vectors(Vec<(KtMonitorRequest, KtMonitorResponse)>),
+    Fail(NetworkError),
+    Stall,
 }
 
 /// Replays operator responses in order and checks each request.
 #[derive(Default)]
 struct Operator {
     searches: VecDeque<(&'static [u8], KtSearchResponse)>,
-    monitors: VecDeque<(KtMonitorRequest, Result<KtMonitorResponse, NetworkError>)>,
+    monitors: VecDeque<Answer>,
 }
 
 impl KtTransport for Operator {
@@ -143,41 +177,52 @@ impl KtTransport for Operator {
         &mut self,
         request: KtMonitorRequest,
     ) -> Result<KtMonitorResponse, NetworkError> {
-        let (expected, response) = self.monitors.pop_front().expect("unexpected monitor");
-        assert_eq!(request, expected);
-        response
+        match self.monitors.pop_front().expect("unexpected monitor") {
+            Answer::Vectors(answers) => Ok(answers
+                .into_iter()
+                .find(|(expected, _)| *expected == request)
+                .unwrap_or_else(|| panic!("no vector answers {request:?}"))
+                .1),
+            Answer::Fail(error) => Err(error),
+            Answer::Stall => std::future::pending().await,
+        }
     }
 }
 
+fn beyond_log() -> Answer {
+    Answer::Fail(NetworkError::InvalidRequest("baseline beyond log".into()))
+}
+
 #[tokio::test]
-async fn split_operator_is_detected_on_the_first_message_each_way() {
+async fn split_operator_withholds_the_check_on_both_branches() {
     let fixture = Fixture::new();
     // The operator shows Alice its own key for Bob and shows Bob a clean log.
     let alice = fixture.device("A bob at 4").await;
     let bob = fixture.device("B bob at 5").await;
+    // Neither side holds signed evidence, so each check is withheld while the
+    // routine control request is answered. Three of them fail closed.
+    for _ in 0..storage_withheld_limit() {
+        // Alice -> Bob. Bob's operator can only prove its own branch.
+        let answers = vec![fixture.monitor("B check 5/4"), fixture.monitor("B control 5/1")];
+        assert_eq!(bob.receive(&fixture, answers, &alice.send()).await, Verdict::Withheld);
+        // Bob -> Alice. Alice's branch has no size 5 to prove.
+        let answers = vec![beyond_log(), fixture.monitor("A control 4/1")];
+        assert_eq!(alice.receive(&fixture, answers, &bob.send()).await, Verdict::Withheld);
+    }
+    assert_eq!((alice.pinned_size(), bob.pinned_size()), (4, 5));
+}
 
-    // Alice -> Bob. Bob's operator can only prove its own branch from size 4.
-    let mut operator = Operator {
-        monitors: [fixture.joint("B joint 5 from 4")].into(),
-        ..Default::default()
-    };
-    assert_eq!(bob.receive(&fixture, &mut operator, &alice.send()).await, Verdict::Split);
-    assert_eq!(bob.pinned_size(), 5);
+fn storage_withheld_limit() -> u32 {
+    crate::storage::peer_kt_heads::WITHHELD_LIMIT
+}
 
-    // Bob -> Alice. Alice's branch has no size 5 to prove.
-    let mut operator = Operator {
-        monitors: [(
-            KtMonitorRequest {
-                keys: Vec::new(),
-                consistency: Some(KtConsistency { last: Some(4), distinguished: Some(5) }),
-            },
-            Err(NetworkError::InvalidRequest("baseline beyond log".into())),
-        )]
-        .into(),
-        ..Default::default()
-    };
-    assert_eq!(alice.receive(&fixture, &mut operator, &bob.send()).await, Verdict::Split);
-    assert_eq!(alice.pinned_size(), 4);
+#[tokio::test(start_paused = true)]
+async fn a_stalled_check_is_withheld_not_an_outage() {
+    let fixture = Fixture::new();
+    let alice = fixture.device("A bob at 4").await;
+    let bob = fixture.device("B bob at 5").await;
+    let answers = vec![Answer::Stall, fixture.monitor("B control 5/1")];
+    assert_eq!(bob.receive(&fixture, answers, &alice.send()).await, Verdict::Withheld);
 }
 
 #[tokio::test]
@@ -186,9 +231,29 @@ async fn same_size_heads_from_two_branches_are_a_split_without_a_request() {
     let alice = fixture.device("A bob at 4").await;
     let bob = fixture.device("B bob at 4").await;
     for (from, to) in [(&alice, &bob), (&bob, &alice)] {
-        let mut operator = Operator::default();
-        assert_eq!(to.receive(&fixture, &mut operator, &from.send()).await, Verdict::Split);
+        assert_eq!(to.receive(&fixture, Vec::new(), &from.send()).await, Verdict::Split);
     }
+}
+
+#[tokio::test]
+async fn a_later_signed_smaller_head_is_a_signed_rollback() {
+    let fixture = Fixture::new();
+    let peer = fixture.device("H bob at 5").await;
+    let restored = fixture.device("R bob at 4").await;
+    let answers = vec![beyond_log(), fixture.monitor("R control 4/1")];
+    assert_eq!(restored.receive(&fixture, answers, &peer.send()).await, Verdict::Split);
+}
+
+#[tokio::test]
+async fn a_restored_log_beyond_our_own_pin_is_no_split() {
+    let fixture = Fixture::new();
+    // Our own pin is past the restored log: both requests are refused, and
+    // an error code is not evidence against the peer.
+    let device = fixture.device("H bob at 5").await;
+    let peer = fixture.device("A bob at 4").await;
+    let answers = vec![beyond_log(), beyond_log()];
+    assert_eq!(device.receive(&fixture, answers, &peer.send()).await, Verdict::Undecided);
+    assert_eq!(device.pinned_size(), 5);
 }
 
 #[tokio::test]
@@ -197,28 +262,31 @@ async fn honest_operator_raises_no_alarm_over_a_conversation() {
     let alice = fixture.device("H bob at 4").await;
     let bob = fixture.device("H bob at 5").await;
 
-    let mut operator = Operator {
-        monitors: [fixture.joint("H joint 5 from 4")].into(),
-        ..Default::default()
-    };
-    assert_eq!(bob.receive(&fixture, &mut operator, &alice.send()).await, Verdict::Consistent);
+    let answers = vec![fixture.monitor("H check 5/4")];
+    assert_eq!(bob.receive(&fixture, answers, &alice.send()).await, Verdict::Consistent);
     assert_eq!(bob.pinned_size(), 5);
 
     // Alice advances to the joint head, so both now share one pin.
-    let mut operator = Operator {
-        monitors: [fixture.joint("H joint 5 for pin 4")].into(),
-        ..Default::default()
-    };
-    assert_eq!(alice.receive(&fixture, &mut operator, &bob.send()).await, Verdict::Consistent);
+    let answers = vec![fixture.monitor("H check 4/5")];
+    assert_eq!(alice.receive(&fixture, answers, &bob.send()).await, Verdict::Consistent);
     assert_eq!(alice.pinned_size(), 5);
 
     // Every later message carries the shared head and needs no request.
     for _ in 0..4 {
         for (from, to) in [(&alice, &bob), (&bob, &alice)] {
-            let mut operator = Operator::default();
-            assert_eq!(to.receive(&fixture, &mut operator, &from.send()).await, Verdict::Consistent);
+            assert_eq!(to.receive(&fixture, Vec::new(), &from.send()).await, Verdict::Consistent);
         }
     }
+}
+
+#[tokio::test]
+async fn the_check_never_monitors_our_own_label() {
+    let fixture = Fixture::new();
+    let alice = fixture.device("H bob at 4").await;
+    let bob = fixture.device("H bob at 5").await;
+    // Bob's only observed label is his own, so there is nothing to blend in.
+    let mut operator = Operator::default();
+    assert_eq!(bob.check(&fixture, &mut operator, &alice.send(), BOB).await, Verdict::Undecided);
 }
 
 #[tokio::test]
@@ -234,12 +302,33 @@ async fn a_head_without_the_operator_signature_is_ignored() {
     ] {
         let mut head = alice.send();
         tamper(&mut head);
-        let mut operator = Operator::default();
-        assert_eq!(bob.receive(&fixture, &mut operator, &head).await, Verdict::Invalid);
+        assert_eq!(bob.receive(&fixture, Vec::new(), &head).await, Verdict::Invalid);
     }
     let mut malformed = alice.send();
     malformed.root.pop();
     assert!(from_gossip(&malformed).is_err());
+}
+
+#[tokio::test]
+async fn the_head_keeps_a_padded_content_in_its_bucket_and_names_its_route() {
+    let fixture = Fixture::new();
+    let device = fixture.device("H bob at 5").await;
+    let padded = Content {
+        padding: vec![7; 300],
+        ..Default::default()
+    }
+    .encode_to_vec();
+    let sent = attach(&device.settings, KtRoute::Normal, padded.clone());
+    assert_eq!(sent.len(), padded.len());
+    let head = received(&sent).unwrap();
+    assert_eq!(route(&head), KtRoute::Normal);
+    // This device has no anonymous pin, so a Tor send carries nothing.
+    assert_eq!(attach(&device.settings, KtRoute::AnonymousTor, padded.clone()), padded);
+    let anonymous = KtHeadGossip {
+        anonymous: true,
+        ..head
+    };
+    assert_eq!(route(&anonymous), KtRoute::AnonymousTor);
 }
 
 #[test]

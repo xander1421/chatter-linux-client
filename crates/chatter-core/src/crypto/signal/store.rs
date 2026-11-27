@@ -208,9 +208,10 @@ impl SignalStore {
                 attribution: IdentityChangeSource::from_db_str(&source),
             });
         }
-        // Our pin and a head this peer sent cannot be one log. Any key we
-        // verified for them may come from the operator's other branch.
-        if self.key_store.peer_kt_split(peer)? {
+        // A head this peer sent exposed a split view, or the server kept
+        // refusing to prove it. Any key we verified for them may come from
+        // the operator's other branch.
+        if self.key_store.peer_kt_block(peer)?.is_some() {
             return Err(untrusted_send(peer, device, None));
         }
         let state = self.key_store.peer_verification(peer, key)?;

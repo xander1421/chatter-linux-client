@@ -3987,3 +3987,15 @@ msgstr "Fidati di questa conversazione"
 #: crates/chatter-core/src/client/mod.rs
 msgid "Accept new safety number"
 msgstr "Accetta il nuovo numero di sicurezza"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The key directory for this contact could not be verified"
+msgstr "Non è stato possibile verificare l’elenco di chiavi di questo contatto"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "The server answered other key checks but not the one that compares your view with this contact's, which can hide an intercepted conversation. Sending is blocked — compare safety numbers with them over a call or in person, or send anyway once."
+msgstr "Il server ha risposto agli altri controlli delle chiavi, ma non a quello che confronta la tua vista con quella di questo contatto, e questo può nascondere una conversazione intercettata. L’invio è bloccato — confronta i numeri di sicurezza con questa persona in una chiamata o di persona, oppure invia comunque una volta."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Send anyway once"
+msgstr "Invia comunque una volta"

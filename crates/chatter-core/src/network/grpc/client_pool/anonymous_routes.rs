@@ -65,6 +65,16 @@ impl GrpcClientPool {
         self.private_route_connection(&self.private_channel_route(channel))
     }
 
+    /// A fresh unidentified connection for one batch of contact-head checks
+    /// (`kt_anchor::gossip`). It is never cached, so the batch shares no
+    /// connection with other queries, and on the onion transport it gets its
+    /// own Tor circuit.
+    pub(crate) fn fresh_anonymous_kt_client(&self) -> super::super::AnonymousKtClient {
+        super::super::AnonymousKtClient::new(
+            self.private_route_connection(&PrivateChannelRoute::default()),
+        )
+    }
+
     fn private_route_connection(&self, route: &PrivateChannelRoute) -> GrpcTransport {
         self.isolated_unidentified_channel(
             &route.grpc,

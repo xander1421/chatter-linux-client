@@ -278,7 +278,7 @@ impl SignalActorHandle {
                                             tracing::warn!(%error, "Could not schedule verification of a received key");
                                         }
                                     }
-                                    record_kt_head(&store, address.name(), receive_kt_route(route, &result.message), &result.message);
+                                    record_kt_head(&store, address.name(), &result.message);
                                     Ok((address, result.message, msg_type))
                                 },
                                 // Preserve the STRUCTURED CryptoError (notably
@@ -293,7 +293,7 @@ impl SignalActorHandle {
                         SignalCommand::DecryptReactionDurable {ciphertext,trust_root,key,response} => {
                             let res=crate::crypto::signal::store::receive::decrypt_durable(store.clone(),&ciphertext,&trust_root,key).await;
                             if let Ok(received) = &res {
-                                record_kt_head(&store, received.address.name(), KtRoute::AnonymousTor, &received.content);
+                                record_kt_head(&store, received.address.name(), &received.content);
                             }
                             let _=response.send(res);
                         }
@@ -330,7 +330,7 @@ impl SignalActorHandle {
                                 Err(ServiceError::Crypto(CryptoError::Protocol("Unknown ciphertext format".into())))
                             };
                             if let Ok(plaintext) = &res {
-                                record_kt_head(&store, sender_address.name(), route, plaintext);
+                                record_kt_head(&store, sender_address.name(), plaintext);
                             }
                             let _ = response.send(res);
                         }

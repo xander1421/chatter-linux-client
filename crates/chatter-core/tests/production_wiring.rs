@@ -113,10 +113,16 @@ const TABLE: &[Entry] = &[
         why: "The KT worker proves a contact's head and this device's pin belong to one log.",
     },
     Entry {
-        symbol: "peer_kt_split",
+        symbol: "peer_kt_block",
         defined_in: "chatter-core/src/storage/peer_kt_heads.rs",
         expect: Expect::Wired,
-        why: "The send trust check refuses a peer whose shared head exposed a split view.",
+        why: "The send trust check refuses a peer whose shared head exposed a split view or whose check the server kept withholding.",
+    },
+    Entry {
+        symbol: "fresh_anonymous_kt_client",
+        defined_in: "chatter-core/src/network/grpc/client_pool/anonymous_routes.rs",
+        expect: Expect::Wired,
+        why: "Contact-head checks run on a fresh unauthenticated connection per batch, never the account channel.",
     },
     Entry {
         symbol: "require_sendable_peer",
