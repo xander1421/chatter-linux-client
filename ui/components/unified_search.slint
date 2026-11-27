@@ -961,7 +961,6 @@ export component UnifiedSearch inherits Rectangle {
                                         size: 32px;
                                         source: ch.has-icon ? ch.icon : root.empty-image;
                                         name: ch.name;
-                                        fallback-bg: Colors.surface-control;
                                     }
                                     VerticalLayout {
                                         horizontal-stretch: 1;
@@ -1340,7 +1339,6 @@ export component UnifiedSearch inherits Rectangle {
                                 size: 32px;
                                 source: option.has-avatar ? option.avatar : root.empty-image;
                                 name: option.name;
-                                fallback-bg: Colors.surface-control;
                             }
                             Text { accessible-role: none; text: option.name; x: Spacing.sm + 40px; width: parent.width - Spacing.sm - 48px; height: 100%; color: Colors.text-primary;
                                 font-size: 13px * Appearance.text-scale; font-weight: Typography.semibold; vertical-alignment: center; overflow: elide; }
