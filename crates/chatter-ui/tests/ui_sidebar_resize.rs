@@ -94,6 +94,7 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
             conversation_id: id.into(),
             display_name: name.into(),
             is_pinned: id == "pinned-chat",
+            is_selected: id == "pinned-chat",
             accessible_label_text: name.into(),
             ..Default::default()
         },
@@ -227,13 +228,23 @@ fn edge_drag_survives_collapse_and_preserves_manual_width_across_window_sizes() 
     width(&w, 68.0);
     assert!(sidebar.get_sidebar_user_collapsed());
     assert_card_order(&w);
-    for label in ["Ada Lovelace", "Grace Hopper"] {
-        assert!(
-            ElementHandle::find_by_accessible_label(&w, label)
-                .any(|element| element.accessible_role() == Some(testing::AccessibleRole::Button)),
-            "missing rail avatar {label}"
-        );
-    }
+    let rail_button = |label| {
+        ElementHandle::find_by_accessible_label(&w, label)
+            .find(|element| element.accessible_role() == Some(testing::AccessibleRole::Button))
+            .unwrap_or_else(|| panic!("missing rail button {label}"))
+    };
+    assert_eq!(
+        rail_button("Ada Lovelace").accessible_item_selected(),
+        Some(true)
+    );
+    assert_eq!(
+        rail_button("Grace Hopper").accessible_item_selected(),
+        Some(false)
+    );
+    assert_eq!(
+        rail_button("Weekend plans").accessible_expanded(),
+        Some(false)
+    );
     for label in [
         "Profile",
         "Settings",

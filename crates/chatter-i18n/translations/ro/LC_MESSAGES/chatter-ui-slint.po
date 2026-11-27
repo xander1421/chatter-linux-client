@@ -6140,6 +6140,9 @@ msgstr "Prietenii pe care îi adaugi apar aici."
 msgid "Got theirs?"
 msgstr "Ai codul celeilalte persoane?"
 
-#: ui/sidebar/sidebar_rail.slint:25
-msgid "{} · {} unread"
-msgstr "{} · {} necitite"
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] "{0} · {n} necitit"
+msgstr[1] "{0} · {n} necitite"
+msgstr[2] "{0} · {n} necitite"

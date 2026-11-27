@@ -6144,6 +6144,8 @@ msgstr "Hinzugefügte Freunde erscheinen hier."
 msgid "Got theirs?"
 msgstr "Hast du ihren Code?"
 
-#: ui/sidebar/sidebar_rail.slint:25
-msgid "{} · {} unread"
-msgstr "{} · {} ungelesen"
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] "{0} · {n} ungelesen"
+msgstr[1] "{0} · {n} ungelesen"

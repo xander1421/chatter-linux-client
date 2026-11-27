@@ -6143,6 +6143,9 @@ msgstr "Тут з’являться друзі, яких ви додасте."
 msgid "Got theirs?"
 msgstr "Маєте код друга?"
 
-#: ui/sidebar/sidebar_rail.slint:25
-msgid "{} · {} unread"
-msgstr "{} · непрочитаних: {}"
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] "{0} · {n} непрочитане"
+msgstr[1] "{0} · {n} непрочитані"
+msgstr[2] "{0} · {n} непрочитаних"
