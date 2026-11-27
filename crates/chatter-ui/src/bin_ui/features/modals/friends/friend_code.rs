@@ -25,6 +25,7 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
         .on_friends_generate_code(move |private_mode: bool| {
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_gen.clone();
+            let revision = ui_ctx.auth_snapshot().session_revision;
             std::thread::spawn(move || {
                 let result = if private_mode {
                     ui_ctx.generate_private_friend_code()
@@ -36,7 +37,9 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
                         let mode_str = if private_mode { "private" } else { "regular" };
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                if ui_ctx.anon_mode_enabled() != private_mode {
+                                if !ui_ctx.session_is_current(revision)
+                                    || ui_ctx.anon_mode_enabled() != private_mode
+                                {
                                     return;
                                 }
                                 w.global::<crate::ModalHostState>()
@@ -226,6 +229,7 @@ fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .on_friends_generate_qr(move |private_mode: bool| {
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_qr.clone();
+            let revision = ui_ctx.auth_snapshot().session_revision;
             // QR encoding and PNG decoding can be expensive for a private code.
             std::thread::spawn(move || {
                 let result = if private_mode {
@@ -247,7 +251,9 @@ fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             Ok((pixels, width, height)) => {
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak.upgrade() {
-                                        if ui_ctx.anon_mode_enabled() != private_mode {
+                                        if !ui_ctx.session_is_current(revision)
+                                            || ui_ctx.anon_mode_enabled() != private_mode
+                                        {
                                             return;
                                         }
                                         // UI thread only: create Slint buffer from pre-decoded pixels
@@ -584,6 +590,7 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                                 )
                                 | FriendCodeConnectionError::FriendRequest(
                                     chatter_core::client::UserError::UserNotFound(_)
+                                        | chatter_core::client::UserError::KeyVerificationPending
                                 )
                                 | FriendCodeConnectionError::SecretChat(
                                     chatter_core::client::AnonDmError::CannotMessageSelf

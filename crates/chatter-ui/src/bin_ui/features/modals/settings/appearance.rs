@@ -118,7 +118,12 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     // Chrome effects are device-local and applied before the first frame.
-    appearance.set_glass_effects(ui_ctx.glass_effects_enabled());
+    // Match the Skia backdrop debug switch so material tokens select flat fills.
+    appearance.set_backdrop_effects_available(!matches!(
+        std::env::var("SLINT_BACKDROP_EFFECTS").as_deref(),
+        Ok("0" | "false" | "off")
+    ));
+    appearance.set_prefer_glass_effects(ui_ctx.glass_effects_enabled());
     let ui_ctx_glass = ui_ctx.clone();
     let weak_glass = window.as_weak();
     appearance.on_glass_effects_changed(move |enabled: bool| {
@@ -127,7 +132,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
         if let Some(w) = weak_glass.upgrade() {
             w.global::<crate::Appearance>()
-                .set_glass_effects(ui_ctx_glass.glass_effects_enabled());
+                .set_prefer_glass_effects(ui_ctx_glass.glass_effects_enabled());
         }
     });
 

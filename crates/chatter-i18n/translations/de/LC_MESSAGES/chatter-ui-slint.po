@@ -6119,3 +6119,33 @@ msgid ""
 msgstr ""
 "Andere erfahren, wenn ihre Nachrichten dich erreichen. Wenn aus, siehst du "
 "ihre auch nicht"
+
+#: ui/pages/first_friend.slint:51
+msgid "Add your first friend"
+msgstr "Füge deinen ersten Freund hinzu"
+
+#: ui/pages/first_friend.slint:66
+msgid "Chatter has no phone-number lookup. Swap codes with someone you know."
+msgstr "In Chatter kannst du nicht nach Telefonnummern suchen. Tausche Codes mit jemandem aus, den du kennst."
+
+#: ui/sidebar/card_drag.slint:109
+msgid "Drop here for a new section"
+msgstr "Hier ablegen, um einen Abschnitt zu erstellen"
+
+#: ui/pages/first_friend.slint:85
+msgid "Friend code"
+msgstr "Freundescode"
+
+#: ui/sidebar/chats_card.slint:17
+msgid "Friends you add appear here."
+msgstr "Hinzugefügte Freunde erscheinen hier."
+
+#: ui/pages/first_friend.slint:109
+msgid "Got theirs?"
+msgstr "Hast du ihren Code?"
+
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] "{0} · {n} ungelesen"
+msgstr[1] "{0} · {n} ungelesen"

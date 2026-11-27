@@ -227,6 +227,7 @@ pub struct MembershipLog {
     kt: Arc<dyn IdentityKeyVerifier>,
     repo: VerifiedMembershipRepository,
     observer: parking_lot::RwLock<Option<Weak<dyn LogObserver>>>,
+    private_membership_changed: tokio::sync::Notify,
     locks: parking_lot::Mutex<HashMap<ChannelId, Arc<tokio::sync::Mutex<()>>>>,
 }
 
@@ -269,8 +270,13 @@ impl MembershipLog {
             kt,
             repo,
             observer: parking_lot::RwLock::new(None),
+            private_membership_changed: tokio::sync::Notify::new(),
             locks: Default::default(),
         }
+    }
+
+    pub(crate) async fn wait_for_private_membership_change(&self) {
+        self.private_membership_changed.notified().await;
     }
 
     pub fn set_observer(&self, observer: Weak<dyn LogObserver>) {
@@ -463,8 +469,13 @@ impl MembershipLog {
         actions: pb::channel_change::Actions,
         backfill: bool,
     ) -> Result<(), LogError> {
+        let private_changed = verified.0.new_state.channel_type == pb::ChannelType::ChannelPrivate
+            && prev.as_ref().is_none_or(|state| state.hash() != verified.0.new_state_hash);
         if self.repo.commit(channel_id, change, &verified)? {
             self.notify(channel_id, MembershipNotice::Verified);
+        }
+        if private_changed {
+            self.private_membership_changed.notify_one();
         }
         let (me, _) = self.backend.me().await?;
         let left: Vec<String> = verified

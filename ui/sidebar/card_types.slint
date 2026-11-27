@@ -1,0 +1,40 @@
+import { ChatRowData } from "chat_list.slint";
+
+export struct SidebarCardRow {
+    conversation-id: string,
+    kind: string, // dm, private_group, channel, saved
+    name: string,
+    short-name: string,
+    preview: string,
+    time-label: string,
+    unread: int,
+    muted: bool,
+    online: bool,
+    locked: bool,
+    avatar-source: image,
+    has-avatar: bool,
+    initials: string,
+    chat-row: ChatRowData,
+}
+
+export struct SidebarCard {
+    id: string,
+    kind: string, // saved, chats, section
+    title: string,
+    emoji: string,
+    collapsed: bool,
+    unread: int,
+    pinned: [SidebarCardRow],
+    rows: [SidebarCardRow],
+    show-empty-hint: bool,
+}
+
+export global SidebarCards {
+    in property <[SidebarCard]> cards;
+    in property <bool> dragging;
+    in property <string> drag-row-id;
+    callback toggle-collapsed(string);
+    callback open-row(string);
+    callback drop-on-card(string, string);
+    callback drop-new-section(string);
+}

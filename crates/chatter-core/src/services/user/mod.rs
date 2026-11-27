@@ -203,6 +203,10 @@ pub enum UserError {
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
 
+    /// The peer key has not finished verification.
+    #[error("contact key verification pending")]
+    KeyVerificationPending,
+
     /// Cryptographic operation failed.
     #[error("crypto error: {0}")]
     Crypto(#[from] CryptoError),
@@ -241,6 +245,12 @@ impl UserError {
                 chatter_i18n::tr("Too many attempts. Try again in a minute.")
             }
             Self::Network(_) => chatter_i18n::tr("Couldn't reach the server. Try again."),
+            Self::KeyVerificationPending => {
+                chatter_i18n::tr("Checking their security key. Try again in a moment.")
+            }
+            Self::Crypto(CryptoError::UntrustedIdentity { .. }) => {
+                chatter_i18n::tr("This contact’s security key could not be trusted.")
+            }
             Self::Storage(_) | Self::Crypto(_) => {
                 chatter_i18n::tr("Something went wrong. Try again.")
             }

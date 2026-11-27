@@ -5,6 +5,7 @@ import { ModalHostState } from "app_modal_host_state.slint";
 import { CallView } from "app_call_view.slint";
 import { AuthFlow } from "app_auth_flow.slint";
 import { Sidebar } from "sidebar/sidebar.slint";
+import { SidebarCards } from "sidebar/card_types.slint";
 import { Spacing } from "theme/spacing.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ChatPane } from "app_chat_pane.slint";
@@ -28,11 +29,11 @@ export component AppSidebarHost inherits Rectangle {
     callback toggle-anon-mode();
     callback focus-composer();
 
-        background: transparent;
+    background: transparent;
     Sidebar {
         width: root.compact-layout ? parent.width : root.sidebar-panel-width;
         height: parent.height;
-    x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
+        x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
         // Keep the list mounted for the reverse push, but do not
         // paint its rows after the chat fully covers it. Show it
         // immediately when an edge swipe starts, before progress
@@ -51,22 +52,14 @@ export component AppSidebarHost inherits Rectangle {
         // and to the compact rail, which has no header.
         server-unreachable: root.server-unreachable;
         connection-status: root.connection-status;
-        // `mobile-mode` means "touch input" — it sizes the panel's
-        // targets. On desktop the panel also keeps its Discord-style
-        // layout role: an icon rail by default, expanded to the full
-        // list by the toggle in its footer.
-        //
-        // On mobile it no longer does. The rail was kept because it was
-        // the only always-available navigation, and swapping the whole
-        // screen "costs a tap for every glance at the conversation
-        // list" — but the bottom tab bar now pays that cost instead
-        // (Chats is one tap from anywhere), and the rail was spending
-        // 16% of the width of every conversation to avoid it. So on a
-        // phone this is a full-width list that the chat replaces, never
-        // a rail beside it. A tablet is wide enough for the desktop
-        // two-pane role, so only its target sizes follow touch.
+        // Compact width uses the full-screen phone list and its bottom tabs.
+        // A tablet uses the two-pane sidebar with touch-sized controls.
         mobile-mode: root.compact-layout;
         touch: root.is-mobile-platform;
+        // Shield hides Saved, which makes Chats the first card.
+        phone-pinned: !root.compact-layout || SidebarCards.cards.length == 0 ? []
+            : SidebarCards.cards[0].kind == "chats" ? SidebarCards.cards[0].pinned
+            : SidebarCards.cards.length > 1 ? SidebarCards.cards[1].pinned : [];
         mobile-width: root.window-width;
         // The panel is the top-left thing on screen, so it is the one
         // that has to keep the macOS traffic lights clear.
@@ -90,8 +83,8 @@ export component AppSidebarHost inherits Rectangle {
         custom-sections: SidebarPane.custom-sections;
         flat-rows: SidebarPane.flat-rows;
         focus-index <=> SidebarPane.sidebar-focus-index;
-        focus-target(current, move-by, mobile, shield, requests) => {
-            return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests);
+        focus-target(current, move-by, mobile, shield, requests, desktop-rail) => {
+            return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests, desktop-rail);
         }
         focus-composer => { root.focus-composer(); }
         user-display-name: SidebarPane.user-display-name;

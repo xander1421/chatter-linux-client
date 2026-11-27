@@ -1,17 +1,20 @@
 import { DesktopChrome } from "../theme/desktop_chrome.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { ActivityUi } from "../activity/activity_bell.slint";
 import { ActivityGlobal } from "../activity/activity_global.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { Avatar } from "../components/avatar.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
-import { MeshGlobal } from "../mesh/mesh_global.slint";
 
 export component SidebarFooter inherits GlassSurface {
     in property <length> panel-width;
@@ -34,7 +37,17 @@ export component SidebarFooter inherits GlassSurface {
     in property <string> user-presence-status;
     in property <string> user-display-name;
     in property <bool> server-unreachable;
+    in property <int> missed-call-count;
+    private property <bool> ai-available: JarvisGlobal.enabled && JarvisGlobal.opted-in;
+    private property <int> expanded-slot-count: 5 + (root.touch ? 1 : 0)
+        + (root.mesh-available ? 1 : 0) + (root.ai-available ? 1 : 0);
+    private property <length> expanded-gap: 6px;
+    private property <length> expanded-slot-width: clamp(
+        (root.panel-width - 2 * Spacing.sm - root.expanded-slot-count * root.expanded-gap)
+            / root.expanded-slot-count, 0px, root.touch ? root.footer-icon-size : 32px);
     callback profile-clicked();
+    callback friends-clicked();
+    callback calls-clicked();
     callback settings-clicked();
     callback toggle-collapsed();
     callback anon-mode-clicked();
@@ -47,146 +60,135 @@ export component SidebarFooter inherits GlassSurface {
             width: root.panel-width;
             y: root.panel-height - self.height;
             material-level: 2;
+            material-tint: root.collapsed || Appearance.glass-effects ? Materials.regular : Colors.surface-card;
             material-enabled: !DesktopChrome.macos;
+            background: !root.collapsed && DesktopChrome.macos ? Colors.surface-card : transparent;
+            border-radius: root.collapsed ? Spacing.radius-chrome : 12px;
             show-edge: !DesktopChrome.macos;
             elevation: DesktopChrome.macos ? 0 : 3;
 
             // The list reservation and footer use the same stack height.
             height: root.collapsed
-                ? DesktopChrome.macos ? root.rail-footer-height
+                ? !root.touch || DesktopChrome.macos ? root.rail-footer-height
                     : root.rail-button-count * root.rail-icon-size
                         + (root.rail-button-count - 1) * 8px + 16px + Spacing.md + 8px
-                : DesktopChrome.macos ? 48px : 44px;
+                : 48px;
 
-            // Top edge only — the one side that separates this strip from the
-            // list. The four-sided border it replaces doubled up against the
-            // panel's own left/right edges and closed a box around the footer.
-
-
-            // Expanded view: Profile and Settings on the same row
-            // No `alignment` — under any alignment other than stretch, Slint
-            // sizes every child to its PREFERRED width and ignores
-            // horizontal-stretch, so the display name pushed the icons past the
-            // right edge and the last one (collapse) was clipped away entirely.
-            // Stretching lets the name elide and keeps the buttons on screen.
             if !root.collapsed: HorizontalLayout {
-                padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: DesktopChrome.macos ? Spacing.xs : Spacing.sm;
-                // Profile moved to the bottom tab bar's rightmost tab on mobile,
-                // where it carries the user's avatar — a name-and-avatar strip
-                // wedged between the last conversation and the tab bar was
-                // neither a list row nor navigation, and read as leftover.
-                if !false: Rectangle {
-                    horizontal-stretch: 1;
-                    accessible-role: button; accessible-label: @tr("Profile");
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: root.expanded-gap;
+
+                Rectangle {
+                    width: root.expanded-slot-width;
+                    accessible-role: button;
+                    accessible-label: @tr("Profile");
                     accessible-action-default => { root.profile-clicked(); }
-                    border-width: profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                    profile-keys := FocusScope { width: 0px; height: 0px;
-                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
-                    }
-                    TouchArea { mouse-cursor: pointer; clicked => { root.profile-clicked(); } }
                     HorizontalLayout {
-                        spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
-                                presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
+                        alignment: center;
+                        VerticalLayout {
+                            alignment: center;
+                            Avatar {
+                                size: min(root.expanded-slot-width, root.touch ? 30px : 24px);
+                                source: root.user-avatar-source;
+                                fallback-text: root.user-initials;
+                                alt-name: root.user-display-name;
+                                show-presence: true;
+                                presence-color: root.user-presence-status == "online" ? Colors.online
+                                    : root.user-presence-status == "away" ? Colors.away
+                                    : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                             }
                         }
-                        // With touch-sized icons the name can be left a few pixels: an
-                        // ellipsis alone reads as broken, so show the avatar only.
-                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; opacity: self.width < 28px ? 0 : 1; }
                     }
+                    KeyFocus { border-radius: Spacing.sm; activate => { root.profile-clicked(); } }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.profile-clicked(); } }
                 }
-                // The expanded desktop sidebar keeps both list destinations
-                // reachable without first collapsing to the rail.
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: root.active-tab == "chats" ? Colors.row-selected : chats-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: @tr("Chats");
-                        accessible-action-default => { root.tab-selected("chats"); }
-                        border-width: chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        chats-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("chats"); return accept; } return reject; }
-                        }
-                        Image { source: Icons.message-circle; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        chats-touch := TouchArea { clicked => { root.tab-selected("chats"); } }
-                    }
+                Rectangle { horizontal-stretch: 1; }
+                HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: AnonMode.enabled ? Icons.user-plus : Icons.users;
+                    label: AnonMode.enabled ? @tr("Add contact") : @tr("Friends");
+                    clicked => { root.friends-clicked(); }
                 }
-                if root.mesh-available: VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: root.active-tab == "mesh" ? Colors.row-selected : mesh-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: @tr("Mesh");
-                        accessible-action-default => { root.tab-selected("mesh"); }
-                        border-width: mesh-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        mesh-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("mesh"); return accept; } return reject; }
-                        }
-                        Image { source: Icons.radio; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        mesh-touch := TouchArea { clicked => { root.tab-selected("mesh"); } }
-                    }
-                }
-                // Activity: mentions, replies and server status (ActivityUi
-                // bridges to the modal host). The status dot lives here now.
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: bell-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: ActivityGlobal.unread-count > 0 ? @tr("Activity, {} unread", ActivityGlobal.unread-count) : @tr("Activity");
-                        accessible-action-default => { ActivityUi.open(); }
-                        border-width: bell-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        bell-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { ActivityUi.open(); return accept; } return reject; }
-                        }
-                        Image { source: Icons.bell; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                        if root.server-unreachable || ActivityGlobal.unread-count > 0: Rectangle {
-                            x: parent.width - self.width - 1px; y: 1px;
-                            width: 7px; height: 7px; border-radius: 3.5px;
-                            border-width: 1px; border-color: Colors.surface;
-                            background: root.server-unreachable ? Colors.error : Colors.primary;
-                            accessible-role: text;
-                            accessible-label: root.server-unreachable ? @tr("Server unreachable") : @tr("New activity");
-                        }
-                        bell-touch := TouchArea { clicked => { ActivityUi.open(); } }
-                    }
-                }
-                // The gear opens Settings; the avatar opens the account menu.
-                if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: sett-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: @tr("Settings");
-                        accessible-action-default => { root.settings-clicked(); }
-                        border-width: sett-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        sett-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }
-                        }
+                HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: Icons.phone;
+                    label: root.missed-call-count > 0 ? @tr("Calls, {} missed", root.missed-call-count) : @tr("Calls");
+                    clicked => { root.calls-clicked(); }
 
-                        Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
+                    if root.missed-call-count > 0: Rectangle {
+                        x: parent.width - self.width;
+                        height: Spacing.badge-sm;
+                        width: self.height + (root.missed-call-count > 9 ? Spacing.xs : 0px);
+                        border-radius: self.height / 2;
+                        background: Colors.error-hover;
+                        Text {
+                            text: root.missed-call-count > 9 ? "9+" : root.missed-call-count;
+                            color: Colors.on-error;
+                            font-size: Typography.xs2;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
                 }
-                // Collapse back to the rail. The expanded panel needs its own
-                // copy: the rail's cluster only exists while collapsed, so
-                // without this, expanding was a one-way trip.
-                //
-                // There is no rail on mobile to collapse into — the list either
-                // is the screen or the conversation is — so the control has
-                // nothing to do there.
-                if root.touch: VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button; accessible-label: @tr("Collapse sidebar");
-                        accessible-action-default => { root.toggle-collapsed(); }
-                        border-width: collapse-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        collapse-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
-                        }
-                        Image { source: Icons.chevron-left; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        collapse-touch := TouchArea { clicked => { root.toggle-collapsed(); } }
+                if root.mesh-available: HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: root.active-tab == "mesh" ? Icons.message-circle : Icons.radio;
+                    label: root.active-tab == "mesh" ? @tr("Chats") : @tr("Mesh");
+                    clicked => { root.tab-selected(root.active-tab == "mesh" ? "chats" : "mesh"); }
+                }
+                if root.ai-available: HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: Icons.jarvis;
+                    label: @tr("AI");
+                    // The virtual assistant channel uses the nil UUID.
+                    clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); }
+                }
+                HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: Icons.bell;
+                    label: ActivityGlobal.unread-count > 0 ? @tr("Activity, {} unread", ActivityGlobal.unread-count) : @tr("Activity");
+                    clicked => { ActivityUi.open(); }
+
+                    if root.server-unreachable || ActivityGlobal.unread-count > 0: Rectangle {
+                        x: parent.width - self.width - 1px;
+                        y: 1px;
+                        width: 7px;
+                        height: self.width;
+                        border-radius: self.width / 2;
+                        border-width: 1px;
+                        border-color: Colors.surface;
+                        background: root.server-unreachable ? Colors.error : Colors.primary;
+                        accessible-role: text;
+                        accessible-label: root.server-unreachable ? @tr("Server unreachable") : @tr("New activity");
                     }
+                }
+                HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: Icons.settings;
+                    label: @tr("Settings");
+                    clicked => { root.settings-clicked(); }
+                }
+                if root.touch: HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: Icons.chevron-left;
+                    label: @tr("Collapse sidebar");
+                    clicked => { root.toggle-collapsed(); }
                 }
             }
 
@@ -227,7 +229,7 @@ export component SidebarFooter inherits GlassSurface {
                 }
                 // Bottom cluster, in order: AI, Chats, Mesh, Activity, then
                 // profile, Settings, expand.
-                if JarvisGlobal.enabled && JarvisGlobal.opted-in: TooltipArea {
+                if root.touch && root.ai-available: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("AI"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -245,7 +247,7 @@ export component SidebarFooter inherits GlassSurface {
                     } }
                 }
 
-                if root.mesh-available: TooltipArea {
+                if root.touch && root.mesh-available: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("Mesh"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -265,7 +267,7 @@ export component SidebarFooter inherits GlassSurface {
                 }
 
                 // Activity, as in the expanded footer: the rail had no way in.
-                TooltipArea {
+                if root.touch: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("Activity"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -293,7 +295,7 @@ export component SidebarFooter inherits GlassSurface {
                 // in one unbroken stack read as one big undifferentiated
                 // block; a hairline plus extra breathing room lets the eye
                 // parse two small groups instead, without hiding anything.
-                Rectangle {
+                if root.touch: Rectangle {
                     height: root.rail-divider-height;
                     Rectangle {
                         y: parent.height / 2;
@@ -307,7 +309,7 @@ export component SidebarFooter inherits GlassSurface {
                 // Same order as the expanded footer (profile … settings,
                 // collapse): the chevron is last in both, so it does not jump
                 // to the middle of the cluster when the panel collapses.
-                Rectangle {
+                if root.touch: Rectangle {
                     height: root.rail-icon-size;
                     accessible-role: button; accessible-label: @tr("Profile");
                     accessible-action-default => { root.profile-clicked(); }
@@ -322,7 +324,7 @@ export component SidebarFooter inherits GlassSurface {
                         }
                     }
                 }
-                TooltipArea {
+                if root.touch: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: @tr("Settings"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: @tr("Settings");
@@ -345,7 +347,7 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }
-                if root.touch: TooltipArea {
+                TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: root.collapsed ? @tr("Expand sidebar") : @tr("Collapse sidebar"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
@@ -353,7 +355,7 @@ export component SidebarFooter inherits GlassSurface {
                         accessible-action-default => { root.toggle-collapsed(); }
                         KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
                         border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
+                        rail-expand-keys := FocusScope { width: 0px; height: 0px; enabled: root.touch;
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;

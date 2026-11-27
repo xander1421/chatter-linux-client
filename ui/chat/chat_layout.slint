@@ -457,6 +457,8 @@ export component ChatLayout inherits Rectangle {
     // Floating chrome is positioned explicitly: a sized element without x/y
     // is centred in its parent, which put the header mid-screen.
     top-chrome := VerticalLayout {
+        // Keep scrolled bubbles and date separators below the header.
+        z: 1;
         x: 0;
         y: 0;
         width: root.width;
@@ -464,11 +466,11 @@ export component ChatLayout inherits Rectangle {
         // Level-3 chrome floats: on a phone it is inset from the screen edges
         // so its shadow and rim show on all sides and messages visibly pass
         // underneath it (theme/elevation.slint).
-        // Desktop: a hairline gap so the island does not butt against the
-        // sidebar panel beside it (or the window edge on the other side).
-        padding-left: root.mobile ? Spacing.sm : Spacing.xs;
+        // Desktop: the chat column is a framed container (main_chat_shell),
+        // so the island sits one panel gutter inside the frame on every side.
+        padding-left: Spacing.sm;
         padding-right: self.padding-left;
-        padding-top: root.mobile ? Spacing.xs : Spacing.none;
+        padding-top: root.mobile ? Spacing.xs : Spacing.sm;
         spacing: root.mobile ? Spacing.xs : Spacing.none;
         Timer {
             interval: 20s;
@@ -622,12 +624,14 @@ export component ChatLayout inherits Rectangle {
     }
 
     bottom-chrome := VerticalLayout {
+        z: 1;
         x: 0;
         width: root.width;
         height: self.preferred-height;
         y: root.height - self.height - root.drawer-occupied-height;
-        padding-left: root.mobile ? Spacing.sm : Spacing.xs;
+        padding-left: Spacing.sm;
         padding-right: self.padding-left;
+        padding-bottom: root.mobile ? Spacing.none : Spacing.sm;
         // Floating composer — placed directly in VerticalLayout so its
         // explicit height drives the layout slot. A wrapping plain Rectangle
         // does not auto-size from children, which collapses the hit-test
@@ -783,6 +787,7 @@ export component ChatLayout inherits Rectangle {
     // Desktop: a click on the conversation closes the popover like any menu.
     // Chrome stays live: the emoji button toggles and the input closes it.
     if root.drawer-visible && !root.mobile: TouchArea {
+        z: 1;
         x: 0;
         y: top-chrome.height;
         width: root.width;
@@ -795,6 +800,7 @@ export component ChatLayout inherits Rectangle {
     }
 
     if root.drawer-visible || (root.mobile && root.drawer-occupied-height > 0px): picker-drawer := GlassSurface {
+        z: 2;
         init => {
             root.drawer-search-focused = false;
             // A fullscreen call can destroy/remount the chat while picker

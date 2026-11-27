@@ -6108,3 +6108,34 @@ msgid ""
 msgstr ""
 "Сообщать другим, когда их сообщения дошли до вас. Если выключено, вы тоже не "
 "увидите их отчёты"
+
+#: ui/pages/first_friend.slint:51
+msgid "Add your first friend"
+msgstr "Добавьте первого друга"
+
+#: ui/pages/first_friend.slint:66
+msgid "Chatter has no phone-number lookup. Swap codes with someone you know."
+msgstr "В Chatter нет поиска по номеру телефона. Обменяйтесь кодами с тем, кого знаете."
+
+#: ui/sidebar/card_drag.slint:109
+msgid "Drop here for a new section"
+msgstr "Перетащите сюда, чтобы создать раздел"
+
+#: ui/pages/first_friend.slint:85
+msgid "Friend code"
+msgstr "Код друга"
+
+#: ui/sidebar/chats_card.slint:17
+msgid "Friends you add appear here."
+msgstr "Здесь появятся друзья, которых вы добавите."
+
+#: ui/pages/first_friend.slint:109
+msgid "Got theirs?"
+msgstr "У вас есть код друга?"
+
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] "{0} · {n} непрочитанное"
+msgstr[1] "{0} · {n} непрочитанных"
+msgstr[2] "{0} · {n} непрочитанных"

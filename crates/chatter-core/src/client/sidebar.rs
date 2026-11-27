@@ -1,6 +1,250 @@
 use super::*;
+use crate::domain::{ids::SectionId, message::ConversationType, section::CustomSection};
+use crate::ui::sidebar_data::ChatRowSendData;
+
+const SAVED_CARD_ID: &str = "saved";
+const CHATS_CARD_ID: &str = "chats";
+const CHATS_COLLAPSED_KEY: &str = "sidebar.chats_collapsed";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidebarCardKind {
+    Saved,
+    Chats,
+    Section,
+}
+
+#[derive(Clone, Debug)]
+pub struct SidebarCard {
+    pub id: String,
+    pub kind: SidebarCardKind,
+    pub title: String,
+    pub emoji: Option<String>,
+    pub collapsed: bool,
+    pub unread: u32,
+    pub pinned: Vec<SidebarCardRow>,
+    pub rows: Vec<SidebarCardRow>,
+    /// Chats card only: the account has no conversations in any card yet,
+    /// so the card shows its first-friend hint. Filed chats count, so a user
+    /// who moved every chat into sections does not see the hint.
+    pub show_empty_hint: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidebarCardRowKind {
+    Dm,
+    PrivateGroup,
+    Channel,
+    Saved,
+}
+
+#[derive(Clone, Debug)]
+pub struct SidebarCardRow {
+    pub conversation_id: String,
+    pub kind: SidebarCardRowKind,
+    pub name: String,
+    pub short_name: String,
+    pub preview: String,
+    pub time_label: String,
+    pub unread: u32,
+    pub muted: bool,
+    pub online: bool,
+    pub locked: bool,
+    /// Existing chat presentation, including avatar bytes and the exact open/menu kind.
+    pub chat_row: ChatRowSendData,
+}
+
+impl From<ChatRowSendData> for SidebarCardRow {
+    fn from(row: ChatRowSendData) -> Self {
+        use SidebarCardRowKind as Kind;
+        let kind = match row.kind {
+            ConversationType::SavedMessages => Kind::Saved,
+            ConversationType::AnonGroup => Kind::PrivateGroup,
+            ConversationType::Channel | ConversationType::Mesh => Kind::Channel,
+            ConversationType::ServerDm | ConversationType::AnonDm | ConversationType::MeshDm => {
+                Kind::Dm
+            }
+        };
+        let name = row.shown_name();
+        let short_name = if kind == Kind::Dm {
+            row.display_name
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_owned()
+        } else {
+            name.clone()
+        };
+        Self {
+            conversation_id: row.id.clone(),
+            kind,
+            name,
+            short_name,
+            preview: row.last_message.clone(),
+            time_label: row.timestamp_text(),
+            unread: row.unread_count,
+            muted: row.is_muted,
+            online: row.presence_status == "online",
+            locked: row.private_channel,
+            chat_row: row,
+        }
+    }
+}
+
 
 impl ChatterClient {
+    /// Sidebar cards in display order. Saved follows its existing Shield
+    /// visibility policy, and only explicitly created sections are projected.
+    pub fn sidebar_cards(&self) -> Vec<SidebarCard> {
+        let mut cards = Vec::new();
+        if self.visible_in_mode(&ConversationType::SavedMessages) {
+            let title = chatter_i18n::tr("Saved messages");
+            let (preview, time_label) = self.saved_messages_sidebar_preview();
+            let mut row = SidebarCardRow::from(ChatRowSendData {
+                last_message: preview,
+                ..ChatRowSendData::new(
+                    ConversationType::SavedMessages,
+                    SAVED_CARD_ID,
+                    title.as_str(),
+                )
+            });
+            row.time_label = time_label;
+            cards.push(SidebarCard {
+                id: SAVED_CARD_ID.into(),
+                kind: SidebarCardKind::Saved,
+                title,
+                emoji: None,
+                collapsed: false,
+                unread: 0,
+                pinned: Vec::new(),
+                rows: vec![row],
+                show_empty_hint: false,
+            });
+        }
+
+        let chats = self.sidebar_rows();
+        let unread = chats
+            .iter()
+            .filter(|row| !row.is_muted)
+            .map(|row| row.unread_count)
+            .sum();
+        let (pinned, rows) = chats
+            .into_iter()
+            .map(SidebarCardRow::from)
+            .partition(|row| row.chat_row.is_pinned);
+        cards.push(SidebarCard {
+            id: CHATS_CARD_ID.into(),
+            kind: SidebarCardKind::Chats,
+            title: chatter_i18n::tr("Chats"),
+            emoji: None,
+            collapsed: self.chats_card_collapsed().unwrap_or_default(),
+            unread,
+            pinned,
+            rows,
+            show_empty_hint: false,
+        });
+
+        let sections = self.list_sections_with_conversations().unwrap_or_default();
+        let rows = self.section_rows(&sections);
+        cards.extend(sections.into_iter().zip(rows).map(|(section, rows)| {
+            let unread = self.section_unread_badge(&section);
+            // A section pins like the Chats card: pinned chats leave the list
+            // and sit in the card's pinned strip.
+            let (pinned, rows): (Vec<_>, Vec<_>) = rows
+                .into_iter()
+                .map(SidebarCardRow::from)
+                .partition(|row| row.chat_row.is_pinned);
+            SidebarCard {
+                id: section.id.to_string(),
+                kind: SidebarCardKind::Section,
+                title: section.name,
+                emoji: Some(section.icon_emoji).filter(|emoji| !emoji.is_empty()),
+                collapsed: !section.is_expanded,
+                unread,
+                pinned,
+                rows,
+                show_empty_hint: false,
+            }
+        }));
+        let has_conversations = cards.iter()
+            .filter(|card| card.kind != SidebarCardKind::Saved)
+            .any(|card| !card.rows.is_empty() || !card.pinned.is_empty());
+        if let Some(chats) = cards.iter_mut().find(|card| card.kind == SidebarCardKind::Chats) {
+            chats.show_empty_hint = !has_conversations;
+        }
+        cards
+    }
+
+    fn chats_card_collapsed(&self) -> Result<bool, SectionError> {
+        Ok(self
+            .channels()
+            .settings_repo
+            .get_bool(CHATS_COLLAPSED_KEY)?
+            .unwrap_or(false))
+    }
+
+    pub fn toggle_card_collapsed(&self, card_id: &str) -> Result<(), SectionError> {
+        if card_id == CHATS_CARD_ID {
+            use crate::storage::repositories::settings_repo::SettingsRepository;
+            let mut conn = self.channels().settings_repo.database().connection()?;
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(crate::error::StorageError::from)?;
+            let collapsed: Option<bool> =
+                SettingsRepository::get_with_connection(&tx, CHATS_COLLAPSED_KEY)?;
+            SettingsRepository::set_with_connection(
+                &tx,
+                CHATS_COLLAPSED_KEY,
+                &!collapsed.unwrap_or_default(),
+            )?;
+            tx.commit().map_err(crate::error::StorageError::from)?;
+            return Ok(());
+        }
+        let id = card_id
+            .parse::<SectionId>()
+            .map_err(|_| SectionError::NotFound)?;
+        self.sections().toggle_current_expansion(&id)
+    }
+
+    pub fn move_conversation_to_card(
+        &self,
+        conversation_id: &str,
+        card_id: &str,
+    ) -> Result<(), SectionError> {
+        let kind = self.movable_card_row_kind(conversation_id)?;
+        if card_id == CHATS_CARD_ID {
+            return self.remove_conversation_from_section(conversation_id);
+        }
+        let section = card_id
+            .parse::<SectionId>()
+            .map_err(|_| SectionError::NotFound)?;
+        self.move_conversation_to_section(conversation_id, kind, &section)
+    }
+
+    pub fn create_section_with(
+        &self,
+        conversation_id: &str,
+        name: &str,
+        emoji: &str,
+    ) -> Result<CustomSection, SectionError> {
+        let kind = self.movable_card_row_kind(conversation_id)?;
+        self.create_section(name, emoji, Some((conversation_id, kind)))
+    }
+
+    fn movable_card_row_kind(&self, id: &str) -> Result<ConversationType, SectionError> {
+        if id == SAVED_CARD_ID {
+            return Err(SectionError::NotFound);
+        }
+        if let Some(row) = self.sidebar_rows().into_iter().find(|row| row.id == id) {
+            return Ok(row.kind);
+        }
+        self.list_sections_with_conversations()?
+            .into_iter()
+            .flat_map(|section| section.conversations)
+            .find(|row| row.conversation_id == id)
+            .map(|row| row.conversation_type)
+            .ok_or(SectionError::NotFound)
+    }
+
     /// Return the adjacent visible conversation in the same slot order used by
     /// the sidebar. A missing selection starts at the corresponding edge.
     pub fn adjacent_sidebar_conversation(
@@ -89,22 +333,30 @@ impl ChatterClient {
     /// A folder's header badge: unread in its rows, leaving out muted ones,
     /// as Telegram's folder counters do (a muted chat keeps its own grey
     /// count on its row).
-    pub fn section_unread_badge(
-        self: &std::sync::Arc<Self>,
-        section: &crate::domain::section::CustomSection,
-    ) -> u32 {
-        section.conversations.iter().filter(|c| c.unread_count > 0)
-            .map(|c| self.section_member_unread_badge(c)).sum()
+    pub fn section_unread_badge(&self, section: &crate::domain::section::CustomSection) -> u32 {
+        section
+            .conversations
+            .iter()
+            .filter(|c| c.unread_count > 0)
+            .map(|c| self.section_member_unread_badge(c))
+            .sum()
     }
 
     /// One member's exact contribution to the folder header (muted excluded).
     pub fn section_member_unread_badge(
-        self: &std::sync::Arc<Self>,
+        &self,
         conversation: &crate::domain::section::SectionConversation,
     ) -> u32 {
-        if conversation.unread_count == 0 { return 0; }
-        if self.resolve_row_conversation(&conversation.conversation_id, &conversation.conversation_type)
-            .is_none_or(|conv| !self.is_conversation_muted(conv).unwrap_or(false)) {
+        if conversation.unread_count == 0 {
+            return 0;
+        }
+        if self
+            .resolve_row_conversation(
+                &conversation.conversation_id,
+                &conversation.conversation_type,
+            )
+            .is_none_or(|conv| !self.read_conversation_mute(&conv).unwrap_or(false))
+        {
             conversation.unread_count
         } else { 0 }
     }
@@ -352,7 +604,7 @@ impl ChatterClient {
     /// empty while anon mode hides regular channels. Single source of the
     /// sidebar-inclusion rule.
     pub fn sidebar_channels(&self) -> Vec<crate::domain::channel::Channel> {
-        if self.anon_mode_enabled() {
+        if !self.visible_in_mode(&ConversationType::Channel) {
             return Vec::new();
         }
         use crate::domain::channel::ChannelType;
@@ -396,4 +648,171 @@ impl ChatterClient {
             .map(|c| c.id)
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{
+        channel::{Channel, ChannelType, MemberRole, Membership},
+        ids::{ChannelId, UserId},
+        message::Message,
+    };
+    use crate::state::ActiveConversation;
+    use crate::storage::repositories::{
+        channel_repo::ChannelRepository,
+        settings_repo::{keys, SettingsRepository},
+    };
+
+    #[tokio::test]
+    async fn sidebar_cards_order_pins_badges_and_shield_visibility() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let me = UserId::new();
+        client.auth_state().set_logged_in(me, 1, "Me".into());
+        SettingsRepository::new(client.services.database.clone())
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+
+        let ids = || {
+            client
+                .sidebar_cards()
+                .into_iter()
+                .map(|card| card.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(), [SAVED_CARD_ID, CHATS_CARD_ID]);
+        assert!(client
+            .list_sections_with_conversations()
+            .unwrap()
+            .is_empty());
+
+        let repo = ChannelRepository::new(client.services.database.clone());
+        let add_channel = |name: &str| {
+            let channel = Channel::new(ChannelId::new(), name.into(), ChannelType::Private, me);
+            repo.insert(&channel).unwrap();
+            repo.insert_membership(&Membership {
+                channel_id: channel.id,
+                user_id: me,
+                role: MemberRole::Owner,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: Default::default(),
+            })
+            .unwrap();
+            let message = Message::new_text(
+                channel.id,
+                ConversationType::Channel,
+                Some(UserId::new()),
+                "hello".into(),
+                1,
+            );
+            client.messages().store_message_local(&message).unwrap();
+            channel.id
+        };
+        let pinned = add_channel("Pinned channel").to_string();
+        let loose = add_channel("Loose channel").to_string();
+        let filed = add_channel("Filed channel");
+        let filed_id = filed.to_string();
+        assert!(client.set_conversation_pinned(&pinned, true));
+        assert!(client.set_conversation_pinned(&filed_id, true));
+
+        let first = client.create_section("First", "📁", None).unwrap();
+        let second = client
+            .create_section_with(&filed_id, "Second", "📌")
+            .unwrap();
+        let second_id = second.id.to_string();
+        client.reorder_sections(&[second.id, first.id]).unwrap();
+        assert_eq!(
+            ids(),
+            [
+                SAVED_CARD_ID,
+                CHATS_CARD_ID,
+                second_id.as_str(),
+                first.id.to_string().as_str()
+            ]
+        );
+        assert!(client
+            .move_conversation_to_card(&filed_id, &SectionId::new().to_string())
+            .is_err());
+
+        let cards = client.sidebar_cards();
+        assert_eq!(cards[1].pinned.len(), 1);
+        assert_eq!(cards[1].pinned[0].conversation_id, pinned);
+        assert_eq!(cards[1].rows.len(), 1);
+        assert_eq!(cards[1].rows[0].conversation_id, loose);
+        assert_eq!(cards[1].unread, 2);
+        // A pinned chat filed in a section sits in that section's strip.
+        assert_eq!(cards[2].pinned.len(), 1);
+        assert_eq!(cards[2].pinned[0].conversation_id, filed_id);
+        assert!(cards[2].rows.is_empty());
+        assert_eq!(cards[2].unread, 1);
+
+        client
+            .mute_conversation(ActiveConversation::Channel(filed), true)
+            .unwrap();
+        client.toggle_card_collapsed(&second_id).unwrap();
+        client.toggle_card_collapsed(CHATS_CARD_ID).unwrap();
+        let cards = client.sidebar_cards();
+        assert!(cards[1].collapsed && cards[2].collapsed);
+        assert_eq!(cards[2].unread, 0);
+        assert_eq!(cards[2].pinned[0].unread, 1);
+
+        #[cfg(feature = "onion")]
+        {
+            client
+                .services
+                .grpc_pool
+                .set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+            client.set_anon_mode_enabled(true);
+        }
+        #[cfg(not(feature = "onion"))]
+        client
+            .anon_mode
+            .store(true, std::sync::atomic::Ordering::Release);
+        assert!(client.anon_mode_enabled());
+        let cards = client.sidebar_cards();
+        assert_eq!(cards[0].id, CHATS_CARD_ID);
+        assert!(cards
+            .iter()
+            .all(|card| card.rows.is_empty() && card.pinned.is_empty()));
+
+        #[cfg(feature = "onion")]
+        client.set_anon_mode_enabled(false);
+        #[cfg(not(feature = "onion"))]
+        client
+            .anon_mode
+            .store(false, std::sync::atomic::Ordering::Release);
+        client
+            .move_conversation_to_card(&filed_id, CHATS_CARD_ID)
+            .unwrap();
+        let cards = client.sidebar_cards();
+        assert!(cards[2].rows.is_empty());
+        assert!(cards[1]
+            .pinned
+            .iter()
+            .any(|row| row.conversation_id == filed_id));
+        assert_eq!(cards[1].unread, 2);
+    }
+
+    #[test]
+    fn sidebar_cards_short_name_uses_the_bare_dm_display_name() {
+        let mut dm = ChatRowSendData::new(ConversationType::AnonDm, "dm", "Ada Lovelace");
+        dm.label = crate::ui::sidebar_data::ChatRowLabel::IncomingSecretRequest;
+        let dm = SidebarCardRow::from(dm);
+        assert_eq!(dm.short_name, "Ada");
+        assert_ne!(dm.short_name, dm.name);
+        let channel = SidebarCardRow::from(ChatRowSendData::new(
+            ConversationType::Channel,
+            "channel",
+            "Flight Operations",
+        ));
+        assert_eq!(channel.short_name, "Flight Operations");
+    }
 }

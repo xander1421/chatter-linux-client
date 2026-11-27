@@ -60,7 +60,7 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
         // One file, not many, on both platforms. Each is an independent transfer
         // on a link measured in single-digit kB/s, so a multi-select would
         // silently queue minutes of airtime behind one tap.
-        let picked: Vec<PathBuf> = pick_one().await;
+        let picked: Vec<PathBuf> = pick_one(&weak).await;
         let finish = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = finish.upgrade() {
@@ -109,7 +109,7 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
 /// dialog in `chatter-core`, and on Android that module is `cfg`'d out entirely
 /// in favour of the Storage Access Framework, which needs no permission.
 #[cfg(not(target_os = "android"))]
-async fn pick_one() -> Vec<PathBuf> {
+async fn pick_one(weak: &slint::Weak<MainWindow>) -> Vec<PathBuf> {
     use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
 
     let config = FilePickerConfig::new()
@@ -118,11 +118,11 @@ async fn pick_one() -> Vec<PathBuf> {
         .with_filter(FileFilter::images())
         .with_filter(FileFilter::documents())
         .with_multiple(false);
-    FilePicker::pick_files(config).await
+    crate::bin_ui::ui_helpers::picker_or_cancel(weak, FilePicker::pick_files(config).await)
 }
 
 #[cfg(target_os = "android")]
-async fn pick_one() -> Vec<PathBuf> {
+async fn pick_one(_weak: &slint::Weak<MainWindow>) -> Vec<PathBuf> {
     // `"*/*"`, as the staging path uses: the mesh will take any file, and the
     // size cap is core's to enforce, not the chooser's.
     crate::platform::android::file_picker::pick_files(&["*/*"])

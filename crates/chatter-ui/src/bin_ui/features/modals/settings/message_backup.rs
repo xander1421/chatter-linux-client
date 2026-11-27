@@ -110,7 +110,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
-                    let Some(path) = FilePicker::save_file(
+                    let Some(path) = crate::bin_ui::ui_helpers::picker_or_cancel(&weak, FilePicker::save_file(
                         FilePickerConfig::new()
                             .with_title(chatter_i18n::tr("Export message backup"))
                             .with_filter(FileFilter::new(
@@ -127,7 +127,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     )),
                             ),
                     )
-                    .await
+                    .await)
                     else {
                         cancel_message_backup(&weak);
                         return; // user cancelled
@@ -183,7 +183,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
-                    let Some(path) = FilePicker::pick_file(
+                    let Some(path) = crate::bin_ui::ui_helpers::picker_or_cancel(&weak, FilePicker::pick_file(
                         FilePickerConfig::new()
                             .with_title(chatter_i18n::tr("Restore message backup"))
                             .with_filter(FileFilter::new(
@@ -191,7 +191,7 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 vec!["chbk"],
                             )),
                     )
-                    .await
+                    .await)
                     else {
                         cancel_message_backup(&weak);
                         return; // user cancelled

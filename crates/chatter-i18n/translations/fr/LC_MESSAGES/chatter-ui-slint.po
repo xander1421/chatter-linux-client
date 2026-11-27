@@ -6117,3 +6117,33 @@ msgid ""
 msgstr ""
 "Indique aux autres quand leurs messages vous parviennent. Désactivé, vous ne "
 "verrez pas non plus les leurs"
+
+#: ui/pages/first_friend.slint:51
+msgid "Add your first friend"
+msgstr "Ajoutez votre premier ami"
+
+#: ui/pages/first_friend.slint:66
+msgid "Chatter has no phone-number lookup. Swap codes with someone you know."
+msgstr "Chatter ne permet pas de rechercher par numéro de téléphone. Échangez vos codes avec une personne que vous connaissez."
+
+#: ui/sidebar/card_drag.slint:109
+msgid "Drop here for a new section"
+msgstr "Déposez ici pour créer une section"
+
+#: ui/pages/first_friend.slint:85
+msgid "Friend code"
+msgstr "Code d'ami"
+
+#: ui/sidebar/chats_card.slint:17
+msgid "Friends you add appear here."
+msgstr "Les amis que vous ajoutez apparaissent ici."
+
+#: ui/pages/first_friend.slint:109
+msgid "Got theirs?"
+msgstr "Vous avez son code ?"
+
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] "{0} · {n} non lu"
+msgstr[1] "{0} · {n} non lus"

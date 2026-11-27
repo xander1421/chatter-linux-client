@@ -209,18 +209,12 @@ impl SectionService {
         conversation_type: ConversationType,
         section_id: &SectionId,
     ) -> Result<(), SectionError> {
-        // Remove from any existing section first
-        if let Some(old_section_id) = self
-            .section_repo
-            .get_conversation_section(conversation_id)?
-        {
-            self.section_repo
-                .remove_from_section(&old_section_id, conversation_id)?;
-        }
-
         self.section_repo
-            .add_to_section(section_id, conversation_id, &conversation_type)?;
-        Ok(())
+            .set_membership(conversation_id, Some((section_id, &conversation_type)))
+            .map_err(|error| match error {
+                StorageError::NotFound(_) => SectionError::NotFound,
+                other => SectionError::Storage(other),
+            })
     }
 
     /// Reorder custom sections by writing each id's new `sort_order` to
@@ -287,6 +281,15 @@ impl SectionService {
             })
     }
 
+    pub(crate) fn toggle_current_expansion(&self, id: &SectionId) -> Result<(), SectionError> {
+        self.section_repo
+            .toggle_current_expansion(id)
+            .map_err(|error| match error {
+                StorageError::NotFound(_) => SectionError::NotFound,
+                other => SectionError::Storage(other),
+            })
+    }
+
     /// Return the set of all conversation IDs that belong to any section.
     pub fn all_sectioned_conversation_ids(
         &self,
@@ -299,13 +302,7 @@ impl SectionService {
         &self,
         conversation_id: &str,
     ) -> Result<(), SectionError> {
-        if let Some(section_id) = self
-            .section_repo
-            .get_conversation_section(conversation_id)?
-        {
-            self.section_repo
-                .remove_from_section(&section_id, conversation_id)?;
-        }
+        self.section_repo.set_membership(conversation_id, None)?;
         Ok(())
     }
 }

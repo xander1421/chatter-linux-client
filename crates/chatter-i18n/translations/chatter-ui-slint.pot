@@ -5877,3 +5877,33 @@ msgid ""
 "Let others know when their messages reach you. When off, you won't see "
 "theirs either"
 msgstr ""
+
+#: ui/pages/first_friend.slint:51
+msgid "Add your first friend"
+msgstr ""
+
+#: ui/pages/first_friend.slint:66
+msgid "Chatter has no phone-number lookup. Swap codes with someone you know."
+msgstr ""
+
+#: ui/sidebar/card_drag.slint:109
+msgid "Drop here for a new section"
+msgstr ""
+
+#: ui/pages/first_friend.slint:85
+msgid "Friend code"
+msgstr ""
+
+#: ui/sidebar/chats_card.slint:17
+msgid "Friends you add appear here."
+msgstr ""
+
+#: ui/pages/first_friend.slint:109
+msgid "Got theirs?"
+msgstr ""
+
+#: ui/sidebar/sidebar_rail.slint:57
+msgid "{0} · {n} unread"
+msgid_plural "{0} · {n} unread"
+msgstr[0] ""
+msgstr[1] ""

@@ -4232,3 +4232,16 @@ msgstr ""
 "Deine Nachrichten werden weiterhin gesendet. Vergleiche die "
 "Sicherheitsnummern mit deinen Kontakten, bevor du einem neuen Schlüssel "
 "vertraust."
+
+msgid "Checking their security key. Try again in a moment."
+msgstr "Der Sicherheitsschlüssel des Kontakts wird geprüft. Versuche es gleich noch einmal."
+
+msgid "This contact’s security key could not be trusted."
+msgstr "Der Sicherheitsschlüssel dieses Kontakts ist nicht vertrauenswürdig."
+
+msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
+msgstr "Die Dateiauswahl ist nicht verfügbar. Prüfe, ob ein Dateiauswahlportal installiert und aktiv ist."
+
+#: crates/chatter-core/src/client/sidebar.rs:120
+msgid "Chats"
+msgstr "Chats"

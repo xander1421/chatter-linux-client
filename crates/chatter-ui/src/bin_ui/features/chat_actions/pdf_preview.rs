@@ -63,6 +63,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
             // Show Save As dialog then open with system handler
             let filename = super::media_viewer::export_basename(&content.filename);
             let data = content.data.clone();
+            let weak = weak.clone();
             tokio::spawn(async move {
                 let config = FilePickerConfig::new()
                     .with_title(chatter_i18n::tr("Save PDF file"))
@@ -72,7 +73,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
                             .join(&filename),
                     );
 
-                if let Some(destination) = FilePicker::save_file(config).await {
+                if let Some(destination) = crate::bin_ui::ui_helpers::picker_or_cancel(&weak, FilePicker::save_file(config).await) {
                     match super::media_viewer::save_export(&destination, &data) {
                         Ok(destination) => {
                             tracing::info!("Exported PDF");

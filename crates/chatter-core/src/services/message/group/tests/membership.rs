@@ -313,7 +313,7 @@
         // A cache miss waits for maintenance and never starts identified work.
         assert!(matches!(
             alice.submit_group_request(&request, &distribution).await,
-            Err(MessageError::Network(crate::error::NetworkError::Unavailable))
+            Err(MessageError::PrivateChannelEndorsementsPending)
         ));
         assert!(probe.calls.lock().unwrap().is_empty());
 

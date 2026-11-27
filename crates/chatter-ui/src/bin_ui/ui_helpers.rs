@@ -95,3 +95,23 @@ macro_rules! spawn_async_action {
         });
     }};
 }
+
+/// Display a native picker error while letting the caller finish its pending UI state.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) fn picker_or_cancel<T: Default>(
+    weak: &slint::Weak<crate::MainWindow>,
+    result: Result<T, chatter_core::media::file_picker::FilePickerError>,
+) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let message = error.user_message();
+            crate::run_ui!(weak, |w| {
+                w.set_toast_message(message.into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            });
+            T::default()
+        }
+    }
+}

@@ -648,7 +648,7 @@ fn display_decrypted_content(
         // this runs both on a plain thread and inside a runtime task, and
         // `block_on` in the latter panics.
         #[cfg(not(target_os = "android"))]
-        handle.spawn(save_file_from_buffer(secure_buffer, filename.to_string()));
+        handle.spawn(save_file_from_buffer(weak, secure_buffer, filename.to_string()));
         #[cfg(target_os = "android")]
         {
             // Android generic files are exported from authenticated ranges
@@ -1175,6 +1175,7 @@ fn display_pdf_from_buffer(
 /// Save file to user-selected location.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn save_file_from_buffer(
+    weak: slint::Weak<MainWindow>,
     secure_buffer: chatter_core::prelude::SecureBuffer,
     filename_for_save: String,
 ) {
@@ -1188,7 +1189,7 @@ async fn save_file_from_buffer(
                 .join(super::media_viewer::export_basename(&filename_for_save)),
         );
 
-    let destination = FilePicker::save_file(config).await;
+    let destination = crate::bin_ui::ui_helpers::picker_or_cancel(&weak, FilePicker::save_file(config).await);
 
     if let Some(destination) = destination {
         match super::media_viewer::save_export(&destination, &data) {
@@ -1210,6 +1211,7 @@ async fn save_file_from_buffer(
 
 #[cfg(target_os = "ios")]
 async fn save_file_from_buffer(
+    _weak: slint::Weak<MainWindow>,
     _secure_buffer: chatter_core::prelude::SecureBuffer,
     _filename: String,
 ) {

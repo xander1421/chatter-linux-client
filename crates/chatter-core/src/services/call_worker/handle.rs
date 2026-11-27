@@ -91,6 +91,8 @@ impl CallWorkerHandle {
         // Spawn dedicated thread for call operations
         std::thread::Builder::new()
             .name("call-worker".into())
+            // Debug builds of LiveKit room connect can overflow the default thread stack.
+            .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 run_call_worker(
                     cmd_rx,

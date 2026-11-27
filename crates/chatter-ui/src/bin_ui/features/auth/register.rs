@@ -95,7 +95,14 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }],
                             ..Default::default()
                         };
-                        FilePicker::pick_file(config).await
+                        match FilePicker::pick_file(config).await {
+                            Ok(picked) => picked,
+                            Err(error) => {
+                                let message = error.user_message();
+                                crate::run_ui!(weak, |w| w.global::<crate::AuthFlow>().set_register_error(message.into()));
+                                None
+                            }
+                        }
                     };
                     // Android has no `rfd` backend; go through the SAF bridge (§112p).
                     #[cfg(target_os = "android")]

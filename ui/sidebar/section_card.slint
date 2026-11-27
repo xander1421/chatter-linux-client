@@ -1,13 +1,15 @@
-// Folder data and header for the virtualized sidebar list.
-
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { HoldArea } from "../components/hold_area.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
 import { TooltipArea } from "../components/tooltip.slint";
-import { ChatRowData } from "chat_list.slint";
+import { ChatRow, ChatRowData } from "chat_list.slint";
+import { PinnedStrip } from "pinned_strip.slint";
+import { SidebarCard, SidebarCards } from "card_types.slint";
 
 // ── Data structs ────────────────────────────────────────────────
 
@@ -33,7 +35,24 @@ export struct SidebarRowData {
 
 // ── Section header ──────────────────────────────────────────────
 
-export component CustomSectionHeader inherits Rectangle {
+component SectionUnreadBadge inherits Rectangle {
+    in property <int> count;
+
+    width: max(self.height, label.preferred-width + Spacing.sm);
+    height: Spacing.badge-md;
+    border-radius: self.height / 2;
+    background: Colors.action-fill;
+    label := Text {
+        text: root.count > 99 ? "99+" : root.count;
+        color: Colors.on-action;
+        font-size: Typography.xxs;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component SectionHeader inherits Rectangle {
     in property <string> section-id;
     in property <string> name;
     in property <string> icon-emoji;
@@ -42,11 +61,12 @@ export component CustomSectionHeader inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
     in property <bool> keyboard-highlight: false;
+    in property <bool> card-mode: false;
 
     callback toggle-expanded();
     callback context-menu-requested(/* x */ length, /* y */ length);
 
-    height: root.collapsed ? 48px : root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
+    height: root.collapsed ? 48px : root.mobile-mode ? Spacing.touch-target-min : root.card-mode ? Spacing.xxl : Spacing.button-height;
     accessible-role: list-item;
     accessible-label: root.name;
     accessible-description: root.is-expanded ? @tr("Expanded section. Press Shift+F10 or Menu for section options.") : @tr("Collapsed section. Press Shift+F10 or Menu for section options.");
@@ -97,7 +117,48 @@ export component CustomSectionHeader inherits Rectangle {
         held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
     }
 
-    if !root.collapsed: HorizontalLayout {
+    if root.card-mode: HorizontalLayout {
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.xs;
+
+        if root.icon-emoji != "": Text {
+            text: root.icon-emoji;
+            font-family: Typography.font-family-emoji;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.name.to-uppercase();
+            color: Colors.text-muted;
+            font-size: 11px * Appearance.text-scale;
+            font-weight: 600;
+            letter-spacing: self.font-size * 0.06;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        if !root.is-expanded && root.unread-count > 0: VerticalLayout {
+            alignment: center;
+            SectionUnreadBadge { count: root.unread-count; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: Icons.chevron-right;
+                width: 10px;
+                height: self.width;
+                colorize: Colors.text-muted;
+                transform-rotation: root.is-expanded ? 90deg : 0deg;
+                animate transform-rotation {
+                    duration: Appearance.reduce-motion ? 0ms : Materials.motion-standard;
+                    easing: Materials.spring;
+                }
+            }
+        }
+    }
+
+    if !root.collapsed && !root.card-mode: HorizontalLayout {
         padding-left: Spacing.sm;
         padding-right: Spacing.xs;
 
@@ -145,22 +206,7 @@ export component CustomSectionHeader inherits Rectangle {
                 // Aggregate unread badge
                 if root.unread-count > 0: VerticalLayout {
                     alignment: center;
-                    Rectangle {
-                        width: max(self.height, header-badge-text.preferred-width + 8px);
-                        height: Spacing.badge-md;
-                        border-radius: self.height / 2;
-                        background: Colors.action-fill;
-                        header-badge-text := Text {
-                            text: root.unread-count > 99 ? "99+" : root.unread-count;
-                            color: Colors.on-action;
-                            font-size: Typography.xxs;
-                            font-weight: 600;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            width: 100%;
-                            height: 100%;
-                        }
-                    }
+                    SectionUnreadBadge { count: root.unread-count; }
                 }
             }
         }
@@ -206,6 +252,71 @@ export component CustomSectionHeader inherits Rectangle {
             height: 10px;
             border-radius: 5px;
             background: Colors.primary;
+        }
+    }
+}
+
+import { SidebarDragSource } from "card_drag.slint";
+
+export component SectionCard inherits GlassSurface {
+    in property <SidebarCard> card;
+    in property <bool> touch: false;
+    in property <bool> header-highlight: false;
+    in property <int> highlighted-row: -1;
+
+    callback header-context-menu-requested(length, length);
+    callback row-context-menu-requested(ChatRowData, length, length, length);
+    callback pin-requested(string, bool);
+
+    accessible-role: groupbox;
+    accessible-label: root.card.title;
+    border-radius: Spacing.radius-panel;
+    elevation: 0;
+    material-tint: Appearance.glass-effects ? Colors.surface.with-alpha(0.72) : Colors.surface;
+
+    preferred-height: card-content.preferred-height;
+
+    card-content := VerticalLayout {
+        padding: Spacing.xs;
+        spacing: Spacing.xxs;
+
+        SectionHeader {
+            name: root.card.title;
+            icon-emoji: root.card.emoji;
+            is-expanded: !root.card.collapsed;
+            unread-count: root.card.unread;
+            card-mode: true;
+            mobile-mode: root.touch;
+            keyboard-highlight: root.header-highlight;
+            toggle-expanded => { SidebarCards.toggle-collapsed(root.card.id); }
+            context-menu-requested(x, y) => { root.header-context-menu-requested(x, y); }
+        }
+
+        if !root.card.collapsed && root.card.pinned.length > 0: PinnedStrip {
+            rows: root.card.pinned;
+            touch: root.touch;
+            highlighted-row: root.highlighted-row < root.card.pinned.length ? root.highlighted-row : -1;
+            row-context-menu-requested(row, x, y, row-y) => {
+                root.row-context-menu-requested(row, x, y, row-y);
+            }
+        }
+
+        for row[index] in root.card.collapsed ? [] : root.card.rows: SidebarDragSource {
+            row-id: row.conversation-id;
+            source-card-id: root.card.id;
+            height: row-view.height;
+
+            row-view := ChatRow {
+                data: row.chat-row;
+                card-mode: true;
+                mobile-mode: root.touch;
+                keyboard-highlight: root.highlighted-row == root.card.pinned.length + index;
+                clicked => { SidebarCards.open-row(row.conversation-id); }
+                pin-requested(pinned) => { root.pin-requested(row.conversation-id, pinned); }
+                context-menu-requested(x, y) => {
+                    root.row-context-menu-requested(row.chat-row, x, y, self.absolute-position.y);
+                }
+            }
         }
     }
 }

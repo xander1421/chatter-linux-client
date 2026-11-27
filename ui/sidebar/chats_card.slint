@@ -1,0 +1,121 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { ChatRow, ChatRowData } from "chat_list.slint";
+import { SidebarCard, SidebarCards } from "card_types.slint";
+import { PinnedStrip } from "pinned_strip.slint";
+
+import { SidebarDragSource } from "card_drag.slint";
+
+export component ChatsCard inherits GlassSurface {
+    in property <SidebarCard> card;
+    in property <bool> touch: false;
+    in property <bool> header-highlight: false;
+    // Pinned conversations come first in the sidebar's focus order.
+    in property <int> highlighted-row: -1;
+    in property <string> empty-text: @tr("Friends you add appear here.");
+
+    callback row-context-menu-requested(ChatRowData, length, length, length);
+    callback pin-requested(string, bool);
+
+    accessible-role: groupbox;
+    accessible-label: root.display-title;
+    property <string> display-title: @tr("Chats");
+
+    border-radius: Spacing.radius-panel;
+    elevation: 0;
+    material-tint: Appearance.glass-effects ? Colors.surface.with-alpha(0.72) : Colors.surface;
+
+    VerticalLayout {
+        padding: Spacing.xs;
+        spacing: Spacing.xxs;
+
+        Rectangle {
+            height: root.touch ? Spacing.touch-target-min : Spacing.xxl;
+            border-radius: Spacing.radius-control;
+            border-width: root.header-highlight ? Spacing.stroke : 0px;
+            border-color: Colors.focus-ring;
+            accessible-role: button;
+            accessible-label: root.display-title;
+            accessible-expanded: !root.card.collapsed;
+            accessible-action-default => { SidebarCards.toggle-collapsed(root.card.id); }
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.xs;
+
+                Text {
+                    text: root.display-title.to-uppercase();
+                    color: Colors.text-muted;
+                    font-size: 11px * Appearance.text-scale;
+                    font-weight: Typography.semibold;
+                    letter-spacing: self.font-size * 0.06;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    accessible-role: none;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: Icons.chevron-right;
+                        width: 10px;
+                        height: self.width;
+                        colorize: Colors.text-muted;
+                        transform-rotation: root.card.collapsed ? 0deg : 90deg;
+                    }
+                }
+            }
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { SidebarCards.toggle-collapsed(root.card.id); }
+            }
+        }
+
+        if !root.card.collapsed && root.card.pinned.length > 0: PinnedStrip {
+            rows: root.card.pinned;
+            touch: root.touch;
+            highlighted-row: root.highlighted-row < root.card.pinned.length ? root.highlighted-row : -1;
+            row-context-menu-requested(row, x, y, row-y) => {
+                root.row-context-menu-requested(row, x, y, row-y);
+            }
+        }
+
+        for row[index] in root.card.collapsed ? [] : root.card.rows: SidebarDragSource {
+            row-id: row.conversation-id;
+            source-card-id: root.card.id;
+            height: row-view.height;
+
+            row-view := ChatRow {
+                data: row.chat-row;
+                card-mode: true;
+                mobile-mode: root.touch;
+                keyboard-highlight: root.highlighted-row == root.card.pinned.length + index;
+                clicked => { SidebarCards.open-row(row.conversation-id); }
+                pin-requested(pinned) => { root.pin-requested(row.conversation-id, pinned); }
+                context-menu-requested(x, y) => {
+                    root.row-context-menu-requested(row.chat-row, x, y, self.absolute-position.y);
+                }
+            }
+        }
+
+        if root.empty-text != "" && !root.card.collapsed && root.card.pinned.length == 0
+            && root.card.rows.length == 0: HorizontalLayout {
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+            padding-bottom: Spacing.sm;
+            Text {
+                text: root.empty-text;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+}

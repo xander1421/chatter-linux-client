@@ -1,0 +1,129 @@
+import { Avatar } from "../components/avatar.slint";
+import { HoldArea } from "../components/hold_area.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { ConversationKind } from "../chat/conversation_kind.slint";
+import { ChatRowData } from "chat_list.slint";
+import { SidebarCardRow, SidebarCards } from "card_types.slint";
+
+import { SidebarDragSource } from "card_drag.slint";
+
+export component PinnedStrip inherits Flickable {
+    in property <[SidebarCardRow]> rows;
+    in property <bool> touch: false;
+    in property <int> highlighted-row: -1;
+
+    callback row-context-menu-requested(ChatRowData, length, length, length);
+
+    property <length> avatar-size: 34px;
+    property <length> slot-width: max(Spacing.xxxl, Typography.xs * 4);
+    property <length> slot-step: root.slot-width + Spacing.xs;
+    height: root.avatar-size + Spacing.md + Typography.xs * 1.4;
+    viewport-height: self.height;
+    viewport-width: max(self.width, root.rows.length * root.slot-step - Spacing.xs);
+    interactive: self.viewport-width > self.width;
+
+    // Keep the parent sidebar's roving focus visible when it moves past the
+    // edge of the horizontally scrolling strip.
+    changed highlighted-row => {
+        if root.highlighted-row >= 0 && root.highlighted-row < root.rows.length {
+            let left = root.highlighted-row * root.slot-step;
+            let right = left + root.slot-width;
+            let min-x = -left;
+            let max-x = max(min-x, min(0px, root.width - right));
+            root.viewport-x = clamp(root.viewport-x, min-x, max-x);
+        }
+    }
+
+    HorizontalLayout {
+        width: root.viewport-width;
+        alignment: start;
+        spacing: Spacing.xs;
+
+        for row[index] in root.rows: tile := Rectangle {
+            width: root.slot-width;
+            height: root.height;
+            border-radius: Spacing.radius-control;
+            background: row.chat-row.is-selected ? Colors.primary.with-alpha(0.16)
+                : drag-source.hovered ? Colors.row-hover : transparent;
+            border-width: root.highlighted-row == index ? Spacing.stroke : 0px;
+            border-color: Colors.focus-ring;
+            accessible-role: list-item;
+            accessible-label: row.chat-row.accessible-label-text;
+            accessible-action-default => { SidebarCards.open-row(row.conversation-id); }
+            accessible-action-expand => {
+                root.row-context-menu-requested(row.chat-row, self.absolute-position.x + self.width / 2,
+                    self.absolute-position.y + self.height, self.absolute-position.y);
+            }
+
+            Avatar {
+                x: (parent.width - self.width) / 2;
+                y: Spacing.xs;
+                size: root.avatar-size;
+                source: row.avatar-source;
+                name: row.name;
+                fallback-text: row.initials;
+                anonymous: row.chat-row.conversation-type == ConversationKind.anon-dm;
+                show-presence: row.online;
+                presence-color: Colors.online;
+                accessible-role: none;
+            }
+
+            if row.unread > 0: Rectangle {
+                x: (parent.width + root.avatar-size) / 2 - self.width + Spacing.xs;
+                y: Spacing.xxs;
+                width: max(self.height, count.preferred-width + 2 * Spacing.xxs);
+                height: Spacing.badge-sm;
+                border-radius: self.height / 2;
+                background: row.muted ? Colors.fill-secondary : Colors.action-fill;
+                count := Text {
+                    text: row.unread > 99 ? "99+" : row.unread;
+                    color: row.muted ? Colors.text-primary : Colors.on-action;
+                    font-size: 10px * Appearance.text-scale;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+
+            Text {
+                y: root.avatar-size + Spacing.sm;
+                width: parent.width;
+                text: row.short-name;
+                font-size: Typography.xs;
+                font-weight: Typography.semibold;
+                color: Colors.text-secondary;
+                horizontal-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+
+            drag-source := SidebarDragSource {
+                width: 100%;
+                height: 100%;
+                row-id: row.conversation-id;
+                source-card-id: "chats";
+                hovered: input.has-hover;
+
+                input := HoldArea {
+                    width: 100%;
+                    height: 100%;
+                    mouse-cursor: pointer;
+                    enabled-for-touch: root.touch;
+                    clicked => {
+                        if !self.hold-fired && !self.dragged {
+                            SidebarCards.open-row(row.conversation-id);
+                        }
+                    }
+                    held => {
+                        root.row-context-menu-requested(row.chat-row, self.anchor-x, self.anchor-y,
+                            tile.absolute-position.y);
+                    }
+                }
+            }
+        }
+    }
+}

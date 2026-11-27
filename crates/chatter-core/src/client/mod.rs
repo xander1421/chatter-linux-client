@@ -764,7 +764,7 @@ mod core_access;
 mod event_streams;
 mod mesh;
 mod share_targets;
-mod sidebar;
+pub mod sidebar;
 mod trust;
 pub use auth_state::{ResultScope, SessionGuard};
 pub mod conversation;
