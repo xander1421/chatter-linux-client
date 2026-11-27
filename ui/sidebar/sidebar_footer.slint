@@ -353,7 +353,7 @@ export component SidebarFooter inherits GlassSurface {
                         accessible-action-default => { root.toggle-collapsed(); }
                         KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
                         border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
+                        rail-expand-keys := FocusScope { width: 0px; height: 0px; enabled: root.touch;
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
                         }
                         height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
