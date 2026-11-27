@@ -57,7 +57,8 @@ export component KeyboardShortcutsDialog inherits Rectangle {
     }
 
     GlassSurface {
-        material-level: 3;
+        material-enabled: false;
+        background: Colors.background;
         elevation: 5;
 
         width: min(420px, parent.width - 32px);
@@ -67,7 +68,9 @@ export component KeyboardShortcutsDialog inherits Rectangle {
         // scroll when that does not fit.
         height: min(Spacing.lg * 2 + Spacing.header-action-box + 1px + Spacing.md * 2
             + sections.preferred-height, parent.height - 48px);
-        border-radius: Spacing.radius-sheet;
+        border-radius: Spacing.radius-panel;
+        border-width: Spacing.stroke;
+        border-color: Colors.border;
         accessible-role: groupbox;
         accessible-description: @tr("Keyboard shortcuts");
 

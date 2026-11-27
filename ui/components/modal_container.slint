@@ -146,7 +146,7 @@ export component ModalContainer inherits Rectangle {
 
         // Modal card - centered and sized to content
         GlassSurface {
-            material-enabled: !root.full-screen;
+            material-enabled: root.phone-sheet;
             material-level: 3;
             elevation: 5;
             shown: root.show;
@@ -156,8 +156,8 @@ export component ModalContainer inherits Rectangle {
             accessible-role: groupbox;
             accessible-label: root.accessible-title;
             
-            // Responsive width: cap at viewport width minus padding
-            width: root.full-screen || root.phone-sheet ? root.width : min(root.modal-width, root.width - 32px);
+            // Floating dialogs leave a gutter on either side.
+            width: root.full-screen || root.phone-sheet ? root.width : min(root.modal-width, root.width - 2 * Spacing.panel-gutter);
 
             // Height: by default sized to content (preferred-height of the children),
             // capped at max-modal-height or viewport. When fill-height is set, expand
@@ -179,9 +179,11 @@ export component ModalContainer inherits Rectangle {
             transform-scale-y: root.phone-sheet || root.phone-page ? 100% : (94 + 6 * root.page-progress) * 1%;
             transform-origin: { x: self.width / 2, y: self.height / 2 };
 
-            // Full-screen content stays plain; its header owns the glass.
-            background: root.full-screen ? Materials.ambient : transparent;
-            border-radius: root.full-screen ? 0px : Spacing.radius-sheet;
+            // Phone sheets retain their glass and rounded drag surface.
+            background: root.phone-page ? Materials.ambient : root.phone-sheet ? transparent : Colors.background;
+            border-radius: root.full-screen ? 0px : root.phone-sheet ? Spacing.radius-sheet : Spacing.radius-panel;
+            border-width: root.full-screen || root.phone-sheet ? 0px : Spacing.stroke;
+            border-color: Colors.border;
 
             // The handle owns the drag gesture, leaving fields and scrolling content stable.
             if root.phone-sheet: Rectangle {

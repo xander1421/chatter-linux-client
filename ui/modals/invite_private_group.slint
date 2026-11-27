@@ -47,8 +47,8 @@ export component InvitePrivateGroupModal inherits Rectangle {
             Rectangle {
                 min-height: 200px;
                 vertical-stretch: 1;
-                background: Colors.surface;
-                border-radius: Spacing.radius-md;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
 
                 if root.available-friends.length == 0: Rectangle {
                     Text {
@@ -65,12 +65,12 @@ export component InvitePrivateGroupModal inherits Rectangle {
                     viewport-width: parent.width;
 
                     friend-list := VerticalLayout {
-                        padding: Spacing.xs;
+                        padding: Spacing.sm;
 
                         for friend[index] in root.available-friends: Rectangle {
                             height: max(52px, Spacing.touch-target-min);
-                            background: friend.selected ? Colors.inset : friend-touch.pressed ? Materials.pressed : friend-touch.has-hover ? Colors.surface-hover : transparent;
-                            border-radius: Spacing.radius-md;
+                            background: friend.selected ? Colors.tint-strong : friend-touch.pressed ? Materials.pressed : friend-touch.has-hover ? Colors.surface-hover : transparent;
+                            border-radius: Spacing.radius-control;
                             transform-scale-x: friend-touch.pressed ? 0.97 : 1;
                             transform-scale-y: friend-touch.pressed ? 0.94 : 1;
                             animate background { duration: Materials.motion-quick; easing: Materials.settle; }
@@ -208,6 +208,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
 
                 // Cancel button
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
 
@@ -218,6 +219,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
 
                 // Invite button
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: root.loading ? "" :
                         (root.selected-count == 0 ? @tr("Invite") :
                          @tr("Invite {n} member" | "Invite {n} members" % root.selected-count));

@@ -30,8 +30,8 @@ export component ProfileStatusPicker inherits VerticalLayout {
 
     Rectangle {
         height: card.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -40,6 +40,7 @@ export component ProfileStatusPicker inherits VerticalLayout {
         clip: true;
 
         card := VerticalLayout {
+            padding: Spacing.sm;
             // Summary row: what everyone sees now.
             Rectangle {
                 height: max(Spacing.touch-target-min, summary.preferred-height);
@@ -49,7 +50,7 @@ export component ProfileStatusPicker inherits VerticalLayout {
                 accessible-expandable: true;
                 accessible-expanded: root.expanded;
                 accessible-action-default => { root.expanded = !root.expanded; }
-                KeyFocus { border-radius: Spacing.radius-lg; activate => { root.expanded = !root.expanded; } }
+                KeyFocus { border-radius: Spacing.radius-control; activate => { root.expanded = !root.expanded; } }
                 summary-touch := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.expanded = !root.expanded; }
@@ -92,7 +93,8 @@ export component ProfileStatusPicker inherits VerticalLayout {
                 Rectangle { height: Spacing.stroke; background: Colors.divider; }
                 for opt[i] in root.options: Rectangle {
                     height: max(Spacing.touch-target-min, row.preferred-height);
-                    background: row-touch.pressed ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-control;
+                    background: i == root.current ? Colors.tint-strong : row-touch.pressed ? Colors.surface-hover : transparent;
                     // A choice of one: a radio that says which status it sets.
                     accessible-role: radio-button;
                     accessible-label: opt.label;

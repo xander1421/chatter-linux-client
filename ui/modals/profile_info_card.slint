@@ -28,8 +28,8 @@ export component ProfileInfoCard inherits HorizontalLayout {
 
     Rectangle {
         height: info-card.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -159,7 +159,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     Rectangle {
                         width: 150px;
                         height: 150px;
-                        background: white;
+                        background: Colors.qr-background;
                         border-radius: Spacing.radius-md;
 
                         Image {
@@ -183,6 +183,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     spacing: Spacing.sm;
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         text: root.share-link == "" ? @tr("Create link") : @tr("Copy link");
                         variant: "secondary";
                         horizontal-stretch: 1;
@@ -196,6 +197,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     }
 
                     if root.share-link != "": Button {
+                        border-radius: Spacing.radius-control;
                         text: @tr("Reset link");
                         variant: "secondary";
                         horizontal-stretch: 1;

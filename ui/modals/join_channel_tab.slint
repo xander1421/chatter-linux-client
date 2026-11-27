@@ -42,6 +42,7 @@ export component JoinChannelTab inherits VerticalLayout {
         }
 
         search-input := Input {
+            inset-control: true;
             placeholder: @tr("Name, channel ID or chatter://join/ link");
             text <=> root.join-search-query;
 
@@ -217,12 +218,14 @@ export component JoinChannelTab inherits VerticalLayout {
         Rectangle { horizontal-stretch: 1; }
 
         Button {
+            border-radius: Spacing.radius-control;
             text: @tr("Cancel");
             variant: "secondary";
             clicked => { root.close(); }
         }
 
         Button {
+            border-radius: Spacing.radius-control;
             text: root.join-joining ? "" : root.selected-joined ? @tr("Open") : @tr("Join");
             variant: "primary";
             disabled: root.join-selected-id == "" || root.join-joining;

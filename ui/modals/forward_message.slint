@@ -68,8 +68,8 @@ export component ForwardMessageModal inherits Rectangle {
             // Message preview section
             Rectangle {
                 height: 80px;
-                background: Colors.surface-hover;
-                border-radius: Spacing.radius-md;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
 
                 if root.contact-share: HorizontalLayout {
                     padding: Spacing.md;
@@ -110,6 +110,7 @@ export component ForwardMessageModal inherits Rectangle {
             // Search input. The narrowing happens in core — this only reports
             // what was typed; the modal never filters `targets` itself.
             Input {
+                inset-control: true;
                 placeholder: @tr("Search channels or people...");
                 text <=> root.search-text;
                 edited(query) => {
@@ -121,15 +122,15 @@ export component ForwardMessageModal inherits Rectangle {
             Rectangle {
                 min-height: 160px;
                 vertical-stretch: 1;
-                background: Colors.surface;
-                border-radius: Spacing.radius-md;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
 
                 Flickable {
                     viewport-height: target-list.preferred-height;
                     viewport-width: parent.width;
 
                     target-list := VerticalLayout {
-                        padding: Spacing.xs;
+                        padding: Spacing.sm;
 
                         for target[index] in root.targets: Rectangle {
                             // Note: Search filtering is done in Rust before passing to UI
@@ -137,7 +138,7 @@ export component ForwardMessageModal inherits Rectangle {
 
                             height: 48px * Appearance.text-grow;
                             background: is-selected ? Colors.tint-strong : target-touch.pressed ? Materials.pressed : target-touch.has-hover ? Materials.hover : transparent;
-                            border-radius: Spacing.radius-md;
+                            border-radius: Spacing.radius-control;
                             transform-scale-x: target-touch.pressed ? 97% : 100%;
                             transform-scale-y: target-touch.pressed ? 94% : 100%;
                             animate transform-scale-x { duration: target-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
@@ -164,12 +165,12 @@ export component ForwardMessageModal inherits Rectangle {
                                     width: 32px;
                                     height: 32px;
                                     border-radius: 16px;
-                                    background: Colors.primary.with-alpha(0.2);
+                                    background: Colors.surface-control;
                                     Image {
                                         source: Icons.bookmark;
                                         width: 16px;
                                         height: 16px;
-                                        colorize: Colors.primary;
+                                        colorize: Colors.text-secondary;
                                     }
                                 }
                                 // An iconless channel wears the chat list's type
@@ -215,13 +216,13 @@ export component ForwardMessageModal inherits Rectangle {
                                     Rectangle {
                                         width: type-text.width + Spacing.sm * 2;
                                         height: 20px;
-                                        background: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
+                                        background: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.surface-control : Colors.success.with-alpha(0.2);
                                         border-radius: Spacing.radius-sm;
 
                                         type-text := Text {
                                             x: Spacing.sm;
                                             text: target.target-type == "channel" ? @tr("Channel") : target.target-type == "group" || target.target-type == "anon_group" ? @tr("Group") : target.is-anonymous ? @tr("chat type" => "Secret") : @tr("DM");
-                                            color: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary : Colors.success;
+                                            color: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.text-secondary : Colors.success;
                                             font-size: Typography.xs;
                                             font-weight: Typography.medium;
                                             vertical-alignment: center;
@@ -272,6 +273,7 @@ export component ForwardMessageModal inherits Rectangle {
 
                 // Cancel button
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: @tr("Cancel");
                     variant: "secondary";
 
@@ -282,6 +284,7 @@ export component ForwardMessageModal inherits Rectangle {
 
                 // Confirm button
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: root.loading ? "" : root.contact-share ? @tr("Share") : @tr("Forward");
                     variant: "primary";
                     disabled: root.selected-target-id == "" || root.loading;

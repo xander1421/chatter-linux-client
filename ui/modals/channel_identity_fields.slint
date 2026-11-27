@@ -30,8 +30,8 @@ export component ChannelIdentityFields inherits HorizontalLayout {
         Rectangle {
             width: 64px;
             height: 64px;
-            border-radius: Spacing.radius-md;
-            background: Colors.inset;
+            border-radius: Spacing.radius-control;
+            background: Colors.surface-control;
             clip: true;
             accessible-role: button;
             accessible-label: root.has-icon-preview ? @tr("Change channel icon") : @tr("Upload channel icon");
@@ -80,6 +80,7 @@ export component ChannelIdentityFields inherits HorizontalLayout {
         // to Description; Done there (or on a group's name, which
         // has none) puts the keyboard away.
         name-input := Input {
+            inset-control: true;
             placeholder: root.is-private-group ? @tr("Group name") : @tr("Channel name");
             text <=> root.channel-name;
             // Touch sheets open without summoning the IME mid-transition.
@@ -98,6 +99,7 @@ export component ChannelIdentityFields inherits HorizontalLayout {
         // Inside an `if`, so the name field cannot call its
         // focus() directly; it bumps this counter instead.
         Input {
+            inset-control: true;
             visible: !root.is-private-group;
             height: root.is-private-group ? 0px : Spacing.button-height;
             property <int> focus-requests: root.description-focus-requests;
