@@ -633,6 +633,17 @@ mod kt_pin_tests {
         service.key_store.record_peer_kt_head(&owner.to_string(), KtRoute::Normal, &head(9), 0).unwrap();
         settle_peer_head(&service, &events, owner, due(&service), &Ok(Verdict::Split));
         assert!(matches!(rx.try_recv(), Ok(DomainEvent::OwnIdentityChanged { user_id }) if user_id == owner));
+        // We cannot vouch for ourselves, so three consistent checks on that
+        // route clear our own split instead of an accept.
+        for (index, size) in (10..13).enumerate() {
+            service.key_store.record_peer_kt_head(&owner.to_string(), KtRoute::Normal, &head(size), 0).unwrap();
+            settle_peer_head(&service, &events, owner, due(&service), &Ok(Verdict::Consistent));
+            assert_eq!(
+                matches!(rx.try_recv(), Ok(DomainEvent::OwnIdentityChanged { user_id }) if user_id == owner),
+                index == 2
+            );
+        }
+        assert!(service.key_store.peer_kt_block(&owner.to_string()).unwrap().is_none());
     }
 
     #[test]

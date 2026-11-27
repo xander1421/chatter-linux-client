@@ -31,9 +31,20 @@ pub(crate) fn active_peer(client: &ChatterClient) -> Option<UserId> {
 }
 
 /// Restore the durable account warning when a session opens or detects a change.
+/// Every word comes from `ChatterClient::own_identity_warning`.
 pub fn refresh_own(w: &MainWindow, client: &ChatterClient) {
-    match client.own_identity_change_detected() {
-        Ok(detected) => w.set_own_identity_mismatch(detected),
+    match client.own_identity_warning() {
+        Ok(warning) => {
+            w.set_own_identity_mismatch(warning.is_some());
+            let warning = warning.unwrap_or_else(|| chatter_core::client::OwnIdentityWarning {
+                title: String::new(),
+                detail: String::new(),
+                action: None,
+            });
+            w.set_own_identity_title(warning.title.into());
+            w.set_own_identity_detail(warning.detail.into());
+            w.set_own_identity_action(warning.action.unwrap_or_default().into());
+        }
         Err(error) => tracing::warn!(%error, "Could not load own identity-change warning"),
     }
 }
@@ -109,6 +120,14 @@ pub fn wire_accept(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             };
 
+            // Read before accepting: the toast confirms the decision the user
+            // was shown, which accepting removes.
+            let accepted = ui_ctx
+                .identity_change_prompt(&peer_id)
+                .ok()
+                .flatten()
+                .map(|prompt| prompt.accepted)
+                .unwrap_or_default();
             match ui_ctx.accept_peer_identity_change(&peer_id) {
                 Ok(sessions_dropped) => {
                     tracing::warn!(
@@ -120,10 +139,7 @@ pub fn wire_accept(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Say so explicitly. The visible consequence of accepting is a
                     // bar disappearing, which on its own does not distinguish
                     // "accepted" from "the button did nothing".
-                    w.set_toast_message(
-                        chatter_i18n::tr("New safety number accepted — you can message again")
-                            .into(),
-                    );
+                    w.set_toast_message(accepted.into());
                     w.set_toast_variant("success".into());
                     w.set_toast_visible(true);
                 }

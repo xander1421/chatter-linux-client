@@ -244,6 +244,10 @@ export component MainWindow inherits Window {
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
     in-out property <bool> own-identity-mismatch: false;
+    // The account warning's wording comes from chatter-core.
+    in-out property <string> own-identity-title: "";
+    in-out property <string> own-identity-detail: "";
+    in-out property <string> own-identity-action: "";
     // ========== Connection status ==========
     // "connected", "connecting", "reconnecting", "disconnected", "failed".
     // Pushed from `bin_ui::features::connection`, which reads chatter-core's
@@ -866,6 +870,9 @@ export component MainWindow inherits Window {
                 is-mobile-platform : root.is-mobile-platform;
                 is-small-screen : root.is-small-screen;
                 own-identity-mismatch: root.own-identity-mismatch;
+                own-identity-title: root.own-identity-title;
+                own-identity-detail: root.own-identity-detail;
+                own-identity-action: root.own-identity-action;
                 keyboard-open : root.keyboard-open;
                 macos-titlebar-height : root.native-chat-row ? root.macos-titlebar-height : 0px;
                 macos-traffic-lights-width : root.native-chat-row ? root.macos-traffic-lights-width : 0px;

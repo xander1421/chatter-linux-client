@@ -4027,3 +4027,31 @@ msgstr "Le serveur a répondu aux autres vérifications de clés, mais pas à ce
 #: crates/chatter-core/src/client/mod.rs
 msgid "Send anyway once"
 msgstr "Envoyer quand même une fois"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Conversation trusted"
+msgstr "Discussion approuvée"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "You can send one message"
+msgstr "Vous pouvez envoyer un message"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s key directory looks inconsistent."
+msgstr "L’annuaire de clés de votre compte semble incohérent."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your other devices may be seeing different keys."
+msgstr "Vos autres appareils voient peut-être des clés différentes."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "View your safety number"
+msgstr "Voir votre numéro de sécurité"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s identity key changed in the transparency log"
+msgstr "La clé d’identité de votre compte a changé dans le journal de transparence"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "An unexpected key was published for your account. Check your safety number with your contacts."
+msgstr "Une clé inattendue a été publiée pour votre compte. Vérifiez votre numéro de sécurité avec vos contacts."

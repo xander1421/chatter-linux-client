@@ -8,7 +8,8 @@ use rusqlite::{OptionalExtension, params};
 
 /// Withheld checks on one route after which sends to the peer fail closed.
 pub(crate) const WITHHELD_LIMIT: u32 = 3;
-/// Consecutive consistent checks on the blocking route that clear the block.
+/// Consecutive consistent checks on the blocking route that clear an
+/// unverified block, or any block on our own account.
 pub(crate) const CLEAR_AFTER: u32 = 3;
 /// An undecided streak this long, while identified KT requests succeed,
 /// counts as one withheld check.
@@ -140,9 +141,14 @@ impl KeyStore {
                         "UPDATE peer_kt_heads SET withheld=0 WHERE account=?1 AND route=?2",
                         params![peer, route],
                     )?;
+                    // A split on our own account has no accept control: we
+                    // cannot vouch for ourselves against the server. It clears
+                    // like an unverified block.
                     let cleared = tx.execute(
                         "DELETE FROM peer_kt_split_views
-                         WHERE account=?1 AND kind='unverified' AND route=?2",
+                         WHERE account=?1 AND route=?2 AND (kind='unverified' OR EXISTS (
+                             SELECT 1 FROM settings
+                             WHERE key='auth.current_user_id' AND value=json_quote(?1)))",
                         params![peer, route],
                     )? == 1;
                     if cleared {

@@ -4030,3 +4030,31 @@ msgstr "Serverul a răspuns la celelalte verificări de chei, dar nu la cea care
 #: crates/chatter-core/src/client/mod.rs
 msgid "Send anyway once"
 msgstr "Trimite totuși o dată"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Conversation trusted"
+msgstr "Conversație marcată ca de încredere"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "You can send one message"
+msgstr "Poți trimite un mesaj"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s key directory looks inconsistent."
+msgstr "Directorul de chei al contului tău pare inconsecvent."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your other devices may be seeing different keys."
+msgstr "Celelalte dispozitive ale tale pot vedea chei diferite."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "View your safety number"
+msgstr "Vezi numărul tău de siguranță"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s identity key changed in the transparency log"
+msgstr "Cheia de identitate a contului tău s-a schimbat în jurnalul de transparență"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "An unexpected key was published for your account. Check your safety number with your contacts."
+msgstr "A fost publicată o cheie neașteptată pentru contul tău. Verifică numărul tău de siguranță cu contactele tale."

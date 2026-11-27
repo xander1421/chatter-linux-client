@@ -3994,3 +3994,31 @@ msgstr "Сервер ответил на другие проверки ключ�
 #: crates/chatter-core/src/client/mod.rs
 msgid "Send anyway once"
 msgstr "Всё равно отправить один раз"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Conversation trusted"
+msgstr "Разговору можно доверять"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "You can send one message"
+msgstr "Можно отправить одно сообщение"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s key directory looks inconsistent."
+msgstr "Каталог ключей вашего аккаунта выглядит несогласованным."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your other devices may be seeing different keys."
+msgstr "Ваши другие устройства могут видеть другие ключи."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "View your safety number"
+msgstr "Посмотреть свой номер безопасности"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s identity key changed in the transparency log"
+msgstr "Ключ идентификации вашего аккаунта изменился в журнале прозрачности"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "An unexpected key was published for your account. Check your safety number with your contacts."
+msgstr "Для вашего аккаунта опубликован неожиданный ключ. Сверьте свой номер безопасности с контактами."

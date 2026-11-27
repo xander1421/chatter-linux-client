@@ -4016,3 +4016,31 @@ msgstr "Сервер відповів на інші перевірки ключ�
 #: crates/chatter-core/src/client/mod.rs
 msgid "Send anyway once"
 msgstr "Все одно надіслати один раз"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Conversation trusted"
+msgstr "Розмові можна довіряти"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "You can send one message"
+msgstr "Можна надіслати одне повідомлення"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s key directory looks inconsistent."
+msgstr "Каталог ключів вашого облікового запису виглядає неузгодженим."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your other devices may be seeing different keys."
+msgstr "Ваші інші пристрої можуть бачити інші ключі."
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "View your safety number"
+msgstr "Переглянути свій номер безпеки"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s identity key changed in the transparency log"
+msgstr "Ключ ідентифікації вашого облікового запису змінився в журналі прозорості"
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "An unexpected key was published for your account. Check your safety number with your contacts."
+msgstr "Для вашого облікового запису опубліковано неочікуваний ключ. Звірте свій номер безпеки з контактами."

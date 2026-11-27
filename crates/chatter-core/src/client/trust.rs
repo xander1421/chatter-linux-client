@@ -1,24 +1,41 @@
 use super::*;
 
 impl ChatterClient {
-    /// Whether this account has a durably recorded transparency mismatch.
-    pub fn own_identity_change_detected(&self) -> Result<bool, crate::error::ServiceError> {
+    /// The account-wide transparency warning, if any. A block recorded from
+    /// our own devices' shared heads clears only after consistent checks on
+    /// the route that raised it (`storage::peer_kt_heads`).
+    pub fn own_identity_warning(
+        &self,
+    ) -> Result<Option<OwnIdentityWarning>, crate::error::ServiceError> {
         let Some(owner) = self.auth_snapshot().current_user_id else {
-            return Ok(false);
+            return Ok(None);
         };
         let owner = owner.to_string();
-        // Our own devices' shared heads are checked like a contact's; a block
-        // on our account cannot stop sends to ourselves, so it warns here.
         let own_block = self
             .signal()
             .key_store
             .peer_kt_block(&owner)
             .map_err(crate::error::ServiceError::Storage)?;
-        Ok(own_block.is_some()
-            || crate::services::signal::kt_anchor::own_mismatch(
-                &self.signal().settings_repo,
-                owner.as_bytes(),
-            )?)
+        if own_block.is_some() {
+            return Ok(Some(OwnIdentityWarning {
+                title: chatter_i18n::tr("Your account’s key directory looks inconsistent."),
+                detail: chatter_i18n::tr("Your other devices may be seeing different keys."),
+                action: Some(chatter_i18n::tr("View your safety number")),
+            }));
+        }
+        if crate::services::signal::kt_anchor::own_mismatch(
+            &self.signal().settings_repo,
+            owner.as_bytes(),
+        )? {
+            return Ok(Some(OwnIdentityWarning {
+                title: chatter_i18n::tr("Your account’s identity key changed in the transparency log"),
+                detail: chatter_i18n::tr(
+                    "An unexpected key was published for your account. Check your safety number with your contacts.",
+                ),
+                action: None,
+            }));
+        }
+        Ok(None)
     }
 
     pub(super) fn spawn_own_identity_monitor(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {

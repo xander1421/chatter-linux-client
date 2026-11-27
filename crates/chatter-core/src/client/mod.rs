@@ -483,6 +483,20 @@ pub struct IdentityChangePrompt {
     pub detail: String,
     /// The button label: the trust decision Accept makes.
     pub accept: String,
+    /// What to tell the user once Accept succeeded.
+    pub accepted: String,
+}
+
+/// The account-wide warning above every conversation: our own key changed
+/// in the log, or our own devices' shared heads expose a split view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnIdentityWarning {
+    pub title: String,
+    pub detail: String,
+    /// Label of the link to this device's safety number, when the user can
+    /// check something there. There is no accept: a user cannot vouch for
+    /// their own account against the server.
+    pub action: Option<String>,
 }
 
 impl IdentityChangePrompt {
@@ -500,6 +514,7 @@ impl IdentityChangePrompt {
                     "They most likely reinstalled the app or switched devices. It can also mean someone is intercepting this conversation. Messages are blocked in both directions until you accept the new safety number — compare it with them over a call or in person first.",
                 ),
                 accept: chatter_i18n::tr("Accept new safety number"),
+                accepted: chatter_i18n::tr("New safety number accepted — you can message again"),
             };
         }
         // Unattributed: the ONLY thing that named this peer was the server, so
@@ -511,6 +526,7 @@ impl IdentityChangePrompt {
                 "The server says this came from your contact, but nothing proved that, so it may not be them at all. Messages are blocked in both directions until you accept the new safety number — confirm it with them over a call or in person before you do.",
             ),
             accept: chatter_i18n::tr("Accept new safety number"),
+            accepted: chatter_i18n::tr("New safety number accepted — you can message again"),
         }
     }
 
@@ -524,6 +540,7 @@ impl IdentityChangePrompt {
                 "Either of you may be talking to someone intercepting this conversation. Sending is blocked until you trust this conversation — compare safety numbers with them over a call or in person first.",
             ),
             accept: chatter_i18n::tr("Trust this conversation"),
+            accepted: chatter_i18n::tr("Conversation trusted"),
         }
     }
 
@@ -537,6 +554,7 @@ impl IdentityChangePrompt {
                 "The server answered other key checks but not the one that compares your view with this contact's, which can hide an intercepted conversation. Sending is blocked — compare safety numbers with them over a call or in person, or send anyway once.",
             ),
             accept: chatter_i18n::tr("Send anyway once"),
+            accepted: chatter_i18n::tr("You can send one message"),
         }
     }
 }

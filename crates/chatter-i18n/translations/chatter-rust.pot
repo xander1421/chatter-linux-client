@@ -3471,3 +3471,31 @@ msgstr ""
 #: crates/chatter-core/src/client/mod.rs
 msgid "Send anyway once"
 msgstr ""
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Conversation trusted"
+msgstr ""
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "You can send one message"
+msgstr ""
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s key directory looks inconsistent."
+msgstr ""
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your other devices may be seeing different keys."
+msgstr ""
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "View your safety number"
+msgstr ""
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "Your account’s identity key changed in the transparency log"
+msgstr ""
+
+#: crates/chatter-core/src/client/mod.rs
+msgid "An unexpected key was published for your account. Check your safety number with your contacts."
+msgstr ""
