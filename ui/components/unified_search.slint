@@ -1,3 +1,6 @@
+import { Button } from "button.slint";
+import { Avatar } from "avatar.slint";
+import { IconAction } from "icon_action.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "glass_surface.slint";
 // Unified search — full-window overlay palette.
@@ -65,7 +68,7 @@ component ConvRow inherits Rectangle {
     // someone who already knows where they are going, so mis-tapping here costs
     // them the whole trip — and at 40px this was the shortest target on screen.
     height: Spacing.touch-target-min * Appearance.text-grow;
-    border-radius: Spacing.radius-sm;
+    border-radius: Spacing.radius-control;
     accessible-role: button;
     accessible-label: root.name;
     accessible-enabled: root.interactive;
@@ -81,7 +84,7 @@ component ConvRow inherits Rectangle {
         }
     }
     if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
-    background: touch.pressed ? Materials.pressed : root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
+    background: touch.pressed ? Materials.pressed : root.selected ? Colors.tint-strong : touch.has-hover ? Colors.surface-hover : transparent;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     transform-scale-x: touch.pressed ? 98% : 100%;
     transform-scale-y: touch.pressed ? 96% : 100%;
@@ -111,7 +114,7 @@ component ConvRow inherits Rectangle {
                       : Icons.user;
                 width: 16px;
                 height: 16px;
-                colorize: root.selected ? Colors.primary : Colors.text-muted;
+                colorize: Colors.text-muted;
             }
         }
         // "))" is the mesh mark: radio waves, matching the sidebar glyph —
@@ -119,7 +122,7 @@ component ConvRow inherits Rectangle {
         // that does.
         if root.conv-type == "mesh": Text {
             text: "))";
-            color: root.selected ? Colors.primary : Colors.text-muted;
+            color: Colors.text-muted;
             font-size: Typography.sm;
             font-weight: Typography.semibold;
             width: 20px;
@@ -128,8 +131,9 @@ component ConvRow inherits Rectangle {
         }
         Text {
             text: root.name;
-            color: root.selected ? Colors.text-primary : Colors.text-secondary;
-            font-size: Typography.sm;
+            color: Colors.text-primary;
+            font-size: 13px * Appearance.text-scale;
+            font-weight: Typography.semibold;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -166,7 +170,7 @@ component MsgRow inherits Rectangle {
 
     height: 56px * Appearance.text-grow;
     clip: true;
-    border-radius: Spacing.radius-sm;
+    border-radius: Spacing.radius-control;
     accessible-role: button;
     accessible-label: root.sender-name + " in " + root.channel-name + ": " + root.content-preview;
     accessible-enabled: root.interactive;
@@ -182,7 +186,7 @@ component MsgRow inherits Rectangle {
         }
     }
     if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
-    background: touch.pressed ? Materials.pressed : root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
+    background: touch.pressed ? Materials.pressed : root.selected ? Colors.tint-strong : touch.has-hover ? Colors.surface-hover : transparent;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     transform-scale-x: touch.pressed ? 98% : 100%;
     transform-scale-y: touch.pressed ? 96% : 100%;
@@ -206,7 +210,7 @@ component MsgRow inherits Rectangle {
             Text {
                 text: root.sender-name;
                 color: Colors.text-primary;
-                font-size: Typography.xs;
+                font-size: 13px * Appearance.text-scale;
                 font-weight: Typography.semibold;
                 wrap: no-wrap;
                 overflow: elide;
@@ -228,11 +232,11 @@ component MsgRow inherits Rectangle {
         }
         HorizontalLayout {
             spacing: Spacing.none;
-            before-text := Text { text: root.preview-before; color: Colors.text-secondary; font-size: Typography.sm;
+            before-text := Text { text: root.preview-before; color: Colors.text-muted; font-size: Typography.xs;
                 width: min(self.preferred-width, parent.width * 0.55); wrap: no-wrap; overflow: elide; }
-            match-text := Text { text: root.preview-match; color: Colors.primary; font-size: Typography.sm; font-weight: Typography.semibold;
+            match-text := Text { text: root.preview-match; color: Colors.text-primary; font-size: Typography.xs; font-weight: Typography.semibold;
                 width: min(self.preferred-width, parent.width * 0.4); wrap: no-wrap; overflow: elide; }
-            Text { text: root.preview-after; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; wrap: no-wrap; overflow: elide; }
+            Text { text: root.preview-after; color: Colors.text-muted; font-size: Typography.xs; horizontal-stretch: 1; wrap: no-wrap; overflow: elide; }
         }
     }
 }
@@ -245,7 +249,7 @@ component PersonRow inherits Rectangle {
     callback clicked();
 
     height: Spacing.touch-target-min * Appearance.text-grow;
-    border-radius: Spacing.radius-sm;
+    border-radius: Spacing.radius-control;
     accessible-role: button;
     accessible-label: root.handle == "" ? root.name : root.name + ", @" + root.handle;
     accessible-enabled: root.interactive;
@@ -280,7 +284,7 @@ component PersonRow inherits Rectangle {
         spacing: Spacing.sm;
         Text {
             text: "👤";
-            color: Colors.primary;
+            color: Colors.text-muted;
             font-size: Typography.sm;
             width: 20px;
             horizontal-alignment: center;
@@ -292,7 +296,8 @@ component PersonRow inherits Rectangle {
             Text {
                 text: root.name;
                 color: Colors.text-primary;
-                font-size: Typography.sm;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
             }
             if root.handle != "": Text {
                 text: "@" + root.handle;
@@ -303,8 +308,37 @@ component PersonRow inherits Rectangle {
     }
 }
 
+component SearchEmptyState inherits VerticalLayout {
+    in property <image> icon: Icons.search;
+    in property <string> title;
+
+    padding: Spacing.panel-gutter;
+    spacing: Spacing.sm;
+    alignment: center;
+
+    HorizontalLayout {
+        alignment: center;
+        Image {
+            source: root.icon;
+            width: Spacing.xl;
+            height: self.width;
+            colorize: Colors.text-muted;
+        }
+    }
+
+    Text {
+        text: root.title;
+        color: Colors.text-primary;
+        font-size: Typography.sm;
+        font-weight: Typography.semibold;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
 // Full-window overlay palette (rendered at the window root via `if open`).
 export component UnifiedSearch inherits Rectangle {
+    private property <image> empty-image;
     // Screen readers and Tab stay inside while open (vendored winit
     // AccessKit adapter, Android bridge, i-slint-core window.rs).
     accessible-role: groupbox;
@@ -393,7 +427,7 @@ export component UnifiedSearch inherits Rectangle {
     animate open-progress { duration: Materials.motion-standard; easing: Materials.glide; }
     property <float> shape-progress: root.show ? 1 : 0;
     animate shape-progress { duration: Materials.motion-standard; easing: Materials.spring; }
-    property <length> panel-width: min(940px, root.width - 24px);
+    property <length> panel-width: min(940px, max(0px, root.width - 2 * Spacing.panel-gutter));
     changed show => {
         // Whatever the query is on open/close, the next edit compares to it.
         root.last-edited-query = root.query;
@@ -430,11 +464,6 @@ export component UnifiedSearch inherits Rectangle {
     }
 
     // Dim backdrop — clicking outside the panel closes.
-    GlassSurface {
-        width: 100%; height: 100%;
-        material-level: 0; material-tint: transparent; elevation: 0;
-        opacity: root.open-progress;
-    }
     Rectangle {
         width: 100%;
         height: 100%;
@@ -444,16 +473,16 @@ export component UnifiedSearch inherits Rectangle {
     }
 
     // Palette panel — near top, centered.
-    palette := GlassSurface {
-        material-level: 3;
-        material-tint: Materials.ultra-thin.mix(Materials.search-raised, root.open-progress);
-        elevation: 4;
+    palette := Rectangle {
+        background: Colors.background;
+        border-width: 1px;
+        border-color: Colors.border;
 
         x: root.source-x + ((root.width - root.panel-width) / 2 - root.source-x) * root.open-progress;
-        y: root.source-y + (min(42px, parent.height * 0.04) - root.source-y) * root.open-progress;
+        y: root.source-y + (max(Spacing.panel-gutter, min(42px, parent.height * 0.04)) - root.source-y) * root.open-progress;
         width: min(root.source-width, root.panel-width) + (root.panel-width - min(root.source-width, root.panel-width)) * root.shape-progress;
         height: Spacing.touch-target-min + (parent.height - 2 * self.y - Spacing.touch-target-min) * root.shape-progress;
-        border-radius: Spacing.radius-xl;
+        border-radius: Spacing.radius-panel;
         clip: true;
 
         // Swallow clicks so they don't reach the backdrop.
@@ -462,124 +491,131 @@ export component UnifiedSearch inherits Rectangle {
         content := VerticalLayout {
             opacity: root.show ? 1 : 0;
             animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
-            padding: Spacing.md;
-            spacing: Spacing.sm;
+            padding: Spacing.panel-gutter;
+            spacing: Spacing.panel-gutter;
 
-            // Search input — focused when the overlay appears.
-            Rectangle {
-                // The one field on this overlay, and it was 40px: shorter than
-                // the rows beneath it and under the touch minimum. Auto-focus
-                // hides that on first open and not at all afterwards, when the
-                // user taps it to correct a query.
-                height: Spacing.touch-target-min;
-                // Concentric with the panel: its radius minus the padding.
-                border-radius: Spacing.radius-xl - Spacing.md;
-                background: Colors.inset;
-                border-width: Spacing.stroke;
-                border-color: search-input.has-focus ? Colors.primary : Colors.border;
+            GlassSurface {
+                height: Spacing.touch-target-min + 2 * Spacing.sm;
+                border-radius: Spacing.radius-panel;
+                border-width: 1px;
+                border-color: Colors.border;
 
                 HorizontalLayout {
-                    padding-left: Spacing.md;
-                    padding-right: Spacing.md;
+                    padding: Spacing.sm;
                     spacing: Spacing.sm;
-                    Image {
-                        source: Icons.search;
-                        width: 16px; height: 16px;
-                        colorize: Colors.text-muted;
-                        y: (parent.height - self.height) / 2;
-                    }
+
+                    // Search input — focused when the overlay appears.
                     Rectangle {
+                        // The one field on this overlay, and it was 40px: shorter than
+                        // the rows beneath it and under the touch minimum. Auto-focus
+                        // hides that on first open and not at all afterwards, when the
+                        // user taps it to correct a query.
+                        height: Spacing.touch-target-min;
                         horizontal-stretch: 1;
-                        // The placeholder overlays the field at its text origin,
-                        // rather than taking a trailing HorizontalLayout slot.
-                        search-input := TextInput {
-                            text <=> root.query;
-                            font-size: Typography.sm;
-                            color: Colors.text-primary;
-                            vertical-alignment: center;
-                            width: 100%;
-                            height: 100%;
-                            single-line: true;
-                            // Samsung's IME on Android 10 re-delivers the same
-                            // text after the tap that ends composition; a search
-                            // for an unchanged query cleared the result rows
-                            // between press and release, so the tap was lost.
-                            edited => {
-                                if root.query == root.last-edited-query { return; }
-                                root.last-edited-query = root.query;
-                                root.selected-index = 0;
-                                root.query-changed(root.query);
+                        border-radius: Spacing.radius-control;
+                        background: Colors.surface-control;
+                        border-width: Spacing.stroke;
+                        border-color: search-input.has-focus ? Colors.focus-ring : Colors.border;
+
+                        HorizontalLayout {
+                            padding-left: Spacing.md;
+                            padding-right: Spacing.md;
+                            spacing: Spacing.sm;
+                            Image {
+                                source: Icons.search;
+                                width: 16px; height: 16px;
+                                colorize: Colors.text-muted;
+                                y: (parent.height - self.height) / 2;
                             }
-                            accepted => {
-                                if (root.person-status == "found") {
-                                    root.person-selected(root.person-id);
-                                } else if (root.query-is-handle) {
-                                    root.resolve(root.query);
-                                } else {
-                                    root.activate-selected();
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                // The placeholder overlays the field at its text origin,
+                                // rather than taking a trailing HorizontalLayout slot.
+                                search-input := TextInput {
+                                    text <=> root.query;
+                                    font-size: Typography.sm;
+                                    color: Colors.text-primary;
+                                    vertical-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                    single-line: true;
+                                    // Samsung's IME on Android 10 re-delivers the same
+                                    // text after the tap that ends composition; a search
+                                    // for an unchanged query cleared the result rows
+                                    // between press and release, so the tap was lost.
+                                    edited => {
+                                        if root.query == root.last-edited-query { return; }
+                                        root.last-edited-query = root.query;
+                                        root.selected-index = 0;
+                                        root.query-changed(root.query);
+                                    }
+                                    accepted => {
+                                        if (root.person-status == "found") {
+                                            root.person-selected(root.person-id);
+                                        } else if (root.query-is-handle) {
+                                            root.resolve(root.query);
+                                        } else {
+                                            root.activate-selected();
+                                        }
+                                    }
+                                    key-pressed(event) => {
+                                        if (event.text == Key.UpArrow) {
+                                            if (root.selected-index > 0) { root.selected-index -= 1; }
+                                            return accept;
+                                        }
+                                        if (event.text == Key.DownArrow) {
+                                            if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
+                                            return accept;
+                                        }
+                                        // Android Back arrives as a Key.Back event to the
+                                        // focused field. On Android 14+ the vendored backend
+                                        // calls Activity.finish() when Slint reports Back
+                                        // unhandled, so a Back that only bubbled past this
+                                        // field closed the whole app instead of the palette.
+                                        // Consume it here, same as Escape.
+                                        if (event.text == Key.Escape || event.text == Key.Back) {
+                                            if (root.date-sheet-open) { root.date-sheet-open = false; }
+                                            else if (root.picker-mode != "") { root.picker-mode = ""; }
+                                            else { root.close(); }
+                                            return accept;
+                                        }
+                                        return reject;
+                                    }
+                                }
+                                // Shown whenever the field is empty: on a phone it has
+                                // focus the whole time, so hiding it on focus meant never.
+                                if root.query == "" && search-input.preedit-text == "": search-placeholder := Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: @tr("Search…");
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: left;
                                 }
                             }
-                            key-pressed(event) => {
-                                if (event.text == Key.UpArrow) {
-                                    if (root.selected-index > 0) { root.selected-index -= 1; }
-                                    return accept;
+                            if root.query != "": IconAction {
+                                icon: Icons.x;
+                                visual-size: 28px;
+                                label: @tr("Clear search");
+                                clicked => {
+                                    root.query = "";
+                                    root.last-edited-query = "";
+                                    root.query-changed("");
+                                    search-input.focus();
                                 }
-                                if (event.text == Key.DownArrow) {
-                                    if (root.selected-index < root.total-count - 1) { root.selected-index += 1; }
-                                    return accept;
-                                }
-                                // Android Back arrives as a Key.Back event to the
-                                // focused field. On Android 14+ the vendored backend
-                                // calls Activity.finish() when Slint reports Back
-                                // unhandled, so a Back that only bubbled past this
-                                // field closed the whole app instead of the palette.
-                                // Consume it here, same as Escape.
-                                if (event.text == Key.Escape || event.text == Key.Back) {
-                                    if (root.date-sheet-open) { root.date-sheet-open = false; }
-                                    else if (root.picker-mode != "") { root.picker-mode = ""; }
-                                    else { root.close(); }
-                                    return accept;
-                                }
-                                return reject;
                             }
-                        }
-                        // Shown whenever the field is empty: on a phone it has
-                        // focus the whole time, so hiding it on focus meant never.
-                        if root.query == "" && search-input.preedit-text == "": search-placeholder := Text {
-                            width: 100%;
-                            height: 100%;
-                            text: @tr("Search…");
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
-                            horizontal-alignment: left;
                         }
                     }
-                    if root.query != "": Rectangle {
-                        width: Spacing.touch-target-min; height: Spacing.touch-target-min;
-                        border-radius: self.width / 2;
-                        background: clear-touch.pressed ? Materials.pressed : clear-touch.has-hover ? Materials.hover : transparent;
-                        accessible-role: button; accessible-label: @tr("Clear search");
-                        accessible-action-default => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); }
-                        clear-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); return accept; } return reject; }
-                        }
-                        Rectangle { border-width: clear-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
-                        clear-touch := TouchArea { mouse-cursor: pointer; clicked => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); } }
-                        Text { text: "×"; color: Colors.text-secondary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
-                    }
-                    Rectangle {
-                        width: 72px; height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-lg;
-                        background: cancel-touch.pressed ? Materials.pressed : cancel-touch.has-hover ? Materials.hover : transparent;
-                        accessible-role: button; accessible-label: @tr("Cancel search");
-                        accessible-action-default => { root.cancel(); }
-                        cancel-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.cancel(); return accept; } return reject; }
-                        }
-                        Rectangle { border-width: cancel-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
-                        cancel-touch := TouchArea { mouse-cursor: pointer; clicked => { root.cancel(); } }
-                        Text { text: @tr("Cancel"); color: Colors.primary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+
+                    Button {
+                        text: @tr("Cancel");
+                        label: @tr("Cancel search");
+                        variant: "ghost";
+                        touch: true;
+                        height: Spacing.touch-target-min;
+                        border-radius: Spacing.radius-control;
+                        clicked => { root.cancel(); }
                     }
                 }
             }
@@ -602,10 +638,8 @@ export component UnifiedSearch inherits Rectangle {
                         y: 4px;
                         width: 106px;
                         height: parent.height - 8px;
-                        border-radius: self.height / 2;
-                        background: Colors.row-selected;
-                        border-width: Spacing.stroke;
-                        border-color: Colors.primary;
+                        border-radius: Spacing.radius-control;
+                        background: Colors.tint-strong;
                         animate x { duration: Materials.motion-standard; easing: Materials.spring; }
                         animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                     }
@@ -622,7 +656,7 @@ export component UnifiedSearch inherits Rectangle {
                         x: i * 110px;
                         width: 110px;
                         height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-xl;
+                        border-radius: Spacing.radius-control;
                         background: tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent;
                         accessible-role: tab;
                         accessible-label: tab-name;
@@ -651,7 +685,7 @@ export component UnifiedSearch inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => { root.category = category-name.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                         }
-                        tab-label := Text { text: root.category-counts[i] <= 0 ? tab-name : root.category-counts[i] > root.page-limits[i] ? @tr("{0} {1}+", tab-name, root.page-limits[i]) : @tr("{0} {1}", tab-name, root.category-counts[i]); color: root.category == category-name.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                        tab-label := Text { text: root.category-counts[i] <= 0 ? tab-name : root.category-counts[i] > root.page-limits[i] ? @tr("{0} {1}+", tab-name, root.page-limits[i]) : @tr("{0} {1}", tab-name, root.category-counts[i]); color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                     }
                 }
             }
@@ -670,37 +704,37 @@ export component UnifiedSearch inherits Rectangle {
                 spacing: Spacing.xs;
                 Rectangle {
                     // Grows to its label, like the date chip: translated sort names are longer.
-                    width: max(94px, min(170px, sort-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                    background: sort-touch.pressed ? Materials.pressed : root.sort-order != "relevance" ? Colors.row-selected : Materials.ultra-thin;
-                    border-width: Spacing.stroke; border-color: root.sort-order != "relevance" ? Colors.primary : Colors.border;
+                    width: max(94px, min(170px, sort-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
+                    background: sort-touch.pressed ? Materials.pressed : root.sort-order != "relevance" ? Colors.tint-strong : Colors.surface-control;
+                    border-width: Spacing.stroke; border-color: Colors.border;
                     accessible-role: button; accessible-label: root.sort-order == "relevance" ? @tr("Sort: relevance") : root.sort-order == "newest" ? @tr("Sort: newest") : root.sort-order == "oldest" ? @tr("Sort: oldest") : @tr("Sort: largest");
                     accessible-action-default => { root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance"; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                     sort-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
                         key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance"; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); return accept; } return reject; }
                     }
-                    Rectangle { border-width: sort-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                    Rectangle { border-width: sort-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-control; }
                     sort-touch := TouchArea { mouse-cursor: pointer; clicked => {
                         root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance";
                         root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
                     } }
-                    sort-label := Text { text: root.sort-order == "relevance" ? @tr("Relevance") : root.sort-order == "newest" ? @tr("search sort" => "Newest") : root.sort-order == "oldest" ? @tr("search sort" => "Oldest") : @tr("Largest"); color: root.sort-order != "relevance" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                    sort-label := Text { text: root.sort-order == "relevance" ? @tr("Relevance") : root.sort-order == "newest" ? @tr("search sort" => "Newest") : root.sort-order == "oldest" ? @tr("search sort" => "Oldest") : @tr("Largest"); color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
                 Rectangle {
                     // Grows to a chosen range ("27 Oct – 28 Oct"), like From/In.
-                    width: max(90px, min(170px, date-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                    background: date-touch.pressed ? Materials.pressed : root.date-filter != "any" ? Colors.row-selected : Materials.ultra-thin;
-                    border-width: Spacing.stroke; border-color: root.date-filter != "any" ? Colors.primary : Colors.border;
+                    width: max(90px, min(170px, date-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
+                    background: date-touch.pressed ? Materials.pressed : root.date-filter != "any" ? Colors.tint-strong : Colors.surface-control;
+                    border-width: Spacing.stroke; border-color: Colors.border;
                     accessible-role: button; accessible-label: root.date-filter == "any" ? @tr("Date filter: any") : root.date-filter == "today" ? @tr("Date filter: today") : root.date-filter == "week" ? @tr("Date filter: week") : root.date-filter == "month" ? @tr("Date filter: month") : root.date-filter == "year" ? @tr("Date filter: year") : @tr("Date filter: {}", root.date-filter);
                     accessible-action-default => { root.date-sheet-open = true; root.calendar-shift(0); }
                     date-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
                         key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.date-sheet-open = true; root.calendar-shift(0); return accept; } return reject; }
                     }
-                    Rectangle { border-width: date-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                    Rectangle { border-width: date-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-control; }
                     date-touch := TouchArea { mouse-cursor: pointer; clicked => { root.date-sheet-open = true; root.calendar-shift(0); } }
                     date-label := Text { text: root.date-filter == "any" ? @tr("Any time") : root.date-filter == "today" ? @tr("Today") : root.date-filter == "week" ? @tr("7 days") : root.date-filter == "month" ? @tr("30 days") : root.date-filter == "year" ? @tr("This year")
                         // The days chosen, not a bare "Range".
                         : root.custom-end-short == "" || root.custom-end == root.custom-start ? root.custom-start-short
-                        : root.custom-start-short + " – " + root.custom-end-short; color: root.date-filter != "any" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                        : root.custom-start-short + " – " + root.custom-end-short; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
                 for kind in ["from", "in"]: Rectangle {
                     // A set filter grows to show its name (up to a cap) beside the ×.
@@ -709,36 +743,32 @@ export component UnifiedSearch inherits Rectangle {
                     width: self.chip-set
                         ? max(self.base-width, min(200px, picker-chip-label.preferred-width + Spacing.touch-target-min + Spacing.lg))
                         : self.base-width;
-                    height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                    background: chip-touch.pressed ? Materials.pressed : ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.row-selected : Materials.ultra-thin;
-                    border-width: Spacing.stroke; border-color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.border;
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
+                    background: chip-touch.pressed ? Materials.pressed : self.chip-set ? Colors.tint-strong : Colors.surface-control;
+                    border-width: Spacing.stroke; border-color: Colors.border;
                     accessible-role: button; accessible-label: kind == "from" ? @tr("Filter by sender") : @tr("Filter by conversation");
                     accessible-action-default => { root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, ""); }
                     chip-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
                         key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, ""); return accept; } return reject; }
                     }
-                    Rectangle { border-width: chip-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                    Rectangle { border-width: chip-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-control; }
                     chip-touch := TouchArea { mouse-cursor: pointer; clicked => {
                         root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, "");
                     } }
                     picker-chip-label := Text { text: kind == "from" ? (root.from-label == "" ? @tr("sender filter" => "From") : @tr("From: {}", root.from-label)) : (root.in-label == "" ? @tr("conversation filter" => "In") : @tr("In: {}", root.in-label));
-                        width: parent.width - (((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Spacing.touch-target-min : 0px);
-                        height: 100%; color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; wrap: no-wrap; overflow: elide; }
-                    if (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != ""): Rectangle {
-                        x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: self.width / 2;
-                        background: unselect-touch.pressed ? Materials.pressed : unselect-touch.has-hover ? Materials.hover : transparent;
-                        accessible-role: button; accessible-label: kind == "from" ? @tr("Clear sender filter") : @tr("Clear conversation filter");
-                        accessible-action-default => { if kind == "from" { root.from-filter = ""; root.from-label = ""; } else { root.in-filter = ""; root.in-label = ""; } root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
-                        unselect-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { if kind == "from" { root.from-filter = ""; root.from-label = ""; } else { root.in-filter = ""; root.in-label = ""; } root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); return accept; } return reject; }
-                        }
-                        Rectangle { border-width: unselect-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
-                        unselect-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                        width: parent.width - (parent.chip-set ? Spacing.touch-target-min : 0px);
+                        height: 100%; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; wrap: no-wrap; overflow: elide; }
+                    if self.chip-set: IconAction {
+                        x: parent.width - self.width;
+                        visual-size: 28px;
+                        icon: Icons.x;
+                        label: kind == "from" ? @tr("Clear sender filter") : @tr("Clear conversation filter");
+                        enabled: root.show;
+                        clicked => {
                             if (kind == "from") { root.from-filter = ""; root.from-label = ""; }
                             else { root.in-filter = ""; root.in-label = ""; }
                             root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
-                        } }
-                        Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                        }
                     }
                 }
                 }
@@ -754,41 +784,44 @@ export component UnifiedSearch inherits Rectangle {
                 HorizontalLayout {
                     height: Spacing.touch-target-min;
                     vertical-stretch: 0;
-                    Text { text: @tr("Recent searches"); color: Colors.text-muted; font-size: Typography.xs; horizontal-stretch: 1; vertical-alignment: center; }
-                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min;
-                        accessible-role: button; accessible-label: @tr("Clear recent searches");
-                        accessible-action-default => { root.recent-clear(); }
-                        recent-clear-keys := FocusScope { width: 0px; height: 0px; enabled: root.show;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-clear(); return accept; } return reject; }
-                        }
-                        border-width: recent-clear-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.recent-clear(); } }
-                        Text { text: @tr("Clear"); color: Colors.primary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                    Text {
+                        text: @tr("Recent searches").to-uppercase();
+                        color: Colors.text-muted;
+                        font-size: 11px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
+                        letter-spacing: self.font-size * 0.06;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    Button {
+                        text: @tr("Clear");
+                        label: @tr("Clear recent searches");
+                        variant: "ghost";
+                        touch: true;
+                        height: Spacing.touch-target-min;
+                        border-radius: Spacing.radius-control;
+                        disabled: !root.show;
+                        clicked => { root.recent-clear(); }
                     }
                 }
                 for recent in root.recent-searches: Rectangle {
-                    height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
                     background: recent-touch.pressed ? Materials.pressed : recent-touch.has-hover ? Materials.hover : transparent;
                     accessible-role: button; accessible-label: @tr("Search for {}", recent);
                     accessible-action-default => { root.recent-selected(recent); search-input.focus(); }
                     recent-keys := FocusScope { width: 0px; height: 0px;
                         key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-selected(recent); search-input.focus(); return accept; } return reject; }
                     }
-                    Rectangle { border-width: recent-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-sm; }
+                    Rectangle { border-width: recent-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-control; }
                     recent-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-selected(recent); search-input.focus(); } }
                     Text { text: recent; color: Colors.text-secondary; font-size: Typography.sm; x: Spacing.md; width: parent.width - Spacing.touch-target-min - Spacing.md; vertical-alignment: center; height: 100%; overflow: elide; }
-                    Rectangle {
-                        x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min;
-                        border-radius: self.width / 2;
-                        background: remove-touch.pressed ? Materials.pressed : remove-touch.has-hover ? Materials.hover : transparent;
-                        accessible-role: button; accessible-label: @tr("Remove recent search {}", recent);
-                        accessible-action-default => { root.recent-remove(recent); }
-                        remove-keys := FocusScope { width: 0px; height: 0px;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-remove(recent); return accept; } return reject; }
-                        }
-                        Rectangle { border-width: remove-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
-                        remove-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-remove(recent); } }
-                        Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    IconAction {
+                        x: parent.width - self.width;
+                        visual-size: 28px;
+                        icon: Icons.x;
+                        label: @tr("Remove recent search {}", recent);
+                        enabled: root.show;
+                        clicked => { root.recent-remove(recent); }
                     }
                 }
             }
@@ -797,9 +830,11 @@ export component UnifiedSearch inherits Rectangle {
             // composed it reads "" over an emptied list; a header with nothing
             // under it is noise.
             if root.query == "" && root.conversations.length > 0: Text {
-                text: @tr("Suggested chats");
+                text: @tr("Suggested chats").to-uppercase();
                 color: Colors.text-muted;
-                font-size: Typography.xs;
+                font-size: 11px * Appearance.text-scale;
+                font-weight: Typography.semibold;
+                letter-spacing: self.font-size * 0.06;
                 horizontal-alignment: left;
                 height: 20px;
                 vertical-stretch: 0;
@@ -813,9 +848,11 @@ export component UnifiedSearch inherits Rectangle {
                 vertical-stretch: 0;
                 alignment: start;
                 Text {
-                    text: @tr("People");
+                    text: @tr("People").to-uppercase();
                     color: Colors.text-muted;
-                    font-size: Typography.xs;
+                    font-size: 11px * Appearance.text-scale;
+                    font-weight: Typography.semibold;
+                    letter-spacing: self.font-size * 0.06;
                 }
                 if root.person-status == "found": PersonRow {
                     interactive: root.show;
@@ -842,251 +879,226 @@ export component UnifiedSearch inherits Rectangle {
                 // Tappable: a phone user has no ↵ to press, and the IME's
                 // action key is not guaranteed to reach `accepted`.
                 // `person-handle` is the query with a leading "@" dropped.
-                if root.person-status == "": Rectangle {
-                    height: Spacing.touch-target-min;
-                    border-radius: Spacing.radius-sm;
-                    background: find-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: @tr("Find {}", "@" + root.person-handle);
-                    accessible-action-default => { root.resolve(root.query); }
-                    find-touch := TouchArea {
-                        enabled: root.show;
-                        mouse-cursor: pointer;
-                        clicked => { root.resolve(root.query); }
-                    }
-                    HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        spacing: Spacing.sm;
-                        Text {
-                            accessible-role: none;
-                            text: "👤";
-                            color: Colors.primary;
-                            font-size: Typography.sm;
-                            width: 20px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            accessible-role: none;
-                            text: @tr("Find {}", "@" + root.person-handle);
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-                        Text {
-                            accessible-role: none;
-                            text: "↵";
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
-                        }
-                    }
+                if root.person-status == "": Button {
+                    text: @tr("Find {}", "@" + root.person-handle);
+                    icon: Icons.user;
+                    touch: true;
+                    border-radius: Spacing.radius-control;
+                    disabled: !root.show;
+                    clicked => { root.resolve(root.query); }
                 }
             }
 
-            Flickable {
-                width: 100%;
+            Rectangle {
                 vertical-stretch: 1;
-                min-height: 40px;
-                // Press a result immediately; the Flickable still takes over
-                // drags and cancels the row press when scrolling starts.
-                immediate-child-press: true;
-                viewport-width: self.width;
-                viewport-height: results-list.preferred-height;
-                changed viewport-y => {
-                    if (!root.searching && root.query != "" && root.category != "chats"
-                        && self.viewport-height + self.viewport-y - self.height < self.height) {
-                        root.show-more(root.category);
-                    }
-                }
-                results-list := VerticalLayout {
-                    x: 0px;
-                    y: 0px;
-                    width: parent.width;
-                    spacing: Spacing.xxs;
+                min-height: 40px + 2 * Spacing.sm;
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
 
-                    // Jump to (conversations). An empty query is already titled
-                    // "Recent conversations" above; two headers stacked there.
-                    if (root.category == "all" || root.category == "chats") && root.query != "" && root.conversations.length > 0: Text {
-                        text: @tr("Jump to");
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-                    if root.category == "all" || root.category == "chats": VerticalLayout {
-                        for c[i] in root.conversations: ConvRow {
-                            interactive: root.show;
-                            item-id: c.id;
-                            name: c.name;
-                            conv-type: c.conv-type;
-                            private-channel: c.private-channel;
-                            unread-count: c.unread-count;
-                            selected: i == root.selected-index;
-                            clicked(id, t) => { root.conversation-selected(id, t); }
+                Flickable {
+                    x: Spacing.sm;
+                    y: Spacing.sm;
+                    width: max(0px, parent.width - 2 * Spacing.sm);
+                    height: max(0px, parent.height - 2 * Spacing.sm);
+                    // Press a result immediately; the Flickable still takes over
+                    // drags and cancels the row press when scrolling starts.
+                    immediate-child-press: true;
+                    viewport-width: self.width;
+                    viewport-height: results-list.preferred-height;
+                    changed viewport-y => {
+                        if (!root.searching && root.query != "" && root.category != "chats"
+                            && self.viewport-height + self.viewport-y - self.height < self.height) {
+                            root.show-more(root.category);
                         }
                     }
-
-                    // Public channels — discover and join. Server results; tap
-                    // to join (or open, if already a member).
-                    if (root.category == "all" || root.category == "chats") && root.discover-channels.length > 0: Text {
-                        text: @tr("Public channels");
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-                    if root.category == "all" || root.category == "chats": VerticalLayout {
+                    results-list := VerticalLayout {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
                         spacing: Spacing.xxs;
-                        for ch in root.discover-channels: Rectangle {
-                            height: Spacing.touch-target-min * Appearance.text-grow;
-                            border-radius: Spacing.radius-sm;
-                            background: ch-touch.pressed ? Materials.pressed : ch-touch.has-hover ? Colors.surface-hover : transparent;
-                            accessible-role: button;
-                            accessible-label: ch.joined ? @tr("Open {}", ch.name) : @tr("Join {}", ch.name);
-                            accessible-action-default => { root.channel-selected(ch.id); }
-                            ch-touch := TouchArea { enabled: root.show; mouse-cursor: pointer; clicked => { root.channel-selected(ch.id); } }
-                            HorizontalLayout {
-                                x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%;
-                                spacing: Spacing.sm;
-                                Rectangle {
-                                    width: 32px; height: 32px; border-radius: self.width / 2; clip: true;
-                                    background: Colors.inset;
-                                    if ch.has-icon: Image { width: 100%; height: 100%; source: ch.icon; image-fit: cover; }
-                                    if !ch.has-icon: Text { text: "#"; color: Colors.text-muted; font-size: Typography.base; width: 100%; height: 100%; horizontal-alignment: center; vertical-alignment: center; }
+
+                        // Jump to (conversations). An empty query is already titled
+                        // "Recent conversations" above; two headers stacked there.
+                        if (root.category == "all" || root.category == "chats") && root.query != "" && root.conversations.length > 0: Text {
+                            text: @tr("Jump to").to-uppercase();
+                            color: Colors.text-muted;
+                            font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
+                            letter-spacing: self.font-size * 0.06;
+                        }
+                        if root.category == "all" || root.category == "chats": VerticalLayout {
+                            for c[i] in root.conversations: ConvRow {
+                                interactive: root.show;
+                                item-id: c.id;
+                                name: c.name;
+                                conv-type: c.conv-type;
+                                private-channel: c.private-channel;
+                                unread-count: c.unread-count;
+                                selected: i == root.selected-index;
+                                clicked(id, t) => { root.conversation-selected(id, t); }
+                            }
+                        }
+
+                        // Public channels — discover and join. Server results; tap
+                        // to join (or open, if already a member).
+                        if (root.category == "all" || root.category == "chats") && root.discover-channels.length > 0: Text {
+                            text: @tr("Public channels").to-uppercase();
+                            color: Colors.text-muted;
+                            font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
+                            letter-spacing: self.font-size * 0.06;
+                        }
+                        if root.category == "all" || root.category == "chats": VerticalLayout {
+                            spacing: Spacing.xxs;
+                            for ch in root.discover-channels: Rectangle {
+                                height: Spacing.touch-target-min * Appearance.text-grow;
+                                border-radius: Spacing.radius-control;
+                                background: ch-touch.pressed ? Materials.pressed : ch-touch.has-hover ? Colors.surface-hover : transparent;
+                                accessible-role: button;
+                                accessible-label: ch.joined ? @tr("Open {}", ch.name) : @tr("Join {}", ch.name);
+                                accessible-action-default => { root.channel-selected(ch.id); }
+                                ch-touch := TouchArea { enabled: root.show; mouse-cursor: pointer; clicked => { root.channel-selected(ch.id); } }
+                                HorizontalLayout {
+                                    x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%;
+                                    spacing: Spacing.sm;
+                                    Avatar {
+                                        accessible-role: none;
+                                        size: 32px;
+                                        source: ch.has-icon ? ch.icon : root.empty-image;
+                                        name: ch.name;
+                                        fallback-bg: Colors.surface-control;
+                                    }
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        alignment: center;
+                                        Text { text: ch.name; color: Colors.text-primary; font-size: 13px * Appearance.text-scale; font-weight: Typography.semibold; wrap: no-wrap; overflow: elide; }
+                                        if ch.description != "": Text { text: ch.description; color: Colors.text-muted; font-size: Typography.xs; wrap: no-wrap; overflow: elide; }
+                                    }
+                                    Text {
+                                        text: ch.joined ? @tr("Open") : @tr("Join");
+                                        color: Colors.text-muted;
+                                        font-size: Typography.sm;
+                                        vertical-alignment: center;
+                                    }
                                 }
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    alignment: center;
-                                    Text { text: ch.name; color: Colors.text-primary; font-size: Typography.sm; wrap: no-wrap; overflow: elide; }
-                                    if ch.description != "": Text { text: ch.description; color: Colors.text-muted; font-size: Typography.xs; wrap: no-wrap; overflow: elide; }
-                                }
-                                Text {
-                                    text: ch.joined ? @tr("Open") : @tr("Join");
-                                    color: Colors.primary;
-                                    font-size: Typography.sm;
+                            }
+                        }
+
+                        // Messages (content)
+                        if root.category != "all" && root.category != "chats" && root.messages.length > 0: Text {
+                            text: (root.category == "all" ? @tr("Messages and shared content")
+                                : root.category == "media" ? @tr("Photos and videos")
+                                : root.category == "files" ? @tr("Files")
+                                : root.category == "links" ? @tr("Links")
+                                : root.category == "voice" ? @tr("Voice messages") : @tr("Messages")).to-uppercase();
+                            color: Colors.text-muted;
+                            font-size: 11px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
+                            letter-spacing: self.font-size * 0.06;
+                        }
+                        if root.category != "media" && root.category != "chats": VerticalLayout {
+                            for m[j] in root.messages: VerticalLayout {
+                                property <bool> section-start: root.category == "all" && j < root.message-kinds.length
+                                    && (j == 0 || root.message-kinds[j] != root.message-kinds[max(0, j - 1)]);
+                                if self.section-start: Text {
+                                    height: 22px;
+                                    text: (root.message-kinds[j] == "media" ? @tr("Photos and videos")
+                                        : root.message-kinds[j] == "files" ? @tr("Files")
+                                        : root.message-kinds[j] == "links" ? @tr("Links")
+                                        : root.message-kinds[j] == "voice" ? @tr("Voice messages") : @tr("Messages")).to-uppercase();
+                                    color: Colors.text-muted;
+                                    font-size: 11px * Appearance.text-scale;
+                                    font-weight: Typography.semibold;
+                                    letter-spacing: self.font-size * 0.06;
                                     vertical-alignment: center;
                                 }
+                                MsgRow {
+                                    interactive: root.show;
+                                    message-id: m.message-id;
+                                    channel-name: m.channel-name;
+                                    sender-name: m.sender-name;
+                                    content-preview: m.content-preview;
+                                    preview-before: m.preview-before;
+                                    preview-match: m.preview-match;
+                                    preview-after: m.preview-after;
+                                    match-term: root.query;
+                                    highlight-start: m.highlight-start;
+                                    highlight-end: m.highlight-end;
+                                    timestamp: m.timestamp;
+                                    selected: (root.visible-conversation-count + j) == root.selected-index;
+                                    clicked(id) => { root.message-selected(id); }
+                                }
                             }
                         }
-                    }
-
-                    // Messages (content)
-                    if root.category != "all" && root.category != "chats" && root.messages.length > 0: Text {
-                        text: root.category == "all" ? @tr("Messages and shared content")
-                            : root.category == "media" ? @tr("Photos and videos")
-                            : root.category == "files" ? @tr("Files")
-                            : root.category == "links" ? @tr("Links")
-                            : root.category == "voice" ? @tr("Voice messages") : @tr("Messages");
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-                    if root.category != "media" && root.category != "chats": VerticalLayout {
-                        for m[j] in root.messages: VerticalLayout {
-                            property <bool> section-start: root.category == "all" && j < root.message-kinds.length
-                                && (j == 0 || root.message-kinds[j] != root.message-kinds[max(0, j - 1)]);
-                            if self.section-start: Text {
-                                height: 22px;
-                                text: root.message-kinds[j] == "media" ? @tr("Photos and videos")
-                                    : root.message-kinds[j] == "files" ? @tr("Files")
-                                    : root.message-kinds[j] == "links" ? @tr("Links")
-                                    : root.message-kinds[j] == "voice" ? @tr("Voice messages") : @tr("Messages");
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                vertical-alignment: center;
-                            }
-                            MsgRow {
-                                interactive: root.show;
-                                message-id: m.message-id;
-                                channel-name: m.channel-name;
-                                sender-name: m.sender-name;
-                                content-preview: m.content-preview;
-                                preview-before: m.preview-before;
-                                preview-match: m.preview-match;
-                                preview-after: m.preview-after;
-                                match-term: root.query;
-                                highlight-start: m.highlight-start;
-                                highlight-end: m.highlight-end;
-                                timestamp: m.timestamp;
-                                selected: (root.visible-conversation-count + j) == root.selected-index;
-                                clicked(id) => { root.message-selected(id); }
+                        if root.category == "media": media-grid := Rectangle {
+                            property <int> columns: root.width < 600px ? 2 : 4;
+                            property <length> gutter: Spacing.sm;
+                            property <length> tile: (self.width - (self.columns - 1) * self.gutter) / self.columns;
+                            height: Math.ceil(root.messages.length / self.columns) * (self.tile + self.gutter);
+                            for m[index] in root.messages: Rectangle {
+                                x: mod(index, media-grid.columns) * (media-grid.tile + media-grid.gutter);
+                                y: Math.floor(index / media-grid.columns) * (media-grid.tile + media-grid.gutter);
+                                width: media-grid.tile;
+                                height: media-grid.tile;
+                                border-radius: Spacing.radius-control;
+                                background: Colors.surface-control;
+                                border-width: root.visible-conversation-count + index == root.selected-index ? 2px : 0px;
+                                border-color: Colors.focus-ring;
+                                clip: true;
+                                accessible-role: button;
+                                accessible-label: m.content-preview;
+                                accessible-action-default => { root.message-selected(m.message-id); }
+                                if index < root.has-thumbnails.length && root.has-thumbnails[index]: Image {
+                                    width: 100%; height: 100%; source: root.thumbnails[index]; image-fit: cover;
+                                }
+                                if index >= root.has-thumbnails.length || !root.has-thumbnails[index]: Image {
+                                    source: Icons.image; width: 30px; height: 30px;
+                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                    colorize: Colors.text-muted;
+                                }
+                                Rectangle { y: parent.height - 38px; height: 38px; width: 100%; background: Materials.thick;
+                                    Text { text: m.content-preview; color: Colors.text-primary; font-size: Typography.xs;
+                                        x: Spacing.sm; width: parent.width - 2 * Spacing.sm; height: 100%; vertical-alignment: center; overflow: elide; }
+                                }
+                                TouchArea { enabled: root.show; mouse-cursor: pointer; clicked => { root.message-selected(m.message-id); } }
                             }
                         }
-                    }
-                    if root.category == "media": media-grid := Rectangle {
-                        property <int> columns: root.width < 600px ? 2 : 4;
-                        property <length> gutter: Spacing.sm;
-                        property <length> tile: (self.width - (self.columns - 1) * self.gutter) / self.columns;
-                        height: Math.ceil(root.messages.length / self.columns) * (self.tile + self.gutter);
-                        for m[index] in root.messages: Rectangle {
-                            x: mod(index, media-grid.columns) * (media-grid.tile + media-grid.gutter);
-                            y: Math.floor(index / media-grid.columns) * (media-grid.tile + media-grid.gutter);
-                            width: media-grid.tile;
-                            height: media-grid.tile;
-                            border-radius: Spacing.radius-md;
-                            background: Colors.inset;
-                            border-width: root.visible-conversation-count + index == root.selected-index ? 2px : 0px;
-                            border-color: Colors.primary;
-                            clip: true;
-                            accessible-role: button;
-                            accessible-label: m.content-preview;
-                            accessible-action-default => { root.message-selected(m.message-id); }
-                            if index < root.has-thumbnails.length && root.has-thumbnails[index]: Image {
-                                width: 100%; height: 100%; source: root.thumbnails[index]; image-fit: cover;
-                            }
-                            if index >= root.has-thumbnails.length || !root.has-thumbnails[index]: Image {
-                                source: Icons.image; width: 30px; height: 30px;
-                                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                colorize: Colors.text-muted;
-                            }
-                            Rectangle { y: parent.height - 38px; height: 38px; width: 100%; background: Materials.thick;
-                                Text { text: m.content-preview; color: Colors.text-primary; font-size: Typography.xs;
-                                    x: Spacing.sm; width: parent.width - 2 * Spacing.sm; height: 100%; vertical-alignment: center; overflow: elide; }
-                            }
-                            TouchArea { enabled: root.show; mouse-cursor: pointer; clicked => { root.message-selected(m.message-id); } }
+                        for section[i] in ["Messages", "Media", "Files", "Links", "Voice"]: Button {
+                            // `section` is a category key (`to-lowercase()` selects the page).
+                            property <string> more-label: section == "Messages" ? @tr("Show more messages")
+                                : section == "Media" ? @tr("Show more media")
+                                : section == "Files" ? @tr("Show more files")
+                                : section == "Links" ? @tr("Show more links")
+                                : @tr("Show more voice");
+                            visible: (root.category == "all" || root.category == section.to-lowercase()) && root.category-counts[i + 2] > root.page-limits[i + 2];
+                            height: self.visible ? Spacing.touch-target-min : 0px;
+                            text: more-label;
+                            variant: "secondary";
+                            border-radius: Spacing.radius-control;
+                            disabled: !self.visible || !root.show;
+                            clicked => { root.show-more(section.to-lowercase()); }
                         }
-                    }
-                    for section[i] in ["Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
-                        // `section` is a category key (`to-lowercase()` selects the page).
-                        property <string> more-label: section == "Messages" ? @tr("Show more messages")
-                            : section == "Media" ? @tr("Show more media")
-                            : section == "Files" ? @tr("Show more files")
-                            : section == "Links" ? @tr("Show more links")
-                            : @tr("Show more voice");
-                        visible: (root.category == "all" || root.category == section.to-lowercase()) && root.category-counts[i + 2] > root.page-limits[i + 2];
-                        height: self.visible ? Spacing.touch-target-min : 0px;
-                        border-radius: Spacing.radius-lg;
-                        background: more-touch.pressed ? Materials.pressed : more-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                        accessible-role: button;
-                        accessible-label: more-label;
-                        accessible-action-default => { root.show-more(section.to-lowercase()); }
-                        more-touch := TouchArea { enabled: parent.visible; mouse-cursor: pointer; clicked => { root.show-more(section.to-lowercase()); } }
-                        Text { accessible-role: none; text: more-label; color: Colors.primary; font-size: Typography.sm; width: 100%; height: 100%; horizontal-alignment: center; vertical-alignment: center; }
-                    }
 
-                    if root.searching: Text {
-                        text: @tr("Searching this device…");
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                    }
+                        if root.searching: Text {
+                            text: @tr("Searching this device…");
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                        }
 
-                    // A content tab with nothing shared yet says so, instead of
-                    // showing an empty list under the recent searches.
-                    if root.query == "" && !root.searching && root.messages.length == 0
-                        && (root.category == "media" || root.category == "files" || root.category == "links" || root.category == "voice"): Text {
-                        text: root.category == "media" ? @tr("No photos or videos yet")
-                            : root.category == "files" ? @tr("No files yet")
-                            : root.category == "links" ? @tr("No links yet") : @tr("No voice messages yet");
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                    }
+                        // A content tab with nothing shared yet says so.
+                        if root.query == "" && !root.searching && root.messages.length == 0
+                            && (root.category == "media" || root.category == "files" || root.category == "links" || root.category == "voice"): SearchEmptyState {
+                            icon: root.category == "media" ? Icons.image : root.category == "files" ? Icons.file
+                                : root.category == "links" ? Icons.link : Icons.mic;
+                            title: root.category == "media" ? @tr("No photos or videos yet")
+                                : root.category == "files" ? @tr("No files yet")
+                                : root.category == "links" ? @tr("No links yet") : @tr("No voice messages yet");
+                        }
 
-                    if root.total-count == 0 && root.discover-channels.length == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
-                        text: @tr("No matches on this device");
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
+                        if root.total-count == 0 && root.discover-channels.length == 0 && root.query != "" && !root.searching && !root.query-is-handle: SearchEmptyState {
+                            title: @tr("No matches on this device");
+                        }
                     }
                 }
             }
@@ -1101,19 +1113,21 @@ export component UnifiedSearch inherits Rectangle {
         TouchArea { enabled: root.date-sheet-open; clicked => { root.date-sheet-open = false; } }
         GlassSurface {
             material-level: 3; elevation: 4;
+            border-width: 1px;
+            border-color: Colors.border;
             x: (parent.width - self.width) / 2;
             y: max(0px, min(parent.height - self.height - Spacing.md
                 + (1 - date-layer.reveal) * 48px, parent.height - self.height));
-            width: min(420px, parent.width - 24px);
+            width: min(420px, max(0px, parent.width - 2 * Spacing.panel-gutter));
             height: min(548px, parent.height - 24px);
-            border-radius: Spacing.radius-xl;
+            border-radius: Spacing.radius-panel;
             transform-origin: { x: self.width / 2, y: self.height };
             transform-scale-x: 94% + date-layer.reveal * 6%;
             transform-scale-y: 94% + date-layer.reveal * 6%;
             VerticalLayout {
                 padding: Spacing.lg;
                 spacing: Spacing.xs;
-                Text { text: @tr("date filter" => "When"); color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
+                Text { text: @tr("date filter" => "When"); color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
                 Flickable {
                     height: Spacing.touch-target-min;
                     viewport-width: quick-choices.preferred-width;
@@ -1128,7 +1142,7 @@ export component UnifiedSearch inherits Rectangle {
                         : choice == "30 days" ? @tr("30 days")
                         : @tr("This year");
                     width: max(70px, choice-label.preferred-width + 20px);
-                    height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
                     background: choice-touch.pressed ? Materials.pressed : choice-touch.has-hover ? Materials.hover : transparent;
                     accessible-role: button; accessible-label: choice-name;
                     accessible-action-default => {
@@ -1144,7 +1158,7 @@ export component UnifiedSearch inherits Rectangle {
                             return accept;
                         } return reject; }
                     }
-                    Rectangle { border-width: choice-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-sm; }
+                    Rectangle { border-width: choice-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-control; }
                     choice-touch := TouchArea { mouse-cursor: pointer; clicked => {
                         root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
                         root.date-sheet-open = false;
@@ -1156,28 +1170,18 @@ export component UnifiedSearch inherits Rectangle {
                 }
                 HorizontalLayout {
                     height: Spacing.touch-target-min;
-                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                        background: prev-touch.pressed ? Materials.pressed : prev-touch.has-hover ? Materials.hover : Colors.inset;
-                        accessible-role: button; accessible-label: @tr("Previous month");
-                        accessible-action-default => { root.calendar-shift(-1); }
-                        prev-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.calendar-shift(-1); return accept; } return reject; }
-                        }
-                        Rectangle { border-width: prev-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
-                        prev-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(-1); } }
-                        Text { text: "‹"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    IconAction {
+                        icon: Icons.chevron-left;
+                        label: @tr("Previous month");
+                        enabled: root.date-sheet-open;
+                        clicked => { root.calendar-shift(-1); }
                     }
                     Text { text: root.calendar-month; color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center; }
-                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                        background: next-touch.pressed ? Materials.pressed : next-touch.has-hover ? Materials.hover : Colors.inset;
-                        accessible-role: button; accessible-label: @tr("Next month");
-                        accessible-action-default => { root.calendar-shift(1); }
-                        next-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
-                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.calendar-shift(1); return accept; } return reject; }
-                        }
-                        Rectangle { border-width: next-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
-                        next-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(1); } }
-                        Text { text: "›"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    IconAction {
+                        icon: Icons.chevron-right;
+                        label: @tr("Next month");
+                        enabled: root.date-sheet-open;
+                        clicked => { root.calendar-shift(1); }
                     }
                 }
                 HorizontalLayout {
@@ -1193,9 +1197,12 @@ export component UnifiedSearch inherits Rectangle {
                         x: mod(index, 7) * parent.width / 7;
                         y: Math.floor(index / 7) * Spacing.touch-target-min;
                         width: parent.width / 7; height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-lg;
-                        background: day.date == root.custom-start || day.date == root.custom-end ? Colors.action-fill
-                            : root.custom-start != "" && root.custom-end != "" && day.date > root.custom-start && day.date < root.custom-end ? Colors.selected
+                        border-radius: Spacing.radius-control;
+                        property <bool> range-end: day.date == root.custom-start || day.date == root.custom-end;
+                        property <bool> in-range: root.custom-start != "" && root.custom-end != ""
+                            && day.date > root.custom-start && day.date < root.custom-end;
+                        background: self.range-end ? Colors.tint-strong
+                            : self.in-range ? Colors.tint-weak
                             : day-touch.pressed ? Materials.pressed : day-touch.has-hover ? Materials.hover : transparent;
                         transform-origin: { x: self.width / 2, y: self.height / 2 };
                         transform-scale-x: day-touch.pressed ? 90% : 100%;
@@ -1231,7 +1238,7 @@ export component UnifiedSearch inherits Rectangle {
                                 return reject;
                             }
                         }
-                        if day-keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
+                        if day-keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: Spacing.radius-control; }
                         day-touch := TouchArea { mouse-cursor: pointer;
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down) {
@@ -1255,8 +1262,8 @@ export component UnifiedSearch inherits Rectangle {
                                 root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
                             }
                         } }
-                        Text { text: day.label; width: 100%; height: 100%; color: day.date == root.custom-start || day.date == root.custom-end ? Colors.on-action : day.is-today ? Colors.primary : day.in-month ? Colors.text-primary : Colors.text-muted;
-                            font-weight: day.is-today ? Typography.semibold : Typography.normal;
+                        Text { text: day.label; width: 100%; height: 100%; color: day.in-month ? Colors.text-primary : Colors.text-muted;
+                            font-weight: day.is-today || parent.range-end ? Typography.semibold : 400;
                             font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
@@ -1274,12 +1281,14 @@ export component UnifiedSearch inherits Rectangle {
         TouchArea { enabled: root.picker-mode != ""; clicked => { root.picker-mode = ""; } }
         GlassSurface {
             material-level: 3; elevation: 4;
+            border-width: 1px;
+            border-color: Colors.border;
             x: (parent.width - self.width) / 2;
             y: max(0px, min(parent.height - self.height - Spacing.md
                 + (1 - picker-layer.reveal) * 48px, parent.height - self.height));
-            width: min(420px, parent.width - 24px);
+            width: min(420px, max(0px, parent.width - 2 * Spacing.panel-gutter));
             height: min(560px, parent.height - 24px);
-            border-radius: Spacing.radius-xl;
+            border-radius: Spacing.radius-panel;
             transform-origin: { x: self.width / 2, y: self.height };
             transform-scale-x: 94% + picker-layer.reveal * 6%;
             transform-scale-y: 94% + picker-layer.reveal * 6%;
@@ -1288,11 +1297,11 @@ export component UnifiedSearch inherits Rectangle {
                 // not above the field.
                 alignment: start;
                 padding: Spacing.lg; spacing: Spacing.sm;
-                Text { vertical-stretch: 0; text: root.picker-mode == "from" ? @tr("From a person") : @tr("In a chat"); color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
+                Text { vertical-stretch: 0; text: root.picker-mode == "from" ? @tr("From a person") : @tr("In a chat"); color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
                 Rectangle {
                     vertical-stretch: 0;
-                    height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                    background: Colors.inset;
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
+                    background: Colors.surface-control;
                     accessible-role: text-input;
                     accessible-label: root.picker-mode == "from" ? @tr("Search people") : @tr("Search chats");
                     if root.picker-query == "" && picker-input.preedit-text == "": Text {
@@ -1312,7 +1321,7 @@ export component UnifiedSearch inherits Rectangle {
                         width: parent.width; spacing: Spacing.xxs;
                         for option in root.picker-options: Rectangle {
                             height: Spacing.touch-target-min + Spacing.xs;
-                            border-radius: Spacing.radius-sm;
+                            border-radius: Spacing.radius-control;
                             background: option-touch.pressed ? Materials.pressed : option-touch.has-hover ? Materials.hover : transparent;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale-x: option-touch.pressed ? 96% : 100%;
@@ -1333,15 +1342,27 @@ export component UnifiedSearch inherits Rectangle {
                                 root.picker-mode = "";
                                 root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
                             } }
-                            Rectangle { x: Spacing.sm; y: (parent.height - self.height) / 2; width: 32px; height: 32px; border-radius: self.width / 2; background: Colors.selected; clip: true;
-                                if option.has-avatar: Image { source: option.avatar; width: 100%; height: 100%; image-fit: cover; }
-                                if !option.has-avatar: Image { source: option.conv-type == "channel" ? Icons.hash : option.conv-type == "private_group" ? Icons.users : Icons.user;
-                                    x: 8px; y: 8px; width: 16px; height: 16px; colorize: Colors.primary; }
+                            Avatar {
+                                accessible-role: none;
+                                x: Spacing.sm;
+                                y: (parent.height - self.height) / 2;
+                                size: 32px;
+                                source: option.has-avatar ? option.avatar : root.empty-image;
+                                name: option.name;
+                                fallback-bg: Colors.surface-control;
                             }
                             Text { accessible-role: none; text: option.name; x: Spacing.sm + 40px; width: parent.width - Spacing.sm - 48px; height: 100%; color: Colors.text-primary;
-                                font-size: Typography.sm; vertical-alignment: center; overflow: elide; }
+                                font-size: 13px * Appearance.text-scale; font-weight: Typography.semibold; vertical-alignment: center; overflow: elide; }
                         }
-                        if root.picker-options.length == 0: Text { text: root.picker-searching ? @tr("Searching this device…") : @tr("No matches"); color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
+                        if root.picker-options.length == 0 && root.picker-searching: Text {
+                            text: @tr("Searching this device…");
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                        }
+                        if root.picker-options.length == 0 && !root.picker-searching: SearchEmptyState {
+                            title: @tr("No matches");
+                        }
                     }
                 }
             }

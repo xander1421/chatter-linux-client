@@ -1,3 +1,4 @@
+import { Spacing } from "../theme/spacing.slint";
 import { Materials } from "../theme/materials.slint";
 import { CodePreviewPanel } from "code_preview_panel.slint";
 import { PdfPreviewPanel } from "pdf_preview_panel.slint";
@@ -23,8 +24,8 @@ export component CodePreviewOverlay inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: min(parent.width - 80px, 900px);
-        height: min(parent.height - 80px, 700px);
+        width: min(max(0px, parent.width - 2 * Spacing.panel-gutter), 900px);
+        height: min(max(0px, parent.height - 2 * Spacing.panel-gutter), 700px);
         TouchArea { } // Block backdrop clicks
         CodePreviewPanel {
             width: 100%;
@@ -64,8 +65,8 @@ export component PdfPreviewOverlay inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: min(parent.width - 40px, 900px);
-        height: min(parent.height - 40px, 800px);
+        width: min(max(0px, parent.width - 2 * Spacing.panel-gutter), 900px);
+        height: min(max(0px, parent.height - 2 * Spacing.panel-gutter), 800px);
         TouchArea { } // Block backdrop clicks
         PdfPreviewPanel {
             width: 100%;
