@@ -1,0 +1,135 @@
+import { Icons } from "../theme/icons.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { SidebarCards } from "card_types.slint";
+
+global SidebarCardDragState {
+    in property <string> source-card-id;
+}
+
+export global SidebarCardDrag {
+    pure callback payload(string, string) -> data-transfer;
+    pure callback row-for-target(data-transfer, string) -> string;
+}
+
+// Wraps the existing interactive row so clicks and context menus still
+// reach its own pointer handler before a drag crosses the Slint threshold.
+export component SidebarDragSource inherits DragArea {
+    in property <string> row-id;
+    in property <bool> hovered: false;
+    in property <string> source-card-id;
+    enabled: root.row-id != "" && root.source-card-id != "" && root.source-card-id != "saved";
+    data: SidebarCardDrag.payload(root.row-id, root.source-card-id);
+    allow-move: true;
+
+    changed dragging => {
+        if root.dragging {
+            SidebarCardDragState.source-card-id = root.source-card-id;
+            SidebarCards.drag-row-id = root.row-id;
+            SidebarCards.dragging = true;
+        }
+    }
+    drag-finished(action) => {
+        SidebarCardDragState.source-card-id = "";
+        SidebarCards.dragging = false;
+        SidebarCards.drag-row-id = "";
+    }
+
+    @children
+}
+
+component SidebarDropArea inherits DropArea {
+    in property <string> card-id;
+    enabled: root.card-id != "" && root.card-id != "saved";
+
+    can-drop(event) => {
+        return SidebarCardDrag.row-for-target(event.data, root.card-id) == ""
+            ? DragAction.none : DragAction.move;
+    }
+    dropped(event) => {
+        let row-id = SidebarCardDrag.row-for-target(event.data, root.card-id);
+        if row-id == "" { return DragAction.none; }
+        if root.card-id == "new-section" {
+            SidebarCards.drop-new-section(row-id);
+        } else {
+            SidebarCards.drop-on-card(row-id, root.card-id);
+        }
+        return DragAction.move;
+    }
+}
+
+export component SidebarCardDropTarget inherits Rectangle {
+    in property <string> card-id;
+    border-radius: Spacing.radius-panel;
+    border-width: SidebarCards.dragging && SidebarCardDragState.source-card-id != root.card-id
+        ? (target.has-drag ? 2px : 1px) : 0px;
+    border-color: target.has-drag ? Colors.primary : Colors.primary.with-alpha(0.35);
+
+    target := SidebarDropArea {
+        card-id: root.card-id;
+    }
+}
+
+export component SidebarNewSectionDropZone inherits Rectangle {
+    min-height: 44px;
+    border-radius: Spacing.radius-panel;
+    background: target.has-drag ? Colors.tint-strong : transparent;
+    accessible-role: groupbox;
+    accessible-label: label.text;
+
+    // Dashed in theme color. Both dimensions use the same dash pitch.
+    for dash in Math.floor((root.width - 12px) / 10px): Rectangle {
+        x: 8px + dash * 10px;
+        width: 6px;
+        height: 1px;
+        background: Colors.primary;
+    }
+    for dash in Math.floor((root.width - 12px) / 10px): Rectangle {
+        x: 8px + dash * 10px;
+        y: root.height - self.height;
+        width: 6px;
+        height: 1px;
+        background: Colors.primary;
+    }
+    for dash in Math.floor((root.height - 12px) / 10px): Rectangle {
+        y: 8px + dash * 10px;
+        width: 1px;
+        height: 6px;
+        background: Colors.primary;
+    }
+    for dash in Math.floor((root.height - 12px) / 10px): Rectangle {
+        x: root.width - self.width;
+        y: 8px + dash * 10px;
+        width: 1px;
+        height: 6px;
+        background: Colors.primary;
+    }
+    HorizontalLayout {
+        spacing: Spacing.xs;
+        alignment: center;
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: Icons.plus;
+                colorize: Colors.primary;
+                width: 14px;
+                height: 14px;
+                accessible-role: none;
+            }
+        }
+
+        label := Text {
+            text: @tr("Drop here for a new section");
+            color: Colors.primary;
+            font-size: Typography.xs2;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+    }
+    target := SidebarDropArea { card-id: "new-section"; }
+}

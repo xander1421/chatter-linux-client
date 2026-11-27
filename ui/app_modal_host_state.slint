@@ -85,6 +85,7 @@ export global ModalHostState {
     in-out property <string> create-section-emoji: "📁";
     in-out property <string> create-section-id: "";  // set for rename
     in-out property <bool> create-section-loading: false;
+    in-out property <bool> create-section-from-card-drop: false;
     in-out property <string> create-section-conversation-id: "";
     in-out property <ConversationKind> create-section-conversation-kind;
     // Create-channel modal: which tab to open on (0 = Create, 1 = Join)
@@ -363,6 +364,7 @@ export global ModalHostState {
         root.create-section-name = "";
         root.create-section-emoji = "📁";
         root.create-section-id = "";
+        root.create-section-from-card-drop = false;
         root.create-section-conversation-id = "";
         root.create-section-conversation-kind = ConversationKind.channel;
         root.nav-push("create-section");

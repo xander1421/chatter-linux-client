@@ -841,6 +841,7 @@ pub(crate) fn load_sections(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Wire all section-related callbacks.
 pub(crate) fn wire_section_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_create_section(window, ui_ctx);
+    wire_card_drag(window, ui_ctx);
     wire_delete_section(window, ui_ctx);
     wire_rename_section(window, ui_ctx);
     wire_toggle_expanded(window, ui_ctx);
@@ -850,6 +851,96 @@ pub(crate) fn wire_section_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterCl
     wire_move_section(window, ui_ctx);
     wire_set_sort_mode(window, ui_ctx);
     wire_set_conversation_pinned(window, ui_ctx);
+}
+
+struct CardDrag {
+    row_id: SharedString,
+    source_card_id: SharedString,
+    session: chatter_core::client::SessionGuard,
+}
+
+fn wire_card_drag(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let drag = window.global::<crate::SidebarCardDrag>();
+    let client = ui_ctx.clone();
+    drag.on_payload(move |row_id, source_card_id| {
+        let mut data = i_slint_core::DataTransfer::default();
+        data.set_user_data(std::rc::Rc::new(CardDrag {
+            row_id,
+            source_card_id,
+            session: client.session_guard(),
+        }));
+        data
+    });
+    drag.on_row_for_target(|data, target| {
+        data.user_data()
+            .and_then(|payload| payload.downcast::<CardDrag>().ok())
+            .filter(|drag| {
+                drag.source_card_id != target
+                    && target.as_str() != "saved"
+                    && drag.session.is_current()
+            })
+            .map(|drag| drag.row_id.clone())
+            .unwrap_or_default()
+    });
+
+    let cards = window.global::<crate::SidebarCards>();
+    let weak = window.as_weak();
+    cards.on_drop_new_section(move |row_id| {
+        let Some(w) = weak.upgrade() else { return };
+        let row = w
+            .global::<crate::SidebarCards>()
+            .get_cards()
+            .iter()
+            .filter(|card| card.kind.as_str() != "saved")
+            .find_map(|card| {
+                card.rows
+                    .iter()
+                    .chain(card.pinned.iter())
+                    .find(|row| row.conversation_id == row_id)
+            });
+        if let Some(row) = row {
+            let modal = w.global::<crate::ModalHostState>();
+            if !modal.get_create_section_loading() {
+                modal.invoke_start_create_section_for_conversation(
+                    row_id,
+                    row.chat_row.conversation_type,
+                );
+                modal.set_create_section_from_card_drop(true);
+            }
+        }
+    });
+
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    cards.on_drop_on_card(move |row_id, card_id| {
+        let Some(w) = weak.upgrade() else { return };
+        invalidate_structure(&w, &client);
+        let weak = weak.clone();
+        let client = client.clone();
+        let session = client.session_guard();
+        tokio::spawn(async move {
+            if !session.is_current() {
+                return;
+            }
+            let result = client.move_conversation_to_card(row_id.as_str(), card_id.as_str());
+            if !session.is_current() {
+                return;
+            }
+            match result {
+                Ok(()) => {
+                    refresh_sections_ui(&weak, &client);
+                    super::rebuild_chat_list(&weak, &client);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to move conversation to sidebar card");
+                    section_error(
+                        &weak,
+                        chatter_i18n::trf("Couldn't move chat to folder: {}", &[&e]),
+                    );
+                }
+            }
+        });
+    });
 }
 
 fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -863,18 +954,27 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let conversation = (!conv_id_str.is_empty())
             .then(|| crate::bin_ui::converters::conversation_type(kind));
         let moves_conversation = conversation.is_some();
+        let Some(w) = weak.upgrade() else { return };
+        let modal = w.global::<crate::ModalHostState>();
+        if modal.get_create_section_loading() {
+            return;
+        }
+        let from_card_drop = modal.get_create_section_from_card_drop();
+        modal.set_create_section_loading(true);
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
-
-        run_ui!(weak, |w| w.global::<crate::ModalHostState>().set_create_section_loading(true));
-
-        if let Some(w) = weak_clone.upgrade() { invalidate_structure(&w, &ui_ctx); }
+        invalidate_structure(&w, &ui_ctx);
         tokio::spawn(async move {
-            match ui_ctx.create_section(
-                &name_str,
-                &emoji_str,
-                conversation.map(|kind| (conv_id_str.as_str(), kind)),
-            ) {
+            let result = if from_card_drop {
+                ui_ctx.create_section_with(&conv_id_str, &name_str, &emoji_str)
+            } else {
+                ui_ctx.create_section(
+                    &name_str,
+                    &emoji_str,
+                    conversation.map(|kind| (conv_id_str.as_str(), kind)),
+                )
+            };
+            match result {
                 Ok(section) => {
                     tracing::info!(section_id = %section.id, name = %name_str, "Created custom section");
                     run_ui!(weak_clone, |w| {
@@ -1060,9 +1160,7 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 ///
 /// `SectionService::reorder_sections` was fully implemented with zero callers —
 /// the back half of a drag-to-reorder nobody finished. This is its caller.
-/// Deliberately not drag-and-drop: nothing in this UI has ever had a DropArea,
-/// and dragging a row inside a scrolling list is the worst gesture to debut on
-/// a phone. Two menu entries do the same job with no new gesture vocabulary.
+/// Section ordering is exposed through the folder menu.
 fn wire_move_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
