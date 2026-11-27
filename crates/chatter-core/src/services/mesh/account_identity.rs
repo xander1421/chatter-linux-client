@@ -1,4 +1,70 @@
 use super::*;
+use sha2_10::{Digest, Sha256};
+
+pub(super) const PAIRING_RECEIPT_MAGIC: &[u8; 8] = b"CHTRPQR1";
+
+#[derive(zeroize::ZeroizeOnDrop)]
+pub(super) struct PairingOffer {
+    pub token: [u8; 32],
+    pub transcript: [u8; 32],
+    pub expires_at: u64,
+}
+
+pub(super) fn pairing_token(qr: &BindingQr) -> [u8; 32] {
+    Sha256::digest(qr.to_text().as_bytes()).into()
+}
+
+pub(super) fn pairing_receipt(
+    identity: &MeshIdentity,
+    qr: &BindingQr,
+    transcript: &[u8; 32],
+) -> Vec<u8> {
+    let token = pairing_token(qr);
+    let public = identity.signing_public();
+    let preimage = [
+        PAIRING_RECEIPT_MAGIC.as_slice(),
+        &token,
+        transcript,
+        &public,
+    ]
+    .concat();
+    let signature = chatter_mesh_noise::sign::sign_bytes(identity, &preimage);
+    [
+        PAIRING_RECEIPT_MAGIC.as_slice(),
+        &token,
+        &public,
+        &signature,
+    ]
+    .concat()
+}
+
+pub(super) fn store_paired_pin(
+    state: &mut state::LinkStateInner,
+    storage: &dyn Storage,
+    sealer: &dyn Sealer,
+    peer: &PeerId,
+    noise: &[u8; 32],
+    signing: &[u8; 32],
+    pairing: chatter_mesh_link::registry::PairingKey,
+) -> bool {
+    let mut candidate = state.peers.clone();
+    if !candidate.pair_noise_identity(peer, noise, signing, now_millis(), pairing.clone()) {
+        return false;
+    }
+    if let Ok(sealed) = sealer.seal(&candidate.pins_to_bytes())
+        && storage
+            .save(chatter_mesh_store::storage::StorageKey::PeerPins, &sealed)
+            .is_ok()
+    {
+        state
+            .pairing_couriers
+            .insert(candidate.contact(peer).clone(), &pairing);
+        state.peers = candidate;
+        state.pairing_beacon_slots.invalidate_contacts();
+        return true;
+    }
+    false
+}
 
 impl MeshService {
     /// The account identity is disclosed only to this selected, live Noise peer.
@@ -10,6 +76,8 @@ impl MeshService {
         device_id: u32,
     ) -> Result<(), MeshError> {
         use libsignal_protocol::IdentityKeyPair;
+        let peer = &self.state.route(peer);
+        let identity = self.identity()?;
         let (mesh_static, transcript, sender_nonce, recipient_nonce) = self.state.with(|s| {
             (
                 s.sessions.remote_static(peer),
@@ -43,8 +111,8 @@ impl MeshService {
                 .as_ref()
                 .try_into()
                 .map_err(|_| MeshError::Binding("invalid Signal public key length".into()))?,
-            mesh_static: self.identity.static_public(),
-            mesh_signing: self.identity.signing_public(),
+            mesh_static: identity.static_public(),
+            mesh_signing: identity.signing_public(),
             handshake_hash,
             sender_nonce,
             recipient_nonce,
@@ -54,7 +122,7 @@ impl MeshService {
             account_signature: [0; 64],
             mesh_signature: [0; 64],
         }
-        .sign(&keypair, &self.identity)
+        .sign(&keypair, &identity)
         .ok_or_else(|| MeshError::Binding("could not sign account binding".into()))?;
         self.ble
             .send(BleCommand::BindingProof {
@@ -63,7 +131,7 @@ impl MeshService {
             })
             .map_err(|_| MeshError::NotRunning)?;
         self.binding_store
-            .offer(&account_id.to_string(), peer, now)?;
+            .offer(&account_id.to_string(), &self.state.contact(peer), now)?;
         self.state.with(|s| {
             s.binding_offers.insert(peer.clone());
         });
@@ -79,6 +147,8 @@ impl MeshService {
         device_id: u32,
     ) -> Result<String, MeshError> {
         use libsignal_protocol::IdentityKeyPair;
+        let peer = &self.state.route(peer);
+        let identity = self.identity()?;
         if device_id == 0 {
             return Err(MeshError::Binding("no account device is active".into()));
         }
@@ -89,10 +159,14 @@ impl MeshService {
         let bytes = zeroize::Zeroizing::new(bytes);
         let keypair = IdentityKeyPair::try_from(bytes.as_slice())
             .map_err(|_| MeshError::Binding("invalid local account identity".into()))?;
-        let nonce = self
-            .state
-            .with(|s| s.chatter_hello.local_nonce(peer))
-            .ok_or_else(|| self.needs_session(peer))?;
+        let Some((nonce, transcript)) = self.state.with(|s| {
+            Some((
+                s.chatter_hello.local_nonce(peer)?,
+                s.sessions.handshake_hash(peer)?,
+            ))
+        }) else {
+            return Err(self.needs_session(peer));
+        };
         let qr = BindingQr {
             account_id: *account_id.0.as_bytes(),
             device_id,
@@ -102,14 +176,26 @@ impl MeshService {
                 .as_ref()
                 .try_into()
                 .map_err(|_| MeshError::Binding("invalid Signal public key length".into()))?,
-            mesh_static: self.identity.static_public(),
-            mesh_signing: self.identity.signing_public(),
+            mesh_static: identity.static_public(),
+            mesh_signing: identity.signing_public(),
             nonce,
             expires_at: now_secs() + PROOF_TTL_SECS,
             signature: [0; 64],
         }
-        .sign(&keypair, &self.identity)
+        .sign(&keypair, &identity)
         .ok_or_else(|| MeshError::Binding("could not sign QR identity".into()))?;
+        self.state.with(|s| {
+            s.pairing_offers
+                .retain(|_, offer| offer.expires_at > now_secs());
+            s.pairing_offers.insert(
+                peer.clone(),
+                PairingOffer {
+                    token: pairing_token(&qr),
+                    transcript,
+                    expires_at: qr.expires_at,
+                },
+            );
+        });
         Ok(qr.to_text())
     }
 
@@ -135,7 +221,7 @@ impl MeshService {
 
     /// Human comparison code for the current Noise transcript and both static keys.
     pub fn comparison_code(&self, peer: &PeerId) -> Option<String> {
-        use sha2_10::{Digest, Sha256};
+        let peer = &self.state.route(peer);
         let (remote, transcript) = self.state.with(|s| {
             (
                 s.sessions.remote_static(peer),
@@ -145,7 +231,7 @@ impl MeshService {
         let (Some(remote), Some(transcript)) = (remote, transcript) else {
             return None;
         };
-        let own = self.identity.static_public();
+        let own = self.identity().ok()?.static_public();
         let (first, second) = if own <= remote {
             (own, remote)
         } else {
@@ -162,9 +248,17 @@ impl MeshService {
     }
 
     pub fn binding_state(&self, owner: UserId, peer: &PeerId) -> Result<PeerBinding, MeshError> {
-        if let Some(key) = self.state.with(|s| s.sessions.remote_static(peer)) {
-            self.binding_store
-                .observe_live_key(&owner.to_string(), peer, &key)?;
+        let peer = &self.state.contact(peer);
+        let route = self.state.route(peer);
+        if let Some(key) = self.state.with(|s| s.sessions.remote_static(&route)) {
+            if let Some((current, _)) = self.state.rotated_keys(&route) {
+                if key != current {
+                    return Ok(PeerBinding::KeyChanged);
+                }
+            } else {
+                self.binding_store
+                    .observe_live_key(&owner.to_string(), peer, &key)?;
+            }
         }
         if let Some((account_id, old_key)) = self
             .binding_store
@@ -197,6 +291,7 @@ impl MeshService {
         peer: &PeerId,
     ) -> Result<(SignalStore, libsignal_protocol::ProtocolAddress), MeshError> {
         use libsignal_protocol::{DeviceId, ProtocolAddress};
+        let peer = &self.state.contact(peer);
         let PeerBinding::Verified {
             account_id,
             device_id,
@@ -226,7 +321,7 @@ impl MeshService {
     pub fn signal_opted_in(&self, owner: UserId, peer: &PeerId) -> Result<bool, MeshError> {
         Ok(self
             .binding_store
-            .signal_opted_in(&owner.to_string(), peer)?)
+            .signal_opted_in(&owner.to_string(), &self.state.contact(peer))?)
     }
 
     pub fn signal_protection_label(
@@ -257,9 +352,9 @@ impl MeshService {
     /// Start a Noise handshake with `peer` if no session exists, so actions
     /// that need one (binding, invites) are ready by the time they are tapped.
     pub fn open_session(&self, peer: &PeerId) {
-        let _ = self
-            .ble
-            .send(BleCommand::OpenSession { peer: peer.clone() });
+        let _ = self.ble.send(BleCommand::OpenSession {
+            peer: self.state.route(peer),
+        });
     }
 
     pub fn set_signal_opt_in(
@@ -269,6 +364,7 @@ impl MeshService {
         enabled: bool,
     ) -> Result<(), MeshError> {
         let _signal_guard = self.signal_lock.lock();
+        let peer = &self.state.contact(peer);
         if enabled
             && !matches!(
                 self.binding_state(owner, peer)?,
@@ -314,6 +410,7 @@ impl MeshService {
         self.state.with(|s| {
             s.pending_bindings.clear();
             s.binding_offers.clear();
+            s.pairing_offers.clear();
         });
         Ok(())
     }
@@ -327,14 +424,26 @@ impl MeshService {
         peer: &PeerId,
         scanned_qr: Option<&str>,
     ) -> Result<PeerBinding, MeshError> {
+        let identity = self.identity()?;
+        if scanned_qr.is_none() && !self.is_paired(peer) {
+            return Err(MeshError::Binding(
+                "scan this contact's QR code to pair".into(),
+            ));
+        }
+        let peer = &self.state.route(peer);
+        let contact = self.state.contact(peer);
         let proof = self
             .state
             .with(|s| s.pending_bindings.get(peer).cloned())
             .ok_or_else(|| MeshError::Binding("wait for this peer's live account proof".into()))?;
         let account = uuid::Uuid::from_bytes(proof.account_id).to_string();
-        let method = if let Some(text) = scanned_qr {
-            let qr = BindingQr::from_text(text, now_secs())
-                .ok_or_else(|| MeshError::Binding("QR invite is invalid or expired".into()))?;
+        let qr = scanned_qr
+            .map(|text| {
+                BindingQr::from_text(text, now_secs())
+                    .ok_or_else(|| MeshError::Binding("QR invite is invalid or expired".into()))
+            })
+            .transpose()?;
+        let method = if let Some(qr) = qr.as_ref() {
             if !qr.matches(&proof) {
                 return Err(MeshError::Binding(
                     "QR identity does not match the live peer".into(),
@@ -367,23 +476,49 @@ impl MeshService {
             ));
         }
         let _signal_guard = self.signal_lock.lock();
+        if let Some(qr) = &qr {
+            let pairing = pairing::establish_key(&pairing_token(qr), &hash, &remote, &local, false);
+            let paired = self.state.with(|s| {
+                s.sessions.handshake_hash(peer) == Some(hash)
+                    && store_paired_pin(
+                        s,
+                        self.storage.as_ref(),
+                        self.sealer.as_ref(),
+                        peer,
+                        &proof.mesh_static,
+                        &proof.mesh_signing,
+                        pairing,
+                    )
+            });
+            if !paired {
+                return Err(MeshError::Binding(
+                    "could not persist the live mesh pairing".into(),
+                ));
+            }
+        }
         let result = self.binding_store.accept(
             &owner.to_string(),
-            peer,
+            &contact,
             &proof,
             method,
             now_secs(),
-            scanned_qr.is_some(),
+            qr.is_some(),
         )?;
         self.state.with(|s| {
             s.pending_bindings.remove(peer);
         });
         if matches!(result, PeerBinding::Verified { .. }) {
+            if let Some(qr) = qr {
+                let _ = self.ble.send(BleCommand::BindingProof {
+                    peer: peer.clone(),
+                    bytes: pairing_receipt(&identity, &qr, &hash),
+                });
+            }
             match signal_mesh::bundle_for_peer(
                 &self.key_store,
                 &self.binding_store,
                 &owner.to_string(),
-                peer,
+                &contact,
                 local_device_id,
                 now_secs(),
             ) {

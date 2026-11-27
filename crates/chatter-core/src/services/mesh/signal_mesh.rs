@@ -12,8 +12,8 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use std::sync::Arc;
 
-use chatter_proto::chat_v1::{SignalPreKeyBundle, signal_pre_key_bundle};
 use crate::storage::{KeyStore, mesh_binding_store::MeshBindingStore};
+use chatter_proto::chat_v1::{SignalPreKeyBundle, signal_pre_key_bundle};
 
 use super::MeshError;
 use crate::domain::mesh::frames::{BUNDLE_COUNT, BUNDLE_TTL_SECS, BundleFrame, CarrierFrame};
@@ -97,16 +97,16 @@ impl SignalPlaintext {
     }
 }
 
-pub fn conversation_id(a: &chatter_mesh::ids::PeerId, b: &chatter_mesh::ids::PeerId) -> [u8; 16] {
-    let (first, second) = if a.as_str() <= b.as_str() {
-        (a, b)
-    } else {
-        (b, a)
-    };
+pub fn conversation_id(
+    a: &libsignal_protocol::ProtocolAddress,
+    b: &libsignal_protocol::ProtocolAddress,
+) -> [u8; 16] {
+    let a = (a.name(), u32::from(a.device_id()));
+    let b = (b.name(), u32::from(b.device_id()));
+    let (first, second) = if a <= b { (a, b) } else { (b, a) };
     let name = format!(
-        "chatter.mesh.signal.dm.v1:{}:{}",
-        first.as_str(),
-        second.as_str()
+        "chatter.mesh.signal.dm.v2:{}:{}:{}:{}",
+        first.0, first.1, second.0, second.1
     );
     *uuid::Uuid::new_v5(&uuid::Uuid::nil(), name.as_bytes()).as_bytes()
 }

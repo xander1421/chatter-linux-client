@@ -1,11 +1,9 @@
 use super::*;
 
 impl MeshService {
-    /// Load the identity and wire the stack. Does not touch the radio or the
-    /// network — [`start`](Self::start) does that.
+    /// Wire the stack while mesh is disabled. An enable creates the first identity.
     pub fn new(deps: MeshDeps, config: MeshConfig) -> Result<Self, MeshError> {
         let identity_store = Arc::clone(&deps.identity_store);
-        let identity = Arc::new(deps.identity_store.get_or_create()?);
         let config = Arc::new(config);
         let state = Arc::new(MeshState::new());
         let nostr_state = Arc::new(NostrState::new());
@@ -15,11 +13,6 @@ impl MeshService {
             deps.deliveries,
             deps.attachments,
         ));
-        for channel in deps.private_channels.list()? {
-            if channel.member_key(&identity.peer_id()).is_some() {
-                timeline.open_private_channel(&channel.id, &channel.name);
-            }
-        }
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
         // The receivers for the first channel are dropped: nothing runs until
@@ -28,10 +21,11 @@ impl MeshService {
         let (ble_bus, _) = CommandBus::new();
         let (nostr_bus, _) = CommandBus::new();
 
+        let active_identity = Arc::new(parking_lot::RwLock::new(None));
         let router = Arc::new(RouterHandle::spawn(RouterDeps {
             state: Arc::clone(&state),
             nostr_state: Arc::clone(&nostr_state),
-            identity: Arc::clone(&identity),
+            identity: Arc::clone(&active_identity),
             storage: Arc::clone(&deps.storage),
             sealer: Arc::clone(&deps.sealer),
             ble: Arc::clone(&ble_bus),
@@ -64,7 +58,8 @@ impl MeshService {
             binding_store: deps.binding_store,
             private_channels: deps.private_channels,
             signal_lock: Arc::new(Mutex::new(())),
-            identity,
+            identity: active_identity,
+            private_group_identity: Default::default(),
             config,
             state,
             nostr_state,
@@ -80,8 +75,9 @@ impl MeshService {
             radio_factory: deps.radio_factory,
             relay_connector: deps.relay_connector,
             tasks: Mutex::new(Vec::new()),
-            running: AtomicBool::new(false),
-            identity_wiped: AtomicBool::new(false),
+            lifecycle: tokio::sync::Mutex::new(()),
+            running: Arc::new(AtomicBool::new(false)),
+            identity_wiped: Arc::new(AtomicBool::new(false)),
             sealer_unavailable,
         })
     }
@@ -109,6 +105,7 @@ impl MeshService {
     /// carries geohash channels, and a client with no relay connector still
     /// carries the BLE mesh. Neither absence is an error.
     pub async fn start(&self) -> Result<(), MeshError> {
+        let _lifecycle = self.lifecycle.lock().await;
         // Checked before the radio is touched. A mesh whose sealer has no key
         // would advertise, connect, and then fail every retained write — a peer
         // list that looks healthy over a store that cannot keep anything. Better
@@ -120,9 +117,30 @@ impl MeshService {
         if self.identity_wiped.load(Ordering::SeqCst) {
             return Err(MeshError::IdentityWiped);
         }
-        if self.running.swap(true, Ordering::SeqCst) {
+        if self.running.load(Ordering::SeqCst) {
             return Ok(());
         }
+        let channels = self.private_channels.list()?;
+        let (epoch, group_identity) = {
+            let _signal_guard = self.signal_lock.lock();
+            if self.identity_wiped.load(Ordering::SeqCst) {
+                return Err(MeshError::IdentityWiped);
+            }
+            let epoch = self.identity_store.advance(now_secs(), true)?;
+            let group_identity = self.identity_store.private_group_identity()?;
+            *self.private_group_identity.write() = Some(group_identity.clone());
+            identity::activate_broadcast_epoch(&self.identity, Arc::clone(&epoch.identity));
+            (epoch, group_identity)
+        };
+        let peer = epoch.identity.peer_id();
+        self.state.begin_beacon_epoch(&peer, epoch.started_at);
+        for channel in channels {
+            if channel.member_key(&group_identity.peer_id()).is_some() {
+                self.timeline
+                    .open_private_channel(&channel.id, &channel.name);
+            }
+        }
+        self.running.store(true, Ordering::SeqCst);
         // Fresh channels for fresh runtimes. Every holder — this service and the
         // router — sends through the bus, so none of them has to be told.
         let ble_rx = self.ble.rebind();
@@ -131,16 +149,17 @@ impl MeshService {
         let mut tasks = Vec::new();
 
         // Fresh per start, never reused: see `radio_override`.
-        let radio = match self.radio_factory.as_ref() {
+        let factory = self.radio_factory.clone();
+        let build_radio = Arc::new(move || match factory.as_ref() {
             Some(build) => Some(build()),
             None => radio::platform_radio(),
-        };
-        if let Some(radio) = radio {
+        });
+        if let Some(radio) = build_radio() {
             let runtime = BleRuntime::new(
                 radio,
                 Arc::clone(&self.state),
                 Arc::clone(&self.nostr_state),
-                Arc::clone(&self.identity),
+                Arc::clone(&epoch.identity),
                 Arc::clone(&self.config),
                 self.events.clone(),
                 Arc::clone(&self.router),
@@ -150,7 +169,17 @@ impl MeshService {
                 Arc::clone(&self.private_channels),
                 Arc::clone(&self.key_store),
                 Arc::clone(&self.signal_lock),
-            );
+            )
+            .with_private_group_identity(group_identity)
+            .with_rotation(ble::RadioRotation {
+                store: self.identity_store.clone(),
+                active: self.identity.clone(),
+                build_radio,
+                wiped: self.identity_wiped.clone(),
+                running: self.running.clone(),
+                started_at: epoch.started_at,
+                nostr: self.nostr.clone(),
+            });
             tasks.push(tokio::spawn(runtime.run(ble_rx)));
         } else {
             tracing::info!(
@@ -173,7 +202,7 @@ impl MeshService {
                 pool,
                 Arc::clone(&self.nostr_state),
                 Arc::clone(&self.state),
-                NostrIdentities::from_mesh(&self.identity),
+                NostrIdentities::from_mesh(&epoch.identity),
                 Arc::clone(&self.config),
                 self.events.clone(),
                 Arc::clone(&self.router),
@@ -192,6 +221,7 @@ impl MeshService {
 
     /// Stop and join both transport runtimes; the router lives until service drop.
     pub async fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
         if !self.running.swap(false, Ordering::SeqCst) {
             return;
         }
@@ -202,8 +232,21 @@ impl MeshService {
         for task in tasks {
             let _ = task.await;
         }
+        self.identity.write().take();
+        self.private_group_identity.write().take();
         // The router's channel is permanent. Keep its retained outbox actor
         // alive across a radio restart; RouterHandle::drop joins it at teardown.
+    }
+
+    pub(super) fn identity(&self) -> Result<Arc<MeshIdentity>, MeshError> {
+        self.identity.read().clone().ok_or(MeshError::NotRunning)
+    }
+
+    pub(super) fn private_group_identity(&self) -> Result<Arc<MeshIdentity>, MeshError> {
+        self.private_group_identity
+            .read()
+            .clone()
+            .ok_or(MeshError::NotRunning)
     }
 
     // -------------------------------------------------------------- read paths
@@ -217,13 +260,22 @@ impl MeshService {
     /// This device's mesh peer ID — `SHA256(static key)[..8]` as hex.
     #[must_use]
     pub fn local_peer(&self) -> PeerId {
-        self.identity.peer_id()
+        self.identity()
+            .map(|identity| identity.peer_id())
+            .unwrap_or_default()
     }
 
     /// This device's mesh fingerprint, for out-of-band verification.
     #[must_use]
     pub fn fingerprint(&self) -> String {
-        self.identity.fingerprint()
+        self.identity()
+            .map(|identity| identity.fingerprint())
+            .unwrap_or_default()
+    }
+
+    /// Whether an in-person pairing authorizes this contact's current keys.
+    pub fn is_paired(&self, peer: &PeerId) -> bool {
+        self.state.has_paired_pin(peer)
     }
 
     /// Every peer the mesh currently knows, shaped for display.

@@ -172,6 +172,17 @@ pub trait MeshLink: Send + Sync {
     /// advertise, and a test double should not have to care. Call it before
     /// [`start`](Self::start) — an advertiser already running will not pick it up.
     fn set_local_peer(&self, _peer: [u8; 8]) {}
+
+    /// Install the current window's rendezvous slots, including while running.
+    /// A changed batch marks an advertising window boundary. Backends with a
+    /// long-lived advertising set should replace that set before publishing
+    /// the new slots. The controller remains responsible for BLE address selection.
+    fn set_pairing_beacons(
+        &self,
+        _beacons: &[chatter_mesh::tlv::pairing::PairingBeacon],
+    ) -> Result<(), LinkError> {
+        Ok(())
+    }
 }
 
 /// bitchat's mainnet GATT service UUID.

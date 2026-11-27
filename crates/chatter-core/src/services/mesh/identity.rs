@@ -1,6 +1,6 @@
 //! The mesh identity, and the Nostr identities derived from it.
 //!
-//! [`MeshIdentityStore`] owns the long-term keypair. This module owns the one
+//! [`MeshIdentityStore`] owns the current broadcast keypair. This module owns the one
 //! derivation on top of it: the device seed that `chatter_mesh_nostr` hashes
 //! into a per-geohash secp256k1 identity.
 //!
@@ -30,6 +30,18 @@ use chatter_mesh_nostr::identity::derive_for_bridge;
 use chatter_mesh_nostr::identity::{NostrIdentity, derive_for_geohash};
 use hkdf::Hkdf;
 use sha2::Sha256;
+
+pub(super) type ActiveMeshIdentity =
+    std::sync::Arc<parking_lot::RwLock<Option<std::sync::Arc<MeshIdentity>>>>;
+
+pub(super) fn activate_broadcast_epoch(
+    active: &ActiveMeshIdentity,
+    identity: std::sync::Arc<MeshIdentity>,
+) {
+    // Announce-policy integration: refresh the generated nickname here with
+    // MeshConfig::on_identity_rotated(&identity.peer_id()) before publishing the epoch.
+    *active.write() = Some(identity);
+}
 
 /// Domain separator for the Nostr device seed.
 const NOSTR_SEED_INFO: &[u8] = b"chatter-mesh/nostr-device-seed/v1";

@@ -12,12 +12,12 @@
 //! them apart. Do not "simplify" them into one.
 
 use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 /// Curve25519 static key plus Ed25519 signing key.
 ///
 /// Secrets are held as raw bytes because `snow` wants `&[u8]` and both dalek crates
-/// reconstruct cheaply from a 32-byte array. Callers that need zeroization should
-/// wrap this; the mesh layer never persists it.
+/// reconstruct cheaply from a 32-byte array. The secrets are erased on drop.
 #[derive(Clone)]
 pub struct MeshIdentity {
     static_secret: [u8; 32],
@@ -74,7 +74,7 @@ impl MeshIdentity {
     }
 
     /// SHA-256 of the static public key, lowercase hex. Stable across sessions and
-    /// across peer-ID rotation, which is what makes it usable for verification.
+    /// for verification for the lifetime of this identity.
     pub fn fingerprint(&self) -> String {
         fingerprint_of(&self.static_public)
     }
@@ -82,6 +82,13 @@ impl MeshIdentity {
     /// The short routing ID derived from the static key.
     pub fn peer_id(&self) -> chatter_mesh::ids::PeerId {
         chatter_mesh::ids::PeerId::from_noise_key(&self.static_public)
+    }
+}
+
+impl Drop for MeshIdentity {
+    fn drop(&mut self) {
+        self.static_secret.zeroize();
+        self.signing_secret.zeroize();
     }
 }
 

@@ -2144,7 +2144,9 @@ version = "0.0.0"
 dependencies = [
  "chatter-mesh",
  "sha2 0.11.0",
+ "subtle",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -2163,6 +2165,7 @@ dependencies = [
  "snow",
  "thiserror 2.0.21",
  "x25519-dalek 3.0.0",
+ "zeroize",
 ]
 
 [[package]]

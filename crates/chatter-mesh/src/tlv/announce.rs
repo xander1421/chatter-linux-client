@@ -14,14 +14,16 @@
 //! | 0x04 | directNeighbors | bare concatenation of 8-byte IDs, no count |
 //! | 0x05 | capabilities | little-endian bitfield, minimal width |
 //! | 0x06 | bridgeGeohash | UTF-8, at most 12 bytes |
+//! | 0x07 | pairingBeacon | 13-byte rotating pairing hint |
 //!
 //! Unknown types are **skipped**, not rejected. That is the whole forward-
-//! compatibility story for announcements: a newer peer can add TLV 0x07 and we
+//! compatibility story for announcements: a newer peer can add another TLV and we
 //! keep talking to them.
 
 use crate::error::MeshError;
 use crate::packet::SENDER_ID_LEN;
 use crate::tlv::capabilities::PeerCapabilities;
+use crate::tlv::pairing::PairingBeacon;
 use crate::tlv::{Reader, put_tlv_u8_len, utf8};
 
 const TLV_NICKNAME: u8 = 0x01;
@@ -30,6 +32,7 @@ const TLV_SIGNING_PUBLIC_KEY: u8 = 0x03;
 const TLV_DIRECT_NEIGHBORS: u8 = 0x04;
 const TLV_CAPABILITIES: u8 = 0x05;
 const TLV_BRIDGE_GEOHASH: u8 = 0x06;
+const TLV_PAIRING_BEACON: u8 = 0x07;
 
 /// Most neighbours one announcement may advertise. Swift takes `prefix(10)`.
 pub const MAX_DIRECT_NEIGHBORS: usize = 10;
@@ -53,6 +56,7 @@ pub struct AnnouncementPacket {
     pub capabilities: Option<PeerCapabilities>,
     /// Rendezvous cell this peer bridges, when advertising [`PeerCapabilities::BRIDGE`].
     pub bridge_geohash: Option<String>,
+    pub pairing_beacon: Option<PairingBeacon>,
 }
 
 impl AnnouncementPacket {
@@ -71,6 +75,7 @@ impl AnnouncementPacket {
             direct_neighbors,
             capabilities,
             bridge_geohash,
+            pairing_beacon: None,
         }
     }
 
@@ -109,6 +114,10 @@ impl AnnouncementPacket {
             }
         }
 
+        if let Some(beacon) = &self.pairing_beacon {
+            put_tlv_u8_len(&mut out, TLV_PAIRING_BEACON, beacon)?;
+        }
+
         Ok(out)
     }
 
@@ -121,7 +130,10 @@ impl AnnouncementPacket {
         while reader.remaining() >= 2 {
             let kind = reader.u8()?;
             let length = reader.u8()?;
-            if matches!(kind, TLV_DIRECT_NEIGHBORS | TLV_BRIDGE_GEOHASH) {
+            if matches!(
+                kind,
+                TLV_DIRECT_NEIGHBORS | TLV_BRIDGE_GEOHASH | TLV_PAIRING_BEACON
+            ) {
                 return Ok(true);
             }
             reader.take(usize::from(length))?;
@@ -138,6 +150,7 @@ impl AnnouncementPacket {
         let mut direct_neighbors: Option<Vec<[u8; SENDER_ID_LEN]>> = None;
         let mut capabilities: Option<PeerCapabilities> = None;
         let mut bridge_geohash: Option<String> = None;
+        let mut pairing_beacon = None;
 
         // `while offset + 2 <= data.count`: a lone trailing byte is ignored, not
         // an error. Duplicate TLVs are last-wins, as in Swift.
@@ -169,6 +182,7 @@ impl AnnouncementPacket {
                         bridge_geohash = Some(utf8(value, "announce.bridge_geohash")?);
                     }
                 }
+                TLV_PAIRING_BEACON => pairing_beacon = value.try_into().ok(),
                 // Forward compatibility: skip what we do not recognise.
                 _ => {}
             }
@@ -183,6 +197,7 @@ impl AnnouncementPacket {
             direct_neighbors,
             capabilities,
             bridge_geohash,
+            pairing_beacon,
         })
     }
 }
@@ -202,6 +217,17 @@ mod tests {
             )),
             Some("u4pruyd".to_string()),
         )
+    }
+
+    #[test]
+    fn a_pairing_beacon_is_round_tripped_and_treated_as_contact_metadata() {
+        let mut packet = sample();
+        packet.direct_neighbors = None;
+        packet.bridge_geohash = None;
+        packet.pairing_beacon = Some([7; 13]);
+        let encoded = packet.encode().unwrap();
+        assert_eq!(AnnouncementPacket::decode(&encoded).unwrap(), packet);
+        assert!(AnnouncementPacket::carries_contact_metadata(&encoded).unwrap());
     }
 
     #[test]

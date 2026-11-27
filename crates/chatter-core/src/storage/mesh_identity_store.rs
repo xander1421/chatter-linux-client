@@ -1,39 +1,11 @@
-//! Persistent storage for the bitchat mesh identity.
-//!
-//! The mesh needs a long-term Curve25519 static key (Noise key agreement) and a
-//! long-term Ed25519 signing key (announces). `chatter_mesh_noise` deliberately
-//! owns no key custody — every entry point there takes raw secret bytes — so
-//! custody lands here, in the SQLCipher database, next to the Signal key
-//! material and under the same OS-keyring passphrase.
-//!
-//! # The mesh identity is a separate keypair from the Signal identity. Always.
-//!
-//! `KeyStore` already holds a Curve25519 identity keypair in `local_identity`,
-//! and the temptation to reuse it — "we already have a Curve25519 key right
-//! there" — is exactly the simplification this module exists to prevent. Do not
-//! do it, for two independent reasons:
-//!
-//! 1. **Cross-protocol key reuse.** The same secret would drive a Noise XX
-//!    handshake and the Signal protocol: two constructions agreeing and signing
-//!    over one key, with no analysis anywhere saying that composition is safe.
-//!    Signal's security proof does not cover an attacker who can also feed the
-//!    key into a Noise transcript, and Noise's does not cover X3DH.
-//! 2. **Unlinkability.** A shared key permanently ties a user's mesh presence to
-//!    their chatter account. Anyone who sees both a mesh announce and the
-//!    account's public identity key could join them. The whole point of a local
-//!    mesh identity is that it does not carry the account with it.
-//!
-//! So this module generates fresh key material from the OS CSPRNG and stores it
-//! in its own table (`mesh_identity`, V056). It never reads from and never
-//! writes to `local_identity`, `remote_identities`, or any other Signal table.
+//! Persistent custody for rotating mesh identities. Mesh and Signal keys are generated independently.
 
 use std::sync::Arc;
 
 use crate::crypto::os_rng;
 use chatter_mesh_noise::MeshIdentity;
-use chrono::Utc;
-use rusqlite::{Connection, params};
-use zeroize::Zeroize;
+use rusqlite::{Connection, OptionalExtension, params};
+use zeroize::Zeroizing;
 
 use crate::error::StorageError;
 use crate::storage::Database;
@@ -41,107 +13,125 @@ use crate::storage::Database;
 /// Length of both mesh secrets, in bytes.
 const SECRET_LEN: usize = 32;
 
-/// Mesh identity store.
-///
-/// Owns the device's single long-term mesh keypair. Shares the encrypted
-/// database with the rest of the storage layer via `Arc<Database>`, following
-/// the `KeyStore` pattern.
+pub(crate) const ROTATION_SECS: u64 = 24 * 60 * 60;
+
+pub(crate) struct MeshEpoch {
+    pub identity: Arc<MeshIdentity>,
+    pub started_at: u64,
+}
+
+/// Keeps independent Noise and signing keys in SQLCipher, separate from Signal.
 pub struct MeshIdentityStore {
     db: Arc<Database>,
 }
 
 impl MeshIdentityStore {
-    /// Create a new `MeshIdentityStore`.
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
     }
 
-    #[cfg(test)]
-    /// Load the stored mesh identity.
-    ///
-    /// Returns `None` if this device has never generated one, or if it was
-    /// wiped.
-    pub fn get(&self) -> Result<Option<MeshIdentity>, StorageError> {
-        let conn = self.db.read_connection()?;
-        Self::read(&conn)
+    /// Private group signing material never goes into a radio identity or
+    /// advertisement. It is disclosed only inside a proven pairing.
+    pub(crate) fn private_group_identity(&self) -> Result<Arc<MeshIdentity>, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let stored = tx.query_row(
+            "SELECT static_secret, signing_secret FROM mesh_private_group_identity WHERE id = 1",
+            [],
+            |row| Ok((Zeroizing::new(row.get::<_, Vec<u8>>(0)?), Zeroizing::new(row.get::<_, Vec<u8>>(1)?))),
+        ).optional()?;
+        let identity = if let Some((noise, signing)) = stored {
+            Self::decode(&noise, &signing)?
+        } else {
+            let identity = MeshIdentity::generate(&mut os_rng());
+            tx.execute(
+                "INSERT INTO mesh_private_group_identity (id, static_secret, signing_secret) VALUES (1, ?1, ?2)",
+                params![&identity.static_secret()[..], &identity.signing_secret()[..]],
+            )?;
+            identity
+        };
+        tx.commit()?;
+        Ok(Arc::new(identity))
     }
 
-    /// Load the mesh identity, generating and persisting one on first call.
-    ///
-    /// Every later call returns the same keypair, so the device's mesh
-    /// fingerprint and peer ID are stable across restarts — peers verify each
-    /// other by fingerprint, and a new key on every launch would make that
-    /// verification worthless.
-    pub fn get_or_create(&self) -> Result<MeshIdentity, StorageError> {
-        // The whole read-then-maybe-insert runs on the writer connection: its
-        // mutex serialises callers, so two threads cannot both observe an empty
-        // table and generate two different identities. Doing the read through
-        // `read_connection()` first would reopen exactly that race.
+    #[cfg(test)]
+    pub fn get(&self) -> Result<Option<MeshIdentity>, StorageError> {
+        let conn = self.db.read_connection()?;
+        Ok(Self::read(&conn)?.map(|(identity, _)| identity))
+    }
+
+    /// An enable starts a fresh epoch. Periodic checks start one only when due.
+    pub(crate) fn advance(&self, now: u64, enable: bool) -> Result<MeshEpoch, StorageError> {
+        let mut conn = self.db.connection()?;
+        // Scrub deleted keys from freed SQLCipher pages as well as the live table.
+        conn.pragma_update(None, "secure_delete", true)?;
+        let tx = conn.transaction()?;
+        let stamp = i64::try_from(now).unwrap_or(i64::MAX);
+        let (identity, started_at) = match Self::read(&tx)? {
+            Some((identity, started_at))
+                if !enable && now.saturating_sub(started_at) < ROTATION_SECS =>
+            {
+                (identity, started_at)
+            }
+            Some(_) => {
+                tx.execute("DELETE FROM mesh_identity_epochs", [])?;
+                (Self::insert(&tx, stamp)?, now)
+            }
+            None => (Self::insert(&tx, stamp)?, now),
+        };
+        tx.commit()?;
+        Ok(MeshEpoch {
+            identity: Arc::new(identity),
+            started_at,
+        })
+    }
+
+    /// Used by the panic wipe to erase the current identity.
+    pub fn wipe(&self) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
+        conn.pragma_update(None, "secure_delete", true)?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM mesh_identity_epochs", [])?;
+        tx.execute("DELETE FROM mesh_private_group_identity", [])?;
+        tx.commit()?;
+        Ok(())
+    }
 
-        if let Some(identity) = Self::read(&conn)? {
-            return Ok(identity);
-        }
-
-        // Fresh key material straight from the OS CSPRNG. NOT derived from, and
-        // NOT shared with, the Signal identity key — see the module docs.
+    fn insert(conn: &Connection, started_at: i64) -> Result<MeshIdentity, StorageError> {
         let identity = MeshIdentity::generate(&mut os_rng());
-        let now = Utc::now().to_rfc3339();
-
         conn.execute(
-            "INSERT INTO mesh_identity (id, static_secret, signing_secret, created_at)
+            "INSERT INTO mesh_identity_epochs (id, static_secret, signing_secret, started_at)
              VALUES (1, ?1, ?2, ?3)",
             params![
                 &identity.static_secret()[..],
                 &identity.signing_secret()[..],
-                now
+                started_at,
             ],
         )?;
-
-        tracing::info!(
-            fingerprint = %identity.fingerprint(),
-            "Generated a new mesh identity"
-        );
-
         Ok(identity)
     }
 
-    /// Delete the stored mesh identity.
-    ///
-    /// Used by the panic wipe. After this the device has no mesh presence at
-    /// all: `get` returns `None`, and the next `get_or_create` mints a fresh
-    /// keypair with a different fingerprint, which is the point — the old
-    /// identity must not be recoverable or re-derivable.
-    ///
-    /// Touches only `mesh_identity`. Signal key material is wiped separately by
-    /// `KeyStore`, and neither is a substitute for the other.
-    pub fn wipe(&self) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute("DELETE FROM mesh_identity", [])?;
-        Ok(())
-    }
-
-    /// Read the identity row from an already-acquired connection.
-    fn read(conn: &Connection) -> Result<Option<MeshIdentity>, StorageError> {
-        let row: Result<(Vec<u8>, Vec<u8>), _> = conn.query_row(
-            "SELECT static_secret, signing_secret FROM mesh_identity WHERE id = 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        );
-
-        match row {
-            Ok((mut static_secret, mut signing_secret)) => {
-                let identity = Self::decode(&static_secret, &signing_secret);
-                // The heap buffers rusqlite handed us hold raw secrets; clear
-                // them rather than leaving copies for a later allocation (or a
-                // core dump) to expose.
-                static_secret.zeroize();
-                signing_secret.zeroize();
-                identity.map(Some)
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
+    fn read(conn: &Connection) -> Result<Option<(MeshIdentity, u64)>, StorageError> {
+        let row = conn
+            .query_row(
+                "SELECT static_secret, signing_secret, started_at FROM mesh_identity_epochs
+             WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(static_secret, signing_secret, stamp)| {
+            let static_secret = Zeroizing::new(static_secret);
+            let signing_secret = Zeroizing::new(signing_secret);
+            Ok((Self::decode(&static_secret, &signing_secret)?, stamp))
+        })
+        .transpose()
     }
 
     /// Rebuild a `MeshIdentity` from stored secret bytes.
@@ -207,6 +197,27 @@ mod tests {
     }
 
     #[test]
+    fn private_group_identity_survives_radio_rotation_and_is_wiped_separately() {
+        let db = setup_db();
+        let store = MeshIdentityStore::new(db.clone());
+        let group = store.private_group_identity().unwrap();
+        let first = store.advance(1_000, true).unwrap().identity;
+        let second = store.advance(2_000, true).unwrap().identity;
+        assert_ne!(first.peer_id(), second.peer_id());
+        assert_ne!(group.peer_id(), first.peer_id());
+        let reloaded = MeshIdentityStore::new(db);
+        assert_eq!(
+            reloaded.private_group_identity().unwrap().peer_id(),
+            group.peer_id()
+        );
+        reloaded.wipe().unwrap();
+        assert_ne!(
+            reloaded.private_group_identity().unwrap().peer_id(),
+            group.peer_id()
+        );
+    }
+
+    #[test]
     fn get_returns_none_before_anything_is_generated() {
         let store = MeshIdentityStore::new(setup_db());
         assert!(store.get().unwrap().is_none());
@@ -217,7 +228,7 @@ mod tests {
         let db = setup_db();
         let store = MeshIdentityStore::new(db.clone());
 
-        let created = store.get_or_create().unwrap();
+        let created = store.advance(1_000, false).unwrap().identity;
 
         // A separate store over the same database sees it, so it really landed
         // in the table rather than only in memory.
@@ -228,11 +239,11 @@ mod tests {
     }
 
     #[test]
-    fn second_call_returns_the_identical_keypair() {
+    fn a_periodic_check_before_the_deadline_preserves_the_keypair() {
         let store = MeshIdentityStore::new(setup_db());
 
-        let first = store.get_or_create().unwrap();
-        let second = store.get_or_create().unwrap();
+        let first = store.advance(1_000, false).unwrap().identity;
+        let second = store.advance(1_000, false).unwrap().identity;
 
         assert_eq!(first.static_secret(), second.static_secret());
         assert_eq!(first.signing_secret(), second.signing_secret());
@@ -243,7 +254,7 @@ mod tests {
     #[test]
     fn the_two_mesh_secrets_are_independent_of_each_other() {
         let store = MeshIdentityStore::new(setup_db());
-        let identity = store.get_or_create().unwrap();
+        let identity = store.advance(1_000, false).unwrap().identity;
         assert_ne!(identity.static_secret(), identity.signing_secret());
     }
 
@@ -253,7 +264,7 @@ mod tests {
         let signal_key_pair = store_signal_identity(&db);
 
         let store = MeshIdentityStore::new(db.clone());
-        let mesh = store.get_or_create().unwrap();
+        let mesh = store.advance(1_000, false).unwrap().identity;
 
         // Neither mesh secret nor either mesh public key appears anywhere in
         // the serialized Signal identity keypair. If a future "simplification"
@@ -272,7 +283,7 @@ mod tests {
             signal_key_pair
         );
 
-        let mesh_again = store.get_or_create().unwrap();
+        let mesh_again = store.advance(1_000, false).unwrap().identity;
         key_store.clear_local_identity().unwrap();
         assert_eq!(
             store.get().unwrap().unwrap().static_secret(),
@@ -285,7 +296,7 @@ mod tests {
         let db = setup_db();
         let store = MeshIdentityStore::new(db.clone());
 
-        store.get_or_create().unwrap();
+        store.advance(1_000, false).unwrap().identity;
         store.wipe().unwrap();
 
         assert!(store.get().unwrap().is_none());
@@ -304,9 +315,9 @@ mod tests {
     fn get_or_create_after_a_wipe_produces_a_different_identity() {
         let store = MeshIdentityStore::new(setup_db());
 
-        let before = store.get_or_create().unwrap();
+        let before = store.advance(1_000, false).unwrap().identity;
         store.wipe().unwrap();
-        let after = store.get_or_create().unwrap();
+        let after = store.advance(1_000, false).unwrap().identity;
 
         // A panic wipe that handed back the same key would leave the device
         // recognisable to every peer that had already seen it.
@@ -316,10 +327,56 @@ mod tests {
     }
 
     #[test]
+    fn an_epoch_rotation_keeps_only_the_current_keypair_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("epochs.db");
+        let open = || {
+            let db = Arc::new(Database::open(&path, "testpass").unwrap());
+            db.run_migrations().unwrap();
+            MeshIdentityStore::new(db)
+        };
+        let store = open();
+        let first = store.advance(1_000, true).unwrap();
+        let deadline = first.started_at + ROTATION_SECS;
+        assert_eq!(
+            store
+                .advance(deadline - 1, false)
+                .unwrap()
+                .identity
+                .peer_id(),
+            first.identity.peer_id()
+        );
+        let next = store.advance(deadline, false).unwrap();
+        assert_ne!(next.identity.peer_id(), first.identity.peer_id());
+        assert_ne!(
+            next.identity.static_public(),
+            first.identity.static_public()
+        );
+        assert_ne!(
+            next.identity.signing_public(),
+            first.identity.signing_public()
+        );
+        drop(store);
+
+        let reopened = open();
+        assert_eq!(
+            reopened.get().unwrap().unwrap().peer_id(),
+            next.identity.peer_id()
+        );
+        let conn = reopened.db.read_connection().unwrap();
+        let rows: u32 = conn
+            .query_row("SELECT count(*) FROM mesh_identity_epochs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
     fn a_corrupt_row_is_reported_rather_than_silently_accepted() {
         let db = setup_db();
         let store = MeshIdentityStore::new(db.clone());
-        store.get_or_create().unwrap();
+        store.advance(1_000, false).unwrap().identity;
 
         // Bypass the store and try to plant a short secret, as a corrupted or
         // foreign writer would. The column CHECK rejects it.
@@ -327,7 +384,7 @@ mod tests {
         {
             let conn = db.connection().unwrap();
             conn.execute(
-                "UPDATE mesh_identity SET static_secret = ?1 WHERE id = 1",
+                "UPDATE mesh_identity_epochs SET static_secret = ?1 WHERE id = 1",
                 params![short],
             )
             .unwrap_err();

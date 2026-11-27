@@ -21,7 +21,7 @@ impl Sealer for NoopSealer {
 /// `MeshIdentityStore` needs a real `Database`, and construction tests are
 /// about the wiring rather than about SQLCipher, so this assembles the same
 /// parts `MeshService::new` does from an identity handed in directly.
-fn service(
+pub(super) fn service(
     radio: Option<Arc<dyn MeshLink>>,
     connector: Option<Arc<dyn RelayConnector>>,
 ) -> MeshService {
@@ -36,12 +36,14 @@ fn service_with_radio_factory(
     radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
     connector: Option<Arc<dyn RelayConnector>>,
 ) -> MeshService {
-    let identity = Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
     let config = Arc::new(MeshConfig::default());
     let state = Arc::new(MeshState::new());
     let nostr_state = Arc::new(NostrState::new());
     let timeline = timeline::temp_timeline();
     let identity_store = timeline::temp_identity_store();
+    let identity = Arc::new(parking_lot::RwLock::new(Some(Arc::new(
+        MeshIdentity::generate(&mut crate::crypto::os_rng()),
+    ))));
     let dir = tempfile::tempdir().expect("mesh stores temp dir");
     let db = Arc::new(
         crate::storage::Database::open(&dir.path().join("mesh_stores.db"), "testpass")
@@ -82,6 +84,9 @@ fn service_with_radio_factory(
         // nothing to report.
         sealer_unavailable: None,
         identity,
+        private_group_identity: Arc::new(parking_lot::RwLock::new(Some(
+            identity_store.private_group_identity().unwrap(),
+        ))),
         identity_store,
         config,
         state,
@@ -97,9 +102,79 @@ fn service_with_radio_factory(
         radio_factory,
         relay_connector: connector,
         tasks: Mutex::new(Vec::new()),
-        running: AtomicBool::new(false),
-        identity_wiped: AtomicBool::new(false),
+        lifecycle: tokio::sync::Mutex::new(()),
+        running: Arc::new(AtomicBool::new(false)),
+        identity_wiped: Arc::new(AtomicBool::new(false)),
     }
+}
+
+#[tokio::test]
+async fn the_disabled_mesh_has_no_identity_until_it_is_enabled() {
+    use crate::storage::{
+        Database,
+        repositories::{AttachmentRepository, MeshConversationRepository, MeshDeliveryRepository},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open(&dir.path().join("mesh.db"), "testpass").unwrap());
+    db.run_migrations().unwrap();
+    let store = Arc::new(MeshIdentityStore::new(db.clone()));
+    let radio = MockLink::shared();
+    let mock = radio.clone();
+    let service = MeshService::new(
+        MeshDeps {
+            key_store: Arc::new(KeyStore::new(db.clone())),
+            binding_store: Arc::new(MeshBindingStore::new(db.clone())),
+            private_channels: Arc::new(PrivateChannelStore::new(db.clone())),
+            identity_store: store.clone(),
+            storage: Arc::new(MemoryStorage::new()),
+            messages: Arc::new(MessageRepository::new(db.clone())),
+            conversations: Arc::new(MeshConversationRepository::new(db.clone())),
+            deliveries: Arc::new(MeshDeliveryRepository::new(db.clone())),
+            attachments: Arc::new(AttachmentRepository::new(db)),
+            sealer: Arc::new(NoopSealer),
+            relay_connector: None,
+            radio_factory: Some(Arc::new(move || mock.clone() as Arc<dyn MeshLink>)),
+        },
+        MeshConfig::default(),
+    )
+    .unwrap();
+
+    assert!(store.get().unwrap().is_none());
+    assert!(service.local_peer().is_empty());
+    assert!(service.fingerprint().is_empty());
+    assert!(!radio.is_started());
+
+    service.start().await.unwrap();
+    assert_eq!(
+        store.get().unwrap().unwrap().peer_id(),
+        service.local_peer()
+    );
+    service.shutdown().await;
+    assert!(service.local_peer().is_empty());
+    assert!(!radio.is_started());
+}
+
+#[test]
+fn sending_the_same_file_twice_allocates_different_stream_ids() {
+    let service = service(Some(MockLink::shared()), None);
+    let mut commands = service.ble.rebind();
+    let file = tempfile::NamedTempFile::new().unwrap();
+    file.as_file()
+        .set_len(MAX_SINGLE_PACKET_FILE_BYTES as u64 + 1)
+        .unwrap();
+
+    let mut send = || {
+        service.send_file(file.path()).unwrap();
+        let BleCommand::StreamedFile { manifest, .. } = commands.try_recv().unwrap() else {
+            panic!("expected a streamed file command");
+        };
+        manifest
+    };
+    let first = send();
+    let second = send();
+    assert_eq!(first.sha256, second.sha256);
+    assert_ne!(first.transfer_id, second.transfer_id);
 }
 
 #[tokio::test]
@@ -135,6 +210,7 @@ async fn the_mesh_can_be_stopped_and_started_again() {
     }
 
     service.start().await.expect("start");
+    let first = service.identity().unwrap();
     settle().await;
     assert!(service.is_running());
     assert_eq!(built.lock().len(), 1, "one radio built for the first start");
@@ -144,6 +220,11 @@ async fn the_mesh_can_be_stopped_and_started_again() {
     assert!(!service.is_running());
 
     service.start().await.expect("restart");
+    let second = service.identity().unwrap();
+    assert_ne!(first.peer_id(), second.peer_id());
+    assert_ne!(first.static_public(), second.static_public());
+    assert_ne!(first.signing_public(), second.signing_public());
+    assert_ne!(first.fingerprint(), second.fingerprint());
     settle().await;
     assert!(service.is_running(), "a stopped mesh starts again");
     assert_eq!(
@@ -626,6 +707,25 @@ async fn direct_group_invite_uses_only_the_noise_pinned_roster_key() {
         &owner.signing_public(),
         now_millis(),
     )));
+    assert!(
+        service
+            .invite_private_channel_direct(&channel_id, &peer)
+            .is_err()
+    );
+    service.state.with(|state| {
+        assert!(state.peers.pair_noise_identity(
+            &peer,
+            &owner.static_public(),
+            &owner.signing_public(),
+            now_millis(),
+            chatter_mesh_link::registry::PairingKey::new([42; 32], true)
+        ));
+        assert!(
+            state
+                .peers
+                .bind_private_group_keys(&peer, (owner.static_public(), owner.signing_public()))
+        );
+    });
     service
         .invite_private_channel_direct(&channel_id, &peer)
         .unwrap();

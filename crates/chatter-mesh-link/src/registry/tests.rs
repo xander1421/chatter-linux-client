@@ -390,9 +390,11 @@ fn an_idle_connected_peer_with_no_link_is_demoted_at_the_boundary() {
     let presence = BTreeMap::new();
     let mut registry = registry_with(peer(0xAA), true, true, 0);
     // Exactly the timeout is not yet over it (Swift uses a strict >).
-    assert!(registry
-        .reconcile_connectivity(PEER_INACTIVITY_TIMEOUT_MS, &presence)
-        .is_empty());
+    assert!(
+        registry
+            .reconcile_connectivity(PEER_INACTIVITY_TIMEOUT_MS, &presence)
+            .is_empty()
+    );
     let changes = registry.reconcile_connectivity(PEER_INACTIVITY_TIMEOUT_MS + 1, &presence);
     assert_eq!(changes.disconnected, vec![peer(0xAA)]);
     assert!(changes.removed.is_empty());
@@ -426,9 +428,11 @@ fn disconnected_peers_are_evicted_on_their_own_retention_window() {
     let mut verified = registry_with(peer(0xAA), true, false, 0);
     let mut unverified = registry_with(peer(0xAA), false, false, 0);
 
-    assert!(verified
-        .reconcile_connectivity(REACHABILITY_RETENTION_VERIFIED_MS, &presence)
-        .is_empty());
+    assert!(
+        verified
+            .reconcile_connectivity(REACHABILITY_RETENTION_VERIFIED_MS, &presence)
+            .is_empty()
+    );
     assert!(!verified.is_empty());
     assert_eq!(
         verified
@@ -595,7 +599,7 @@ fn a_damaged_pin_blob_is_refused_whole() {
     // Same length, but the first pin's Noise key no longer derives to the
     // ID it is filed under.
     let mut swapped_key = good.clone();
-    let key_start = 1 + 1 + alice.as_str().len().max(bob.as_str().len()) + 1;
+    let key_start = 1 + 2 * (1 + alice.as_str().len()) + 1;
     swapped_key[key_start] ^= 0xFF;
 
     for blob in [
@@ -684,7 +688,7 @@ fn version_one_announce_pins_are_not_restored_as_proven() {
     let mut legacy = registry.pins_to_bytes();
     legacy[0] = 1;
     let mut restarted = PeerRegistry::new();
-    restarted.restore_pins(&legacy).unwrap();
+    assert!(restarted.restore_pins(&legacy).is_err());
     assert!(restarted.pinned(&alice).is_none());
 }
 

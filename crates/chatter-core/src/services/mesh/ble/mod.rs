@@ -167,6 +167,13 @@ pub struct BleRuntime {
     /// resetting the relay count to zero every time a link changes.
     nostr_state: Arc<NostrState>,
     identity: Arc<MeshIdentity>,
+    private_group_identity: Arc<MeshIdentity>,
+    rotation: Option<RadioRotation>,
+    pairing_candidates: std::collections::BTreeMap<PeerId, (PeerId, u64)>,
+    pairing_exchanges: std::collections::BTreeMap<PeerId, pairing::PairingExchange>,
+    courier_claims: std::collections::BTreeMap<PeerId, std::collections::BTreeSet<[u8; 32]>>,
+    beacon_cursor: usize,
+    published_beacons: Vec<chatter_mesh::tlv::pairing::PairingBeacon>,
     config: Arc<MeshConfig>,
     events: MeshEvents,
     router: Arc<RouterHandle>,
@@ -200,7 +207,6 @@ pub struct BleRuntime {
     private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     prekey_ingress: std::collections::HashMap<LinkId, (u64, u32)>,
-    pending_private_joins: std::collections::HashMap<(PeerId, String), Invite>,
     last_channel_presence_ms: u64,
     last_private_rekey_ms: u64,
     /// Connect attempts run off the loop and report back here. Awaiting one
@@ -268,7 +274,14 @@ impl BleRuntime {
             radio,
             state,
             nostr_state,
+            private_group_identity: identity.clone(),
             identity,
+            rotation: None,
+            pairing_candidates: std::collections::BTreeMap::new(),
+            pairing_exchanges: std::collections::BTreeMap::new(),
+            courier_claims: std::collections::BTreeMap::new(),
+            beacon_cursor: 0,
+            published_beacons: Vec::new(),
             config,
             events,
             router,
@@ -294,10 +307,14 @@ impl BleRuntime {
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
             prekey_ingress: std::collections::HashMap::new(),
-            pending_private_joins: std::collections::HashMap::new(),
             last_channel_presence_ms: 0,
             last_private_rekey_ms: 0,
         }
+    }
+
+    pub(super) fn with_private_group_identity(mut self, identity: Arc<MeshIdentity>) -> Self {
+        self.private_group_identity = identity;
+        self
     }
 
     fn restore_pins(&self) -> Result<(), String> {
@@ -306,9 +323,15 @@ impl BleRuntime {
             .load(StorageKey::PeerPins)
             .map_err(|e| e.to_string())?
         {
-            let bytes = self.sealer.open(&sealed).map_err(|e| e.to_string())?;
+            let bytes =
+                zeroize::Zeroizing::new(self.sealer.open(&sealed).map_err(|e| e.to_string())?);
             self.state
-                .with(|state| state.peers.restore_pins(&bytes))
+                .with(|state| {
+                    state.peers.restore_pins(&bytes)?;
+                    state.pairing_couriers.restore(&state.peers);
+                    state.pairing_beacon_slots.invalidate_contacts();
+                    Ok::<_, chatter_mesh_link::registry::MalformedPins>(())
+                })
                 .map_err(|_| "malformed peer pins".to_string())?;
         }
         Ok(())
@@ -487,15 +510,30 @@ impl BleRuntime {
             self.degraded(format!("Peer identity pins could not be restored: {error}"));
             return;
         }
+        loop {
+            if !self.run_epoch(&mut commands).await {
+                break;
+            }
+            if !self.start_next_epoch().await {
+                break;
+            }
+        }
+    }
+
+    async fn run_epoch(&mut self, commands: &mut UnboundedReceiver<BleCommand>) -> bool {
+        if self.rotation_stopped() {
+            return false;
+        }
         // Before `start`, because an advertiser already running will not pick it
         // up. This is what lets peers recognise us across a private address
         // rotation instead of spending a connection to find out who we are.
-        if let Some(peer) = self.identity.peer_id().to_routing_bytes() {
+        if let Some(peer) = self.broadcast_peer_id().to_routing_bytes() {
             self.radio.set_local_peer(peer);
         }
+        self.refresh_pairing_beacons();
         if let Err(error) = self.radio.start().await {
             self.degraded(format!("the radio would not start: {error}"));
-            return;
+            return false;
         }
         self.state.with(|state| {
             state.radio_running = true;
@@ -525,11 +563,17 @@ impl BleRuntime {
             self.degraded(format!("the courier pool could not be restored: {error}"));
         }
         match self.restore_prekeys() {
-            Ok(local) => self.state.with(|state| state.prekeys.local = Some(local)),
+            Ok(mut local) => {
+                local.rebind(&self.identity);
+                self.state.with(|state| state.prekeys.local = Some(local));
+            }
             // Left `None`: generating a fresh set over secrets we merely could
             // not read would orphan every envelope already sealed to them. Mail
             // to us falls back to the static seal until the next start.
-            Err(error) => self.degraded(format!("mesh prekeys could not be restored: {error}")),
+            Err(error) => {
+                self.state.with(|state| state.prekeys.local = None);
+                self.degraded(format!("mesh prekeys could not be restored: {error}"));
+            }
         }
         self.maintain_prekeys(now_millis()).await;
 
@@ -560,7 +604,7 @@ impl BleRuntime {
         let mut ticker = tokio::time::interval(TICK);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        loop {
+        let rotate = loop {
             let backlogged = !self.state.with(|state| state.writes.is_empty());
             let quiet = !self.dial_in_flight
                 && self.state.with(|state| {
@@ -577,10 +621,10 @@ impl BleRuntime {
                         }
                     }
                     // The radio has shut down for good.
-                    None => break,
+                    None => break false,
                 },
                 command = commands.recv() => match command {
-                    Some(BleCommand::Stop) | None => break,
+                    Some(BleCommand::Stop) | None => break false,
                     Some(command) => {
                         self.on_command(command).await;
                         if quiet { ticker.reset_after(TICK); }
@@ -591,6 +635,13 @@ impl BleRuntime {
                     if quiet { ticker.reset_after(TICK); }
                 },
                 _ = ticker.tick() => {
+                    let now = now_secs();
+                    if self.rotation_stopped() {
+                        break false;
+                    }
+                    if self.rotation_due(now) {
+                        break true;
+                    }
                     self.on_tick().await;
                     ticker.reset_after(if quiet { QUIET_TICK } else { TICK });
                 },
@@ -599,16 +650,49 @@ impl BleRuntime {
                     self.flush_buffered_writes().await;
                 }
             }
+        };
+        if !rotate {
+            self.stop_epoch().await;
         }
+        rotate
+    }
 
-        let _ = self.radio.stop().await;
+    async fn stop_epoch(&mut self) -> bool {
+        let stopped = self.radio.stop().await;
+        if let Err(error) = &stopped {
+            self.degraded(format!("the radio would not stop: {error}"));
+        }
         self.state.with(|state| {
             state.radio_running = false;
             state.sessions.clear();
             state.chatter_hello.clear_live();
             state.pending_bindings.clear();
+            state.pairing_offers.clear();
+            state.links.clear();
+            state.address_of.clear();
+            state.connecting.clear();
+            state.max_write.clear();
+            state.writes = Default::default();
+            state.spool = chatter_mesh_link::planner::DirectedRelaySpool::new();
+            state.fragments = chatter_mesh::fragment::FragmentAssembler::new();
+            state.assembler = chatter_mesh_link::backpressure::InboundAssembler::new();
+            state.last_announce_ms = 0;
         });
         self.emit_status();
+        stopped.is_ok()
+    }
+
+    fn refresh_pairing_beacons(&mut self) {
+        let beacons = self.state.pairing_beacons(&self.broadcast_peer_id());
+        if self.published_beacons == beacons {
+            return;
+        }
+        if let Err(error) = self.radio.set_pairing_beacons(&beacons) {
+            self.degraded(format!(
+                "the radio could not install pairing beacons: {error}"
+            ));
+        }
+        self.published_beacons = beacons;
     }
 }
 
@@ -622,6 +706,9 @@ mod links;
 mod maintenance;
 mod messages;
 mod outgoing_files;
+mod pairing;
+mod rotation;
+pub(super) use rotation::RadioRotation;
 mod secure_ingress;
 mod transmission;
 
@@ -664,6 +751,19 @@ fn rescue_link_writes(
             .filter_map(|write| write.bytes.get(1).copied())
             .collect(),
     )
+}
+
+fn encode_fragment_stream(packet: &BitchatPacket, chunk: usize) -> Option<Vec<Vec<u8>>> {
+    let mut stream_id = [0; 8];
+    if let Err(error) = getrandom::fill(&mut stream_id) {
+        tracing::warn!(target: "mesh::ble", %error, "could not generate a fragment stream ID");
+        return None;
+    }
+    fragment::plan_fragments(packet, chunk, stream_id)
+        .ok()?
+        .iter()
+        .map(|frame| codec::encode(frame, fragment::pads_ble_frame(frame.msg_type)).ok())
+        .collect()
 }
 
 /// Every *other* link bound to the peer `ingress` is bound to.
@@ -804,17 +904,25 @@ fn link_seq(link: &LinkId) -> u64 {
 /// A free function so the relay path can be spawned: it needs the shared state and
 /// nothing else from the runtime. It no longer needs the radio — everything goes
 /// through the paced queue now, the same as `transmit`.
-async fn transmit_forwarded(state: &Arc<MeshState>, packet: &BitchatPacket, ingress: &LinkId) {
+async fn transmit_forwarded(
+    state: &Arc<MeshState>,
+    packet: &BitchatPacket,
+    ingress: &LinkId,
+    group_links: Option<&[LinkId]>,
+) {
     let padding = fragment::pads_ble_frame(packet.msg_type);
     let Ok(encoded) = codec::encode(packet, padding) else {
         return;
     };
-    let (links, siblings) = state.with(|inner| {
+    let (mut links, siblings) = state.with(|inner| {
         (
             link_candidates_locked(inner),
             sibling_links_locked(inner, ingress),
         )
     });
+    if let Some(allowed) = group_links {
+        links.retain(|candidate| allowed.contains(&candidate.id));
+    }
     let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
         // Split horizon: never send a packet back down the link it arrived on —
         // nor down any other link to the same peer, which is what `siblings` adds.
@@ -825,15 +933,10 @@ async fn transmit_forwarded(state: &Arc<MeshState>, packet: &BitchatPacket, ingr
 
     let frames: Vec<Vec<u8>> = match plan.fragment_chunk_size {
         Some(chunk) => {
-            let mut id = [0u8; 8];
-            id.copy_from_slice(&packet.packet_id()[..8]);
-            match fragment::plan_fragments(packet, chunk, id) {
-                Ok(fragments) => fragments
-                    .iter()
-                    .filter_map(|f| codec::encode(f, fragment::pads_ble_frame(f.msg_type)).ok())
-                    .collect(),
-                Err(_) => return,
-            }
+            let Some(frames) = encode_fragment_stream(packet, chunk) else {
+                return;
+            };
+            frames
         }
         None => vec![encoded],
     };

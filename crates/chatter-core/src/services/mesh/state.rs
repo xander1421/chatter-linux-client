@@ -69,6 +69,9 @@ pub struct LinkStateInner {
     /// Declined invitation epochs stay suppressed while a creator retries them.
     pub declined_group_invites: BTreeMap<String, (u32, u64)>,
     pub binding_offers: BTreeSet<PeerId>,
+    pub(super) pairing_offers: BTreeMap<PeerId, super::account_identity::PairingOffer>,
+    pub(super) pairing_couriers: super::pairing::PairingCouriers,
+    pub(super) pairing_beacon_slots: super::pairing::PairingBeaconSlots,
     pub links: LinkStateStore,
     pub peers: PeerRegistry,
     pub ingress: IngressRegistry,
@@ -141,6 +144,9 @@ impl Default for LinkStateInner {
             pending_group_invites: BTreeMap::new(),
             declined_group_invites: BTreeMap::new(),
             binding_offers: BTreeSet::new(),
+            pairing_offers: BTreeMap::new(),
+            pairing_couriers: Default::default(),
+            pairing_beacon_slots: Default::default(),
             prekeys: super::prekeys::PrekeyState::default(),
             max_write: BTreeMap::new(),
             address_of: BTreeMap::new(),
@@ -185,10 +191,33 @@ impl MeshState {
         f(&mut guard)
     }
 
+    pub(super) fn route(&self, peer: &PeerId) -> PeerId {
+        self.with(|state| state.peers.route(&peer.to_short()).clone())
+    }
+
+    pub(super) fn contact(&self, peer: &PeerId) -> PeerId {
+        self.with(|state| state.peers.contact(&peer.to_short()).clone())
+    }
+
+    /// A rotated route inherits the private account authorization only via
+    /// the durable Noise pin for its previous identity.
+    pub(super) fn rotated_keys(&self, peer: &PeerId) -> Option<([u8; 32], [u8; 32])> {
+        self.with(|state| {
+            let pin = state.peers.pinned(peer)?;
+            if pin.contact == *peer {
+                return None;
+            }
+            Some((
+                pin.noise_public_key.as_slice().try_into().ok()?,
+                pin.signing_public_key.as_slice().try_into().ok()?,
+            ))
+        })
+    }
+
     /// A live link has been bound to this peer by Noise proof.
     #[must_use]
     pub fn is_connected(&self, peer: &PeerId) -> bool {
-        self.with(|state| !state.links.links_to(peer).is_empty())
+        self.with(|state| !state.links.links_to(state.peers.route(peer)).is_empty())
     }
 
     /// The mesh's freshness heuristic: seen recently enough to be worth a send.
@@ -196,6 +225,7 @@ impl MeshState {
     pub fn is_reachable(&self, peer: &PeerId) -> bool {
         let now = now_millis();
         self.with(|state| {
+            let peer = state.peers.route(peer);
             state.peers.is_reachable(peer, now)
                 || (state.peers.info(peer).is_some()
                     && state.links.discovery_links_to(peer).next().is_some())
@@ -212,14 +242,20 @@ impl MeshState {
     #[must_use]
     pub fn can_write_to(&self, peer: &PeerId) -> bool {
         self.with(|state| {
-            let links = state.links.links_to(peer);
+            let links = state.links.links_to(state.peers.route(peer));
             links.iter().any(|link| state.links.is_writable(link))
         })
     }
 
     pub(super) fn can_open_session_to(&self, peer: &PeerId) -> bool {
         self.can_write_to(peer)
-            || self.with(|state| state.links.discovery_links_to(peer).next().is_some())
+            || self.with(|state| {
+                state
+                    .links
+                    .discovery_links_to(state.peers.route(peer))
+                    .next()
+                    .is_some()
+            })
     }
 
     pub(super) fn public_sync_peers(&self) -> Vec<PeerId> {
@@ -244,34 +280,59 @@ impl MeshState {
     /// send against without retaining a copy.
     #[must_use]
     pub fn has_session(&self, peer: &PeerId) -> bool {
-        self.with(|state| state.sessions.has_session(peer))
+        self.with(|state| state.sessions.has_session(state.peers.route(peer)))
     }
 
-    /// A private-channel roster entry must come from the Noise-bound pin.
+    /// Bind a group roster member to its durable paired contact. A live
+    /// exchange must still present the current radio key that Noise proved.
     pub(super) fn pinned_member(
         &self,
         peer: &PeerId,
         require_live_session: bool,
     ) -> Option<super::private_channel::Member> {
         self.with(|state| {
-            let pin = state.peers.pinned(peer)?;
-            let static_key: [u8; 32] = pin.noise_public_key.as_slice().try_into().ok()?;
-            match state.sessions.remote_static(peer) {
-                Some(live) if live == static_key => {}
+            let wire = state.peers.route(peer);
+            let pin = state.peers.pinned(wire)?;
+            let (group_static, group_signing) = pin.private_group_keys?;
+            match state.sessions.remote_static(wire) {
+                Some(live) if pin.noise_public_key.as_slice() == live => {}
                 None if !require_live_session => {}
                 _ => return None,
             }
             Some(super::private_channel::Member {
-                peer: peer.to_string(),
-                fingerprint: chatter_mesh_noise::fingerprint_of(&static_key),
-                signing_key: pin.signing_public_key.clone(),
+                peer: PeerId::from_noise_key(&group_static).to_string(),
+                fingerprint: chatter_mesh_noise::fingerprint_of(&group_static),
+                signing_key: group_signing.to_vec(),
                 nickname: state
                     .peers
-                    .info(peer)
+                    .info(wire)
                     .filter(|record| record.verified_nickname)
                     .map_or_else(|| pin.nickname.clone(), |record| record.nickname.clone()),
             })
         })
+    }
+
+    pub(super) fn private_group_keys(&self, peer: &PeerId) -> Option<([u8; 32], [u8; 32])> {
+        self.with(|state| {
+            state
+                .peers
+                .pinned(state.peers.route(peer))?
+                .private_group_keys
+        })
+    }
+
+    pub(super) fn wire_for_group_peer(&self, group: &PeerId) -> Option<PeerId> {
+        self.with(|state| {
+            state.peers.pinned_identities().find_map(|(wire, pin)| {
+                let (key, _) = pin.private_group_keys?;
+                (PeerId::from_noise_key(&key) == *group).then(|| wire.clone())
+            })
+        })
+    }
+
+    pub(super) fn group_peer_for_wire(&self, peer: &PeerId) -> Option<PeerId> {
+        let (key, _) = self.private_group_keys(peer)?;
+        Some(PeerId::from_noise_key(&key))
     }
 
     /// Everything the courier selector needs about every peer we know.
@@ -330,7 +391,7 @@ impl MeshState {
                             .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
                             .map(|key| chatter_mesh_noise::fingerprint_of(&key))
                             .or_else(|| state.sessions.fingerprint(&record.peer)),
-                        peer: record.peer,
+                        peer: state.peers.contact(&record.peer).clone(),
                         nickname: record.nickname,
                     }
                 })

@@ -173,7 +173,10 @@ impl BleRuntime {
         if due {
             let first_attempt = self.state.with(|state| {
                 if state.peers.pinned(peer).is_some() {
-                    let attempts = state.known_peer_reopen_attempts.entry(peer.clone()).or_default();
+                    let attempts = state
+                        .known_peer_reopen_attempts
+                        .entry(peer.clone())
+                        .or_default();
                     *attempts = attempts.saturating_add(1);
                     *attempts == 1
                 } else {
@@ -211,6 +214,7 @@ impl BleRuntime {
     }
 
     pub(super) async fn send_signal_bundle(&mut self, peer: &PeerId, bytes: &[u8]) {
+        let peer = &self.state.route(peer);
         let sealed = self.state.with(|state| state.sessions.encrypt(peer, bytes));
         let Ok(ciphertext) = sealed else {
             // Sessions open lazily. The handshake's Chatter Hello re-offers
@@ -230,6 +234,8 @@ impl BleRuntime {
     }
 
     pub(super) async fn send_signal_carrier(&mut self, peer: &PeerId, bytes: Vec<u8>) {
+        let peer = &self.state.route(peer);
+        let contact = self.state.contact(peer);
         let Some(frame) = frames::CarrierFrame::decode(&bytes, now_secs()) else {
             return;
         };
@@ -237,9 +243,9 @@ impl BleRuntime {
             return;
         };
         if !matches!(
-            self.binding_store.state(&owner, peer),
+            self.binding_store.state(&owner, &contact),
             Ok(PeerBinding::Verified { .. })
-        ) || self.binding_store.signal_opted_in(&owner, peer).ok() != Some(true)
+        ) || self.binding_store.signal_opted_in(&owner, &contact).ok() != Some(true)
         {
             return;
         }
@@ -255,7 +261,7 @@ impl BleRuntime {
         if !self.state.can_write_to(peer) || !compatible {
             if self
                 .binding_store
-                .queue_mesh_carrier(&owner, peer, &frame)
+                .queue_mesh_carrier(&owner, &contact, &frame)
                 .is_err()
             {
                 return;
@@ -286,7 +292,7 @@ impl BleRuntime {
                 message_id: uuid::Uuid::from_bytes(frame.message_id)
                     .to_string()
                     .to_uppercase(),
-                peer: Some(peer.clone()),
+                peer: Some(contact.clone()),
                 state: super::super::events::MeshDelivery::Secure,
             });
         }
@@ -304,10 +310,12 @@ impl BleRuntime {
         let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() else {
             return;
         };
-        let Ok(Some(recipient_key)) = self.binding_store.verified_noise_key(&owner, recipient)
-        else {
+        let Some((wire_key, _)) = self.account_mesh_keys(&owner, recipient) else {
             return;
         };
+        let paired = self.state.pairing_courier(recipient);
+        let recipient_key = paired.as_ref().map_or(wire_key, |pair| pair.remote);
+        let contact = self.state.contact(recipient);
         let mut payload = Vec::with_capacity(4 + bytes.len());
         payload.extend_from_slice(b"CSM1");
         payload.extend_from_slice(bytes);
@@ -339,6 +347,7 @@ impl BleRuntime {
                     && p.is_verified
                     && p.is_connected
                     && self.state.can_write_to(&p.peer)
+                    && (paired.is_none() || self.state.has_paired_pin(&p.peer))
             })
             .take(usize::from(INITIAL_COPIES))
             .map(|p| p.peer)
@@ -347,33 +356,24 @@ impl BleRuntime {
         for courier in candidates {
             if self
                 .binding_store
-                .reserve_mesh_courier(&owner, recipient, &id, &courier)
+                .reserve_mesh_courier(&owner, &contact, &id, &courier)
                 .ok()
                 != Some(true)
             {
                 continue;
             }
-            let Ok(payload) = envelope.encode() else {
-                break;
-            };
-            let packet = self.build_packet(
-                MessageType::CourierEnvelope,
-                Some(&courier),
-                payload,
-                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-            );
-            if self.transmit(&packet, Some(&courier), None).await {
+            if self.send_courier_frame(&courier, &envelope).await {
                 handed = true;
             } else {
                 let _ = self
                     .binding_store
-                    .release_mesh_courier(&owner, recipient, &id, &courier);
+                    .release_mesh_courier(&owner, &contact, &id, &courier);
             }
         }
         if handed {
             self.events.send(MeshEvent::Delivery {
                 message_id: uuid::Uuid::from_bytes(id).to_string().to_uppercase(),
-                peer: Some(recipient.clone()),
+                peer: Some(contact),
                 state: super::super::events::MeshDelivery::SignalRelayed,
             });
         }

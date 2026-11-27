@@ -18,6 +18,9 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
     ) -> bool {
+        if self.state.route(claimed) != *claimed {
+            return false;
+        }
         let local = self.identity.peer_id();
         let now_ms = now_millis();
         let now_s = now_secs();
@@ -132,6 +135,12 @@ impl BleRuntime {
         }
 
         let direct = accepted.direct_hint;
+        let paired_contact = direct
+            .then(|| self.state.paired_contact_for_announce(announcement))
+            .flatten();
+        if let Some(contact) = &paired_contact {
+            self.note_pairing_candidate(claimed, contact, now_ms);
+        }
 
         let (is_new, new_discovery, link_authenticated, first_sighting, reconnected, bound_peer) =
             self.state.with(|state| {
@@ -203,6 +212,17 @@ impl BleRuntime {
         // A verified direct announce on an authenticated link can retry the
         // handover. The courier retains each envelope until its recipient confirms it.
         let ingress = AnnounceIngress::new(direct, link_authenticated);
+        if ingress.permits_offer() {
+            let claimed_keys = self
+                .courier_claims
+                .get(claimed)
+                .cloned()
+                .unwrap_or_default();
+            for key in claimed_keys {
+                self.hand_over_courier_mail(claimed, &key, now_s, ingress)
+                    .await;
+            }
+        }
         if let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice()) {
             if ingress.permits_offer() {
                 self.hand_over_courier_mail(claimed, &key, now_s, ingress)
@@ -221,6 +241,9 @@ impl BleRuntime {
         }
 
         self.retry_pending_dm_handshake(claimed).await;
+        if paired_contact.is_some() && self.state.has_session(claimed) {
+            self.send_pairing_proof(claimed).await;
+        }
         // A known peer may return on a new link, where an old session alone
         // cannot authorize routing. Reopen Noise to restore private delivery.
         // Strangers still open Noise on demand.
@@ -243,7 +266,9 @@ impl BleRuntime {
                     now_ms.saturating_sub(last) >= known_peer_retry_delay_ms(attempts, jitter_ms)
                 });
                 let has_session = state.sessions.has_session(claimed);
-                let known = has_session || state.peers.pinned(claimed).is_some();
+                let known = has_session
+                    || state.peers.pinned(claimed).is_some()
+                    || paired_contact.is_some();
                 known && (!has_session || !state.links.presence(claimed).any()) && due
             })
             && self.state.can_open_session_to(claimed)
@@ -268,7 +293,7 @@ impl BleRuntime {
         if new_discovery || (is_new && (link_authenticated || direct_discovery)) {
             // Push anything retained for them, and offer them mail for others.
             let _ = self.router.send(RouterCommand::PeerAvailable {
-                peer: claimed.clone(),
+                peer: self.state.contact(claimed),
             });
             // A peer we have not synced with yet gets our public history.
             if let Ok(send) = self.gossip.initial_sync_to(claimed, now_s) {

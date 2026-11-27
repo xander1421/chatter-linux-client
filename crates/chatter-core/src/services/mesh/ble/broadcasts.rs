@@ -82,10 +82,10 @@ impl BleRuntime {
         self.originate_broadcast(&packet).await;
     }
 
-    pub(super) async fn send_private_control(&mut self, peer: &PeerId, bytes: &[u8]) {
+    pub(super) async fn send_private_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
         let Ok(ciphertext) = self.state.with(|s| s.sessions.encrypt(peer, bytes)) else {
             // A current member retries when this peer establishes Noise again.
-            return;
+            return false;
         };
         let packet = self.build_packet(
             MessageType::NoiseEncrypted,
@@ -93,20 +93,29 @@ impl BleRuntime {
             ciphertext,
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
-        self.transmit(&packet, Some(peer), None).await;
+        self.transmit(&packet, Some(peer), None).await
+    }
+
+    pub(super) async fn send_group_control(&self, peer: &PeerId, bytes: &[u8]) -> bool {
+        self.pairing_verified(peer) && self.send_private_control(peer, bytes).await
     }
 
     pub(super) async fn send_group_state(&mut self, peer: &PeerId, bytes: &[u8], invite: bool) {
+        let Some(wire) = self.state.wire_for_group_peer(peer) else {
+            return;
+        };
+        let peer = &wire;
         let kind = if invite {
             NoisePayloadType::GroupInvite
         } else {
             NoisePayloadType::GroupKeyUpdate
         };
         let payload = chatter_mesh::packet::encode_noise_payload(kind, bytes);
-        let sealed = self
-            .state
-            .with(|state| state.sessions.encrypt(peer, &payload));
-        let Ok(ciphertext) = sealed else {
+        let sealed = self.pairing_verified(peer).then(|| {
+            self.state
+                .with(|state| state.sessions.encrypt(peer, &payload))
+        });
+        let Some(Ok(ciphertext)) = sealed else {
             let now = now_millis();
             let due = self.state.with(|state| {
                 state
@@ -114,6 +123,7 @@ impl BleRuntime {
                     .links_to(peer)
                     .iter()
                     .any(|link| state.links.is_writable(link))
+                    && !state.sessions.has_session(peer)
                     && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
                         >= DM_HANDSHAKE_RETRY_MS
             });
@@ -131,26 +141,32 @@ impl BleRuntime {
         self.transmit(&packet, Some(peer), None).await;
     }
 
-    pub(super) async fn broadcast_private_channel(&mut self, id: &str, bytes: Vec<u8>) {
+    pub(super) async fn broadcast_private_channel(
+        &mut self,
+        id: &str,
+        bytes: Vec<u8>,
+        timestamp_ms: u64,
+    ) {
         let Ok(Some(state)) = self.private_channels.load(id) else {
             return;
         };
         if state.stale {
             return;
         }
-        let packet_sender = self.identity.peer_id();
-        let Some(opened) = state.decrypt(&bytes) else {
+        let local_group = self.private_group_identity.peer_id();
+        let Some(opened) = state.decrypt(&bytes, timestamp_ms) else {
             return;
         };
         let message_id = opened.id;
         let content = opened.content;
-        let sender = packet_sender.clone();
-        let packet = self.build_packet(MessageType::GroupMessage, None, bytes, 7);
+        let sender = opened.sender;
+        let mut packet = self.build_packet(MessageType::GroupMessage, None, bytes, 7);
+        packet.timestamp = timestamp_ms;
         self.state
             .with(|s| s.self_broadcasts.record(&message_id, &packet, now_millis()));
         self.originate_broadcast(&packet).await;
         let conversation = MeshConversation::PrivateChannel(id.to_owned());
-        let nickname = if sender == packet_sender {
+        let nickname = if sender == local_group {
             self.config.nickname()
         } else {
             self.state
@@ -158,9 +174,9 @@ impl BleRuntime {
                 .unwrap_or_else(|| sender.as_str().to_owned())
         };
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
-            message: outbound_message(&conversation, &message_id, &sender, &content, now_millis()),
+            message: outbound_message(&conversation, &message_id, &sender, &content, timestamp_ms),
             conversation,
-            is_local: sender == packet_sender,
+            is_local: sender == local_group,
             sender,
             nickname,
             sender_verified: true,

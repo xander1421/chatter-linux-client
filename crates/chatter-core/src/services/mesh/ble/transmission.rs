@@ -1,5 +1,14 @@
 use super::*;
 
+pub(super) fn is_private_group_packet(packet: &BitchatPacket) -> bool {
+    match packet.message_type() {
+        Some(MessageType::GroupMessage) => true,
+        Some(MessageType::Fragment) => fragment::FragmentHeader::parse(packet)
+            .is_ok_and(|(header, _)| header.original_type == MessageType::GroupMessage.as_u8()),
+        _ => false,
+    }
+}
+
 impl BleRuntime {
     pub(super) async fn announce(&mut self) {
         let now_ms = now_millis();
@@ -24,7 +33,7 @@ impl BleRuntime {
         if self.state.with(|state| state.prekeys.local.is_some()) {
             capabilities.insert(PeerCapabilities::PREKEYS);
         }
-        let announcement = AnnouncementPacket::new(
+        let mut announcement = AnnouncementPacket::new(
             nickname.clone(),
             self.identity.static_public().to_vec(),
             self.identity.signing_public().to_vec(),
@@ -32,6 +41,9 @@ impl BleRuntime {
             Some(capabilities),
             self.config.bridge_geohash.clone(),
         );
+        let beacons = self.state.pairing_beacons(&self.broadcast_peer_id());
+        announcement.pairing_beacon = Some(beacons[self.beacon_cursor % beacons.len()]);
+        self.beacon_cursor = self.beacon_cursor.wrapping_add(1);
         let payload = match announcement.encode() {
             Ok(payload) => payload,
             Err(error) => {
@@ -99,6 +111,11 @@ impl BleRuntime {
         packet
     }
 
+    /// Address advertised by the current radio epoch and written into its packets.
+    pub(super) fn broadcast_peer_id(&self) -> PeerId {
+        self.identity.peer_id()
+    }
+
     pub(super) fn build_packet(
         &self,
         msg_type: MessageType,
@@ -107,15 +124,14 @@ impl BleRuntime {
         ttl: u8,
     ) -> BitchatPacket {
         let sender_id = self
-            .identity
-            .peer_id()
+            .broadcast_peer_id()
             .to_routing_bytes()
             .unwrap_or([0u8; SENDER_ID_LEN]);
         // Broadcast is encoded by *omitting* the recipient, which is what
         // bitchat sends (`recipientID: nil`). The explicit all-`0xFF` form is
         // also accepted by them, but the omitted form is what their own packets
         // carry, so sending it keeps our traffic byte-comparable with theirs.
-        let recipient_id = recipient.and_then(PeerId::to_routing_bytes);
+        let recipient_id = recipient.and_then(|peer| self.state.route(peer).to_routing_bytes());
         BitchatPacket::new(
             msg_type,
             sender_id,
@@ -176,6 +192,8 @@ impl BleRuntime {
         ingress_link: Option<&LinkId>,
         chosen_link: Option<&LinkId>,
     ) -> bool {
+        let directed_peer = directed_peer.map(|peer| self.state.route(peer));
+        let directed_peer = directed_peer.as_ref();
         let padding = fragment::pads_ble_frame(packet.msg_type);
         let Ok(encoded) = codec::encode(packet, padding) else {
             return false;
@@ -206,6 +224,9 @@ impl BleRuntime {
                 };
                 candidate.peer = Some(peer.clone());
             }
+            if is_private_group_packet(packet) {
+                links.retain(|candidate| self.group_traffic_allowed(&candidate.id));
+            }
             let request = OutboundPlanRequest::new(packet, encoded.len(), &links)
                 .with_ingress_link(ingress_link)
                 .with_excluded_links(&siblings)
@@ -215,17 +236,10 @@ impl BleRuntime {
 
             let frames = match plan.fragment_chunk_size {
                 Some(chunk) => {
-                    let mut id = [0u8; 8];
-                    id.copy_from_slice(&packet.packet_id()[..8]);
-                    match fragment::plan_fragments(packet, chunk, id) {
-                        Ok(fragments) => fragments
-                            .iter()
-                            .filter_map(|f| {
-                                codec::encode(f, fragment::pads_ble_frame(f.msg_type)).ok()
-                            })
-                            .collect(),
-                        Err(_) => Vec::new(),
-                    }
+                    let Some(frames) = encode_fragment_stream(packet, chunk) else {
+                        return false;
+                    };
+                    frames
                 }
                 None => vec![encoded],
             };
@@ -353,11 +367,19 @@ impl BleRuntime {
         let state = Arc::clone(&self.state);
         let ingress = ingress.clone();
         let delay = u64::from(decision.delay_ms);
+        let group_links = is_private_group_packet(packet).then(|| {
+            self.state
+                .link_candidates()
+                .into_iter()
+                .map(|candidate| candidate.id)
+                .filter(|link| self.group_traffic_allowed(link))
+                .collect::<Vec<_>>()
+        });
         tokio::spawn(async move {
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            transmit_forwarded(&state, &forwarded, &ingress).await;
+            transmit_forwarded(&state, &forwarded, &ingress, group_links.as_deref()).await;
         });
     }
 }

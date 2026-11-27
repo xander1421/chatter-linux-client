@@ -27,7 +27,7 @@ use super::state::MeshState;
 
 /// Leading bytes of the persisted blob, so a blob of another shape is refused
 /// rather than misread as key material.
-const MAGIC: &[u8; 4] = b"LPK1";
+const MAGIC: &[u8; 4] = b"LPK3";
 
 /// One of our prekeys. The secret is wiped on drop.
 struct LocalPrekey {
@@ -47,7 +47,7 @@ impl Drop for LocalPrekey {
 #[derive(Default)]
 pub struct LocalPrekeys {
     keys: Vec<LocalPrekey>,
-    next_id: u32,
+    owner: Option<[u8; 32]>,
     generated_at_ms: u64,
     /// A prekey was consumed since the last save.
     dirty: bool,
@@ -60,6 +60,15 @@ impl LocalPrekeys {
     /// Returns whether the set changed and must be persisted, then republished
     /// — in that order, because a published prekey whose secret was never saved
     /// is mail that can never be opened.
+    pub fn rebind(&mut self, identity: &MeshIdentity) {
+        let owner = identity.static_public();
+        if self.owner != Some(owner) {
+            self.keys.clear();
+            self.owner = Some(owner);
+            self.dirty = true;
+        }
+    }
+
     pub fn refresh(&mut self, now_ms: u64, rng: &mut impl rand_core_10::CryptoRng) -> bool {
         let before = self.keys.len();
         self.keys
@@ -69,8 +78,9 @@ impl LocalPrekeys {
         let mut unconsumed = self.unconsumed().count();
         if needs_replenish(unconsumed) {
             while unconsumed < MAX_PREKEYS {
-                let id = self.next_id;
-                self.next_id = self.next_id.wrapping_add(1);
+                let mut id = [0; 4];
+                rng.fill_bytes(&mut id);
+                let id = u32::from_be_bytes(id);
                 if self.keys.iter().any(|key| key.id == id) {
                     continue;
                 }
@@ -87,6 +97,7 @@ impl LocalPrekeys {
         }
 
         if changed {
+            self.dirty = true;
             self.generated_at_ms = next_generated_at(self.generated_at_ms, now_ms);
         }
         changed
@@ -99,6 +110,12 @@ impl LocalPrekeys {
 
     /// Our current bundle, signed: every unconsumed prekey, ascending by ID.
     pub fn bundle(&self, identity: &MeshIdentity) -> Option<PrekeyBundle> {
+        if self
+            .owner
+            .is_some_and(|owner| owner != identity.static_public())
+        {
+            return None;
+        }
         let mut prekeys: Vec<Prekey> = self
             .unconsumed()
             .map(|key| Prekey {
@@ -146,12 +163,11 @@ impl LocalPrekeys {
         self.keys.iter().filter(|key| key.consumed_at_ms.is_none())
     }
 
-    /// `MAGIC ‖ be_u32(next_id) ‖ be_u64(generated_at) ‖ be_u16(n) ‖
-    /// (be_u32(id) ‖ secret32 ‖ be_u64(created) ‖ u8(consumed?) ‖ be_u64(at)) * n`
+    /// Store the current epoch owner and its one-time keys.
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
-        let mut out = Zeroizing::new(Vec::with_capacity(18 + self.keys.len() * 53));
+        let mut out = Zeroizing::new(Vec::with_capacity(46 + self.keys.len() * 53));
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&self.next_id.to_be_bytes());
+        out.extend_from_slice(&self.owner.unwrap_or([0; 32]));
         out.extend_from_slice(&self.generated_at_ms.to_be_bytes());
         let count = u16::try_from(self.keys.len()).unwrap_or(u16::MAX);
         out.extend_from_slice(&count.to_be_bytes());
@@ -175,7 +191,7 @@ impl LocalPrekeys {
             cursor = rest;
             Some(head)
         };
-        let next_id = u32::from_be_bytes(take(4)?.try_into().ok()?);
+        let owner: [u8; 32] = take(32)?.try_into().ok()?;
         let generated_at_ms = u64::from_be_bytes(take(8)?.try_into().ok()?);
         let count = u16::from_be_bytes(take(2)?.try_into().ok()?);
         let mut keys = Vec::with_capacity(usize::from(count));
@@ -201,7 +217,7 @@ impl LocalPrekeys {
         }
         Some(Self {
             keys,
-            next_id,
+            owner: (owner != [0; 32]).then_some(owner),
             generated_at_ms,
             dirty: false,
         })
@@ -222,6 +238,10 @@ struct CachedBundle {
 }
 
 impl PeerBundles {
+    pub fn forget(&mut self, owner: &[u8; 32]) {
+        self.bundles.remove(owner);
+    }
+
     /// Cache a bundle whose signature the caller has verified against the
     /// owner's Noise-bound signing key. Strictly newer replaces; past
     /// [`MAX_CACHED_BUNDLES`] the least recently updated owner is evicted.
@@ -293,6 +313,11 @@ pub fn seal_offline(
     identity: &MeshIdentity,
     now_ms: u64,
 ) -> Option<(Vec<u8>, Option<u32>)> {
+    if let Some(pairing) = state.courier_sender(recipient_key) {
+        return seal_courier(payload, recipient_key, &pairing)
+            .ok()
+            .map(|ciphertext| (ciphertext, None));
+    }
     let prekey = state.with(|inner| inner.prekeys.peers.take(recipient_key, now_ms));
     match prekey {
         Some(prekey) => seal_prekey(payload, prekey.id, &prekey.public_key, identity)
@@ -385,6 +410,26 @@ mod tests {
         assert!(next.prekeys.iter().all(|p| p.id != prekey.id));
         assert!(next.generated_at > NOW);
         assert!(peers.ingest(next, NOW + 1));
+    }
+
+    #[test]
+    fn a_new_epoch_publishes_no_prekeys_from_the_previous_epoch() {
+        let (old, next) = (identity(), identity());
+        let mut local = LocalPrekeys::default();
+        local.rebind(&old);
+        assert!(local.refresh(NOW, &mut os_rng()));
+        let original = local.bundle(&old).unwrap();
+        local.rebind(&next);
+        assert!(local.refresh(NOW + 1, &mut os_rng()));
+        let bundle = local.bundle(&next).unwrap();
+        assert_ne!(bundle.owner_static, original.owner_static);
+        assert!(bundle.verify(&next.signing_public()));
+        assert!(bundle.prekeys.iter().all(|key| {
+            original
+                .prekeys
+                .iter()
+                .all(|old| old.id != key.id && old.public_key != key.public_key)
+        }));
     }
 
     #[test]

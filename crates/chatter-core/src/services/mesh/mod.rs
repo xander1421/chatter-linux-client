@@ -232,7 +232,8 @@ pub struct MeshService {
     binding_store: Arc<MeshBindingStore>,
     private_channels: Arc<PrivateChannelStore>,
     signal_lock: Arc<Mutex<()>>,
-    identity: Arc<MeshIdentity>,
+    identity: identity::ActiveMeshIdentity,
+    private_group_identity: identity::ActiveMeshIdentity,
     /// Retained so a panic wipe can destroy the keypair, not merely the mail.
     identity_store: Arc<MeshIdentityStore>,
     config: Arc<MeshConfig>,
@@ -265,11 +266,12 @@ pub struct MeshService {
     has_radio: bool,
     relay_connector: Option<Arc<dyn RelayConnector>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
-    running: AtomicBool,
+    lifecycle: tokio::sync::Mutex<()>,
+    running: Arc<AtomicBool>,
     /// Set by a panic wipe. `identity` above is the erased keypair; announcing
     /// it again would relink this device to everything the wipe was meant to
     /// cut off, so the radio stays down until a restart loads a fresh one.
-    identity_wiped: AtomicBool,
+    identity_wiped: Arc<AtomicBool>,
     /// Set when the sealer holds no key — see [`MeshError::SealerUnavailable`].
     sealer_unavailable: Option<String>,
 }
@@ -281,6 +283,7 @@ mod conversations;
 mod files;
 mod lifecycle;
 mod messaging;
+mod pairing;
 
 /// A fresh wire message ID.
 ///

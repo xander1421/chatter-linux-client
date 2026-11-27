@@ -13,13 +13,22 @@ impl BleRuntime {
         now_s: u64,
         ingress: AnnounceIngress,
     ) {
-        let support = self.state.with(|state| match state.chatter_hello.get(peer) {
-            Some(hello) if hello.capabilities & COURIER_RECEIPTS != 0 => {
-                CourierReceiptSupport::Supported
-            }
-            Some(_) => CourierReceiptSupport::Unsupported,
-            None => CourierReceiptSupport::Unknown,
-        });
+        let has_claim = self
+            .courier_claims
+            .get(peer)
+            .is_some_and(|keys| keys.contains(recipient_key));
+        let support = if has_claim {
+            CourierReceiptSupport::Supported
+        } else {
+            self.state
+                .with(|state| match state.chatter_hello.get(peer) {
+                    Some(hello) if hello.capabilities & COURIER_RECEIPTS != 0 => {
+                        CourierReceiptSupport::Supported
+                    }
+                    Some(_) => CourierReceiptSupport::Unsupported,
+                    None => CourierReceiptSupport::Unknown,
+                })
+        };
         let envelopes = match self.couriers.offer_envelopes(recipient_key, now_s, ingress) {
             Ok(envelopes) => envelopes,
             Err(error) => {
@@ -28,16 +37,7 @@ impl BleRuntime {
             }
         };
         for envelope in envelopes {
-            let Ok(payload) = envelope.encode() else {
-                continue;
-            };
-            let packet = self.build_packet(
-                MessageType::CourierEnvelope,
-                Some(peer),
-                payload,
-                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-            );
-            if self.transmit(&packet, Some(peer), None).await
+            if self.send_courier_frame(peer, &envelope).await
                 && let Err(error) = self.couriers.record_offer(&envelope, support, now_s)
             {
                 tracing::warn!(target: "mesh::ble", %error, "courier offer could not be recorded");
@@ -105,10 +105,11 @@ impl BleRuntime {
             .state
             .with(|state| state.peers.nickname(peer, false).map(str::to_string))
             .unwrap_or_else(|| peer.as_str().to_string());
+        let contact = self.state.contact(peer);
         let inbound = InboundMessage {
             wire_id: message_id.to_string(),
-            conversation: MeshConversation::Dm(peer.clone()),
-            sender: peer.clone(),
+            conversation: MeshConversation::Dm(contact.clone()),
+            sender: contact.clone(),
             nickname: nickname.clone(),
             content: content.to_string(),
             timestamp_ms,
@@ -116,7 +117,7 @@ impl BleRuntime {
         MeshMessage {
             message: inbound.to_domain(),
             conversation: inbound.conversation,
-            sender: peer.clone(),
+            sender: contact,
             nickname,
             is_local: false,
             sender_verified: true,

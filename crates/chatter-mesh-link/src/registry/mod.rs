@@ -39,7 +39,7 @@ pub use ingress::{INGRESS_RECORD_LIFETIME_MS, IngressRecord, IngressRegistry};
 pub use link_state::{BindOutcome, LinkPresence, LinkState, LinkStateStore};
 pub use peer::{
     AnnounceUpdate, ConnectivityChanges, MAX_PINNED_IDENTITIES, MalformedPins,
-    PEER_INACTIVITY_TIMEOUT_MS, PeerRecord, PeerRegistry, PinnedIdentity,
+    PEER_INACTIVITY_TIMEOUT_MS, PairingKey, PeerRecord, PeerRegistry, PinnedIdentity,
     REACHABILITY_RETENTION_UNVERIFIED_MS, REACHABILITY_RETENTION_VERIFIED_MS, RemovedPeer,
     reachability_retention_ms,
 };
