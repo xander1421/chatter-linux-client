@@ -150,6 +150,9 @@ export component MainChatShell inherits Rectangle {
         // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
         // Hidden entirely in call-fullscreen so the call view fills the whole window.
         if !CallView.active-call-fullscreen && !root.call-hides-sidebar: AppSidebarHost {
+            // The rail tooltip extends into the chat column. Keep it above
+            // the chat canvas while preserving the phone's push transition.
+            z: !root.compact-layout && root.sidebar-is-rail ? 1 : 0;
             width: parent.width;
             height: parent.height;
             chat-push-progress: root.chat-push-progress;

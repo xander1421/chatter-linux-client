@@ -28,6 +28,7 @@ import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshList } from "../mesh/mesh_list.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
 import { SidebarFooter } from "sidebar_footer.slint";
+import { SidebarRail } from "sidebar_rail.slint";
 import { SidebarHeader } from "sidebar_header.slint";
 import { ActivityBell } from "../activity/activity_bell.slint";
 
@@ -86,6 +87,7 @@ export component Sidebar inherits Rectangle {
 
     // ── Properties: State ──
     in-out property <bool> collapsed: false;
+    private property <bool> card-rail: root.collapsed && !root.mobile-mode;
     property <bool> desktop-rail: root.collapsed && !root.touch;
     changed desktop-rail => {
         if (sidebar-keys.has-focus) { root.focus-step(-2); }
@@ -327,7 +329,7 @@ export component Sidebar inherits Rectangle {
     // that separates it from the chat column beside it.
     // On touch layouts, let the page show through the rounded glass chrome.
     // An opaque full-height backing fills the header/footer corner cutouts.
-    background: root.touch ? transparent
+    background: root.touch || root.card-rail ? transparent
               : AnonMode.enabled ? Colors.primary.with-alpha(0.08)
               : root.mobile-mode ? transparent
               : Colors.surface;
@@ -350,6 +352,7 @@ export component Sidebar inherits Rectangle {
     in property <length> bottom-inset: 0px;
 
     Rectangle {
+        visible: !root.card-rail;
         // Clip the list and glass chrome together. Child/backdrop painting must
         // not fill the square corners outside the tablet panel silhouette.
         border-radius: root.border-radius;
@@ -981,7 +984,7 @@ export component Sidebar inherits Rectangle {
             width: 1px;
             height: 1px;
             focus-on-click: false;
-            enabled: !root.touch && (root.active-tab == "chats" || root.desktop-rail) && !root.hidden;
+            enabled: !root.card-rail && !root.touch && (root.active-tab == "chats" || root.desktop-rail) && !root.hidden;
             changed has-focus => { if (self.has-focus) { root.focus-step(-2); } }
             accessible-role: list;
             accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0
@@ -1096,6 +1099,21 @@ export component Sidebar inherits Rectangle {
         // the foot of the list holding nothing — visible as a lighter rectangle
         // above the floating dock.
 
+    }
+
+    if root.card-rail: SidebarRail {
+        width: root.width;
+        height: root.height;
+        touch: root.touch;
+        saved-open: root.saved-open;
+        search-overlay-open: root.search-overlay-open;
+        top-inset: root.titlebar-height;
+        bottom-inset: root.bottom-inset;
+        search => { root.search-clicked(); }
+        create => { root.create-clicked(); }
+        expand => { root.toggle-collapsed(); }
+        focus-composer => { root.focus-composer(); }
+        row-context-menu-opened(row) => { root.row-context-menu-opened(row.conversation-id, row.conversation-type); }
     }
 
     // Right edge — the seam against the chat column. Desktop only: on a phone

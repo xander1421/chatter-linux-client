@@ -1,0 +1,369 @@
+import { Avatar } from "../components/avatar.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { HoldArea } from "../components/hold_area.slint";
+import { HeaderButton } from "../components/header_button.slint";
+import { SidebarPane } from "../app_sidebar_pane.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { ChatRowData } from "chat_list.slint";
+import { SidebarCard, SidebarCardRow, SidebarCards } from "card_types.slint";
+
+component RailSurface inherits GlassSurface {
+    border-radius: Spacing.radius-panel;
+    material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+}
+
+component RailButton inherits RailSurface {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> touch;
+    in property <bool> accent;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    if root.accent: Rectangle {
+        border-radius: parent.border-radius;
+        background: Colors.tint-strong;
+    }
+    HeaderButton {
+        width: root.width;
+        height: root.height;
+        icon: root.icon;
+        label: root.label;
+        touch: root.touch;
+        active: root.accent;
+        enabled: root.enabled;
+        plain: true;
+        clicked => { root.clicked(); }
+    }
+}
+
+component RailItem inherits Rectangle {
+    in property <string> label;
+    in property <string> emoji;
+    in property <image> glyph;
+    in property <image> avatar-source;
+    in property <string> initials;
+    in property <int> unread;
+    in property <bool> selected;
+    in property <bool> online;
+    in property <bool> focused;
+    in property <bool> has-menu;
+    out property <string> hint: root.unread > 0
+        ? @tr("{} · {} unread", root.label, root.unread) : root.label;
+    out property <bool> hovered: hit.has-hover;
+    callback activated();
+    callback menu-requested(length, length);
+
+    in property <bool> touch;
+    in property <string> spoken-label: root.hint;
+    callback hint-changed(bool, bool, length, length, string);
+    changed hovered => { root.hint-changed(false, root.hovered, root.absolute-position.y, root.height, root.hint); }
+    changed focused => { root.hint-changed(true, root.focused, root.absolute-position.y, root.height, root.hint); }
+
+    height: root.touch ? Spacing.touch-target-min : 42px;
+    accessible-role: button;
+    accessible-label: root.spoken-label;
+    accessible-action-default => { root.activated(); }
+    accessible-action-expand => {
+        if root.has-menu {
+            root.menu-requested(root.absolute-position.x + root.width, root.absolute-position.y + root.height / 2);
+        }
+    }
+
+    Rectangle {
+        width: 38px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.hovered ? Colors.row-hover : transparent;
+        border-width: root.focused || root.selected ? 2px : 0px;
+        border-color: root.focused ? Colors.focus-ring : Colors.primary;
+
+        if root.emoji != "": Text {
+            text: root.emoji;
+            font-size: Typography.lg;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        if root.emoji == "" && root.glyph.width > 0: Image {
+            width: 20px;
+            height: self.width;
+            source: root.glyph;
+            colorize: root.selected ? Colors.primary : Colors.text-secondary;
+        }
+        if root.emoji == "" && root.glyph.width == 0: Avatar {
+            size: 34px;
+            source: root.avatar-source;
+            name: root.label;
+            fallback-text: root.initials;
+            accessible-role: none;
+            show-presence: root.online;
+            presence-color: Colors.online;
+        }
+        if root.unread > 0: Rectangle {
+            width: max(16px, badge.preferred-width + Spacing.xs * 2);
+            height: 16px;
+            x: min(parent.width - 10px, root.width / 2 + parent.width / 2 - self.width);
+            y: -2px;
+            border-radius: self.height / 2;
+            background: Colors.action-fill;
+            badge := Text {
+                text: root.unread > 99 ? "99+" : "\{root.unread}";
+                color: Colors.on-action;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+    hit := HoldArea {
+        mouse-cursor: pointer;
+        enabled-for-touch: root.touch && root.has-menu;
+        clicked => { if !self.hold-fired && !self.dragged { root.activated(); } }
+        held => { if root.has-menu { root.menu-requested(self.anchor-x, self.anchor-y); } }
+    }
+}
+
+component RailAvatar inherits RailItem {
+    in property <SidebarCardRow> conversation;
+    in property <bool> saved-open;
+    label: root.conversation.name;
+    online: root.conversation.online;
+    spoken-label: root.conversation.chat-row.accessible-label-text != "" ? root.conversation.chat-row.accessible-label-text : root.hint;
+    avatar-source: root.conversation.avatar-source;
+    initials: root.conversation.initials;
+    unread: root.conversation.muted ? 0 : root.conversation.unread;
+    glyph: root.conversation.kind == "saved" ? Icons.bookmark
+        : root.conversation.kind == "channel" && !root.conversation.has-avatar ? (root.conversation.locked ? Icons.lock : Icons.hash) : @image-url("");
+    selected: root.conversation.kind == "saved" ? root.saved-open : root.conversation.chat-row.is-selected;
+    has-menu: root.conversation.kind != "saved";
+    activated => { SidebarCards.open-row(root.conversation.conversation-id); }
+}
+
+export component SidebarRail inherits Rectangle {
+    in property <bool> touch;
+    in property <bool> saved-open;
+    in property <bool> search-overlay-open;
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    callback search();
+    callback create();
+    callback expand();
+    callback focus-composer();
+    callback row-context-menu-opened(ChatRowData);
+
+    private property <[SidebarCard]> cards: SidebarCards.cards;
+    private property <int> card-index;
+    private property <int> item-index;
+    private property <string> hover-hint;
+    private property <length> hover-y;
+    private property <string> focus-hint;
+    private property <length> focus-y;
+    private property <length> action-height: root.touch ? Spacing.touch-target-min : 44px;
+    private property <length> row-height: root.touch ? Spacing.touch-target-min : 42px;
+    private property <length> card-padding: Spacing.xs;
+    private property <int> active-card: max(0, min(root.card-index, root.cards.length - 1));
+    private property <int> active-item: root.cards.length > 0
+        ? max(0, min(root.item-index, root.item-count(root.cards[root.active-card]) - 1)) : 0;
+    private property <bool> has-sections: root.cards.length > 0 && root.cards[root.cards.length - 1].kind == "section";
+
+    pure function header-count(card: SidebarCard) -> int {
+        // The single expanded Chats card has no leading glyph in 4C.
+        return card.kind == "section" || (card.kind == "chats"
+            && (card.collapsed || root.has-sections || card.pinned.length + card.rows.length == 0)) ? 1 : 0;
+    }
+    pure function item-count(card: SidebarCard) -> int {
+        return root.header-count(card) + (card.collapsed && card.kind != "saved" ? 0 : card.pinned.length + card.rows.length);
+    }
+    pure function row-at(card: SidebarCard, index: int) -> SidebarCardRow {
+        let row-index = index - root.header-count(card);
+        return row-index < card.pinned.length ? card.pinned[row-index] : card.rows[row-index - card.pinned.length];
+    }
+    pure function is-focused(card: int, item: int) -> bool {
+        return keys.has-focus && Appearance.keyboard-focus-visible && root.active-card == card && root.active-item == item;
+    }
+    function step(delta: int) {
+        if root.cards.length == 0 { return; }
+        let active = root.active-card;
+        let last = root.item-count(root.cards[active]) - 1;
+        let item = root.active-item;
+        if delta == -2 {
+            root.card-index = 0;
+            root.item-index = 0;
+        } else if delta == 2 {
+            root.card-index = root.cards.length - 1;
+            root.item-index = max(0, root.item-count(root.cards[root.card-index]) - 1);
+        } else if item + delta >= 0 && item + delta <= last {
+            root.card-index = active;
+            root.item-index = item + delta;
+        } else if active + delta >= 0 && active + delta < root.cards.length {
+            root.card-index = active + delta;
+            root.item-index = delta > 0 ? 0 : max(0, root.item-count(root.cards[root.card-index]) - 1);
+        }
+    }
+    function activate(menu: bool) {
+        if root.cards.length == 0 { return; }
+        let card = root.cards[root.active-card];
+        if root.active-item < root.header-count(card) {
+            if !menu { SidebarCards.toggle-collapsed(card.id); }
+        } else {
+            let row = root.row-at(card, root.active-item);
+            if !menu { SidebarCards.open-row(row.conversation-id); }
+            else if row.kind != "saved" {
+                let y = root.absolute-position.y + root.focus-y;
+                root.open-row-menu(card, row.chat-row, root.absolute-position.x + root.width, y, y - root.row-height / 2);
+            }
+        }
+    }
+    function open-row-menu(card: SidebarCard, row: ChatRowData, x: length, y: length, row-y: length) {
+        SidebarPane.ctx-menu-row = row;
+        SidebarPane.ctx-menu-row-y = row-y - root.absolute-position.y;
+        SidebarPane.ctx-menu-conv-id = row.conversation-id;
+        SidebarPane.ctx-menu-conv-type = row.conversation-type;
+        SidebarPane.ctx-menu-is-pinned = row.is-pinned;
+        SidebarPane.ctx-menu-is-archived = false;
+        SidebarPane.ctx-menu-can-leave = row.can-leave;
+        SidebarPane.ctx-menu-can-delete = row.can-delete;
+        SidebarPane.ctx-menu-x = x;
+        SidebarPane.ctx-menu-y = y;
+        SidebarPane.ctx-menu-current-section-id = card.kind == "section" ? card.id : "";
+        SidebarPane.section-context-menu-open = false;
+        root.row-context-menu-opened(row);
+        SidebarPane.row-context-menu-open = true;
+    }
+    function update-hint(keyboard: bool, shown: bool, y: length, height: length, label: string) {
+        if !keyboard {
+            if shown {
+                root.hover-hint = label;
+                root.hover-y = y - root.absolute-position.y + height / 2;
+            } else if root.hover-hint == label {
+                root.hover-hint = "";
+            }
+            return;
+        }
+        if !shown { return; }
+        let top = y - scroll.absolute-position.y;
+        if top < 0px {
+            scroll.viewport-y = min(0px, scroll.viewport-y - top);
+        } else if top + height > scroll.height {
+            scroll.viewport-y = max(scroll.height - scroll.viewport-height, scroll.viewport-y - (top + height - scroll.height));
+        }
+        root.focus-hint = label;
+        root.focus-y = scroll.y + max(0px, min(top, scroll.height - height)) + height / 2;
+    }
+
+    VerticalLayout {
+        padding-top: root.top-inset;
+        padding-bottom: root.bottom-inset;
+        spacing: Spacing.panel-gutter;
+
+        RailButton {
+            height: root.action-height;
+            icon: Icons.search;
+            label: @tr("Search");
+            touch: root.touch;
+            opacity: root.search-overlay-open ? 0 : 1;
+            enabled: !root.search-overlay-open;
+            clicked => { root.search(); }
+        }
+        RailButton {
+            height: root.action-height;
+            icon: Icons.plus;
+            accent: true;
+            label: @tr("Create");
+            touch: root.touch;
+            clicked => { root.create(); }
+        }
+        scroll := Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: stack.preferred-height;
+            changed viewport-y => { root.hover-hint = ""; }
+
+            stack := VerticalLayout {
+                width: scroll.width;
+                spacing: Spacing.panel-gutter;
+                for card[card-idx] in root.cards: RailSurface {
+                    height: root.item-count(card) * root.row-height + 2 * root.card-padding;
+                    accessible-role: groupbox;
+                    accessible-label: card.title;
+
+                    VerticalLayout {
+                        padding: root.card-padding;
+                        if root.header-count(card) > 0: RailItem {
+                            touch: root.touch;
+                            label: card.title;
+                            emoji: card.emoji;
+                            glyph: Icons.message-circle;
+                            unread: card.collapsed ? card.unread : 0;
+                            focused: root.is-focused(card-idx, 0);
+                            activated => { SidebarCards.toggle-collapsed(card.id); }
+                            hint-changed(keyboard, shown, y, height, label) => {
+                                root.update-hint(keyboard, shown, y, height, label);
+                            }
+                        }
+                        for item-idx in root.item-count(card) - root.header-count(card): RailAvatar {
+                            touch: root.touch;
+                            conversation: root.row-at(card, item-idx + root.header-count(card));
+                            saved-open: root.saved-open;
+                            focused: root.is-focused(card-idx, item-idx + root.header-count(card));
+                            menu-requested(x, y) => {
+                                root.open-row-menu(card, self.conversation.chat-row, x, y, self.absolute-position.y);
+                            }
+                            hint-changed(keyboard, shown, y, height, label) => {
+                                root.update-hint(keyboard, shown, y, height, label);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        keys := FocusScope {
+            height: 0px;
+            focus-on-click: false;
+            accessible-role: list;
+            accessible-label: self.has-focus && root.focus-hint != "" ? root.focus-hint : @tr("Conversations");
+            changed has-focus => { if self.has-focus { root.step(-2); } }
+            key-pressed(event) => {
+                if event.text == Key.UpArrow { root.step(-1); return accept; }
+                if event.text == Key.DownArrow { root.step(1); return accept; }
+                if event.text == Key.Home { root.step(-2); return accept; }
+                if event.text == Key.End { root.step(2); return accept; }
+                if event.text == Key.Return || event.text == Key.Space { root.activate(false); return accept; }
+                if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) { root.activate(true); return accept; }
+                if event.text == Key.Escape { root.focus-composer(); return accept; }
+                return reject;
+            }
+        }
+        RailButton {
+            height: root.action-height;
+            icon: Icons.chevron-right;
+            label: @tr("Expand sidebar");
+            touch: root.touch;
+            clicked => { root.expand(); }
+        }
+    }
+
+    // The hint sits outside the scroll viewport so the card cannot clip it.
+    if root.hover-hint != "" || (keys.has-focus && root.focus-hint != ""): GlassSurface {
+        x: root.width + Spacing.sm;
+        y: max(0px, min(root.height - self.height,
+            (root.hover-hint != "" ? root.hover-y : root.focus-y) - self.height / 2));
+        width: min(hint.preferred-width + 2 * Spacing.sm, 200px);
+        height: hint.preferred-height + 2 * Spacing.xs;
+        border-radius: Spacing.radius-control;
+        material-level: 3;
+        elevation: 4;
+        hint := Text {
+            width: parent.width - 2 * Spacing.sm;
+            text: root.hover-hint != "" ? root.hover-hint : root.focus-hint;
+            color: Colors.text-primary;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+        }
+    }
+}
