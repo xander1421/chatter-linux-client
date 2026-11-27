@@ -3,7 +3,7 @@ import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
-import { SettingsRow } from "../components/settings_row.slint";
+import { SettingsCardRow } from "settings_controls.slint";
 import { Icons } from "../theme/icons.slint";
 import { UpdateGlobal } from "../update/update_global.slint";
 
@@ -12,21 +12,21 @@ export component AboutSettings inherits VerticalLayout {
     callback open-licenses();
 
 
-    spacing: Spacing.md;
+    spacing: Spacing.panel-gutter;
     Text { text: @tr("About Chatter"); color: Colors.text-primary;
-        font-size: Typography.xl; font-weight: Typography.semibold; }
+        font-size: Typography.sm; font-weight: Typography.semibold; }
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
-            SettingsRow {
+            SettingsCardRow {
                 touch: root.mobile-platform;
                 icon: Icons.info;
                 title: @tr("Version");
@@ -35,6 +35,7 @@ export component AboutSettings inherits VerticalLayout {
                 show-chevron: false;
             }
             Button {
+                border-radius: Spacing.radius-control;
                 touch: root.mobile-platform;
                 text: UpdateGlobal.checking || UpdateGlobal.state == "checking" ? @tr("Checking…") : @tr("Check for updates");
                 disabled: UpdateGlobal.checking || UpdateGlobal.state == "checking";
@@ -57,12 +58,12 @@ export component AboutSettings inherits VerticalLayout {
         }
     }
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
-            SettingsRow {
+            SettingsCardRow {
                 touch: root.mobile-platform;
                 icon: Icons.info;
                 title: @tr("Open-source licenses");

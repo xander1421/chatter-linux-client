@@ -1,0 +1,18 @@
+import { Input } from "../components/input.slint";
+import { SettingsRow } from "../components/settings_row.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component SettingsCardRow inherits SettingsRow {
+    border-radius: Spacing.radius-control;
+    title-size: 13px * Appearance.text-scale;
+    title-weight: Typography.semibold;
+    detail-color: Colors.text-muted;
+}
+
+export component SettingsInput inherits Input {
+    field-fill: Colors.surface-control;
+    field-radius: Spacing.radius-control;
+}

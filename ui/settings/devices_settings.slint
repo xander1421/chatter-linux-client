@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -25,19 +26,19 @@ export component DevicesSettings inherits VerticalLayout {
     callback view-sessions-clicked();
 
 
-    spacing: Spacing.lg;
+    spacing: Spacing.panel-gutter;
 
     // Section header
     Text {
         text: @tr("Linked devices");
         color: Colors.text-primary;
-        font-size: Typography.xl;
+        font-size: Typography.sm;
         font-weight: Typography.semibold;
     }
 
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -45,7 +46,7 @@ export component DevicesSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.md;
 
             HorizontalLayout {
@@ -61,8 +62,8 @@ export component DevicesSettings inherits VerticalLayout {
                         Text {
                             text: @tr("Devices");
                             color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
+                            font-size: 13px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
                             vertical-alignment: center;
                         }
 
@@ -71,11 +72,11 @@ export component DevicesSettings inherits VerticalLayout {
                             width: 24px;
                             height: 20px;
                             border-radius: Spacing.radius-sm;
-                            background: Colors.action-fill;
+                            background: Colors.surface-control;
 
                             Text {
                                 text: root.sessions-loaded ? "\{root.session-count}" : "—";
-                                color: Colors.on-action;
+                                color: Colors.text-secondary;
                                 font-size: Typography.xs;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
@@ -94,6 +95,7 @@ export component DevicesSettings inherits VerticalLayout {
                 }
 
                 if !root.compact-mode: Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Manage devices");
                     variant: "secondary";
@@ -103,6 +105,7 @@ export component DevicesSettings inherits VerticalLayout {
 
             // Compact: full-width button stacked below
             if root.compact-mode: Button {
+                border-radius: Spacing.radius-control;
                 touch: root.mobile-platform;
                 text: @tr("Manage devices");
                 variant: "secondary";
@@ -126,20 +129,36 @@ export component DevicesSettings inherits VerticalLayout {
             font-size: Typography.sm;
             wrap: word-wrap;
         }
-        if root.sessions-loaded && root.sessions.length == 0 && !root.sessions-loading: Text {
-            text: @tr("No active devices found");
-            color: Colors.text-muted;
-            font-size: Typography.sm;
+        if root.sessions-loaded && root.sessions.length == 0 && !root.sessions-loading: VerticalLayout {
+            padding: Spacing.sm;
+            spacing: Spacing.sm;
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.smartphone;
+                    width: Spacing.button-icon;
+                    height: Spacing.button-icon;
+                    colorize: Colors.text-muted;
+                }
+            }
+            Text {
+                text: @tr("No active devices found");
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
         }
 
         for session in root.sessions: Rectangle {
-            background: Colors.surface-section;
-            border-radius: Spacing.radius-lg;
+            background: Colors.surface-card;
+            border-radius: Spacing.radius-panel;
             border-width: Elevation.rim-width;
             border-color: Elevation.card-rim;
 
             HorizontalLayout {
-                padding: Spacing.md;
+                padding: Spacing.sm;
                 spacing: Spacing.md;
 
                 VerticalLayout {
@@ -161,8 +180,8 @@ export component DevicesSettings inherits VerticalLayout {
                         Text {
                             text: session.device-info;
                             color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
+                            font-size: 13px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
                             overflow: elide;
                             horizontal-stretch: 1;
                         }
@@ -195,6 +214,7 @@ export component DevicesSettings inherits VerticalLayout {
                     alignment: center;
                     spacing: Spacing.xs;
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: root.confirm-revoke-id == session.device-id ? @tr("Confirm") : @tr("Revoke");
                         variant: root.confirm-revoke-id == session.device-id ? "destructive" : "secondary";
@@ -209,6 +229,7 @@ export component DevicesSettings inherits VerticalLayout {
                         }
                     }
                     if root.confirm-revoke-id == session.device-id: Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("Cancel");
                         variant: "ghost";
@@ -219,10 +240,10 @@ export component DevicesSettings inherits VerticalLayout {
         }
 
         for link in root.pending-links: Rectangle {
-            background: Colors.surface-section;
-            border-radius: Spacing.radius-lg;
+            background: Colors.surface-card;
+            border-radius: Spacing.radius-panel;
             HorizontalLayout {
-                padding: Spacing.md;
+                padding: Spacing.sm;
                 spacing: Spacing.md;
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -230,8 +251,8 @@ export component DevicesSettings inherits VerticalLayout {
                     Text {
                         text: link.device-name != "" ? link.device-name : @tr("New device");
                         color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        font-weight: Typography.medium;
+                        font-size: 13px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
                     }
                     Text {
                         text: @tr("Approved, waiting to finish linking (until {})", link.expires);
@@ -241,6 +262,7 @@ export component DevicesSettings inherits VerticalLayout {
                     }
                 }
                 Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Cancel");
                     variant: "ghost";
@@ -251,6 +273,7 @@ export component DevicesSettings inherits VerticalLayout {
         }
 
         Button {
+            border-radius: Spacing.radius-control;
             touch: root.mobile-platform;
             text: @tr("Link new device");
             variant: "primary";

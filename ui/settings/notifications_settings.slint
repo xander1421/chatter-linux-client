@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
@@ -14,30 +15,31 @@ export component NotificationsSettings inherits VerticalLayout {
     callback notification-detail-changed(string);
 
 
-    spacing: Spacing.lg;
+    spacing: Spacing.panel-gutter;
 
     // Section header
     Text {
         text: @tr("Notifications");
         color: Colors.text-primary;
-        font-size: Typography.xl;
+        font-size: Typography.sm;
         font-weight: Typography.semibold;
     }
 
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
             init => { NotificationDelivery.load(); }
 
         push-row := ToggleRow {
+            border-radius: Spacing.radius-control;
             accessible-text: @tr("Account push notifications");
             label-spacing: Spacing.sm;
             checked <=> NotificationDelivery.push-enabled;
@@ -48,8 +50,8 @@ export component NotificationsSettings inherits VerticalLayout {
                 width: push-row.label-width;
                 text: @tr("Account push notifications");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {
@@ -73,6 +75,7 @@ export component NotificationsSettings inherits VerticalLayout {
             wrap: word-wrap;
         }
         if NotificationDelivery.error != "": Button {
+            border-radius: Spacing.radius-control;
             touch: root.mobile-platform;
             text: @tr("Retry");
             variant: "ghost";
@@ -87,8 +90,8 @@ export component NotificationsSettings inherits VerticalLayout {
     // enforced in core (NotificationService::show_message_notification);
     // sealed-sender messages never show a sender regardless.
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -96,14 +99,15 @@ export component NotificationsSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Notification content");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Notification content").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
 
             Text {
@@ -121,8 +125,8 @@ export component NotificationsSettings inherits VerticalLayout {
             ]: Rectangle {
                 property <bool> selected: root.notification-detail == opt.key;
                 height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: detail-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-control;
+                background: selected ? Colors.tint-strong : detail-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
                 accessible-checkable: true;
@@ -168,8 +172,8 @@ export component NotificationsSettings inherits VerticalLayout {
                         text: opt.label;
                         vertical-alignment: center;
                         color: selected ? Colors.text-primary : Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-weight: selected ? Typography.medium : Typography.normal;
+                        font-size: 13px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
                     }
                 }
 
@@ -185,18 +189,18 @@ export component NotificationsSettings inherits VerticalLayout {
     }
 
     if FullScreenCallPermission.state > 0: Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.xs;
             Text {
                 width: parent.width;
                 wrap: word-wrap;
                 text: @tr("Incoming calls on the lock screen");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
             }
             HorizontalLayout {
                 spacing: Spacing.sm;
@@ -208,6 +212,7 @@ export component NotificationsSettings inherits VerticalLayout {
                     font-size: Typography.xs;
                 }
                 if FullScreenCallPermission.state == 1: Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Allow");
                     clicked => { FullScreenCallPermission.open-settings(); }
@@ -220,23 +225,23 @@ export component NotificationsSettings inherits VerticalLayout {
     // OS notification channel, so the row opens its page;
     // on desktop it is a switch the notifier honours.
     if NotificationSound.mode == "system": system-sound-card := Rectangle {
-        border-radius: Spacing.radius-lg;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
         // The wrapped description needs a width to report its real height.
-        property <length> label-width: max(0px, self.width - Spacing.md * 3 - 18px);
+        property <length> label-width: max(0px, self.width - Spacing.sm * 2 - Spacing.md - 18px);
         min-height: max(Spacing.touch-target-min, system-sound-layout.preferred-height);
-        background: sound-touch.has-hover ? Colors.surface-hover : Colors.surface;
+        background: sound-touch.has-hover ? Colors.surface-hover : Colors.surface-card;
         accessible-role: button;
         accessible-label: @tr("Sound and vibration");
         accessible-action-default => { NotificationSound.open-system-settings(); }
         KeyFocus { border-radius: parent.border-radius; activate => { NotificationSound.open-system-settings(); } }
 
         system-sound-layout := HorizontalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.md;
 
             VerticalLayout {
@@ -248,8 +253,8 @@ export component NotificationsSettings inherits VerticalLayout {
                     wrap: word-wrap;
                     text: @tr("Sound and vibration");
                     color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
+                    font-size: 13px * Appearance.text-scale;
+                    font-weight: Typography.semibold;
                 }
                 Text {
                     width: system-sound-card.label-width;
@@ -279,8 +284,8 @@ export component NotificationsSettings inherits VerticalLayout {
 
     if NotificationSound.mode == "toggle": Rectangle {
         height: sound-row.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -288,7 +293,8 @@ export component NotificationsSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         sound-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Notification sound");
@@ -299,8 +305,8 @@ export component NotificationsSettings inherits VerticalLayout {
                 width: sound-row.label-width;
                 text: @tr("Notification sound");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {

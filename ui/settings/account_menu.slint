@@ -17,15 +17,16 @@ import { Avatar } from "../components/avatar.slint";
 import { Toggle } from "../components/toggle.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { Materials } from "../theme/materials.slint";
-import { Elevation } from "../theme/elevation.slint";
 
 export component MenuRow inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> destructive: false;
+    in property <bool> card-row: false;
     callback clicked();
 
     height: Spacing.list-row-height-touch;
+    border-radius: root.card-row ? Spacing.radius-control : 0px;
     background: touch.pressed ? Materials.pressed
         : touch.has-hover ? Colors.surface-hover : transparent;
     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
@@ -57,7 +58,8 @@ export component MenuRow inherits Rectangle {
         Text {
             text: root.label;
             color: root.destructive ? Colors.danger : Colors.text-primary;
-            font-size: Typography.base;
+            font-size: root.card-row ? 13px * Appearance.text-scale : Typography.base;
+            font-weight: root.card-row ? Typography.semibold : Typography.normal;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
@@ -69,7 +71,7 @@ export component MenuRow inherits Rectangle {
     if keys.has-focus: Rectangle {
         border-width: Spacing.stroke;
         border-color: Colors.focus-ring;
-        border-radius: Spacing.radius-md;
+        border-radius: root.card-row ? Spacing.radius-control : Spacing.radius-md;
     }
 }
 
@@ -100,8 +102,12 @@ export component AccountMenu inherits Rectangle {
     callback settings();
     callback notifications();
 
-    function toggle-night() {
-        Appearance.theme = Appearance.dark ? "light" : "dark";
+    private property <bool> dark-palette: Appearance.dark;
+    private property <bool> night-mode: root.dark-palette;
+    changed dark-palette => { root.night-mode = root.dark-palette; }
+
+    function set-night-mode(dark: bool) {
+        Appearance.theme = dark ? "dark" : "light";
         Appearance.theme-changed(Appearance.theme);
     }
 
@@ -136,7 +142,7 @@ export component AccountMenu inherits Rectangle {
                     padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                     padding-left: root.mobile-mode ? Spacing.md : Spacing.none;
                     padding-right: root.mobile-mode ? Spacing.md : Spacing.none;
-                    spacing: root.mobile-mode ? Spacing.lg : Spacing.sm;
+                    spacing: Spacing.panel-gutter;
                     alignment: start;
 
                     if root.mobile-mode: VerticalLayout {
@@ -159,8 +165,8 @@ export component AccountMenu inherits Rectangle {
                         if root.username != "": Text {
                             width: max(0px, root.width - 2 * Spacing.lg - 2 * Spacing.md);
                             text: "@" + root.username;
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
                             horizontal-alignment: center;
                             overflow: elide;
                         }
@@ -174,69 +180,58 @@ export component AccountMenu inherits Rectangle {
                         Text {
                             text: root.display-name;
                             color: Colors.text-primary;
-                            font-size: Typography.lg;
+                            font-size: Typography.sm;
                             font-weight: Typography.semibold;
                             overflow: elide;
                         }
                         if root.username != "": Text {
                             text: "@" + root.username;
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
                             overflow: elide;
                         }
                     }
                     Rectangle {
                         height: profile-group.preferred-height;
-                        background: root.mobile-mode ? Colors.surface-section : transparent;
-                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
-                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
-                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
-                        drop-shadow-color: Elevation.card-shadow;
-                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
-                        border-color: Elevation.card-rim;
+                        background: Colors.surface-card;
+                        border-radius: Spacing.radius-panel;
                         profile-group := VerticalLayout {
-                            MenuRow { icon: Icons.user; label: @tr("My profile"); clicked => { root.my-profile(); } }
+                            padding: Spacing.sm;
+                            MenuRow { card-row: true; icon: Icons.user; label: @tr("My profile"); clicked => { root.my-profile(); } }
                             // Shield mode has no Saved Messages or channels.
                             if !AnonMode.enabled: MenuDivider { }
-                            if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: @tr("Saved messages"); clicked => { root.saved-messages(); } }
+                            if !AnonMode.enabled: MenuRow { card-row: true; icon: Icons.bookmark; label: @tr("Saved messages"); clicked => { root.saved-messages(); } }
                         }
                     }
                     Rectangle {
                         height: activity-group.preferred-height;
-                        background: root.mobile-mode ? Colors.surface-section : transparent;
-                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
-                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
-                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
-                        drop-shadow-color: Elevation.card-shadow;
-                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
-                        border-color: Elevation.card-rim;
+                        background: Colors.surface-card;
+                        border-radius: Spacing.radius-panel;
                         activity-group := VerticalLayout {
-                            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: @tr("New channel"); clicked => { root.new-channel(); } }
+                            padding: Spacing.sm;
+                            if !AnonMode.enabled: MenuRow { card-row: true; icon: Icons.megaphone; label: @tr("New channel"); clicked => { root.new-channel(); } }
                             if !AnonMode.enabled: MenuDivider { }
-                            MenuRow { icon: Icons.bell; label: @tr("Notification inbox"); clicked => { root.notifications(); } }
+                            MenuRow { card-row: true; icon: Icons.bell; label: @tr("Notification inbox"); clicked => { root.notifications(); } }
                         }
                     }
                     Rectangle {
                         height: settings-group.preferred-height;
-                        background: root.mobile-mode ? Colors.surface-section : transparent;
-                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
-                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
-                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
-                        drop-shadow-color: Elevation.card-shadow;
-                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
-                        border-color: Elevation.card-rim;
+                        background: Colors.surface-card;
+                        border-radius: Spacing.radius-panel;
                         settings-group := VerticalLayout {
-                            MenuRow { icon: Icons.settings; label: @tr("Settings"); clicked => { root.settings(); } }
+                            padding: Spacing.sm;
+                            MenuRow { card-row: true; icon: Icons.settings; label: @tr("Settings"); clicked => { root.settings(); } }
                             MenuDivider { }
-                            // The switch reflects the active palette; the row handles taps
-                            // so the Toggle's checked binding stays attached to it.
+                            // The row handles pointer and accessibility activation.
+                            // Toggle handles keyboard activation.
                             Rectangle {
                                 height: Spacing.list-row-height-touch;
+                                border-radius: Spacing.radius-control;
                                 accessible-role: switch;
                                 accessible-label: @tr("Night mode");
                                 accessible-checkable: true;
                                 accessible-checked: Appearance.dark;
-                                accessible-action-default => { root.toggle-night(); }
+                                accessible-action-default => { root.set-night-mode(!root.dark-palette); }
                                 background: night-touch.pressed ? Materials.pressed
                                     : night-touch.has-hover ? Colors.surface-hover : transparent;
                                 animate background { duration: Materials.motion-quick; easing: Materials.settle; }
@@ -252,19 +247,24 @@ export component AccountMenu inherits Rectangle {
                                         // The row's own label says it.
                                         accessible-role: none;
                                         color: Colors.text-primary;
-                                        font-size: Typography.base;
+                                        font-size: 13px * Appearance.text-scale;
+                                        font-weight: Typography.semibold;
                                         vertical-alignment: center;
                                         horizontal-stretch: 1;
                                     }
                                     VerticalLayout { alignment: center; horizontal-stretch: 0;
                                         // The row is the switch; a second, unnamed one
                                         // sat inside it for TalkBack.
-                                        Toggle { checked: Appearance.dark; accessible-role: none; }
+                                        Toggle {
+                                            checked <=> root.night-mode;
+                                            accessible-role: none;
+                                            toggled(dark) => { root.set-night-mode(dark); }
+                                        }
                                     }
                                 }
                                 night-touch := TouchArea {
                                     mouse-cursor: pointer;
-                                    clicked => { root.toggle-night(); }
+                                    clicked => { root.set-night-mode(!root.dark-palette); }
                                 }
                             }
                         }

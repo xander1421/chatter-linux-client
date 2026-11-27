@@ -10,6 +10,8 @@ import { Materials } from "../theme/materials.slint";
 export component SettingsRow inherits Rectangle {
     in property <image> icon;
     in property <string> title;
+    in property <length> title-size: Typography.sm;
+    in property <int> title-weight: Typography.medium;
     in property <string> detail: "";
     in property <color> detail-color: Colors.text-secondary;
     in property <string> action-label: "";
@@ -77,8 +79,8 @@ export component SettingsRow inherits Rectangle {
             Text {
                 text: root.title;
                 color: root.destructive ? Colors.danger : Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: root.title-size;
+                font-weight: root.title-weight;
                 vertical-alignment: center;
                 // Translated titles run longer than the English ones: wrap
                 // beside the action button rather than being cut by it.
@@ -94,6 +96,7 @@ export component SettingsRow inherits Rectangle {
             }
         }
         if root.action-label != "": Button {
+            border-radius: root.border-radius;
             text: root.action-label;
             variant: root.destructive ? "danger" : "secondary";
             size: "small";

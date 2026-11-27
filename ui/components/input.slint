@@ -14,7 +14,11 @@ export component Input inherits Rectangle {
     changed caret-end-seq => { input.set-selection-offsets(2147483647, 2147483647); }
     in property <bool> password: false;
     in property <bool> disabled: false;
+    // Inset fields (inside a card) use the control fill and radius; callers
+    // may still set fill and radius explicitly.
     in property <bool> inset-control: false;
+    in property <color> field-fill: root.inset-control ? Colors.surface-control : Colors.surface;
+    in property <length> field-radius: root.inset-control ? Spacing.radius-control : Spacing.radius-md;
     in property <length> control-height: Spacing.touch-target-min;
     property <length> effective-height: max(root.control-height, Spacing.touch-target-min);
     in property <bool> error: false;
@@ -63,8 +67,8 @@ export component Input inherits Rectangle {
         // Input container
         Rectangle {
             height: root.effective-height;
-            border-radius: root.inset-control ? Spacing.radius-control : Spacing.radius-md;
-            background: root.inset-control ? Colors.surface-control : Colors.surface;
+            border-radius: root.field-radius;
+            background: root.field-fill;
             border-width: Spacing.stroke;
             border-color: border-col;
             animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }

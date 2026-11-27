@@ -11,6 +11,7 @@ export component Button inherits Rectangle {
     in property <string> variant: "primary";  // primary, secondary, ghost/tertiary, danger/destructive, danger-ghost, icon
     in property <string> size: "medium"; // small, medium, large
     in property <bool> touch: false;
+    in property <bool> selected: false;
     in property <bool> hover-enabled: true;
     in property <string> label: root.text; // accessible name for icon-only buttons
     in property <bool> disabled: false;
@@ -42,6 +43,8 @@ export component Button inherits Rectangle {
             variant == "secondary" ? Colors.fill-secondary :
             (variant == "destructive" || variant == "danger") ? root.destructive-fill :
             transparent
+        } else if selected {
+            Colors.tint-strong
         } else if pressed {
             variant == "primary" ? Colors.action-active :
             variant == "secondary" ? Colors.fill-secondary-hover :

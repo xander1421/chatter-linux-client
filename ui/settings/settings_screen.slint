@@ -24,14 +24,17 @@ import { SessionInfo, PendingLinkInfo } from "../modals/sessions.slint";
 
 // Shared model data remains exported through this screen for its callers.
 
-// One compact-mode section chip. Selected = the neutral raised pill every
-// other tab bar uses (bottom nav, Calls, Contacts); teal fill is for actions.
+// Compact navigation uses the shared button and its existing keyboard handling.
 component SectionTab inherits Button {
     in property <string> section;
     in-out property <string> active;
     hover-enabled: !self.touch;
     height: Spacing.touch-target-min;
-    variant: self.active == self.section ? "secondary" : "ghost";
+    variant: "ghost";
+    border-radius: Spacing.radius-control;
+    selected: self.active == self.section;
+    accessible-role: tab;
+    accessible-item-selected: self.selected;
     // Fired on every tap, also on the chip that is already active: a strip
     // dragged aside leaves it half shown, and no section change follows.
     callback reveal();
@@ -222,13 +225,14 @@ export component SettingsScreen inherits Rectangle {
     callback cloud-ai-model-changed(string);
     callback cloud-ai-refresh-quota();
 
-    background: Materials.ambient;
+    background: Colors.background;
 
     // Responsive breakpoint: compact mode when width < 500px
     property <bool> compact-mode: root.width < 500px;
 
-    // Responsive content padding
-    property <length> content-padding: compact-mode ? Spacing.md : Spacing.xl;
+    property <bool> phone-layout: root.compact-mode && root.mobile-platform;
+    property <length> page-gutter: root.phone-layout ? 0px : Spacing.panel-gutter;
+    property <length> content-padding: root.phone-layout ? Spacing.md : Spacing.panel-gutter;
 
     VerticalLayout {
         width: root.width;
@@ -236,17 +240,20 @@ export component SettingsScreen inherits Rectangle {
 
         HorizontalLayout {
             horizontal-stretch: 1;
+            padding: root.page-gutter;
+            spacing: Spacing.panel-gutter;
 
-        // Sidebar navigation — hidden in compact mode — Neo surface
-        if !compact-mode: GlassSurface {
-            material-level: 2;
-            elevation: 3;
-
+        // Section navigation and the active page frame sit side by side.
+        if !compact-mode: Rectangle {
             width: min(240px, root.width * 0.35);
+            background: Colors.background;
+            border-width: Spacing.stroke;
+            border-color: Colors.border;
+            border-radius: Spacing.radius-panel;
 
             VerticalLayout {
-                padding: Spacing.md;
-                spacing: Spacing.xs;
+                padding: Spacing.panel-gutter;
+                spacing: Spacing.panel-gutter;
 
                 // Header — back chevron on the LEADING edge, then the title.
                 // Settings is a full-window page you pushed into from the
@@ -254,100 +261,121 @@ export component SettingsScreen inherits Rectangle {
                 // affordance the chat header and every full-screen modal take.
                 // `touch: false` because this is the one full-screen surface
                 // that also exists at mouse density.
-                HorizontalLayout {
+                GlassSurface {
                     height: Spacing.header-action-box;
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    DismissButton {
-                        back: true;
-                        plain: true;
-                        touch: false;
-                        clicked => { root.close-settings(); }
-                    }
-
-                    Text {
-                        text: @tr("Settings");
-                        color: Colors.text-primary;
-                        font-size: Typography.xl;
-                        font-weight: Typography.semibold;
-                        vertical-alignment: center;
-                    }
-                }
-
-                Rectangle { height: Spacing.md; }
-
-                // Navigation items
-                for item[index] in [
-                    { id: "account", label: @tr("Account"), enabled: true },
-                    { id: "privacy", label: @tr("Privacy"), enabled: true },
-                    { id: "notifications", label: @tr("Notifications"), enabled: true },
-                    { id: "devices", label: @tr("Linked devices"), enabled: true },
-                    { id: "appearance", label: @tr("Appearance"), enabled: true },
-                    { id: "encryption", label: @tr("Encryption"), enabled: true },
-                    { id: "ai", label: @tr("Remote AI"), enabled: true },
-                    { id: "about", label: @tr("About"), enabled: true }
-                ]: Rectangle {
-                    visible: item.id != "ai" || JarvisGlobal.enabled;
-                    height: !self.visible ? 0px : root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
-                    border-radius: Spacing.radius-md;
-                    background: active-section == item.id ? Colors.row-selected :
-                               (nav-touch.pressed && item.enabled ? Materials.pressed
-                               : nav-touch.has-hover && item.enabled ? Colors.row-hover : transparent);
-                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
-                    opacity: item.enabled ? 1.0 : 0.5;
-                    accessible-role: tab;
-                    accessible-label: item.label;
-                    accessible-item-selected: active-section == item.id;
-                    accessible-enabled: item.enabled;
-                    accessible-action-default => {
-                        if item.enabled {
-                            active-section = item.id;
-                        }
-                    }
-                    KeyFocus { enabled: item.enabled; border-radius: parent.border-radius; activate => { active-section = item.id; } }
+                    material-level: 4;
+                    border-width: Spacing.stroke;
+                    border-color: Colors.border;
+                    border-radius: Spacing.radius-panel;
 
                     HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
+                        padding-left: Spacing.xs;
                         spacing: Spacing.sm;
                         alignment: start;
 
-                        if !root.compact-mode: VerticalLayout {
-                            alignment: center;
-                            Image {
-                                source: item.id == "account" ? Icons.user
-                                    : item.id == "devices" ? Icons.smartphone
-                                    : item.id == "privacy" ? Icons.shield
-                                    : item.id == "notifications" ? Icons.bell
-                                    : item.id == "encryption" ? Icons.lock
-                                    : item.id == "ai" ? Icons.sparkles
-                                    : item.id == "about" ? Icons.info : Icons.moon;
-                                width: Spacing.button-icon;
-                                height: Spacing.button-icon;
-                                colorize: active-section == item.id ? Colors.selected-indicator : Colors.text-secondary;
-                            }
+                        DismissButton {
+                            back: true;
+                            plain: true;
+                            touch: false;
+                            clicked => { root.close-settings(); }
                         }
 
                         Text {
-                            accessible-role: none;
-                            text: item.label;
-                            color: active-section == item.id ? (root.compact-mode ? Colors.on-action : Colors.text-primary) :
-                                   (item.enabled ? Colors.text-secondary : Colors.text-muted);
+                            text: @tr("Settings");
+                            color: Colors.text-primary;
                             font-size: Typography.sm;
-                            font-weight: active-section == item.id ? Typography.medium : Typography.normal;
+                            font-weight: Typography.semibold;
                             vertical-alignment: center;
                         }
                     }
+                }
 
-                    nav-touch := TouchArea {
-                        mouse-cursor: item.enabled ? pointer : default;
-                        clicked => {
-                            if item.enabled {
-                                active-section = item.id;
+                Rectangle {
+                    height: nav-card.preferred-height;
+                    background: Colors.surface-card;
+                    border-radius: Spacing.radius-panel;
+
+                    nav-card := VerticalLayout {
+                        padding: Spacing.sm;
+                        spacing: Spacing.xs;
+
+                        // Navigation items
+                        for item[index] in [
+                            { id: "account", label: @tr("Account"), enabled: true },
+                            { id: "privacy", label: @tr("Privacy"), enabled: true },
+                            { id: "notifications", label: @tr("Notifications"), enabled: true },
+                            { id: "devices", label: @tr("Linked devices"), enabled: true },
+                            { id: "appearance", label: @tr("Appearance"), enabled: true },
+                            { id: "encryption", label: @tr("Encryption"), enabled: true },
+                            { id: "ai", label: @tr("Remote AI"), enabled: true },
+                            { id: "about", label: @tr("About"), enabled: true }
+                        ]: Rectangle {
+                            visible: item.id != "ai" || JarvisGlobal.enabled;
+                            height: !self.visible ? 0px : root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
+                            border-radius: Spacing.radius-control;
+                            background: active-section == item.id ? Colors.tint-strong :
+                                       (nav-touch.pressed && item.enabled ? Materials.pressed
+                                       : nav-touch.has-hover && item.enabled ? Colors.row-hover : transparent);
+                            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                            opacity: item.enabled ? 1.0 : 0.5;
+                            accessible-role: tab;
+                            accessible-label: item.label;
+                            accessible-item-selected: active-section == item.id;
+                            accessible-enabled: item.enabled;
+                            accessible-action-default => {
+                                if item.enabled {
+                                    active-section = item.id;
+                                }
+                            }
+                            KeyFocus { enabled: item.enabled; border-radius: parent.border-radius; activate => { active-section = item.id; } }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                spacing: Spacing.sm;
+                                alignment: stretch;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 0;
+                                    alignment: center;
+                                    Image {
+                                        source: item.id == "account" ? Icons.user
+                                            : item.id == "devices" ? Icons.smartphone
+                                            : item.id == "privacy" ? Icons.shield
+                                            : item.id == "notifications" ? Icons.bell
+                                            : item.id == "encryption" ? Icons.lock
+                                            : item.id == "ai" ? Icons.sparkles
+                                            : item.id == "about" ? Icons.info : Icons.moon;
+                                        width: Spacing.button-icon;
+                                        height: Spacing.button-icon;
+                                        colorize: Colors.text-secondary;
+                                    }
+                                }
+
+                                Text {
+                                    accessible-role: none;
+                                    text: item.label;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    overflow: elide;
+                                    color: active-section == item.id ? Colors.text-primary :
+                                           (item.enabled ? Colors.text-secondary : Colors.text-muted);
+                                    font-size: 13px * Appearance.text-scale;
+                                    font-weight: Typography.semibold;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            nav-touch := TouchArea {
+                                mouse-cursor: item.enabled ? pointer : default;
+                                clicked => {
+                                    if item.enabled {
+                                        active-section = item.id;
+                                    }
+                                }
+
                             }
                         }
-
                     }
                 }
 
@@ -361,6 +389,10 @@ export component SettingsScreen inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             background: Colors.background;
+            border-width: root.phone-layout ? 0px : Spacing.stroke;
+            border-color: Colors.border;
+            border-radius: root.phone-layout ? 0px : Spacing.radius-panel;
+            clip: true;
 
             content-scroll := Flickable {
                 width: parent.width;
@@ -372,9 +404,9 @@ export component SettingsScreen inherits Rectangle {
                     width: parent.width;
                     padding: root.content-padding;
                     padding-left: root.content-padding + Spacing.md * (1 - root.page-entry);
-                    padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : Spacing.none);
+                    padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm + root.page-gutter : Spacing.none);
                     padding-bottom: root.content-padding + root.bottom-inset;
-                    spacing: root.compact-mode ? Spacing.md : Spacing.lg;
+                    spacing: Spacing.panel-gutter;
                     alignment: start;
 
                     // Center content with max-width (wider in compact mode to use space).
@@ -539,12 +571,15 @@ export component SettingsScreen inherits Rectangle {
     // Explicit x/y: a sized child of a plain Rectangle is CENTRED by default,
     // which put this bar mid-screen over the content on phones (§138).
     if compact-mode: GlassSurface {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        material-enabled: false;
-        background: Colors.surface-page;
-        border-radius: Spacing.none;
+        x: 2 * root.page-gutter;
+        y: self.x;
+        width: root.width - 2 * self.x;
+        material-enabled: !root.phone-layout;
+        material-level: 4;
+        background: root.phone-layout ? Colors.background : transparent;
+        border-width: root.phone-layout ? 0px : Spacing.stroke;
+        border-color: Colors.border;
+        border-radius: root.phone-layout ? 0px : Spacing.radius-panel;
 
         height: Spacing.touch-target-min + Spacing.sm;
 
@@ -632,13 +667,13 @@ export component SettingsScreen inherits Rectangle {
                     x: 0;
                     width: Spacing.md;
                     height: parent.height;
-                    background: @linear-gradient(90deg, Colors.surface-page 0%, Colors.surface-page.with-alpha(0) 100%);
+                    background: @linear-gradient(90deg, Colors.background 0%, Colors.background.with-alpha(0) 100%);
                 }
                 if tab-layout.preferred-width + tabs.viewport-x > tabs.width: Rectangle {
                     x: parent.width - self.width;
                     width: Spacing.md;
                     height: parent.height;
-                    background: @linear-gradient(90deg, Colors.surface-page.with-alpha(0) 0%, Colors.surface-page 100%);
+                    background: @linear-gradient(90deg, Colors.background.with-alpha(0) 0%, Colors.background 100%);
                 }
             }
         }
