@@ -23,6 +23,7 @@ use crate::domain::ids::ChannelId;
 use crate::domain::verified_state::{StateHash, VerifiedChannel};
 use crate::error::NetworkError;
 use crate::mailbox::token_manager::{MailboxToken, TokenManager};
+use crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository;
 use crate::services::signal::{AnonymousPreKeyRoute, PreKeySource};
 
 use super::{MessageError, MessageService};
@@ -98,17 +99,20 @@ struct Cached {
 }
 
 #[derive(Default)]
-pub(crate) struct TokenCache(Mutex<HashMap<ChannelId, Cached>>);
+pub(crate) struct TokenCache {
+    entries: Mutex<HashMap<ChannelId, Cached>>,
+    pub(super) retry_ready: tokio::sync::Notify,
+}
 
 impl TokenCache {
     pub(super) fn clear(&self) {
-        if let Ok(mut map) = self.0.lock() {
+        if let Ok(mut map) = self.entries.lock() {
             map.clear();
         }
     }
 
     fn get(&self, channel_id: &ChannelId, state_hash: &StateHash, now: u64) -> Option<Vec<u8>> {
-        let map = self.0.lock().ok()?;
+        let map = self.entries.lock().ok()?;
         map.get(channel_id)
             .filter(|c| c.state_hash == *state_hash && c.expiration > now + REFRESH_MARGIN_SECS)
             .map(|c| c.token.clone())
@@ -116,7 +120,7 @@ impl TokenCache {
 
     fn recently_checked(&self, channel_id: &ChannelId, state_hash: &StateHash, now: u64) -> bool {
         const CHECK_INTERVAL_SECS: u64 = 15 * 60;
-        self.0.lock().ok().is_some_and(|map| map.get(channel_id).is_some_and(|c| {
+        self.entries.lock().ok().is_some_and(|map| map.get(channel_id).is_some_and(|c| {
             c.state_hash == *state_hash
                 && c.expiration > now + REFRESH_MARGIN_SECS
                 && now.saturating_sub(c.checked_at) < CHECK_INTERVAL_SECS
@@ -130,13 +134,13 @@ impl TokenCache {
     fn put_endorsed(
         &self, channel_id: &ChannelId, state_hash: StateHash, expiration: u64, token: Vec<u8>, endorsements: Vec<u8>,
     ) {
-        if let Ok(mut map) = self.0.lock() {
+        if let Ok(mut map) = self.entries.lock() {
             map.insert(*channel_id, Cached { state_hash, expiration, checked_at: now_secs(), token, endorsements });
         }
     }
 
     fn endorsements(&self, channel_id: &ChannelId, state_hash: &StateHash, now: u64) -> Option<Vec<u8>> {
-        let map = self.0.lock().ok()?;
+        let map = self.entries.lock().ok()?;
         map.get(channel_id)
             .filter(|c| c.state_hash == *state_hash && c.expiration > now + REFRESH_MARGIN_SECS)
             .map(|c| c.endorsements.clone())
@@ -269,14 +273,20 @@ impl MessageService {
             == Some(crate::domain::channel::ChannelType::Private)
     }
 
+    pub(super) fn has_private_channel_endorsements(&self, channel_id: &ChannelId) -> bool {
+        self.group_gate().for_distribution(channel_id).is_ok_and(|verified| {
+            self.group_send_tokens.get(channel_id, &verified.state_hash, now_secs()).is_some()
+        })
+    }
+
     async fn refresh_group_send_token(
         &self,
         channel_id: &ChannelId,
         verified: &VerifiedChannel,
-    ) -> Result<(), MessageError> {
+    ) -> Result<bool, MessageError> {
         let now = now_secs();
         if self.group_send_tokens.recently_checked(channel_id, &verified.state_hash, now) {
-            return Ok(());
+            return Ok(false);
         }
         crate::state::send_session::check_send_session()?;
         let resp = self
@@ -312,13 +322,18 @@ impl MessageService {
         .map_err(invalid)?;
         crate::state::send_session::check_send_session()?;
         self.group_send_tokens.put_endorsed(channel_id, verified.state_hash, expiration, token, resp.endorsements);
-        Ok(())
+        Ok(true)
     }
 
     fn private_memberships(&self, owner: &crate::domain::UserId) -> Result<Vec<ChannelId>, MessageError> {
         let mut channels = self.channel_repo.list_channels_for_user(owner)?;
+        // A join commits and pins its verified state before saving the
+        // channel and its display roster.
+        let verified = VerifiedMembershipRepository::new(self.database.clone());
+        channels.extend(verified.channels_distributing_to(&owner.to_string())?);
         channels.retain(|channel| self.is_private_channel(channel));
         channels.sort_unstable_by_key(|channel| *channel.as_uuid());
+        channels.dedup();
         Ok(channels)
     }
 
@@ -327,8 +342,12 @@ impl MessageService {
         let mut cert_checked = false;
         for channel in self.private_memberships(&owner)? {
             crate::state::send_session::check_send_session()?;
-            let Ok(verified) = self.group_gate().for_distribution(&channel) else {
-                continue;
+            let verified = match self.group_gate().for_distribution(&channel) {
+                Ok(verified) => verified,
+                Err(error) => {
+                    tracing::warn!(%channel, %error, "Skipping private-channel endorsement refresh");
+                    continue;
+                }
             };
             if !verified.state.active_members().any(|(user, member)| {
                 user == &owner_id && !member.is_muted(crate::inbox::ack_policy::now_ns())
@@ -338,11 +357,17 @@ impl MessageService {
             if !cert_checked {
                 cert_checked = true;
                 if let Err(error) = self.signal_service.get_or_request_sender_certificate(&mut self.auth_client()).await {
-                    tracing::debug!(%error, "Private-channel sender certificate unavailable");
+                    tracing::warn!(%error, "Private-channel sender certificate unavailable");
                 }
             }
-            if let Err(error) = self.refresh_group_send_token(&channel, &verified).await {
-                tracing::debug!(channel = %channel, %error, "Private-channel endorsements unavailable");
+            match self.refresh_group_send_token(&channel, &verified).await {
+                Ok(true) => {
+                    if let Err(error) = self.wake_private_channel_sends(owner, channel) {
+                        tracing::warn!(%channel, %error, "Could not wake private-channel sends");
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%channel, %error, "Private-channel endorsements unavailable"),
             }
         }
         Ok(())
@@ -435,7 +460,7 @@ impl MessageService {
         }
         let token = self.group_send_tokens
             .get(&channel_id, &verified.state_hash, now_secs())
-            .ok_or(NetworkError::Unavailable)?;
+            .ok_or(MessageError::PrivateChannelEndorsementsPending)?;
         self.signal_service.get_cached_sender_certificate()
             .map_err(|error| MessageError::from_signal_send(error, "Sender certificate"))?
             .ok_or(NetworkError::Unavailable)?;
@@ -749,10 +774,14 @@ impl MessageService {
 /// so the selected channels do not disclose which ones have pending posts.
 pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
     client: &std::sync::Arc<C>,
+    membership_log: std::sync::Arc<crate::services::channel::membership_log::MembershipLog>,
 ) -> tokio::task::JoinHandle<()> {
     let weak = std::sync::Arc::downgrade(client);
     tokio::spawn(async move {
-        crate::app::core_services::initial_token_refill_sleep().await;
+        tokio::select! {
+            _ = crate::app::core_services::initial_token_refill_sleep() => {}
+            _ = membership_log.wait_for_private_membership_change() => {}
+        }
         loop {
             {
                 let Some(client) = weak.upgrade() else { break };
@@ -769,7 +798,10 @@ pub(crate) fn spawn_private_channel_maintenance<C: super::SendRecoveryClient>(
                     }).await;
                 }
             }
-            crate::app::core_services::jittered_sleep().await;
+            tokio::select! {
+                _ = crate::app::core_services::jittered_sleep() => {}
+                _ = membership_log.wait_for_private_membership_change() => {}
+            }
         }
     })
 }

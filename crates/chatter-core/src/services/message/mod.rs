@@ -155,6 +155,10 @@ pub enum MessageError {
     #[error("dm error: {0}")]
     DmError(String),
 
+    /// The maintenance worker has yet to cache endorsements for this state.
+    #[error("waiting for private-channel endorsements")]
+    PrivateChannelEndorsementsPending,
+
     /// No prefetched token for a Shield bootstrap. User posts are parked for
     /// the independent retry schedule; this error never triggers a refill.
     #[error("Shield is getting ready — will send automatically")]

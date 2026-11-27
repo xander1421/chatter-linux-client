@@ -76,6 +76,37 @@ fn observe(log: &MembershipLog) -> Arc<Seen> {
     seen
 }
 
+#[tokio::test(start_paused = true)]
+async fn private_membership_hash_changes_wake_endorsement_maintenance() {
+    let (owner, bob) = (who(1), who(2));
+    let server = Arc::new(FakeServer::default());
+    let ch = channel_id();
+    let (log, _, _) = device(&owner, &server, &[&owner, &bob]);
+    let no_wait = std::time::Duration::ZERO;
+
+    author(&log, &server, &ch, AuthorBase::Genesis, |_| genesis())
+        .await
+        .unwrap();
+    tokio::time::timeout(no_wait, log.wait_for_private_membership_change())
+        .await
+        .unwrap();
+    let first_hash = log.load(&ch).unwrap().unwrap().state_hash;
+
+    author(&log, &server, &ch, AuthorBase::Verified, |_| {
+        vec![add(&bob, ChannelRole::Member, true)]
+    })
+    .await
+    .unwrap();
+    assert_ne!(log.load(&ch).unwrap().unwrap().state_hash, first_hash);
+    tokio::time::timeout(no_wait, log.wait_for_private_membership_change())
+        .await
+        .unwrap();
+
+    let duplicate = server.log.lock()[1].clone();
+    log.ingest(&ch, &duplicate).await.unwrap();
+    assert!(tokio::time::timeout(no_wait, log.wait_for_private_membership_change()).await.is_err());
+}
+
 /// Everything the authoring path produces is accepted by the verifier on
 /// another device: genesis, a direct invite, the invitee's own accept, a
 /// role change, a kick, a transfer and a leave.
