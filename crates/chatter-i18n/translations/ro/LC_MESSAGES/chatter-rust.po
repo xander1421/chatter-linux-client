@@ -4206,3 +4206,7 @@ msgstr "Cheia de securitate a acestui contact nu este de încredere."
 
 msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
 msgstr "Selectorul de fișiere nu este disponibil. Verifică dacă portalul de selectare a fișierelor este instalat și rulează."
+
+#: crates/chatter-core/src/client/sidebar.rs:120
+msgid "Chats"
+msgstr "Conversații"

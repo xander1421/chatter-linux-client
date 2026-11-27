@@ -6088,3 +6088,31 @@ msgid ""
 msgstr ""
 "Fai sapere agli altri quando i loro messaggi ti arrivano. Se disattivato, "
 "non vedrai nemmeno le loro"
+
+#: ui/pages/first_friend.slint:51
+msgid "Add your first friend"
+msgstr "Aggiungi il tuo primo amico"
+
+#: ui/pages/first_friend.slint:66
+msgid "Chatter has no phone-number lookup. Swap codes with someone you know."
+msgstr "Chatter non permette di cercare per numero di telefono. Scambia i codici con una persona che conosci."
+
+#: ui/sidebar/card_drag.slint:109
+msgid "Drop here for a new section"
+msgstr "Rilascia qui per creare una sezione"
+
+#: ui/pages/first_friend.slint:85
+msgid "Friend code"
+msgstr "Codice amico"
+
+#: ui/sidebar/chats_card.slint:17
+msgid "Friends you add appear here."
+msgstr "Gli amici che aggiungi appariranno qui."
+
+#: ui/pages/first_friend.slint:109
+msgid "Got theirs?"
+msgstr "Hai il suo codice?"
+
+#: ui/sidebar/sidebar_rail.slint:25
+msgid "{} · {} unread"
+msgstr "{} · {} da leggere"

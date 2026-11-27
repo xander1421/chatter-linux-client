@@ -6115,3 +6115,31 @@ msgid ""
 msgstr ""
 "Le arată altora când mesajele lor ajung la tine. Dezactivat, nu le vei vedea "
 "nici tu pe ale lor"
+
+#: ui/pages/first_friend.slint:51
+msgid "Add your first friend"
+msgstr "Adaugă primul tău prieten"
+
+#: ui/pages/first_friend.slint:66
+msgid "Chatter has no phone-number lookup. Swap codes with someone you know."
+msgstr "În Chatter nu poți căuta după numărul de telefon. Fă schimb de coduri cu o persoană pe care o cunoști."
+
+#: ui/sidebar/card_drag.slint:109
+msgid "Drop here for a new section"
+msgstr "Trage aici pentru a crea o secțiune"
+
+#: ui/pages/first_friend.slint:85
+msgid "Friend code"
+msgstr "Cod de prieten"
+
+#: ui/sidebar/chats_card.slint:17
+msgid "Friends you add appear here."
+msgstr "Prietenii pe care îi adaugi apar aici."
+
+#: ui/pages/first_friend.slint:109
+msgid "Got theirs?"
+msgstr "Ai codul celeilalte persoane?"
+
+#: ui/sidebar/sidebar_rail.slint:25
+msgid "{} · {} unread"
+msgstr "{} · {} necitite"

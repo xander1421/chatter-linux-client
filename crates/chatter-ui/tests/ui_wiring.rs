@@ -3302,8 +3302,7 @@ fn the_message_hover_action_bar_never_appears_on_touch() {
 ///  L1 (DYNAMIC): the callback exists on MainWindow and the real handler runs.
 ///  L2 (STATIC, Rust): the handler reaches `set_conversation_pinned` on core.
 ///  L2 (STATIC, Slint): the conversation menu carries the entry that fires it,
-///    and the three lists that render pin order pass the row's flag up so the
-///    menu can say Pin or Unpin.
+///    and its label reflects the current pin state.
 #[test]
 fn pin_conversation_reaches_core_from_the_sidebar_menu() {
     no_keyring();
@@ -3339,24 +3338,13 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
         "the conversation menu must carry a Pin/Unpin entry firing set-pinned"
     );
     assert!(
-        menu.contains(r#"label: root.is-pinned ? "Unpin" : "Pin to top""#),
+        menu.contains(r#"label: root.is-pinned ? @tr("Unpin") : @tr("Pin to top")"#),
         "the entry must name the action it will actually perform"
     );
-
-    // Every chat-list row — loose and foldered, both slots of the flat list
-    // (038d14a9) — hands itself to the menu, pin state included.
-    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
-    assert_eq!(
-        sidebar.matches("SidebarPane.ctx-menu-row = entry.chat;").count(),
-        2,
-        "the chat-list row must carry itself into the menu"
-    );
-    assert_eq!(
-        sidebar
-            .matches("SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;")
-            .count(),
-        2,
-        "the menu must read the row's pin state"
+    let pane = include_str!("../../../ui/app_sidebar_pane.slint");
+    assert!(
+        pane.contains("root.ctx-menu-is-pinned = row.is-pinned;"),
+        "a card row must carry its pin state into the context menu"
     );
 }
 
@@ -3612,91 +3600,27 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     );
 }
 
-/// Each section looped the WHOLE flat conversation list and hid non-matches
-/// with `visible:` + `height: 0px` — ten folders over two hundred conversations
-/// instantiated two thousand elements. Rows are now pre-grouped in Rust so a
-/// section's model holds only its own.
-#[test]
-fn folder_rows_are_pre_grouped_per_section() {
-    // Since 038d14a9 the sidebar is one virtualized flat list. Each section
-    // still owns its rows; core turns the per-section shape into slots, so no
-    // Slint filter runs over a flat list of every foldered row.
-    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
-    assert!(
-        list.contains("conversations: [ChatRowData]"),
-        "each section must own its rows"
-    );
-    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
-    assert!(
-        sidebar.contains("for entry[idx] in root.flat-rows:")
-            && sidebar.contains("if entry.kind == \"section-chat\":"),
-        "folder rows must render from the flat slot list"
-    );
-    assert!(
-        !sidebar.contains("section-id == entry") && !list.contains("conv.section-id == section.section-id"),
-        "the visible/height:0 filter over the whole flat list must be gone"
-    );
-
-    // Rust must be the thing that groups them, and core orders the slots.
-    let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    assert!(
-        src.contains("conversations: ModelRc::new(VecModel::from(rows))"),
-        "the per-section model must be built in Rust"
-    );
-    let flat = include_str!("../src/bin_ui/features/sidebar/mod.rs");
-    assert!(
-        flat.contains("sidebar_slots(chats.row_count(), &shape)")
-            && flat.contains("sections[index].conversations.row_data(row)"),
-        "each section-chat slot must read its own section's row"
-    );
-}
-
-/// `CustomSectionList` never received `mobile-mode`, so folder headers stayed
-/// 32px and rows 36px against a 48px touch minimum, and 24px hover buttons sat
-/// on a surface that has no hover.
+/// Section cards reuse the touch-sized rows and headers in the phone list.
 #[test]
 fn folder_ui_sizes_up_for_touch() {
-    // Folder headers and rows render from the flat list since 038d14a9.
     let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
-    let header = &sidebar[sidebar
-        .find("if entry.kind == \"section-header\": CustomSectionHeader {")
-        .expect("CustomSectionList instantiated")..];
+    let card = sidebar
+        .find("SectionCard {")
+        .expect("expanded sidebar uses section cards");
     assert!(
-        // `touch`, not `mobile-mode`: a two-pane tablet is not in mobile
-        // layout but is still driven by a finger (595b5031).
-        header[..600].contains("mobile-mode: root.touch"),
-        "the folder list must be told whether it is being touched"
+        sidebar[card..].lines().take(8).any(|line| line.contains("touch: root.touch")),
+        "a tablet must pass touch sizing to its section cards"
     );
-
-    // Folder rows are the chat list's own rows, sized by the same flag.
-    let rows = &sidebar[sidebar
-        .find("if entry.kind == \"section-chat\": Rectangle {")
-        .expect("folder rows are ChatRows")..];
+    let section = include_str!("../../../ui/sidebar/section_card.slint");
     assert!(
-        rows[..400].contains("root.touch ? Spacing.row-height-touch")
-            && rows[..400].contains("section-chat-row := ChatRow {")
-            && rows[..600].contains("mobile-mode: root.touch;"),
-        "folder conversation rows must meet the touch minimum"
+        section.contains("root.mobile-mode ? Spacing.touch-target-min")
+            && section.matches("mobile-mode: root.touch;").count() >= 2,
+        "the section header and its chat rows must use touch sizes"
     );
-    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
-    assert!(
-        list.contains(
-            "height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height"
-        ),
-        "folder headers must meet the touch minimum"
-    );
-    // Desktop shows them always (keyboard reach); touch never does.
-    assert!(
-        list.contains("if !root.mobile-mode: HorizontalLayout {"),
-        "the rename/delete buttons are desktop-only — hold opens \
-         a menu carrying both, and a 24px button is unhittable by a finger"
-    );
-
-    // Which means the touch route to rename must exist in that menu.
     let menu = include_str!("../../../ui/sidebar/section_context_menu.slint");
     assert!(
         menu.contains("root.rename-section(root.section-id)"),
-        "with the hover buttons desktop-only, Rename must live in the hold menu"
+        "the touch menu must retain Rename"
     );
 }
 
@@ -3710,12 +3634,12 @@ fn folder_ui_sizes_up_for_touch() {
 /// warns about ("replaces the row's TouchArea rather than nesting inside it").
 #[test]
 fn folder_header_has_one_pointer_surface_not_two() {
-    let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    let list = include_str!("../../../ui/sidebar/section_card.slint");
     let start = list
-        .find("component CustomSectionHeader")
-        .expect("CustomSectionHeader present");
+        .find("component SectionHeader")
+        .expect("SectionHeader present");
     let end = list[start..]
-        .find("export component CustomSectionList")
+        .find("export component SectionCard")
         .map(|i| start + i)
         .unwrap_or(list.len());
     let header = &list[start..end];
@@ -5006,14 +4930,13 @@ fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
     let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
     let app_src = include_str!("../../../ui/app_sidebar_host.slint");
 
-    // Since 038d14a9 the empty state is the flat list's "empty" slot inside
-    // Sidebar itself (no ChatList instantiation in between). Its "Browse
-    // channels" fires the Sidebar's own callback, by pointer and by a11y.
+    // The phone keeps its Browse channels action in the flat list.
+    // Expanded cards use the friend-first empty state.
     let empty = sidebar_src
         .find("if entry.kind == \"empty\"")
         .expect("the sidebar must render an empty state");
     let cta = sidebar_src[empty..]
-        .find("text: \"Browse channels\";")
+        .find("text: @tr(\"Browse channels\");")
         .expect("the empty state must still offer Browse channels")
         + empty;
     let tail = &sidebar_src[cta..cta + 700];
@@ -5234,9 +5157,8 @@ fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
 }
 
 /// §124 1b: the Calls screen was reachable only from the phone tab bar, so a
-/// two-pane tablet (touch, >= 600 dp) had no way in. The sidebar now carries a
-/// Calls row on every wide layout; on a phone it stays hidden because the tab
-/// bar is the entry there.
+/// two-pane tablet (touch, >= 600 dp) had no way in. The tablet uses the
+/// sidebar footer and the phone uses its Calls tab.
 #[test]
 fn tablet_sidebar_opens_the_calls_screen() {
     use slint::ComponentHandle;
@@ -5250,8 +5172,6 @@ fn tablet_sidebar_opens_the_calls_screen() {
         .data_dir(tmp.path().to_string_lossy().to_string())
         .build()
         .expect("offline ChatterClient::build");
-    // The sidebar's quick links are rows of the flat list Rust builds at
-    // startup (038d14a9), so the production wiring has to run.
     chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
@@ -5262,19 +5182,19 @@ fn tablet_sidebar_opens_the_calls_screen() {
         !w.get_compact_layout(),
         "1000 dp must be the two-pane layout"
     );
-    let row = testing::ElementHandle::find_by_accessible_label(&w, "Calls")
-        .next()
-        .expect("no Calls entry in the tablet sidebar");
-    row.invoke_accessible_default_action();
+    let calls = testing::ElementHandle::find_by_accessible_label(&w, "Calls")
+        .find(|element| element.accessible_role() == Some(testing::AccessibleRole::Button))
+        .expect("no Calls button in the tablet sidebar footer");
+    calls.invoke_accessible_default_action();
     assert_eq!(
         w.global::<chatter_ui::SidebarPane>()
             .get_active_tab()
             .as_str(),
         "calls",
-        "the sidebar Calls row did not raise the Calls screen"
+        "the sidebar Calls button did not raise the Calls screen"
     );
 
-    // Missed calls surface on the row itself.
+    // Missed calls surface on the footer button.
     w.global::<chatter_ui::SidebarPane>()
         .set_active_tab("chats".into());
     w.global::<chatter_ui::CallView>().set_missed_call_count(3);
@@ -5282,7 +5202,7 @@ fn tablet_sidebar_opens_the_calls_screen() {
         testing::ElementHandle::find_by_accessible_label(&w, "Calls, 3 missed")
             .next()
             .is_some(),
-        "missed-call count is not on the sidebar Calls row"
+        "missed-call count is not on the sidebar Calls button"
     );
 
     // Phone: the tab bar owns the entry; the sidebar must not duplicate it.
@@ -5952,7 +5872,6 @@ fn repeated_chat_rows_never_sample_glass() {
                 name.as_str(),
                 "chat/message_item.slint"
                     | "sidebar/chat_list.slint"
-                    | "sidebar/custom_section_list.slint"
             )
         {
             let code = src

@@ -3924,3 +3924,7 @@ msgid ""
 "Your messages still send. Compare safety numbers with your contacts before "
 "you trust a new key."
 msgstr ""
+
+#: crates/chatter-core/src/client/sidebar.rs:120
+msgid "Chats"
+msgstr ""

@@ -6118,3 +6118,31 @@ msgid ""
 msgstr ""
 "Повідомляти іншим, коли їхні повідомлення дійшли до вас. Якщо вимкнено, ви "
 "теж не побачите їхні звіти"
+
+#: ui/pages/first_friend.slint:51
+msgid "Add your first friend"
+msgstr "Додайте першого друга"
+
+#: ui/pages/first_friend.slint:66
+msgid "Chatter has no phone-number lookup. Swap codes with someone you know."
+msgstr "У Chatter немає пошуку за номером телефону. Обміняйтеся кодами зі знайомою людиною."
+
+#: ui/sidebar/card_drag.slint:109
+msgid "Drop here for a new section"
+msgstr "Перетягніть сюди, щоб створити розділ"
+
+#: ui/pages/first_friend.slint:85
+msgid "Friend code"
+msgstr "Код друга"
+
+#: ui/sidebar/chats_card.slint:17
+msgid "Friends you add appear here."
+msgstr "Тут з’являться друзі, яких ви додасте."
+
+#: ui/pages/first_friend.slint:109
+msgid "Got theirs?"
+msgstr "Маєте код друга?"
+
+#: ui/sidebar/sidebar_rail.slint:25
+msgid "{} · {} unread"
+msgstr "{} · непрочитаних: {}"

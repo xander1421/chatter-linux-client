@@ -4177,3 +4177,7 @@ msgstr "La chiave di sicurezza di questo contatto non è attendibile."
 
 msgid "The desktop file picker is unavailable. Check that a file chooser portal is installed and running."
 msgstr "Il selettore di file non è disponibile. Verifica che un portale di selezione file sia installato e in esecuzione."
+
+#: crates/chatter-core/src/client/sidebar.rs:120
+msgid "Chats"
+msgstr "Chat"
