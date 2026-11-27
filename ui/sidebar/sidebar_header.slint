@@ -89,8 +89,7 @@ export component SidebarHeader inherits Rectangle {
             }
         }
 
-        // Create: the same glass tile as the cards, with the accent tint
-        // layered on the glass (as the rail's Create), not a flat fill.
+        // Keep the accent inside the glass tile's single hairline rim.
         if !root.mobile-mode: GlassSurface {
             width: 40px;
             height: self.width;
@@ -98,8 +97,14 @@ export component SidebarHeader inherits Rectangle {
             border-radius: Spacing.radius-panel;
             elevation: 0;
             material-tint: Appearance.glass-effects ? Materials.regular : Colors.surface-card;
+            show-edge: false;
+            popup-rim: true;
             Rectangle {
-                border-radius: parent.border-radius;
+                x: 1px;
+                y: 1px;
+                width: parent.width - 2px;
+                height: parent.height - 2px;
+                border-radius: parent.border-radius - 1px;
                 background: Colors.tint-strong;
             }
             HeaderButton {

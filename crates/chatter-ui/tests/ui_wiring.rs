@@ -5853,8 +5853,15 @@ fn sidebar_search_and_create_have_separate_controls() {
     assert!(header[..create].contains("horizontal-stretch: 1;"));
     assert!(header[..create].contains(card_glass));
     assert!(header[create..].contains("width: 40px;"));
-    assert!(header[create..].contains(card_glass));
-    assert!(header[create..].contains("background: Colors.tint-strong;"));
+    for token in [
+        card_glass,
+        "show-edge: false;",
+        "popup-rim: true;",
+        "border-radius: parent.border-radius - 1px;",
+        "background: Colors.tint-strong;",
+    ] {
+        assert!(header[create..].contains(token));
+    }
     assert!(header[create..].contains("control-radius: Spacing.radius-panel;"));
 }
 

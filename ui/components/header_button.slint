@@ -53,8 +53,7 @@ export component HeaderButton inherits Rectangle {
 
     callback clicked();
 
-    // Keyboard: Tab lands here, Space/Enter activates. The focused state is
-    // the tint (no stroke: the shell's material owns its edge).
+    // Keyboard: Tab lands here, Space/Enter activates.
     keys := FocusScope {
         width: 0px;
         height: 0px;
@@ -94,16 +93,26 @@ export component HeaderButton inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         border-radius: min(root.control-radius, self.height / 2);
-        background: touch-area.pressed && root.enabled ? Materials.pressed : touch-area.has-hover && root.enabled ? Materials.hover
-            : (root.active || keys.has-focus ? Colors.tint-strong : root.control-fill);
-
-        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+        private property <brush> clear: transparent;
+        private property <bool> tinted: root.active || root.control-fill != self.clear;
+        show-edge: !self.tinted && !keys.has-focus;
+        popup-rim: self.tinted && !root.plain && !keys.has-focus;
 
         Rectangle {
-            border-radius: parent.border-radius;
-            background: Materials.specular;
-            opacity: root.enabled && touch-area.pressed ? 0.9 : root.enabled && touch-area.has-hover ? 0.45 : 0;
-            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+            x: 1px;
+            y: 1px;
+            width: max(0px, parent.width - 2px);
+            height: max(0px, parent.height - 2px);
+            border-radius: max(0px, parent.border-radius - 1px);
+            background: touch-area.pressed && root.enabled ? Materials.pressed : touch-area.has-hover && root.enabled ? Materials.hover
+                : (root.active || keys.has-focus ? Colors.tint-strong : root.control-fill);
+            animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+            Rectangle {
+                border-radius: parent.border-radius;
+                background: Materials.specular;
+                opacity: root.enabled && touch-area.pressed ? 0.9 : root.enabled && touch-area.has-hover ? 0.45 : 0;
+                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+            }
         }
         Rectangle {
             border-radius: parent.border-radius;
