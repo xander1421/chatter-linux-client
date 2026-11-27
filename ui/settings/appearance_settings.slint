@@ -12,21 +12,21 @@ export component AppearanceSettings inherits VerticalLayout {
     callback search-shortcut-changed(string);
 
 
-    spacing: Spacing.lg;
+    spacing: Spacing.panel-gutter;
 
     // Section header
     Text {
         text: @tr("Appearance");
         color: Colors.text-primary;
-        font-size: Typography.xl;
+        font-size: Typography.sm;
         font-weight: Typography.semibold;
     }
 
     // Theme. Kept on this device (core: `ThemeMode`),
     // applied live through the `Appearance` global.
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -34,14 +34,15 @@ export component AppearanceSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Theme");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Theme").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
 
             for opt in [
@@ -51,8 +52,8 @@ export component AppearanceSettings inherits VerticalLayout {
             ]: Rectangle {
                 property <bool> selected: Appearance.theme == opt.key;
                 min-height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: theme-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-control;
+                background: selected ? Colors.tint-strong : theme-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
                 accessible-checkable: true;
@@ -101,8 +102,8 @@ export component AppearanceSettings inherits VerticalLayout {
                         Text {
                             text: opt.label;
                             color: selected ? Colors.text-primary : Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: selected ? Typography.medium : Typography.normal;
+                            font-size: 13px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
                         }
 
                         if opt.hint != "": Text {
@@ -129,8 +130,8 @@ export component AppearanceSettings inherits VerticalLayout {
     // the OS language when it is one Chatter ships, else English. Names come
     // from `chatter_i18n::LANGUAGES`, each in its own language.
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -138,22 +139,23 @@ export component AppearanceSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Language");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Language").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
 
             for opt in Appearance.languages: Rectangle {
                 property <bool> selected: Appearance.language == opt.code;
                 property <string> label: opt.code == "system" ? @tr("System") : opt.name;
                 min-height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: language-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-control;
+                background: selected ? Colors.tint-strong : language-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: label;
                 accessible-checkable: true;
@@ -201,8 +203,8 @@ export component AppearanceSettings inherits VerticalLayout {
                         Text {
                             text: label;
                             color: selected ? Colors.text-primary : Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: selected ? Typography.medium : Typography.normal;
+                            font-size: 13px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
                         }
 
                         if opt.code == "system": Text {
@@ -228,8 +230,8 @@ export component AppearanceSettings inherits VerticalLayout {
     // Text size. Kept on this device (core: `TextSize`); every
     // Typography step is drawn at `Appearance.text-scale`.
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -237,14 +239,15 @@ export component AppearanceSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Text size");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Text size").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
 
             for opt in [
@@ -255,7 +258,7 @@ export component AppearanceSettings inherits VerticalLayout {
             ]: Rectangle {
                 property <bool> selected: Appearance.text-size == opt.key;
                 min-height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
+                border-radius: Spacing.radius-control;
                 background: text-size-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
@@ -305,8 +308,8 @@ export component AppearanceSettings inherits VerticalLayout {
                         Text {
                             text: opt.label;
                             color: selected ? Colors.text-primary : Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: selected ? Typography.medium : Typography.normal;
+                            font-size: 13px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
                         }
 
                         if opt.hint != "": Text {
@@ -331,11 +334,12 @@ export component AppearanceSettings inherits VerticalLayout {
 
     Rectangle {
         height: glass-effects-row.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
 
         glass-effects-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Glass effects");
@@ -346,8 +350,8 @@ export component AppearanceSettings inherits VerticalLayout {
                 width: glass-effects-row.label-width;
                 text: @tr("Glass effects");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {
@@ -362,11 +366,12 @@ export component AppearanceSettings inherits VerticalLayout {
 
     Rectangle {
         height: reduce-motion-row.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
 
         reduce-motion-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Reduce animations");
@@ -377,8 +382,8 @@ export component AppearanceSettings inherits VerticalLayout {
                 width: reduce-motion-row.label-width;
                 text: @tr("Reduce animations");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {
@@ -392,18 +397,19 @@ export component AppearanceSettings inherits VerticalLayout {
     }
 
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Animation speed");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Animation speed").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
             Text {
                 text: @tr("How quickly menus and transitions move");
@@ -423,8 +429,8 @@ export component AppearanceSettings inherits VerticalLayout {
                     property <bool> selected: Appearance.animation-speed == opt.value;
                     horizontal-stretch: 1;
                     height: Spacing.touch-target-min;
-                    border-radius: Spacing.radius-md;
-                    background: selected ? Colors.action-fill : Colors.surface-hover;
+                    border-radius: Spacing.radius-control;
+                    background: selected ? Colors.tint-strong : Colors.surface-control;
                     accessible-role: button;
                     accessible-label: @tr("Animation speed {}", opt.label);
                     accessible-checkable: true;
@@ -444,7 +450,7 @@ export component AppearanceSettings inherits VerticalLayout {
                         text: opt.label;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        color: selected ? Colors.on-action : Colors.text-secondary;
+                        color: selected ? Colors.text-primary : Colors.text-secondary;
                         font-size: Typography.sm;
                         font-weight: selected ? Typography.semibold : Typography.medium;
                     }
@@ -463,8 +469,8 @@ export component AppearanceSettings inherits VerticalLayout {
     // Message spacing. Kept on this device (core: `MessageDensity`);
     // read through the density tokens in `Spacing`.
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -472,14 +478,15 @@ export component AppearanceSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Message spacing");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Message spacing").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
 
             for opt in [
@@ -488,8 +495,8 @@ export component AppearanceSettings inherits VerticalLayout {
             ]: Rectangle {
                 property <bool> selected: Appearance.density == opt.key;
                 min-height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: density-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-control;
+                background: selected ? Colors.tint-strong : density-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
                 accessible-checkable: true;
@@ -538,8 +545,8 @@ export component AppearanceSettings inherits VerticalLayout {
                         Text {
                             text: opt.label;
                             color: selected ? Colors.text-primary : Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: selected ? Typography.medium : Typography.normal;
+                            font-size: 13px * Appearance.text-scale;
+                            font-weight: Typography.semibold;
                         }
 
                         if opt.hint != "": Text {
@@ -565,8 +572,8 @@ export component AppearanceSettings inherits VerticalLayout {
     // Search shortcut setting (3-way segmented selector).
     // Keyboard shortcuts mean nothing on a phone.
     if !root.mobile-platform: Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -574,7 +581,7 @@ export component AppearanceSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         HorizontalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.md;
 
             VerticalLayout {
@@ -582,10 +589,11 @@ export component AppearanceSettings inherits VerticalLayout {
                 spacing: Spacing.sm;
 
                 Text {
-                    text: @tr("Search shortcut");
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
+                    text: @tr("Search shortcut").to-uppercase();
+                    color: Colors.text-muted;
+                    font-size: 11px * Appearance.text-scale;
+                    letter-spacing: self.font-size * 0.06;
+                    font-weight: Typography.semibold;
                 }
 
                 Text {
@@ -624,8 +632,8 @@ export component AppearanceSettings inherits VerticalLayout {
                     }
                     height: Spacing.button-height;
                     min-width: 56px;
-                    border-radius: Spacing.radius-md;
-                    background: selected ? Colors.action-fill : Colors.surface-hover;
+                    border-radius: Spacing.radius-control;
+                    background: selected ? Colors.tint-strong : Colors.surface-control;
                     border-width: 0px;
 
                     HorizontalLayout {
@@ -635,7 +643,7 @@ export component AppearanceSettings inherits VerticalLayout {
                             text: opt.label;
                             vertical-alignment: center;
                             horizontal-alignment: center;
-                            color: selected ? Colors.on-action : Colors.text-secondary;
+                            color: selected ? Colors.text-primary : Colors.text-secondary;
                             font-size: Typography.xs;
                             font-weight: selected ? Typography.semibold : Typography.medium;
                         }

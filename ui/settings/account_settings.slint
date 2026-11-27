@@ -1,10 +1,10 @@
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
-import { SettingsRow } from "../components/settings_row.slint";
-import { Input } from "../components/input.slint";
+import { SettingsCardRow, SettingsInput } from "settings_controls.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Icons } from "../theme/icons.slint";
 
@@ -65,14 +65,14 @@ export component AccountSettings inherits VerticalLayout {
     Text {
         text: @tr("Account");
         color: Colors.text-primary;
-        font-size: Typography.xl;
+        font-size: Typography.sm;
         font-weight: Typography.semibold;
     }
 
     // Profile info row
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -80,7 +80,7 @@ export component AccountSettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.md;
 
             HorizontalLayout {
@@ -102,21 +102,22 @@ export component AccountSettings inherits VerticalLayout {
                     Text {
                         text: root.display-name;
                         color: Colors.text-primary;
-                        font-size: Typography.lg;
-                        font-weight: Typography.medium;
+                        font-size: 13px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
                         overflow: elide;
                     }
 
                     Text {
                         text: root.username != "" ? "@" + root.username : "";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
                         overflow: elide;
                     }
                 }
 
                 // Edit button — beside the name on wide screens
                 if !root.compact-mode: Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Edit profile");
                     variant: "secondary";
@@ -137,384 +138,388 @@ export component AccountSettings inherits VerticalLayout {
     }
 
     // Security subsection
-    Rectangle { height: Spacing.lg; }
-
-    Text {
-        text: @tr("Security");
-        color: Colors.text-primary;
-        font-size: Typography.lg;
-        font-weight: Typography.semibold;
-    }
-
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         VerticalLayout {
-            spacing: Spacing.none;
-    // Change Password group
-    Rectangle {
-        background: transparent;
-        border-radius: Spacing.none;
-
-        VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
-
-            SettingsRow {
-                touch: root.mobile-platform;
-                icon: Icons.lock;
-                title: @tr("Password");
-                detail: @tr("Choose a strong, unique password for your account.");
-                clickable: false;
-                show-chevron: false;
-                action-label: show-password-form ? "" : @tr("Change");
-                clicked => { show-password-form = true; }
+            Text {
+                text: @tr("Security").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
 
-            // Inline password form
-            if show-password-form: VerticalLayout {
-                spacing: Spacing.sm;
-
-                Rectangle {
-                    height: 1px;
-                    background: Colors.divider;
-                }
-
-                Input {
-                    placeholder: @tr("Current password");
-                    password: true;
-                    disabled: root.password-changing;
-                    text <=> root.current-password;
-                }
-
-                // Stacked: side by side on a phone the
-                // placeholders clipped ("Confirm new pa…").
-                VerticalLayout {
-                    spacing: Spacing.md;
-
-                    Input {
-                        placeholder: @tr("New password");
-                        password: true;
-                        disabled: root.password-changing;
-                        text <=> root.new-password;
-                        horizontal-stretch: 1;
-                    }
-
-                    Input {
-                        placeholder: @tr("Confirm new password");
-                        password: true;
-                        disabled: root.password-changing;
-                        text <=> root.confirm-password;
-                        error: root.password-error != "" || (root.confirm-password != "" && root.new-password != root.confirm-password);
-                        error-message: root.password-error != "" ? root.password-error : @tr("Passwords do not match");
-                        horizontal-stretch: 1;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-                    alignment: end;
-
-                    Button {
-                        touch: root.mobile-platform;
-                        text: @tr("Cancel");
-                        variant: "ghost";
-                        disabled: root.password-changing || root.delete-loading;
-                        clicked => {
-                            show-password-form = false;
-                            root.current-password = "";
-                            root.new-password = "";
-                            root.confirm-password = "";
-                        }
-                    }
-
-                    Button {
-                        touch: root.mobile-platform;
-                        text: @tr("Save");
-                        variant: "primary";
-                        loading: root.password-changing;
-                        disabled: root.password-changing || root.current-password == "" ||
-                                 root.new-password == "" ||
-                                 root.confirm-password == "" || root.new-password != root.confirm-password;
-                        clicked => {
-                            root.change-password(root.current-password, root.new-password);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Rectangle { height: 1px; background: Colors.divider; }
-
-    // Recovery Codes group
-    Rectangle {
-        background: transparent;
-        border-radius: Spacing.none;
-
-        VerticalLayout {
-            padding: Spacing.md;
-            spacing: Spacing.sm;
-
-            SettingsRow {
-                touch: root.mobile-platform;
-                icon: Icons.shield;
-                title: @tr("Recovery codes");
-                detail: @tr("Lost or used up your codes? Get a new set.");
-                clickable: false;
-                show-chevron: false;
-                action-label: show-recovery-regen ? "" : @tr("Regenerate");
-                clicked => { show-recovery-regen = true; }
-            }
-
-            // Inline confirm: nothing is replaced until the password is in.
-            if show-recovery-regen: VerticalLayout {
-                spacing: Spacing.sm;
-
-                Rectangle {
-                    height: 1px;
-                    background: Colors.divider;
-                }
-
-                Text {
-                    width: parent.width;
-                    text: @tr("Your current recovery codes stop working and a new set is shown once. Enter your password to confirm.");
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
-                }
-
-                Input {
-                    placeholder: @tr("Password");
-                    password: true;
-                    disabled: root.recovery-regen-loading;
-                    text <=> root.recovery-regen-password;
-                    error: root.recovery-regen-error != "";
-                    error-message: root.recovery-regen-error;
-                }
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-                    alignment: end;
-
-                    Button {
-                        touch: root.mobile-platform;
-                        text: @tr("Cancel");
-                        variant: "ghost";
-                        disabled: root.recovery-regen-loading;
-                        clicked => {
-                            show-recovery-regen = false;
-                            root.recovery-regen-password = "";
-                        }
-                    }
-
-                    Button {
-                        touch: root.mobile-platform;
-                        text: @tr("Regenerate");
-                        variant: "primary";
-                        loading: root.recovery-regen-loading;
-                        disabled: root.recovery-regen-loading || root.recovery-regen-password == "";
-                        clicked => {
-                            root.regenerate-recovery-codes(root.recovery-regen-password);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Rectangle { height: 1px; background: Colors.divider; }
-
-    // Change PIN group
-    Rectangle {
-        background: transparent;
-        border-radius: Spacing.none;
-
-        VerticalLayout {
-            padding: Spacing.md;
-            spacing: Spacing.sm;
-
-            SettingsRow {
-                touch: root.mobile-platform;
-                icon: Icons.lock;
-                title: @tr("Backup PIN");
-                detail: @tr("Your PIN secures your encrypted key backup.");
-                clickable: false;
-                show-chevron: false;
-                action-label: show-pin-form ? "" : @tr("Change");
-                clicked => { show-pin-form = true; }
-            }
-
-            // Inline PIN form
-            if show-pin-form: VerticalLayout {
-                spacing: Spacing.sm;
-
-                Rectangle {
-                    height: 1px;
-                    background: Colors.divider;
-                }
-
-                Input {
-                    placeholder: @tr("Current PIN");
-                    password: true;
-                    disabled: root.change-pin-loading;
-                    text <=> root.change-pin-current;
-                }
+            // Change Password group
+            Rectangle {
+                background: transparent;
+                border-radius: Spacing.none;
 
                 VerticalLayout {
-                    spacing: Spacing.md;
-
-                    Input {
-                        placeholder: @tr("New PIN (8+ characters)");
-                        password: true;
-                        disabled: root.change-pin-loading;
-                        text <=> root.change-pin-new;
-                        horizontal-stretch: 1;
-                    }
-
-                    Input {
-                        placeholder: @tr("Confirm new PIN");
-                        password: true;
-                        disabled: root.change-pin-loading;
-                        text <=> root.change-pin-confirm;
-                        error: root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm;
-                        error-message: @tr("PINs do not match");
-                        horizontal-stretch: 1;
-                    }
-                }
-
-                if root.change-pin-error != "": Text {
-                    width: parent.width;
-                    text: root.change-pin-error;
-                    color: Colors.error;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
-                }
-
-                if root.change-pin-success != "": Text {
-                    text: root.change-pin-success;
-                    color: Colors.success;
-                    font-size: Typography.xs;
-                }
-
-                HorizontalLayout {
                     spacing: Spacing.sm;
-                    alignment: end;
 
-                    Button {
+                    SettingsCardRow {
                         touch: root.mobile-platform;
-                        text: @tr("Cancel");
-                        variant: "ghost";
-                        disabled: root.change-pin-loading;
-                        clicked => {
-                            show-pin-form = false;
-                            root.change-pin-current = "";
-                            root.change-pin-new = "";
-                            root.change-pin-confirm = "";
-                        }
+                        icon: Icons.lock;
+                        title: @tr("Password");
+                        detail: @tr("Choose a strong, unique password for your account.");
+                        clickable: false;
+                        show-chevron: false;
+                        action-label: show-password-form ? "" : @tr("Change");
+                        clicked => { show-password-form = true; }
                     }
 
-                    Button {
-                        touch: root.mobile-platform;
-                        text: @tr("Save");
-                        variant: "primary";
-                        loading: root.change-pin-loading;
-                        disabled: root.change-pin-loading || root.change-pin-current == "" ||
-                                 root.change-pin-new == "" ||
-                                 root.change-pin-confirm == "" || root.change-pin-new != root.change-pin-confirm;
-                        clicked => {
-                            root.change-pin(root.change-pin-current, root.change-pin-new);
+                    // Inline password form
+                    if show-password-form: VerticalLayout {
+                        spacing: Spacing.sm;
+
+                        Rectangle {
+                            height: 1px;
+                            background: Colors.divider;
+                        }
+
+                        SettingsInput {
+                            placeholder: @tr("Current password");
+                            password: true;
+                            disabled: root.password-changing;
+                            text <=> root.current-password;
+                        }
+
+                        // Stacked: side by side on a phone the
+                        // placeholders clipped ("Confirm new pa…").
+                        VerticalLayout {
+                            spacing: Spacing.md;
+
+                            SettingsInput {
+                                placeholder: @tr("New password");
+                                password: true;
+                                disabled: root.password-changing;
+                                text <=> root.new-password;
+                                horizontal-stretch: 1;
+                            }
+
+                            SettingsInput {
+                                placeholder: @tr("Confirm new password");
+                                password: true;
+                                disabled: root.password-changing;
+                                text <=> root.confirm-password;
+                                error: root.password-error != "" || (root.confirm-password != "" && root.new-password != root.confirm-password);
+                                error-message: root.password-error != "" ? root.password-error : @tr("Passwords do not match");
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            alignment: end;
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Cancel");
+                                variant: "ghost";
+                                disabled: root.password-changing || root.delete-loading;
+                                clicked => {
+                                    show-password-form = false;
+                                    root.current-password = "";
+                                    root.new-password = "";
+                                    root.confirm-password = "";
+                                }
+                            }
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Save");
+                                variant: "primary";
+                                loading: root.password-changing;
+                                disabled: root.password-changing || root.current-password == "" ||
+                                         root.new-password == "" ||
+                                         root.confirm-password == "" || root.new-password != root.confirm-password;
+                                clicked => {
+                                    root.change-password(root.current-password, root.new-password);
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-    }
 
-    Rectangle { height: 1px; background: Colors.divider; }
+            Rectangle { height: 1px; background: Colors.divider; }
 
-    // Key Backup group
-    Rectangle {
-        background: transparent;
-        border-radius: Spacing.none;
+            // Recovery Codes group
+            Rectangle {
+                background: transparent;
+                border-radius: Spacing.none;
 
-        VerticalLayout {
-            padding: Spacing.md;
-            spacing: Spacing.sm;
-
-            SettingsRow {
-                touch: root.mobile-platform;
-                icon: Icons.download;
-                title: @tr("Key backup");
-                detail: root.backup-status == "backed_up" ? @tr("Status: Backed up") : root.backup-status == "not_backed_up" ? @tr("Status: Not backed up") : @tr("Status: Unknown");
-                detail-color: root.backup-status == "backed_up" ? Colors.success : root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-secondary;
-                clickable: false;
-                show-chevron: false;
-                action-label: !show-backup-retry && root.backup-status != "backed_up" ? @tr("Retry") : "";
-                clicked => { show-backup-retry = true; }
-            }
-
-            // Inline retry form
-            if show-backup-retry && root.backup-status != "backed_up": VerticalLayout {
-                spacing: Spacing.sm;
-
-                Rectangle {
-                    height: 1px;
-                    background: Colors.divider;
-                }
-
-                Input {
-                    placeholder: @tr("Enter your PIN to retry backup");
-                    password: true;
-                    disabled: root.backup-retry-loading;
-                    text <=> root.backup-retry-pin;
-                }
-
-                if root.backup-retry-error != "": Text {
-                    width: parent.width;
-                    text: root.backup-retry-error;
-                    color: Colors.error;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
-                }
-
-                HorizontalLayout {
+                VerticalLayout {
                     spacing: Spacing.sm;
-                    alignment: end;
 
-                    Button {
+                    SettingsCardRow {
                         touch: root.mobile-platform;
-                        text: @tr("Cancel");
-                        variant: "ghost";
-                        disabled: root.backup-retry-loading;
-                        clicked => {
-                            show-backup-retry = false;
-                            root.backup-retry-pin = "";
-                        }
+                        icon: Icons.shield;
+                        title: @tr("Recovery codes");
+                        detail: @tr("Lost or used up your codes? Get a new set.");
+                        clickable: false;
+                        show-chevron: false;
+                        action-label: show-recovery-regen ? "" : @tr("Regenerate");
+                        clicked => { show-recovery-regen = true; }
                     }
 
-                    Button {
-                        touch: root.mobile-platform;
-                        text: @tr("Retry");
-                        variant: "primary";
-                        loading: root.backup-retry-loading;
-                        disabled: root.backup-retry-loading || root.backup-retry-pin == "";
-                        clicked => {
-                            root.retry-backup(root.backup-retry-pin);
+                    // Inline confirm: nothing is replaced until the password is in.
+                    if show-recovery-regen: VerticalLayout {
+                        spacing: Spacing.sm;
+
+                        Rectangle {
+                            height: 1px;
+                            background: Colors.divider;
+                        }
+
+                        Text {
+                            width: parent.width;
+                            text: @tr("Your current recovery codes stop working and a new set is shown once. Enter your password to confirm.");
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+
+                        SettingsInput {
+                            placeholder: @tr("Password");
+                            password: true;
+                            disabled: root.recovery-regen-loading;
+                            text <=> root.recovery-regen-password;
+                            error: root.recovery-regen-error != "";
+                            error-message: root.recovery-regen-error;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            alignment: end;
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Cancel");
+                                variant: "ghost";
+                                disabled: root.recovery-regen-loading;
+                                clicked => {
+                                    show-recovery-regen = false;
+                                    root.recovery-regen-password = "";
+                                }
+                            }
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Regenerate");
+                                variant: "primary";
+                                loading: root.recovery-regen-loading;
+                                disabled: root.recovery-regen-loading || root.recovery-regen-password == "";
+                                clicked => {
+                                    root.regenerate-recovery-codes(root.recovery-regen-password);
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-    }
+
+            Rectangle { height: 1px; background: Colors.divider; }
+
+            // Change PIN group
+            Rectangle {
+                background: transparent;
+                border-radius: Spacing.none;
+
+                VerticalLayout {
+                    spacing: Spacing.sm;
+
+                    SettingsCardRow {
+                        touch: root.mobile-platform;
+                        icon: Icons.lock;
+                        title: @tr("Backup PIN");
+                        detail: @tr("Your PIN secures your encrypted key backup.");
+                        clickable: false;
+                        show-chevron: false;
+                        action-label: show-pin-form ? "" : @tr("Change");
+                        clicked => { show-pin-form = true; }
+                    }
+
+                    // Inline PIN form
+                    if show-pin-form: VerticalLayout {
+                        spacing: Spacing.sm;
+
+                        Rectangle {
+                            height: 1px;
+                            background: Colors.divider;
+                        }
+
+                        SettingsInput {
+                            placeholder: @tr("Current PIN");
+                            password: true;
+                            disabled: root.change-pin-loading;
+                            text <=> root.change-pin-current;
+                        }
+
+                        VerticalLayout {
+                            spacing: Spacing.md;
+
+                            SettingsInput {
+                                placeholder: @tr("New PIN (8+ characters)");
+                                password: true;
+                                disabled: root.change-pin-loading;
+                                text <=> root.change-pin-new;
+                                horizontal-stretch: 1;
+                            }
+
+                            SettingsInput {
+                                placeholder: @tr("Confirm new PIN");
+                                password: true;
+                                disabled: root.change-pin-loading;
+                                text <=> root.change-pin-confirm;
+                                error: root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm;
+                                error-message: @tr("PINs do not match");
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        if root.change-pin-error != "": Text {
+                            width: parent.width;
+                            text: root.change-pin-error;
+                            color: Colors.error;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+
+                        if root.change-pin-success != "": Text {
+                            text: root.change-pin-success;
+                            color: Colors.success;
+                            font-size: Typography.xs;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            alignment: end;
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Cancel");
+                                variant: "ghost";
+                                disabled: root.change-pin-loading;
+                                clicked => {
+                                    show-pin-form = false;
+                                    root.change-pin-current = "";
+                                    root.change-pin-new = "";
+                                    root.change-pin-confirm = "";
+                                }
+                            }
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Save");
+                                variant: "primary";
+                                loading: root.change-pin-loading;
+                                disabled: root.change-pin-loading || root.change-pin-current == "" ||
+                                         root.change-pin-new == "" ||
+                                         root.change-pin-confirm == "" || root.change-pin-new != root.change-pin-confirm;
+                                clicked => {
+                                    root.change-pin(root.change-pin-current, root.change-pin-new);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Colors.divider; }
+
+            // Key Backup group
+            Rectangle {
+                background: transparent;
+                border-radius: Spacing.none;
+
+                VerticalLayout {
+                    spacing: Spacing.sm;
+
+                    SettingsCardRow {
+                        touch: root.mobile-platform;
+                        icon: Icons.download;
+                        title: @tr("Key backup");
+                        detail: root.backup-status == "backed_up" ? @tr("Status: Backed up") : root.backup-status == "not_backed_up" ? @tr("Status: Not backed up") : @tr("Status: Unknown");
+                        detail-color: root.backup-status == "backed_up" ? Colors.success : root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-secondary;
+                        clickable: false;
+                        show-chevron: false;
+                        action-label: !show-backup-retry && root.backup-status != "backed_up" ? @tr("Retry") : "";
+                        clicked => { show-backup-retry = true; }
+                    }
+
+                    // Inline retry form
+                    if show-backup-retry && root.backup-status != "backed_up": VerticalLayout {
+                        spacing: Spacing.sm;
+
+                        Rectangle {
+                            height: 1px;
+                            background: Colors.divider;
+                        }
+
+                        SettingsInput {
+                            placeholder: @tr("Enter your PIN to retry backup");
+                            password: true;
+                            disabled: root.backup-retry-loading;
+                            text <=> root.backup-retry-pin;
+                        }
+
+                        if root.backup-retry-error != "": Text {
+                            width: parent.width;
+                            text: root.backup-retry-error;
+                            color: Colors.error;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            alignment: end;
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Cancel");
+                                variant: "ghost";
+                                disabled: root.backup-retry-loading;
+                                clicked => {
+                                    show-backup-retry = false;
+                                    root.backup-retry-pin = "";
+                                }
+                            }
+
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                touch: root.mobile-platform;
+                                text: @tr("Retry");
+                                variant: "primary";
+                                loading: root.backup-retry-loading;
+                                disabled: root.backup-retry-loading || root.backup-retry-pin == "";
+                                clicked => {
+                                    root.retry-backup(root.backup-retry-pin);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
         }
     }
 
     // Message Backup group (encrypted history export/restore)
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -524,10 +529,10 @@ export component AccountSettings inherits VerticalLayout {
         preferred-height: backup-content.preferred-height;
 
         backup-content := VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
-            SettingsRow {
+            SettingsCardRow {
                 touch: root.mobile-platform;
                 icon: Icons.download;
                 title: @tr("Message backup");
@@ -536,7 +541,7 @@ export component AccountSettings inherits VerticalLayout {
                 show-chevron: false;
             }
 
-            Input {
+            SettingsInput {
                 placeholder: @tr("File backup passphrase");
                 password: true;
                 disabled: root.message-backup-busy;
@@ -555,6 +560,7 @@ export component AccountSettings inherits VerticalLayout {
                 spacing: Spacing.sm;
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Export to file…");
                     variant: "secondary";
@@ -566,6 +572,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Restore from file…");
                     variant: "secondary";
@@ -577,7 +584,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
             }
 
-            Input {
+            SettingsInput {
                 placeholder: @tr("PIN (for server backup)");
                 password: true;
                 disabled: root.message-backup-busy;
@@ -596,6 +603,7 @@ export component AccountSettings inherits VerticalLayout {
                 spacing: Spacing.sm;
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Back up to server");
                     variant: "secondary";
@@ -607,6 +615,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Restore from server");
                     variant: "secondary";
@@ -629,24 +638,22 @@ export component AccountSettings inherits VerticalLayout {
     }
 
     // Danger Zone
-    Rectangle { height: Spacing.md; }
-
-    Text {
-        text: @tr("Danger zone");
-        color: Colors.error;
-        font-size: Typography.lg;
-        font-weight: Typography.semibold;
-    }
-
     Rectangle {
-        background: Colors.error.with-alpha(0.05);
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
-            spacing: Spacing.md;
+            padding: Spacing.sm;
+            spacing: Spacing.sm;
+            Text {
+                text: @tr("Danger zone").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
+            }
 
             // Logout row
             HorizontalLayout {
@@ -659,8 +666,8 @@ export component AccountSettings inherits VerticalLayout {
                     Text {
                         text: @tr("Session on this device");
                         color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        font-weight: Typography.medium;
+                        font-size: 13px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
                     }
 
                     Text {
@@ -671,6 +678,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 if !show-logout-confirm && !root.compact-mode: Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Log out");
                     variant: "destructive";
@@ -680,6 +688,7 @@ export component AccountSettings inherits VerticalLayout {
 
             // Compact: full-width button stacked below
             if !show-logout-confirm && root.compact-mode: Button {
+                border-radius: Spacing.radius-control;
                 touch: root.mobile-platform;
                 text: @tr("Log out");
                 variant: "destructive";
@@ -691,6 +700,7 @@ export component AccountSettings inherits VerticalLayout {
                 spacing: Spacing.sm;
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Cancel");
                     variant: "secondary";
@@ -698,6 +708,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Log out of this device");
                     variant: "destructive";
@@ -726,8 +737,8 @@ export component AccountSettings inherits VerticalLayout {
                         // section header a few rows up.
                         text: @tr("This account");
                         color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        font-weight: Typography.medium;
+                        font-size: 13px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
                     }
 
                     Text {
@@ -741,6 +752,7 @@ export component AccountSettings inherits VerticalLayout {
                 // First click reveals a confirmation step
                 // (with password) — never deletes directly.
                 if !show-delete-confirm && !root.compact-mode: Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Delete account");
                     variant: "destructive";
@@ -753,6 +765,7 @@ export component AccountSettings inherits VerticalLayout {
 
             // Compact: full-width button stacked below
             if !show-delete-confirm && root.compact-mode: Button {
+                border-radius: Spacing.radius-control;
                 touch: root.mobile-platform;
                 text: @tr("Delete account");
                 variant: "destructive";
@@ -779,7 +792,7 @@ export component AccountSettings inherits VerticalLayout {
                     wrap: word-wrap;
                 }
 
-                Input {
+                SettingsInput {
                     placeholder: @tr("Password");
                     password: true;
                     disabled: root.delete-loading;
@@ -793,6 +806,7 @@ export component AccountSettings inherits VerticalLayout {
                     alignment: end;
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("Cancel");
                         variant: "ghost";
@@ -804,6 +818,7 @@ export component AccountSettings inherits VerticalLayout {
                     }
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("Delete forever");
                         variant: "destructive";

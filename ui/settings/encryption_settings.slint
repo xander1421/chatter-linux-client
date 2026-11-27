@@ -1,3 +1,4 @@
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -14,13 +15,13 @@ export component EncryptionSettings inherits VerticalLayout {
     callback sealed-sender-changed(bool);
 
 
-    spacing: Spacing.lg;
+    spacing: Spacing.panel-gutter;
 
     // Section header
     Text {
         text: @tr("Encryption");
         color: Colors.text-primary;
-        font-size: Typography.xl;
+        font-size: Typography.sm;
         font-weight: Typography.semibold;
     }
 
@@ -34,8 +35,8 @@ export component EncryptionSettings inherits VerticalLayout {
 
     // Identity Verification group
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -56,7 +57,7 @@ export component EncryptionSettings inherits VerticalLayout {
         }
 
         identity-content := VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
@@ -65,14 +66,14 @@ export component EncryptionSettings inherits VerticalLayout {
                 // lives on the contact's profile.
                 text: @tr("Your identity key");
                 color: Colors.text-primary;
-                font-size: Typography.lg;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
             }
 
             // Fingerprint display — Neo inset
             Rectangle {
-                background: Colors.inset;
-                border-radius: Spacing.radius-md;
+                background: Colors.surface-control;
+                border-radius: Spacing.radius-control;
 
                 preferred-height: fingerprint-content.preferred-height;
 
@@ -104,6 +105,7 @@ export component EncryptionSettings inherits VerticalLayout {
                 }
 
                 if !root.compact-mode: Button {
+                    border-radius: Spacing.radius-control;
                     touch: root.mobile-platform;
                     text: @tr("Copy");
                     variant: "ghost";
@@ -113,6 +115,7 @@ export component EncryptionSettings inherits VerticalLayout {
 
             // Compact: full-width button stacked below
             if root.compact-mode: Button {
+                border-radius: Spacing.radius-control;
                 touch: root.mobile-platform;
                 text: @tr("Copy");
                 variant: "ghost";
@@ -123,8 +126,8 @@ export component EncryptionSettings inherits VerticalLayout {
 
     // Sealed Sender setting
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -134,7 +137,8 @@ export component EncryptionSettings inherits VerticalLayout {
         preferred-height: sealed-sender-row.preferred-height;
 
         sealed-sender-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Allow sealed sender from anyone");
@@ -148,8 +152,8 @@ export component EncryptionSettings inherits VerticalLayout {
                 width: sealed-sender-row.label-width;
                 text: @tr("Allow sealed sender from anyone");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {

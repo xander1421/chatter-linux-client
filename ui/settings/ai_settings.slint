@@ -1,10 +1,11 @@
+import { Appearance } from "../theme/appearance.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
-import { Input } from "../components/input.slint";
+import { SettingsInput } from "settings_controls.slint";
 import { ToggleRow } from "../components/toggle_row.slint";
 
 export component AISettings inherits VerticalLayout {
@@ -24,12 +25,12 @@ export component AISettings inherits VerticalLayout {
     callback cloud-ai-refresh-quota();
 
 
-    spacing: Spacing.lg;
-    Text { text: @tr("Remote AI"); color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
+    spacing: Spacing.panel-gutter;
+    Text { text: @tr("Remote AI"); color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
     // ── Cloud AI ───────────────────────────────────
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -37,10 +38,11 @@ export component AISettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.md;
 
             cloud-ai-row := ToggleRow {
+                border-radius: Spacing.radius-control;
                 row-spacing: Spacing.md;
                 label-spacing: Spacing.sm;
                 accessible-text: @tr("Use cloud AI");
@@ -54,8 +56,8 @@ export component AISettings inherits VerticalLayout {
                     width: cloud-ai-row.label-width;
                     text: @tr("Use cloud AI");
                     color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
+                    font-size: 13px * Appearance.text-scale;
+                    font-weight: Typography.semibold;
                     wrap: word-wrap;
                 }
                 Text {
@@ -80,6 +82,7 @@ export component AISettings inherits VerticalLayout {
                     spacing: Spacing.sm;
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("My API key");
                         variant: root.cloud-ai-mode == "direct-anthropic" ? "primary" : "secondary";
@@ -90,6 +93,7 @@ export component AISettings inherits VerticalLayout {
                     }
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("Buy tokens");
                         variant: root.cloud-ai-mode == "server-broker" ? "primary" : "secondary";
@@ -103,13 +107,14 @@ export component AISettings inherits VerticalLayout {
                 // The model both modes ask for. Blank means the provider default.
                 HorizontalLayout {
                     spacing: Spacing.sm;
-                    Input {
+                    SettingsInput {
                         placeholder: @tr("Model (blank for the default)");
                         text <=> root.cloud-ai-model;
                         horizontal-stretch: 1;
                         accepted(value) => { root.cloud-ai-model-changed(value); }
                     }
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("Save model");
                         variant: "secondary";
@@ -130,7 +135,7 @@ export component AISettings inherits VerticalLayout {
                         wrap: word-wrap;
                     }
 
-                    Input {
+                    SettingsInput {
                         placeholder: root.cloud-ai-configured ? @tr("API key saved — enter a new one to replace it") : @tr("Anthropic API key");
                         password: true;
                         text <=> root.cloud-ai-api-key;
@@ -139,6 +144,7 @@ export component AISettings inherits VerticalLayout {
                     HorizontalLayout {
                         alignment: start;
                         Button {
+                            border-radius: Spacing.radius-control;
                             touch: root.mobile-platform;
                             text: @tr("Save key");
                             variant: "secondary";
@@ -171,6 +177,7 @@ export component AISettings inherits VerticalLayout {
                     HorizontalLayout {
                         alignment: start;
                         Button {
+                            border-radius: Spacing.radius-control;
                             touch: root.mobile-platform;
                             text: @tr("Refresh balance");
                             variant: "secondary";
@@ -190,10 +197,20 @@ export component AISettings inherits VerticalLayout {
         }
     }
 
-    if JarvisGlobal.enabled: Button {
-        touch: root.mobile-platform;
-        text: @tr("Assistant memory");
-        variant: "secondary";
-        clicked => { root.open-memory(); }
+    if JarvisGlobal.enabled: Rectangle {
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
+
+        VerticalLayout {
+            padding: Spacing.sm;
+
+            Button {
+                border-radius: Spacing.radius-control;
+                touch: root.mobile-platform;
+                text: @tr("Assistant memory");
+                variant: "secondary";
+                clicked => { root.open-memory(); }
+            }
+        }
     }
 }

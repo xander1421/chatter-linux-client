@@ -1,10 +1,11 @@
+import { Appearance } from "../theme/appearance.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
-import { Input } from "../components/input.slint";
+import { SettingsInput } from "settings_controls.slint";
 import { ToggleRow } from "../components/toggle_row.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { AppLockSettings } from "../app_lock.slint";
@@ -31,13 +32,13 @@ export component PrivacySettings inherits VerticalLayout {
     callback username-discoverable-changed(bool);
 
 
-    spacing: Spacing.lg;
+    spacing: Spacing.panel-gutter;
 
     // Section header
     Text {
         text: @tr("Privacy");
         color: Colors.text-primary;
-        font-size: Typography.xl;
+        font-size: Typography.sm;
         font-weight: Typography.semibold;
     }
 
@@ -51,8 +52,8 @@ export component PrivacySettings inherits VerticalLayout {
     // receives our profile key (core profile_visibility);
     // restricting rotates the key, so it may ask for the PIN.
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -60,14 +61,15 @@ export component PrivacySettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Who can see my photo and name");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Who can see my photo and name").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
 
             Text {
@@ -85,8 +87,8 @@ export component PrivacySettings inherits VerticalLayout {
             ]: Rectangle {
                 property <bool> selected: (root.profile-visibility-pending != "" ? root.profile-visibility-pending : root.profile-visibility) == opt.key;
                 height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: visibility-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-control;
+                background: selected ? Colors.tint-strong : visibility-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
                 accessible-checkable: true;
@@ -125,8 +127,8 @@ export component PrivacySettings inherits VerticalLayout {
                         text: opt.label;
                         vertical-alignment: center;
                         color: selected ? Colors.text-primary : Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-weight: selected ? Typography.medium : Typography.normal;
+                        font-size: 13px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
                     }
                 }
 
@@ -148,7 +150,7 @@ export component PrivacySettings inherits VerticalLayout {
                     wrap: word-wrap;
                 }
 
-                Input {
+                SettingsInput {
                     placeholder: @tr("PIN");
                     password: true;
                     text <=> root.profile-visibility-pin;
@@ -159,6 +161,7 @@ export component PrivacySettings inherits VerticalLayout {
                     alignment: end;
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("Cancel");
                         variant: "secondary";
@@ -167,6 +170,7 @@ export component PrivacySettings inherits VerticalLayout {
                     }
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         touch: root.mobile-platform;
                         text: @tr("Confirm");
                         loading: root.profile-visibility-busy;
@@ -200,8 +204,8 @@ export component PrivacySettings inherits VerticalLayout {
 
     Rectangle {
         height: shield-row.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -209,7 +213,8 @@ export component PrivacySettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         shield-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Shield");
@@ -223,8 +228,8 @@ export component PrivacySettings inherits VerticalLayout {
                 width: shield-row.label-width;
                 text: @tr("Shield");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {
@@ -242,8 +247,8 @@ export component PrivacySettings inherits VerticalLayout {
     // Who can find me by my username. The server
     // enforces it; the choice shows the persisted value.
     Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -251,14 +256,15 @@ export component PrivacySettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         VerticalLayout {
-            padding: Spacing.md;
+            padding: Spacing.sm;
             spacing: Spacing.sm;
 
             Text {
-                text: @tr("Who can find me by my username");
-                color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                text: @tr("Who can find me by my username").to-uppercase();
+                color: Colors.text-muted;
+                font-size: 11px * Appearance.text-scale;
+                letter-spacing: self.font-size * 0.06;
+                font-weight: Typography.semibold;
             }
             Text {
                 width: max(0px, parent.width - parent.padding * 2);
@@ -276,8 +282,8 @@ export component PrivacySettings inherits VerticalLayout {
             ]: Rectangle {
                 property <bool> selected: root.username-discoverable == opt.discoverable;
                 height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: username-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-control;
+                background: selected ? Colors.tint-strong : username-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
                 accessible-checkable: true;
@@ -326,8 +332,8 @@ export component PrivacySettings inherits VerticalLayout {
                         text: opt.label;
                         vertical-alignment: center;
                         color: selected ? Colors.text-primary : Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-weight: selected ? Typography.medium : Typography.normal;
+                        font-size: 13px * Appearance.text-scale;
+                        font-weight: Typography.semibold;
                     }
                 }
 
@@ -347,8 +353,8 @@ export component PrivacySettings inherits VerticalLayout {
     // Read Receipts setting
     Rectangle {
         height: read-receipts-row.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -356,7 +362,8 @@ export component PrivacySettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         read-receipts-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Read receipts");
@@ -370,8 +377,8 @@ export component PrivacySettings inherits VerticalLayout {
                 width: read-receipts-row.label-width;
                 text: @tr("Read receipts");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {
@@ -387,8 +394,8 @@ export component PrivacySettings inherits VerticalLayout {
     // Delivery Receipts setting (mutual: off also hides others' receipts)
     Rectangle {
         height: delivery-receipts-row.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -396,7 +403,8 @@ export component PrivacySettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         delivery-receipts-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Delivery receipts");
@@ -410,8 +418,8 @@ export component PrivacySettings inherits VerticalLayout {
                 width: delivery-receipts-row.label-width;
                 text: @tr("Delivery receipts");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {
@@ -427,8 +435,8 @@ export component PrivacySettings inherits VerticalLayout {
     // Typing Indicators setting
     Rectangle {
         height: typing-indicators-row.preferred-height;
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
+        background: Colors.surface-card;
+        border-radius: Spacing.radius-panel;
         drop-shadow-blur: Elevation.card-blur;
         drop-shadow-offset-y: Elevation.card-offset;
         drop-shadow-color: Elevation.card-shadow;
@@ -436,7 +444,8 @@ export component PrivacySettings inherits VerticalLayout {
         border-color: Elevation.card-rim;
 
         typing-indicators-row := ToggleRow {
-            row-padding: Spacing.md;
+            border-radius: Spacing.radius-control;
+            row-padding: Spacing.sm;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
             accessible-text: @tr("Typing indicators");
@@ -450,8 +459,8 @@ export component PrivacySettings inherits VerticalLayout {
                 width: typing-indicators-row.label-width;
                 text: @tr("Typing indicators");
                 color: Colors.text-primary;
-                font-size: Typography.sm;
-                font-weight: Typography.medium;
+                font-size: 13px * Appearance.text-scale;
+                font-weight: Typography.semibold;
                 wrap: word-wrap;
             }
             Text {
