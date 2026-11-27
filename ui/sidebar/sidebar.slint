@@ -1077,6 +1077,9 @@ export component Sidebar inherits Rectangle {
             user-presence-status: root.user-presence-status;
             user-display-name: root.user-display-name;
             server-unreachable: root.server-unreachable;
+            missed-call-count: root.missed-call-count;
+            friends-clicked => { root.friends-clicked(); }
+            calls-clicked => { root.calls-clicked(); }
             profile-clicked => { root.profile-clicked(); }
             settings-clicked => { root.settings-clicked(); }
             // The host owns the state (SidebarPane.sidebar-collapsed); flipping
