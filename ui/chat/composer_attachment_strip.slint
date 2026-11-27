@@ -1,14 +1,12 @@
-import { KeyFocus } from "../components/key_focus.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { PendingAttachmentData } from "composer_types.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { Materials } from "../theme/materials.slint";
 
 // Attachment cards sit between the controls and the reply row.
-export component ComposerAttachmentStrip inherits GlassSurface {
+export component ComposerAttachmentStrip inherits Rectangle {
     in property <length> row-padding;
     in property <length> action-shell-height;
     in property <length> attachment-band-height;
@@ -21,12 +19,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
     callback remove-attachment(string);
     callback attachment-clicked();
     opacity: min(1, max(0, root.strip-reveal));
-    // One material with the reply chip and the action shells; the
-    // cards are wells inside it, not a second card style.
-    border-radius: Spacing.radius-chrome;
     clip: true;
-    material-enabled: false;
-    opaque: true;
 
     attachment-scroll := Flickable {
         width: 100%;
@@ -56,8 +49,8 @@ export component ComposerAttachmentStrip inherits GlassSurface {
             for attachment in root.pending-attachments: Rectangle {
                 width: 180px;
                 height: root.attachment-chip-height;
-                background: Colors.inset;
-                border-radius: Spacing.radius-lg;
+                background: Colors.surface-control;
+                border-radius: Spacing.radius-control;
                 opacity: attachment.is-ready ? 1.0 : 0.7;
 
                 property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
@@ -147,36 +140,13 @@ export component ComposerAttachmentStrip inherits GlassSurface {
                         }
                     }
 
-                    // Remove button: the reply chip's dismiss, exactly.
-                    // A 48dp hit box, quiet at rest, error tint only
-                    // under the pointer — the filled pink disc was the
-                    // loudest thing in the composer.
-                    Rectangle {
-                        width: Spacing.touch-target-min;
-                        height: Spacing.touch-target-min;
-                        background: remove-touch.pressed ? Colors.error.transparentize(0.7)
-                            : remove-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                        border-radius: Spacing.radius-chrome-inner;
-                        accessible-role: button;
-                        accessible-label: @tr("Remove attachment");
-                        accessible-action-default => { root.remove-attachment(attachment.id); }
-                        KeyFocus { border-radius: parent.border-radius; activate => { root.remove-attachment(attachment.id); } }
-
-                        Image {
-                            source: Icons.x;
-                            width: 18px;
-                            height: 18px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            colorize: remove-touch.has-hover ? Colors.error : Colors.text-secondary;
-                        }
-
-                        remove-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.remove-attachment(attachment.id);
-                            }
-                        }
+                    HeaderButton {
+                        touch: true;
+                        plain: true;
+                        glyph: 18px;
+                        icon: Icons.x;
+                        label: @tr("Remove attachment");
+                        clicked => { root.remove-attachment(attachment.id); }
                     }
                 }
             }
@@ -186,33 +156,14 @@ export component ComposerAttachmentStrip inherits GlassSurface {
             VerticalLayout {
                 height: root.attachment-chip-height;
                 alignment: center;
-                Rectangle {
-                    width: Spacing.touch-target-min;
-                    height: Spacing.touch-target-min;
-                    background: add-more-touch.pressed ? Materials.pressed
-                        : add-more-touch.has-hover ? Materials.hover : Colors.inset;
-                    border-radius: Spacing.radius-chrome-inner;
-                    accessible-role: button;
-                    accessible-label: @tr("Add attachment");
-                    accessible-action-default => { if !root.disabled { root.attachment-clicked(); } }
-                    KeyFocus { border-radius: parent.border-radius; activate => { if !root.disabled { root.attachment-clicked(); } } }
-
-                    Image {
-                        source: Icons.plus;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-secondary;
-                    }
-
-                    add-more-touch := TouchArea {
-                        enabled: !root.disabled;
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.attachment-clicked();
-                        }
-                    }
+                HeaderButton {
+                    touch: true;
+                    plain: true;
+                    glyph: 18px;
+                    enabled: !root.disabled;
+                    icon: Icons.plus;
+                    label: @tr("Add attachment");
+                    clicked => { root.attachment-clicked(); }
                 }
             }
         }

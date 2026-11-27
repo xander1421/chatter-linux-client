@@ -267,17 +267,15 @@ export component AppTopOverlays inherits Rectangle {
             && (!self.phone || (SidebarPane.mobile-show-chat && SidebarPane.active-tab == "chats"));
         suggestions: ChatPane.mention-suggestions;
         selected-index: ChatPane.mention-selected-index;
-        // A phone's chat is the whole width: the list sits above the
-        // composer edge to edge, not 280px in where a sidebar would be
-        // (it floated over the messages at the right, S9).
         property <bool> phone: root.is-mobile-platform && root.width < 600px;
-        max-popup-width: self.phone ? root.width - 2 * Spacing.sm : min(240px, root.width - 32px);
-        max-popup-height: max(0px, ChatPane.mention-composer-top - root.safe-area-top - 2 * Spacing.sm);
+        property <length> gutter: self.phone ? Spacing.sm : Spacing.panel-gutter;
+        max-popup-width: max(0px, min(root.width - 2 * self.gutter, self.phone ? root.width : 240px));
+        max-popup-height: max(0px, ChatPane.mention-composer-top - root.safe-area-top - 2 * self.gutter);
         // The composer edge is measured in window coordinates; this overlay
         // starts below the status bar and shrinks with the keyboard.
-        x: self.phone ? Spacing.sm : max(Spacing.sm, min(SidebarPane.sidebar-hidden ? 16px
-            : root.sidebar-menu-width, root.width - self.width - Spacing.sm));
-        y: max(Spacing.sm, ChatPane.mention-composer-top - root.safe-area-top - self.height - Spacing.sm);
+        x: self.phone ? self.gutter : max(self.gutter,
+            min(ChatPane.mention-composer-left, root.width - self.width - self.gutter));
+        y: max(self.gutter, ChatPane.mention-composer-top - root.safe-area-top - self.height - self.gutter);
 
         suggestion-selected(id, display) => {
             ChatPane.mention-autocomplete-visible = false;
