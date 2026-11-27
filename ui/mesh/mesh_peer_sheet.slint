@@ -104,7 +104,9 @@ export component MeshPeerSheet inherits Rectangle {
                             alignment: center;
                             Rectangle {
                                 width: 72px; height: 72px; border-radius: Spacing.radius-full;
-                                background: Colors.surface-control;
+                                background: transparent;
+                                border-width: 1px;
+                                border-color: Colors.border;
                                 Image { source: Icons.user; width: 34px; height: 34px;
                                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                     colorize: Colors.text-secondary; }

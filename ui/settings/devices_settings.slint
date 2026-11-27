@@ -72,7 +72,9 @@ export component DevicesSettings inherits VerticalLayout {
                             width: 24px;
                             height: 20px;
                             border-radius: Spacing.radius-sm;
-                            background: Colors.surface-control;
+                            background: transparent;
+                            border-width: 1px;
+                            border-color: Colors.border;
 
                             Text {
                                 text: root.sessions-loaded ? "\{root.session-count}" : "—";

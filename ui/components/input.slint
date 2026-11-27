@@ -17,7 +17,7 @@ export component Input inherits Rectangle {
     // Inset fields (inside a card) use the control fill and radius; callers
     // may still set fill and radius explicitly.
     in property <bool> inset-control: false;
-    in property <color> field-fill: root.inset-control ? Colors.surface-control : Colors.surface;
+    in property <color> field-fill: root.inset-control ? transparent : Colors.surface;
     in property <length> field-radius: root.inset-control ? Spacing.radius-control : Spacing.radius-md;
     in property <length> control-height: Spacing.touch-target-min;
     property <length> effective-height: max(root.control-height, Spacing.touch-target-min);

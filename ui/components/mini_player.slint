@@ -103,7 +103,9 @@ export component MiniPlayer inherits Rectangle {
             width: max(0px, parent.width - 2 * self.x);
             height: 2px;
             border-radius: Spacing.radius-full;
-            background: Colors.surface-control;
+            background: transparent;
+            border-width: 1px;
+            border-color: Colors.border;
 
             Rectangle {
                 x: 0px;

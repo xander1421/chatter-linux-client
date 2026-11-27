@@ -165,7 +165,9 @@ export component ForwardMessageModal inherits Rectangle {
                                     width: 32px;
                                     height: 32px;
                                     border-radius: 16px;
-                                    background: Colors.surface-control;
+                                    background: transparent;
+                                    border-width: 1px;
+                                    border-color: Colors.border;
                                     Image {
                                         source: Icons.bookmark;
                                         width: 16px;
@@ -180,7 +182,9 @@ export component ForwardMessageModal inherits Rectangle {
                                     width: 32px;
                                     height: 32px;
                                     border-radius: 16px;
-                                    background: Colors.surface-control;
+                                    background: transparent;
+                                    border-width: 1px;
+                                    border-color: Colors.border;
                                     Image {
                                         source: target.private-channel ? Icons.lock : Icons.hash;
                                         width: 16px;

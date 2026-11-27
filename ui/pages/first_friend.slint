@@ -92,7 +92,9 @@ export component FirstFriend inherits Flickable {
                         width: body.qr-size;
                         height: self.width;
                         border-radius: Spacing.radius-control;
-                        background: Colors.surface-control;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: Colors.border;
                         clip: true;
 
                         if ModalHostState.friends-show-qr && root.my-code != "": Image {
@@ -113,7 +115,7 @@ export component FirstFriend inherits Flickable {
 
                         Rectangle {
                             height: 40px;
-                            background: Colors.surface-control;
+                            background: transparent;
                             border-width: 1px;
                             border-color: Colors.border;
                             border-radius: Spacing.radius-control;

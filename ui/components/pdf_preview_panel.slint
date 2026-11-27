@@ -82,7 +82,9 @@ export component PdfPreviewPanel inherits Rectangle {
                     Rectangle {
                         height: 20px;
                         width: pdf-text.preferred-width + Spacing.sm * 2;
-                        background: Colors.surface-control;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: Colors.border;
                         border-radius: Spacing.radius-control;
 
                         pdf-text := Text {

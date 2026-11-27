@@ -57,7 +57,9 @@ export component DateSeparator inherits HorizontalLayout {
 
     Rectangle {
         border-radius: Spacing.radius-full;
-        background: Colors.surface-control;
+        background: transparent;
+        border-width: 1px;
+        border-color: Colors.border;
         min-width: date-label.preferred-width + Spacing.md * 2;
         height: 24px * Appearance.text-grow;
         date-label := Text {

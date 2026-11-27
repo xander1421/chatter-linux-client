@@ -57,7 +57,9 @@ export component MeshList inherits Rectangle {
                             spacing: Spacing.md;
                             Rectangle {
                                 width: 40px; height: 40px; border-radius: Spacing.radius-full;
-                                background: Colors.surface-control;
+                                background: transparent;
+                                border-width: 1px;
+                                border-color: Colors.border;
                                 Image {
                                     source: Icons.radio; width: 20px; height: 20px;
                                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
@@ -129,7 +131,9 @@ export component MeshList inherits Rectangle {
                 spacing: Spacing.md; alignment: center;
                 Rectangle {
                     width: 64px; height: 64px; border-radius: Spacing.radius-full;
-                    background: Colors.surface-control;
+                    background: transparent;
+                    border-width: 1px;
+                    border-color: Colors.border;
                     Image {
                         source: Icons.message-circle; width: 30px; height: 30px;
                         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;

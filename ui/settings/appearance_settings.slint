@@ -430,7 +430,7 @@ export component AppearanceSettings inherits VerticalLayout {
                     horizontal-stretch: 1;
                     height: Spacing.touch-target-min;
                     border-radius: Spacing.radius-control;
-                    background: selected ? Colors.tint-strong : Colors.surface-control;
+                    background: selected ? Colors.tint-strong : transparent;
                     accessible-role: button;
                     accessible-label: @tr("Animation speed {}", opt.label);
                     accessible-checkable: true;
@@ -633,7 +633,7 @@ export component AppearanceSettings inherits VerticalLayout {
                     height: Spacing.button-height;
                     min-width: 56px;
                     border-radius: Spacing.radius-control;
-                    background: selected ? Colors.tint-strong : Colors.surface-control;
+                    background: selected ? Colors.tint-strong : transparent;
                     border-width: 0px;
 
                     HorizontalLayout {

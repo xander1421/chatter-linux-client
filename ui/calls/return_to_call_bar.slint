@@ -85,7 +85,9 @@ export component ReturnToCallBar inherits GlassSurface {
                 width: 88px;
                 height: 56px;
                 border-radius: Spacing.radius-control;
-                background: Colors.surface-control;
+                background: transparent;
+                border-width: 1px;
+                border-color: Colors.border;
                 clip: true;
 
                 if root.remote-has-video: Image {

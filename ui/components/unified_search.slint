@@ -513,7 +513,7 @@ export component UnifiedSearch inherits Rectangle {
                         height: Spacing.touch-target-min;
                         horizontal-stretch: 1;
                         border-radius: Spacing.radius-control;
-                        background: Colors.surface-control;
+                        background: transparent;
                         border-width: Spacing.stroke;
                         border-color: search-input.has-focus ? Colors.focus-ring : Colors.border;
 
@@ -1041,7 +1041,7 @@ export component UnifiedSearch inherits Rectangle {
                                 width: media-grid.tile;
                                 height: media-grid.tile;
                                 border-radius: Spacing.radius-control;
-                                background: Colors.surface-control;
+                                background: transparent;
                                 border-width: root.visible-conversation-count + index == root.selected-index ? 2px : 0px;
                                 border-color: Colors.focus-ring;
                                 clip: true;
@@ -1301,7 +1301,9 @@ export component UnifiedSearch inherits Rectangle {
                 Rectangle {
                     vertical-stretch: 0;
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-control;
-                    background: Colors.surface-control;
+                    background: transparent;
+                    border-width: 1px;
+                    border-color: Colors.border;
                     accessible-role: text-input;
                     accessible-label: root.picker-mode == "from" ? @tr("Search people") : @tr("Search chats");
                     if root.picker-query == "" && picker-input.preedit-text == "": Text {

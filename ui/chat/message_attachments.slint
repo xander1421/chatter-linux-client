@@ -84,7 +84,9 @@ export component MessageAttachments inherits VerticalLayout {
             y: self.in-album ? self.tile.y : 0px;
             width: self.in-album ? self.tile.width : 0px;
             height: self.in-album ? self.tile.height : 0px;
-            background: Colors.surface-control;
+            background: transparent;
+            border-width: 1px;
+            border-color: Colors.border;
             clip: true;
 
             // Placeholder under the thumbnail; the thumbnail fades in over it as

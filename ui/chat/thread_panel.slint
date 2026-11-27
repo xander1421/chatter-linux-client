@@ -254,7 +254,9 @@ export component ThreadPanel inherits Rectangle {
                             width: badge-text.preferred-width + Spacing.sm;
                             height: Spacing.badge-md;
                             y: (parent.height - self.height) / 2;
-                            background: Colors.surface-control;
+                            background: transparent;
+                            border-width: 1px;
+                            border-color: Colors.border;
                             border-radius: Spacing.radius-full;
 
                             badge-text := Text {

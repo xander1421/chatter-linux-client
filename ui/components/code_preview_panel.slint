@@ -74,7 +74,9 @@ export component CodePreviewPanel inherits Rectangle {
                     if root.language != "": Rectangle {
                         height: 20px;
                         width: lang-text.preferred-width + Spacing.sm * 2;
-                        background: Colors.surface-control;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: Colors.border;
                         border-radius: Spacing.radius-control;
 
                         lang-text := Text {

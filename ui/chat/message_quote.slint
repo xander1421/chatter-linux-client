@@ -114,7 +114,9 @@ export component MessageQuote inherits Rectangle {
                 width: gif-label.preferred-width + 6px;
                 height: 13px;
                 border-radius: 3px;
-                background: Colors.surface-control;
+                background: transparent;
+                border-width: 1px;
+                border-color: Colors.border;
                 gif-label := Text {
                     text: @tr("GIF");
                     color: Colors.text-secondary;

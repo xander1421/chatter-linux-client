@@ -43,7 +43,9 @@ export component LoadingPage inherits Rectangle {
                         width: 100px;
                         height: 14px;
                         border-radius: 7px;
-                        background: Colors.surface-control;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: Colors.border;
                     }
                     for dot[i] in [0, 1, 2]: Rectangle {
                         width: 14px;

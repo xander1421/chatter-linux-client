@@ -62,7 +62,9 @@ component ActivityFeedRow inherits Rectangle {
         VerticalLayout { alignment: center;
             Rectangle {
                 width: 40px; height: 40px; border-radius: Spacing.radius-md;
-                background: Colors.surface-control;
+                background: transparent;
+                border-width: 1px;
+                border-color: Colors.border;
                 Image { source: root.glyph; width: 20px; height: 20px;
                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                     colorize: root.tint; }
@@ -216,7 +218,9 @@ export component ActivitySheet inherits Rectangle {
                             alignment: center; spacing: Spacing.sm; height: 160px;
                             HorizontalLayout { alignment: center;
                                 Rectangle { width: 52px; height: 52px; border-radius: Spacing.radius-full;
-                                    background: Colors.surface-control;
+                                    background: transparent;
+                                    border-width: 1px;
+                                    border-color: Colors.border;
                                     Image { source: Icons.bell; width: 24px; height: 24px;
                                         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                         colorize: Colors.text-muted; }

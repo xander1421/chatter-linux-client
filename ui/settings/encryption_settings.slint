@@ -72,7 +72,9 @@ export component EncryptionSettings inherits VerticalLayout {
 
             // Fingerprint display — Neo inset
             Rectangle {
-                background: Colors.surface-control;
+                background: transparent;
+                border-width: 1px;
+                border-color: Colors.border;
                 border-radius: Spacing.radius-control;
 
                 preferred-height: fingerprint-content.preferred-height;

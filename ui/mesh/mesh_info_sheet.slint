@@ -88,7 +88,9 @@ export component MeshInfoSheet inherits Rectangle {
                         Rectangle {
                             width: 64px; height: 64px;
                             border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-lg : Spacing.radius-full;
-                            background: Colors.surface-control;
+                            background: transparent;
+                            border-width: 1px;
+                            border-color: Colors.border;
                             Image {
                                 source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
                                 width: 28px; height: 28px;
