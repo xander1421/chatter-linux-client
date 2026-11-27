@@ -52,6 +52,9 @@ pub struct SignalStore {
     outbound_kt_due_at: i64,
     inbound_kt_due_at: i64,
     authenticated_whisper_receive: bool,
+    /// Digest of the message this actor command encrypts, for the one-message
+    /// "send anyway once" permit. `None` outside encryption.
+    send_digest: Option<[u8; 32]>,
     /// Mesh ratchets have a device-local address space per signed-in account.
     /// Identity keys remain keyed by the ordinary account ID.
     mesh_owner: Option<String>,
@@ -68,6 +71,7 @@ impl SignalStore {
             outbound_kt_due_at: 0,
             inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
+            send_digest: None,
             mesh_owner: None,
             #[cfg(feature = "mesh")]
             mesh_binding: None,
@@ -89,6 +93,7 @@ impl SignalStore {
             outbound_kt_due_at: 0,
             inbound_kt_due_at: 0,
             authenticated_whisper_receive: false,
+            send_digest: None,
             mesh_owner: Some(owner),
             mesh_binding: Some((binding_store, peer)),
         }
@@ -145,6 +150,14 @@ impl SignalStore {
         self.kt_route = Some(route);
         self.inbound_kt_due_at = 0;
         self.authenticated_whisper_receive = false;
+        self.send_digest = None;
+    }
+
+    /// Name the message this command encrypts (its bytes before the actor
+    /// adds a transparency head).
+    pub(crate) fn set_send_digest(&mut self, plaintext: &[u8]) {
+        use sha2::Digest;
+        self.send_digest = Some(sha2::Sha256::digest(plaintext).into());
     }
 
     pub(crate) fn defer_outbound_kt_until(&mut self, due_at: i64) {
@@ -211,8 +224,11 @@ impl SignalStore {
         // A head this peer sent exposed a split view, or the server kept
         // refusing to prove it. Any key we verified for them may come from
         // the operator's other branch.
-        if self.key_store.peer_kt_block(peer)?.is_some() {
-            return Err(untrusted_send(peer, device, None));
+        match self.key_store.peer_kt_block(peer)? {
+            None => {}
+            Some(crate::storage::peer_kt_heads::KtBlock::Unverified)
+                if self.key_store.use_kt_permit(peer, self.send_digest) => {}
+            Some(_) => return Err(untrusted_send(peer, device, None)),
         }
         let state = self.key_store.peer_verification(peer, key)?;
         match state {

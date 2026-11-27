@@ -48,6 +48,13 @@ impl PinScope {
         }
     }
 
+    fn verified_at(self) -> &'static str {
+        match self {
+            Self::Account => "kt.libsignal.verified_at",
+            Self::Anonymous => "kt.libsignal.anonymous.verified_at",
+        }
+    }
+
     fn label_key(self, field: &str, label: &[u8]) -> String {
         let prefix = match self {
             Self::Account => "kt.libsignal",
@@ -449,9 +456,20 @@ impl<'a> Pin<'a> {
             )?;
         }
         update_settings(&tx)?;
+        let verified_at = self
+            .now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        SettingsRepository::set_with_connection(&tx, self.scope.verified_at(), &verified_at)?;
         tx.commit().map_err(StorageError::from)?;
         Ok(())
     }
+}
+
+/// When a proof on `scope`'s pin last verified, in Unix seconds.
+pub(crate) fn verified_at(settings: &SettingsRepository, scope: PinScope) -> Result<Option<i64>, KtError> {
+    Ok(settings.get::<i64>(scope.verified_at())?)
 }
 
 fn check_setting(

@@ -20,13 +20,16 @@ impl Migration for V149PeerKtHeads {
             checked BLOB,
             attempts INTEGER NOT NULL DEFAULT 0,
             withheld INTEGER NOT NULL DEFAULT 0,
+            consistent INTEGER NOT NULL DEFAULT 0,
+            undecided INTEGER NOT NULL DEFAULT 0,
+            undecided_since INTEGER,
             due_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (account, route)
         );
         CREATE TABLE peer_kt_split_views (
             account TEXT PRIMARY KEY,
             kind TEXT NOT NULL CHECK (kind IN ('split', 'unverified')),
-            allowed INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
+            route INTEGER NOT NULL CHECK (route IN (0, 1)),
             detected_at INTEGER NOT NULL
         );
         "#

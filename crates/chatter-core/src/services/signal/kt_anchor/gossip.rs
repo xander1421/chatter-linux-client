@@ -44,34 +44,14 @@ pub(crate) fn attach(settings: &SettingsRepository, route: KtRoute, plaintext: V
     };
     let mut head = to_gossip(&pinned.head);
     head.anonymous = route == KtRoute::AnonymousTor;
+    let padded = !content.padding.is_empty();
     content.kt_head = Some(head);
-    fit_padding(&mut content, plaintext.len());
+    if padded {
+        // Re-pad with the head included: the same bucket when it fits, the
+        // next one when it does not.
+        crate::services::message::MessageService::pad_content_to_bucket(&mut content);
+    }
     content.encode_to_vec()
-}
-
-/// Senders pad a `Content` to a size bucket before it reaches the actor. Take
-/// the head's bytes out of that padding so the message keeps its bucket.
-/// Content without padding grows by the head.
-fn fit_padding(content: &mut Content, target: usize) {
-    if content.padding.is_empty() {
-        return;
-    }
-    use rand::Rng;
-    // Each step changes the padding length prefix by at most one byte.
-    for _ in 0..4 {
-        let len = content.encoded_len();
-        if len > target {
-            let keep = content.padding.len().saturating_sub(len - target);
-            content.padding.truncate(keep);
-        } else if len < target {
-            let mut rng = rand::rng();
-            content
-                .padding
-                .extend((0..target - len).map(|_| rng.random::<u8>()));
-        } else {
-            return;
-        }
-    }
 }
 
 /// The head carried by a decrypted `Content`, if any.
@@ -151,17 +131,17 @@ pub(crate) enum Verdict {
     Split,
     /// The peer sent a head without a valid operator signature.
     Invalid,
-    /// The check failed while a routine request on the same connection was
-    /// answered and verified.
+    /// The check failed between two routine requests on the same connection
+    /// that were answered and verified.
     Withheld,
-    /// Nothing was learned: the route is down, or there is no label to
-    /// monitor yet. Counts toward nothing.
+    /// Nothing was learned: a routine request failed, or there is no label
+    /// to monitor yet. Only a long streak while identified requests succeed
+    /// counts (`storage::peer_kt_heads`).
     Undecided,
 }
 
 /// Check a contact's head against this device's pin on `scope`'s route. Each
-/// request has its own `step` deadline, so a stalled check still leaves time
-/// for the control request that tells withholding from an outage.
+/// request has its own `step` deadline.
 pub(crate) async fn reconcile(
     client: &mut AnonymousKtClient,
     settings: &SettingsRepository,
@@ -232,6 +212,16 @@ async fn reconcile_at(
         return Ok(Verdict::Undecided);
     };
     let baseline = pin.last_head().unwrap_or(&pin.distinguished.head).clone();
+    let checkpoint = pin.distinguished.head.clone();
+    // A routine request first: it opens the connection, so connection or
+    // circuit setup never falls inside the check's deadline.
+    if pin
+        .monitor_with(client, &label, &data, &baseline, &checkpoint, step)
+        .await
+        .is_err()
+    {
+        return Ok(Verdict::Undecided);
+    }
     if let Ok((head, data)) = pin
         .monitor_with(client, &label, &data, &baseline, peer, step)
         .await
@@ -241,17 +231,16 @@ async fn reconcile_at(
         pin.save(head, observations, Some(data), |_| Ok(()))?;
         return Ok(Verdict::Consistent);
     }
-    // Control: the same request with the shared checkpoint in place of the
-    // peer head. An error code is not evidence; a signed head is.
-    let checkpoint = pin.distinguished.head.clone();
-    let Ok((head, data)) = pin
+    // The check failed. It was withheld only if the same connection still
+    // answers a routine request afterwards. An error code is not evidence; a
+    // signed head is.
+    let Ok((head, _)) = pin
         .monitor_with(client, &label, &data, &baseline, &checkpoint, step)
         .await
     else {
         return Ok(Verdict::Undecided);
     };
     let rollback = head.0.tree_size < peer.0.tree_size && head.0.timestamp > peer.0.timestamp;
-    pin.save(head, observations, Some(data), |_| Ok(()))?;
     Ok(if rollback {
         Verdict::Split
     } else {

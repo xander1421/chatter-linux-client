@@ -6,8 +6,14 @@ use super::peer_verification::KtRoute;
 use crate::error::StorageError;
 use rusqlite::{OptionalExtension, params};
 
-/// Withheld checks after which sends to the peer fail closed.
+/// Withheld checks on one route after which sends to the peer fail closed.
 pub(crate) const WITHHELD_LIMIT: u32 = 3;
+/// Consecutive consistent checks on the blocking route that clear the block.
+pub(crate) const CLEAR_AFTER: u32 = 3;
+/// An undecided streak this long, while identified KT requests succeed,
+/// counts as one withheld check.
+pub(crate) const UNDECIDED_LIMIT: u32 = 6;
+pub(crate) const UNDECIDED_WINDOW_SECS: i64 = 24 * 60 * 60;
 
 #[derive(Debug)]
 pub(crate) struct PeerKtHead {
@@ -27,8 +33,12 @@ pub(crate) enum HeadSettle {
     Split,
     /// The head carries no valid operator signature.
     Invalid,
-    /// The route answered a routine request but not the check.
+    /// The connection answered routine requests before and after the check
+    /// but not the check.
     Withheld,
+    /// The route did not answer a routine request. `identified_at` is when an
+    /// identified KT request last verified, in Unix seconds.
+    Undecided { identified_at: Option<i64> },
 }
 
 /// Why sends to a peer are blocked.
@@ -41,7 +51,7 @@ pub(crate) enum KtBlock {
 impl KeyStore {
     /// Keep the newest head an account sent on `route`. A pending row keeps its
     /// due time, so a busy conversation cannot postpone its check, and keeps
-    /// its withheld count, so a new head cannot reset the fail-closed count.
+    /// its counts, so a new head cannot reset them.
     pub(crate) fn record_peer_kt_head(
         &self,
         peer: &str,
@@ -85,7 +95,7 @@ impl KeyStore {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
-    /// Retry an undecided check later. It counts toward nothing.
+    /// Retry later without a verdict: the route has no client right now.
     pub(crate) fn delay_peer_kt_head(&self, job: &PeerKtHead, now: i64) -> Result<(), StorageError> {
         let attempts = job.attempts.saturating_add(1).min(8);
         self.db.connection()?.execute(
@@ -96,8 +106,7 @@ impl KeyStore {
     }
 
     /// Record a verdict for `job`'s head. Returns true when the peer's block
-    /// changed: a new split, a new or renewed unverified block, or an
-    /// unverified block cleared by a consistent check.
+    /// changed: a new split, a new unverified block, or a cleared one.
     pub(crate) fn settle_peer_kt_head(
         &self,
         job: &PeerKtHead,
@@ -107,21 +116,47 @@ impl KeyStore {
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         let (peer, route) = (&job.peer, job.route as i64);
+        let attempts = job.attempts.saturating_add(1).min(8);
+        let retry_at = now + retry_delay(attempts);
+        let mut withheld = false;
         let changed = match outcome {
             HeadSettle::Consistent => {
                 tx.execute(
-                    "UPDATE peer_kt_heads SET checked=?3,attempts=0,withheld=0,due_at=0
+                    "UPDATE peer_kt_heads SET checked=?3,attempts=0,due_at=0,
+                         consistent=consistent+1,undecided=0,undecided_since=NULL
                      WHERE account=?1 AND route=?2",
                     params![peer, route, job.head],
                 )?;
-                tx.execute(
-                    "DELETE FROM peer_kt_split_views WHERE account=?1 AND kind='unverified'",
-                    [peer],
-                )? == 1
+                let consistent: u32 = tx
+                    .query_row(
+                        "SELECT consistent FROM peer_kt_heads WHERE account=?1 AND route=?2",
+                        params![peer, route],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0);
+                if consistent >= CLEAR_AFTER {
+                    tx.execute(
+                        "UPDATE peer_kt_heads SET withheld=0 WHERE account=?1 AND route=?2",
+                        params![peer, route],
+                    )?;
+                    let cleared = tx.execute(
+                        "DELETE FROM peer_kt_split_views
+                         WHERE account=?1 AND kind='unverified' AND route=?2",
+                        params![peer, route],
+                    )? == 1;
+                    if cleared {
+                        self.kt_permits.lock().remove(peer.as_str());
+                    }
+                    cleared
+                } else {
+                    false
+                }
             }
             HeadSettle::Invalid => {
                 tx.execute(
-                    "UPDATE peer_kt_heads SET checked=?3,attempts=0,due_at=0
+                    "UPDATE peer_kt_heads SET checked=?3,attempts=0,due_at=0,
+                         undecided=0,undecided_since=NULL
                      WHERE account=?1 AND route=?2",
                     params![peer, route, job.head],
                 )?;
@@ -129,57 +164,85 @@ impl KeyStore {
             }
             HeadSettle::Split => {
                 tx.execute(
-                    "UPDATE peer_kt_heads SET checked=?3,attempts=0,due_at=0
+                    "UPDATE peer_kt_heads SET checked=?3,attempts=0,due_at=0,
+                         consistent=0,undecided=0,undecided_since=NULL
                      WHERE account=?1 AND route=?2",
                     params![peer, route, job.head],
                 )?;
                 tx.execute(
-                    "INSERT INTO peer_kt_split_views (account,kind,allowed,detected_at)
-                     VALUES (?1,'split',0,?2)
-                     ON CONFLICT(account) DO UPDATE SET kind='split',allowed=0,detected_at=?2
+                    "INSERT INTO peer_kt_split_views (account,kind,route,detected_at)
+                     VALUES (?1,'split',?2,?3)
+                     ON CONFLICT(account) DO UPDATE SET kind='split',route=?2,detected_at=?3
                      WHERE peer_kt_split_views.kind!='split'",
-                    params![peer, now],
+                    params![peer, route, now],
                 )? == 1
             }
             HeadSettle::Withheld => {
-                let attempts = job.attempts.saturating_add(1).min(8);
-                tx.execute(
-                    "UPDATE peer_kt_heads SET withheld=withheld+1,attempts=?3,due_at=?4
-                     WHERE account=?1 AND route=?2",
-                    params![peer, route, attempts, now + retry_delay(attempts)],
-                )?;
-                let withheld: u32 = tx
-                    .query_row(
-                        "SELECT withheld FROM peer_kt_heads WHERE account=?1 AND route=?2",
-                        params![peer, route],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                    .unwrap_or(0);
-                // A permission to send anyway lasts until the next withheld check.
-                withheld >= WITHHELD_LIMIT
-                    && tx.execute(
-                        "INSERT INTO peer_kt_split_views (account,kind,allowed,detected_at)
-                         VALUES (?1,'unverified',0,?2)
-                         ON CONFLICT(account) DO UPDATE SET allowed=0
-                         WHERE peer_kt_split_views.kind='unverified'
-                           AND peer_kt_split_views.allowed=1",
-                        params![peer, now],
-                    )? == 1
+                withheld = true;
+                false
             }
+            HeadSettle::Undecided { identified_at } => {
+                tx.execute(
+                    "UPDATE peer_kt_heads SET attempts=?3,due_at=?4,undecided=undecided+1,
+                         undecided_since=COALESCE(undecided_since,?5)
+                     WHERE account=?1 AND route=?2",
+                    params![peer, route, attempts, retry_at, now],
+                )?;
+                let streak: Option<(u32, Option<i64>)> = tx
+                    .query_row(
+                        "SELECT undecided,undecided_since FROM peer_kt_heads
+                         WHERE account=?1 AND route=?2",
+                        params![peer, route],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                // Head checks that never get an answer while identified KT
+                // requests keep verifying are withholding, not an outage.
+                withheld = streak.is_some_and(|(count, since)| {
+                    since.is_some_and(|since| {
+                        count >= UNDECIDED_LIMIT
+                            && now - since >= UNDECIDED_WINDOW_SECS
+                            && identified_at.is_some_and(|at| at > since)
+                    })
+                });
+                false
+            }
+        };
+        let changed = if withheld {
+            tx.execute(
+                "UPDATE peer_kt_heads SET withheld=withheld+1,consistent=0,attempts=?3,due_at=?4,
+                     undecided=0,undecided_since=NULL
+                 WHERE account=?1 AND route=?2",
+                params![peer, route, attempts, retry_at],
+            )?;
+            let count: u32 = tx
+                .query_row(
+                    "SELECT withheld FROM peer_kt_heads WHERE account=?1 AND route=?2",
+                    params![peer, route],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            count >= WITHHELD_LIMIT
+                && tx.execute(
+                    "INSERT OR IGNORE INTO peer_kt_split_views (account,kind,route,detected_at)
+                     VALUES (?1,'unverified',?2,?3)",
+                    params![peer, route, now],
+                )? == 1
+        } else {
+            changed
         };
         tx.commit()?;
         Ok(changed)
     }
 
-    /// The block in force for `peer`. An unverified block the user chose to
-    /// send through is not in force.
+    /// The block recorded for `peer`, if any.
     pub(crate) fn peer_kt_block(&self, peer: &str) -> Result<Option<KtBlock>, StorageError> {
         let kind: Option<String> = self
             .db
             .read_connection()?
             .query_row(
-                "SELECT kind FROM peer_kt_split_views WHERE account=?1 AND allowed=0",
+                "SELECT kind FROM peer_kt_split_views WHERE account=?1",
                 [peer],
                 |row| row.get(0),
             )
@@ -191,23 +254,45 @@ impl KeyStore {
         })
     }
 
-    /// The user's explicit decision on the block in force. A split is cleared;
-    /// an unverified block lets sends through until the next withheld check.
+    /// The user's explicit decision on the block. A split is cleared. An
+    /// unverified block stays; the user gets one in-memory permit for the
+    /// next message.
     pub(crate) fn accept_peer_kt_block(&self, peer: &str) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
-        let cleared = conn.execute(
+        let cleared = self.db.connection()?.execute(
             "DELETE FROM peer_kt_split_views WHERE account=?1 AND kind='split'",
             [peer],
-        )?;
-        let allowed = conn.execute(
-            "UPDATE peer_kt_split_views SET allowed=1
-             WHERE account=?1 AND kind='unverified' AND allowed=0",
-            [peer],
-        )?;
-        Ok(cleared + allowed > 0)
+        )? == 1;
+        if cleared {
+            return Ok(true);
+        }
+        if self.peer_kt_block(peer)? == Some(KtBlock::Unverified) {
+            self.kt_permits.lock().insert(peer.to_owned(), None);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Whether the "send anyway once" permit covers this send. The permit is
+    /// spent on the first message (`digest`) it releases and then covers only
+    /// that message's other devices and retries. A check without a message,
+    /// such as session setup, neither needs nor spends it.
+    pub(crate) fn use_kt_permit(&self, peer: &str, digest: Option<[u8; 32]>) -> bool {
+        let mut permits = self.kt_permits.lock();
+        let Some(permit) = permits.get_mut(peer) else {
+            return false;
+        };
+        match (digest, *permit) {
+            (None, _) => true,
+            (Some(digest), None) => {
+                *permit = Some(digest);
+                true
+            }
+            (Some(digest), Some(spent)) => digest == spent,
+        }
     }
 }
 
+/// Exponential backoff from 5 minutes to a 6-hour cap.
 fn retry_delay(attempts: u32) -> i64 {
-    (2_i64 << attempts).min(300)
+    (300_i64 << attempts.saturating_sub(1).min(7)).min(6 * 60 * 60)
 }

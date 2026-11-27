@@ -199,30 +199,52 @@ async fn split_operator_withholds_the_check_on_both_branches() {
     // The operator shows Alice its own key for Bob and shows Bob a clean log.
     let alice = fixture.device("A bob at 4").await;
     let bob = fixture.device("B bob at 5").await;
-    // Neither side holds signed evidence, so each check is withheld while the
-    // routine control request is answered. Three of them fail closed.
-    for _ in 0..storage_withheld_limit() {
+    // Neither side holds signed evidence, so each check is withheld between
+    // two answered routine requests. Three of them fail closed (storage).
+    for _ in 0..crate::storage::peer_kt_heads::WITHHELD_LIMIT {
         // Alice -> Bob. Bob's operator can only prove its own branch.
-        let answers = vec![fixture.monitor("B check 5/4"), fixture.monitor("B control 5/1")];
+        let answers = vec![
+            fixture.monitor("B control 5/1"),
+            fixture.monitor("B check 5/4"),
+            fixture.monitor("B control 5/1"),
+        ];
         assert_eq!(bob.receive(&fixture, answers, &alice.send()).await, Verdict::Withheld);
         // Bob -> Alice. Alice's branch has no size 5 to prove.
-        let answers = vec![beyond_log(), fixture.monitor("A control 4/1")];
+        let answers = vec![
+            fixture.monitor("A control 4/1"),
+            beyond_log(),
+            fixture.monitor("A control 4/1"),
+        ];
         assert_eq!(alice.receive(&fixture, answers, &bob.send()).await, Verdict::Withheld);
     }
     assert_eq!((alice.pinned_size(), bob.pinned_size()), (4, 5));
 }
 
-fn storage_withheld_limit() -> u32 {
-    crate::storage::peer_kt_heads::WITHHELD_LIMIT
-}
-
 #[tokio::test(start_paused = true)]
-async fn a_stalled_check_is_withheld_not_an_outage() {
+async fn a_stalled_check_on_an_answering_connection_is_withheld() {
     let fixture = Fixture::new();
     let alice = fixture.device("A bob at 4").await;
     let bob = fixture.device("B bob at 5").await;
-    let answers = vec![Answer::Stall, fixture.monitor("B control 5/1")];
+    let answers = vec![
+        fixture.monitor("B control 5/1"),
+        Answer::Stall,
+        fixture.monitor("B control 5/1"),
+    ];
     assert_eq!(bob.receive(&fixture, answers, &alice.send()).await, Verdict::Withheld);
+}
+
+#[tokio::test(start_paused = true)]
+async fn connection_setup_and_dropped_connections_are_never_withheld() {
+    let fixture = Fixture::new();
+    let alice = fixture.device("A bob at 4").await;
+    let bob = fixture.device("B bob at 5").await;
+    // The opening routine request fails: nothing is learned.
+    for opening in [Answer::Stall, Answer::Fail(NetworkError::Unavailable)] {
+        assert_eq!(bob.receive(&fixture, vec![opening], &alice.send()).await, Verdict::Undecided);
+    }
+    // The connection dies with the check: the routine request after it fails too.
+    let answers = vec![fixture.monitor("B control 5/1"), Answer::Stall, Answer::Stall];
+    assert_eq!(bob.receive(&fixture, answers, &alice.send()).await, Verdict::Undecided);
 }
 
 #[tokio::test]
@@ -240,19 +262,22 @@ async fn a_later_signed_smaller_head_is_a_signed_rollback() {
     let fixture = Fixture::new();
     let peer = fixture.device("H bob at 5").await;
     let restored = fixture.device("R bob at 4").await;
-    let answers = vec![beyond_log(), fixture.monitor("R control 4/1")];
+    let answers = vec![
+        fixture.monitor("R control 4/1"),
+        beyond_log(),
+        fixture.monitor("R control 4/1"),
+    ];
     assert_eq!(restored.receive(&fixture, answers, &peer.send()).await, Verdict::Split);
 }
 
 #[tokio::test]
 async fn a_restored_log_beyond_our_own_pin_is_no_split() {
     let fixture = Fixture::new();
-    // Our own pin is past the restored log: both requests are refused, and
-    // an error code is not evidence against the peer.
+    // Our own pin is past the restored log, so the routine request is refused
+    // too, and an error code is not evidence against the peer.
     let device = fixture.device("H bob at 5").await;
     let peer = fixture.device("A bob at 4").await;
-    let answers = vec![beyond_log(), beyond_log()];
-    assert_eq!(device.receive(&fixture, answers, &peer.send()).await, Verdict::Undecided);
+    assert_eq!(device.receive(&fixture, vec![beyond_log()], &peer.send()).await, Verdict::Undecided);
     assert_eq!(device.pinned_size(), 5);
 }
 
@@ -262,12 +287,12 @@ async fn honest_operator_raises_no_alarm_over_a_conversation() {
     let alice = fixture.device("H bob at 4").await;
     let bob = fixture.device("H bob at 5").await;
 
-    let answers = vec![fixture.monitor("H check 5/4")];
+    let answers = vec![fixture.monitor("H control 5/1"), fixture.monitor("H check 5/4")];
     assert_eq!(bob.receive(&fixture, answers, &alice.send()).await, Verdict::Consistent);
     assert_eq!(bob.pinned_size(), 5);
 
     // Alice advances to the joint head, so both now share one pin.
-    let answers = vec![fixture.monitor("H check 4/5")];
+    let answers = vec![fixture.monitor("H control 4/1"), fixture.monitor("H check 4/5")];
     assert_eq!(alice.receive(&fixture, answers, &bob.send()).await, Verdict::Consistent);
     assert_eq!(alice.pinned_size(), 5);
 
@@ -310,20 +335,31 @@ async fn a_head_without_the_operator_signature_is_ignored() {
 }
 
 #[tokio::test]
-async fn the_head_keeps_a_padded_content_in_its_bucket_and_names_its_route() {
+async fn a_padded_content_stays_on_an_exact_bucket_and_names_its_route() {
+    use chatter_proto::content_v1::{DataMessage, content::Content as Body};
     let fixture = Fixture::new();
     let device = fixture.device("H bob at 5").await;
-    let padded = Content {
-        padding: vec![7; 300],
-        ..Default::default()
+    let padded = |body: usize| {
+        let mut content = Content {
+            content: Some(Body::DataMessage(DataMessage {
+                body: "x".repeat(body),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        crate::services::message::MessageService::pad_content_to_bucket(&mut content);
+        content.encode_to_vec()
+    };
+    // The head fits the 256 bucket, or moves the message to the next bucket.
+    for (body, bucket) in [(10, 256), (200, 512), (420, 1024)] {
+        let before = padded(body);
+        let sent = attach(&device.settings, KtRoute::Normal, before.clone());
+        assert_eq!(sent.len(), bucket, "body {body}, {} bytes before the head", before.len());
     }
-    .encode_to_vec();
-    let sent = attach(&device.settings, KtRoute::Normal, padded.clone());
-    assert_eq!(sent.len(), padded.len());
-    let head = received(&sent).unwrap();
+    let head = received(&attach(&device.settings, KtRoute::Normal, padded(10))).unwrap();
     assert_eq!(route(&head), KtRoute::Normal);
     // This device has no anonymous pin, so a Tor send carries nothing.
-    assert_eq!(attach(&device.settings, KtRoute::AnonymousTor, padded.clone()), padded);
+    assert_eq!(attach(&device.settings, KtRoute::AnonymousTor, padded(10)), padded(10));
     let anonymous = KtHeadGossip {
         anonymous: true,
         ..head
