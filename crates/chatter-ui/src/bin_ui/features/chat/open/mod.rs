@@ -154,6 +154,17 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
         // A conversation lives on the Chats tab: opened from Contacts, Calls
         // or a pushed profile, it must not stay hidden behind them.
         crate::bin_ui::features::back::reset_to_chats(&w);
+        // A thread (or the pinned-messages page) belongs to the conversation
+        // being left: core drops the active thread on the switch, so a panel
+        // left open beside the next chat could not send. Close it through its
+        // own handler (saves the thread draft), then hide it now: that
+        // handler's queued hide is tied to the conversation being left.
+        let pane = w.global::<crate::ChatPane>();
+        if pane.get_thread_panel_visible() {
+            pane.invoke_close_thread_clicked();
+            pane.set_thread_panel_visible(false);
+            pane.set_thread_replies(slint::ModelRc::new(slint::VecModel::default()));
+        }
         // Picker visibility belongs to the composer being left. Reset at the
         // synchronous entry point as well as on phone Back: a two-pane switch
         // does not change mobile-show-chat, and the chat child is recreated.
