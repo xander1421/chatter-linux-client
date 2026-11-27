@@ -6,7 +6,9 @@ import { KeyFocus } from "../components/key_focus.slint";
 import { ActivityUi } from "../activity/activity_bell.slint";
 import { ActivityGlobal } from "../activity/activity_global.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -36,6 +38,13 @@ export component SidebarFooter inherits GlassSurface {
     in property <string> user-display-name;
     in property <bool> server-unreachable;
     in property <int> missed-call-count;
+    private property <bool> ai-available: JarvisGlobal.enabled && JarvisGlobal.opted-in;
+    private property <int> expanded-slot-count: 5 + (root.touch ? 1 : 0)
+        + (root.mesh-available ? 1 : 0) + (root.ai-available ? 1 : 0);
+    private property <length> expanded-gap: 6px;
+    private property <length> expanded-slot-width: clamp(
+        (root.panel-width - 2 * Spacing.sm - root.expanded-slot-count * root.expanded-gap)
+            / root.expanded-slot-count, 0px, root.touch ? root.footer-icon-size : 32px);
     callback profile-clicked();
     callback friends-clicked();
     callback calls-clicked();
@@ -51,7 +60,10 @@ export component SidebarFooter inherits GlassSurface {
             width: root.panel-width;
             y: root.panel-height - self.height;
             material-level: 2;
+            material-tint: root.collapsed || Appearance.glass-effects ? Materials.regular : Colors.surface-card;
             material-enabled: !DesktopChrome.macos;
+            background: !root.collapsed && DesktopChrome.macos ? Colors.surface-card : transparent;
+            border-radius: root.collapsed ? Spacing.radius-chrome : 12px;
             show-edge: !DesktopChrome.macos;
             elevation: DesktopChrome.macos ? 0 : 3;
 
@@ -60,15 +72,15 @@ export component SidebarFooter inherits GlassSurface {
                 ? !root.touch || DesktopChrome.macos ? root.rail-footer-height
                     : root.rail-button-count * root.rail-icon-size
                         + (root.rail-button-count - 1) * 8px + 16px + Spacing.md + 8px
-                : DesktopChrome.macos ? 48px : 44px;
+                : 48px;
 
             if !root.collapsed: HorizontalLayout {
                 padding-left: Spacing.sm;
                 padding-right: Spacing.sm;
-                spacing: Spacing.xs;
+                spacing: root.expanded-gap;
 
                 Rectangle {
-                    width: root.touch ? 36px : 28px;
+                    width: root.expanded-slot-width;
                     accessible-role: button;
                     accessible-label: @tr("Profile");
                     accessible-action-default => { root.profile-clicked(); }
@@ -77,7 +89,7 @@ export component SidebarFooter inherits GlassSurface {
                         VerticalLayout {
                             alignment: center;
                             Avatar {
-                                size: root.touch ? 30px : 24px;
+                                size: min(root.expanded-slot-width, root.touch ? 30px : 24px);
                                 source: root.user-avatar-source;
                                 fallback-text: root.user-initials;
                                 alt-name: root.user-display-name;
@@ -93,7 +105,7 @@ export component SidebarFooter inherits GlassSurface {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 HeaderButton {
-                    width: root.footer-icon-size;
+                    width: root.expanded-slot-width;
                     plain: true;
                     glyph: 16px;
                     icon: AnonMode.enabled ? Icons.user-plus : Icons.users;
@@ -101,7 +113,7 @@ export component SidebarFooter inherits GlassSurface {
                     clicked => { root.friends-clicked(); }
                 }
                 HeaderButton {
-                    width: root.footer-icon-size;
+                    width: root.expanded-slot-width;
                     plain: true;
                     glyph: 16px;
                     icon: Icons.phone;
@@ -124,8 +136,25 @@ export component SidebarFooter inherits GlassSurface {
                         }
                     }
                 }
+                if root.mesh-available: HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: root.active-tab == "mesh" ? Icons.message-circle : Icons.radio;
+                    label: root.active-tab == "mesh" ? @tr("Chats") : @tr("Mesh");
+                    clicked => { root.tab-selected(root.active-tab == "mesh" ? "chats" : "mesh"); }
+                }
+                if root.ai-available: HeaderButton {
+                    width: root.expanded-slot-width;
+                    plain: true;
+                    glyph: 16px;
+                    icon: Icons.jarvis;
+                    label: @tr("AI");
+                    // The virtual assistant channel uses the nil UUID.
+                    clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); }
+                }
                 HeaderButton {
-                    width: root.footer-icon-size;
+                    width: root.expanded-slot-width;
                     plain: true;
                     glyph: 16px;
                     icon: Icons.bell;
@@ -146,7 +175,7 @@ export component SidebarFooter inherits GlassSurface {
                     }
                 }
                 HeaderButton {
-                    width: root.footer-icon-size;
+                    width: root.expanded-slot-width;
                     plain: true;
                     glyph: 16px;
                     icon: Icons.settings;
@@ -154,7 +183,7 @@ export component SidebarFooter inherits GlassSurface {
                     clicked => { root.settings-clicked(); }
                 }
                 if root.touch: HeaderButton {
-                    width: root.footer-icon-size;
+                    width: root.expanded-slot-width;
                     plain: true;
                     glyph: 16px;
                     icon: Icons.chevron-left;
@@ -200,7 +229,7 @@ export component SidebarFooter inherits GlassSurface {
                 }
                 // Bottom cluster, in order: AI, Chats, Mesh, Activity, then
                 // profile, Settings, expand.
-                if root.touch && JarvisGlobal.enabled && JarvisGlobal.opted-in: TooltipArea {
+                if root.touch && root.ai-available: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: @tr("AI"); tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
