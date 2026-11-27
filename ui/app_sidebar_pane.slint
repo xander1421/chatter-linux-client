@@ -1,5 +1,5 @@
 import { ChatRowData } from "sidebar/chat_list.slint";
-import { CustomSectionData, SidebarRowData } from "sidebar/custom_section_list.slint";
+import { CustomSectionData, SidebarRowData } from "sidebar/section_card.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 
 export global SidebarPane {
@@ -63,6 +63,30 @@ export global SidebarPane {
     in-out property <length> section-header-ctx-menu-y: 0px;
     in-out property <string> section-header-ctx-menu-section-id: "";
     in-out property <string> section-header-ctx-menu-sort-mode: "recent";
+
+    public function anchor-card-row-menu(row: ChatRowData, card-id: string, x: length, y: length, row-y: length) {
+        root.ctx-menu-row = row;
+        root.ctx-menu-conv-id = row.conversation-id;
+        root.ctx-menu-conv-type = row.conversation-type;
+        root.ctx-menu-current-section-id = card-id == "chats" ? "" : card-id;
+        root.ctx-menu-is-pinned = row.is-pinned;
+        root.ctx-menu-is-archived = false;
+        root.ctx-menu-can-leave = row.can-leave;
+        root.ctx-menu-can-delete = row.can-delete;
+        root.ctx-menu-x = x;
+        root.ctx-menu-y = y;
+        root.ctx-menu-row-y = row-y;
+        root.section-context-menu-open = false;
+    }
+
+    public function open-card-section-menu(section-id: string, sort-mode: string, x: length, y: length) {
+        root.section-header-ctx-menu-section-id = section-id;
+        root.section-header-ctx-menu-sort-mode = sort-mode;
+        root.section-header-ctx-menu-x = x;
+        root.section-header-ctx-menu-y = y;
+        root.row-context-menu-open = false;
+        root.section-context-menu-open = true;
+    }
     // The current top-level destination: "chats", "mesh", "calls", "contacts" or
     // "profile" (the account menu). Separate from `modal-stack` below — a
     // screen pushed over a tab (someone's profile, Settings, Sessions) never
