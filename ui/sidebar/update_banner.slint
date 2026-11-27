@@ -8,6 +8,9 @@ import { Button } from "../components/button.slint";
 
 export component UpdateBanner inherits GlassSurface {
     material-level: 2;
+    border-radius: Spacing.radius-panel;
+    border-width: 1px;
+    border-color: Colors.border;
     accessible-role: groupbox;
     accessible-label: @tr("App update");
     // The update notice grows inside its reserved top slot. A one-frame
@@ -32,14 +35,14 @@ export component UpdateBanner inherits GlassSurface {
             Text { text: UpdateGlobal.state == "ready" ? @tr("Ready to restart") : UpdateGlobal.state == "installing" ? @tr("Confirm system install") : UpdateGlobal.state == "error" ? @tr("Update failed") : @tr("Update available");
                 color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
             Text { text: UpdateGlobal.state == "downloading" ? UpdateGlobal.progress : UpdateGlobal.state == "confirm-cellular" ? @tr("Cellular download?") : UpdateGlobal.state == "error" ? UpdateGlobal.error : UpdateGlobal.version;
-                color: UpdateGlobal.state == "error" ? Colors.error : Colors.text-secondary;
+                color: UpdateGlobal.state == "error" ? Colors.error : Colors.text-muted;
                 font-size: Typography.xs; wrap: word-wrap; }
         }
         Rectangle { horizontal-stretch: 1; }
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
-            Button { text: UpdateGlobal.state == "error" ? @tr("Retry") : UpdateGlobal.play-distribution ? @tr("Update in Play Store") : UpdateGlobal.state == "ready" ? @tr("Restart") : UpdateGlobal.state == "confirm-cellular" ? @tr("Download now") : @tr("Update");
+            Button { border-radius: Spacing.radius-control; text: UpdateGlobal.state == "error" ? @tr("Retry") : UpdateGlobal.play-distribution ? @tr("Update in Play Store") : UpdateGlobal.state == "ready" ? @tr("Restart") : UpdateGlobal.state == "confirm-cellular" ? @tr("Download now") : @tr("Update");
                 disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
                 clicked => { UpdateGlobal.update(); }
             }

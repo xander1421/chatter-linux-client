@@ -1,3 +1,5 @@
+import { Colors } from "theme/colors.slint";
+import { Spacing } from "theme/spacing.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { LoginPage } from "pages/login.slint";
 import { RegisterPage } from "pages/register.slint";
@@ -9,6 +11,14 @@ import { AuthFlow } from "app_auth_flow.slint";
 
 // The account entry flow uses AuthFlow for authentication state and actions.
 export component AuthPages inherits Rectangle {
+    in property <bool> framed;
+    visible: root.current-view != "main" || root.exiting-view != "";
+    background: root.current-view == "main" ? transparent : Colors.background;
+    border-width: root.framed && root.current-view != "main" ? 1px : 0px;
+    border-color: Colors.border;
+    border-radius: root.framed ? Spacing.radius-panel : 0px;
+    clip: true;
+
     in property <bool> account-free-surfaces;
     in property <string> current-view;
     in property <string> exiting-view;
@@ -165,6 +175,7 @@ export component AuthPages inherits Rectangle {
         x: root.view-shift("welcome");
         opacity: root.view-opacity("welcome");
         display-name: SidebarPane.user-display-name;
+        touch: root.is-mobile-platform;
         add-friends => { AuthFlow.welcome-add-friends(); }
         browse-channels => { AuthFlow.welcome-browse-channels(); }
         get-started => { AuthFlow.welcome-get-started(); }

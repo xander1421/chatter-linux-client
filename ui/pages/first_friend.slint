@@ -42,133 +42,153 @@ export component FirstFriend inherits Flickable {
         height: parent.viewport-height;
         alignment: center;
         cross-axis-alignment: center;
-        padding: Spacing.md;
+        padding: Spacing.panel-gutter;
 
-        VerticalLayout {
-            width: min(560px, root.width - 2 * Spacing.md);
-            spacing: 14px;
+        Rectangle {
+            width: min(576px, root.width - 2 * Spacing.panel-gutter);
+            background: Colors.surface-card;
+            border-radius: Spacing.radius-panel;
             accessible-role: groupbox;
             accessible-label: @tr("Add your first friend");
 
-            Text {
-                text: @tr("Add your first friend");
-                color: Colors.text-primary;
-                font-size: 24px;
-                font-weight: Typography.semibold;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-            Text {
-                text: @tr("Chatter has no phone-number lookup. Swap codes with someone you know.");
-                color: Colors.text-secondary;
-                font-size: 13px;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-
-            body := Rectangle {
-                private property <bool> side-by-side: self.width >= 524px;
-                private property <length> qr-size: min(200px, self.width);
-                height: self.side-by-side ? max(self.qr-size, form.height)
-                    : self.qr-size + Spacing.md + form.height;
-
-                Rectangle {
-                    x: body.side-by-side ? (body.width - 524px) / 2 : (body.width - self.width) / 2;
-                    y: body.side-by-side ? (body.height - self.height) / 2 : 0px;
-                    width: body.qr-size;
-                    height: self.width;
-                    border-radius: Spacing.radius-lg;
-                    background: Colors.fill-secondary;
-                    clip: true;
-
-                    if ModalHostState.friends-show-qr && root.my-code != "": Image {
-                        width: parent.width;
-                        height: parent.height;
-                        source: ModalHostState.friends-qr-code-image;
-                        accessible-role: image;
-                        accessible-label: @tr("Friend code");
+            VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.sm;
+                HorizontalLayout {
+                    alignment: center;
+                    Image {
+                        source: Icons.plus;
+                        width: 20px;
+                        height: 20px;
+                        colorize: Colors.text-secondary;
+                        accessible-role: none;
                     }
                 }
+                Text {
+                    text: @tr("Add your first friend");
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: @tr("Chatter has no phone-number lookup. Swap codes with someone you know.");
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
 
-                form := VerticalLayout {
-                    x: body.side-by-side ? (body.width - 524px) / 2 + 224px : (body.width - self.width) / 2;
-                    y: body.side-by-side ? (body.height - self.height) / 2 : body.qr-size + Spacing.md;
-                    width: min(300px, body.width);
-                    height: self.preferred-height;
-                    spacing: Spacing.sm;
+                body := Rectangle {
+                    private property <bool> side-by-side: self.width >= 524px;
+                    private property <length> qr-size: min(200px, self.width);
+                    height: self.side-by-side ? max(self.qr-size, form.height)
+                        : self.qr-size + Spacing.md + form.height;
 
                     Rectangle {
-                        height: 40px;
-                        background: Colors.fill-secondary;
-                        border-width: 1px;
-                        border-color: Colors.border;
-                        border-radius: Spacing.radius-md;
+                        x: body.side-by-side ? (body.width - 524px) / 2 : (body.width - self.width) / 2;
+                        y: body.side-by-side ? (body.height - self.height) / 2 : 0px;
+                        width: body.qr-size;
+                        height: self.width;
+                        border-radius: Spacing.radius-control;
+                        background: Colors.surface-control;
+                        clip: true;
 
-                        Text {
-                            x: Spacing.sm;
-                            width: parent.width - 2 * Spacing.sm;
+                        if ModalHostState.friends-show-qr && root.my-code != "": Image {
+                            width: parent.width;
                             height: parent.height;
-                            text: root.my-code;
+                            source: ModalHostState.friends-qr-code-image;
+                            accessible-role: image;
+                            accessible-label: @tr("Friend code");
+                        }
+                    }
+
+                    form := VerticalLayout {
+                        x: body.side-by-side ? (body.width - 524px) / 2 + 224px : (body.width - self.width) / 2;
+                        y: body.side-by-side ? (body.height - self.height) / 2 : body.qr-size + Spacing.md;
+                        width: min(300px, body.width);
+                        height: self.preferred-height;
+                        spacing: Spacing.sm;
+
+                        Rectangle {
+                            height: 40px;
+                            background: Colors.surface-control;
+                            border-width: 1px;
+                            border-color: Colors.border;
+                            border-radius: Spacing.radius-control;
+
+                            Text {
+                                x: Spacing.sm;
+                                width: parent.width - 2 * Spacing.sm;
+                                height: parent.height;
+                                text: root.my-code;
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Button {
+                            border-radius: Spacing.radius-control;
+                            text: @tr("Copy my code");
+                            variant: "secondary";
+                            icon: Icons.copy;
+                            touch: root.touch;
+                            disabled: root.my-code == "";
+                            clicked => { ModalHostState.friends-copy-code(); }
+                        }
+                        Text {
+                            text: @tr("Got theirs?");
                             color: Colors.text-primary;
                             font-size: Typography.sm;
-                            overflow: elide;
-                            vertical-alignment: center;
                         }
-                    }
-                    Button {
-                        text: @tr("Copy my code");
-                        icon: Icons.copy;
-                        touch: root.touch;
-                        disabled: root.my-code == "";
-                        clicked => { ModalHostState.friends-copy-code(); }
-                    }
-                    Text {
-                        text: @tr("Got theirs?");
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                    }
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
-                        Input {
-                            horizontal-stretch: 1;
-                            min-width: 0px;
-                            placeholder: @tr("Paste a code or link");
-                            text <=> ModalHostState.friends-code-input;
-                            caret-end-seq: ModalHostState.friends-code-caret-end-seq;
-                            edited => {
-                                if !ModalHostState.friends-loading { ModalHostState.friends-code-status = ""; }
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            Input {
+                                inset-control: true;
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                placeholder: @tr("Paste a code or link");
+                                text <=> ModalHostState.friends-code-input;
+                                caret-end-seq: ModalHostState.friends-code-caret-end-seq;
+                                edited => {
+                                    if !ModalHostState.friends-loading { ModalHostState.friends-code-status = ""; }
+                                }
+                                accepted => { root.add-code(); }
                             }
-                            accepted => { root.add-code(); }
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                text: @tr("Add");
+                                touch: root.touch;
+                                disabled: ModalHostState.friends-code-input == "";
+                                loading: ModalHostState.friends-loading;
+                                clicked => { root.add-code(); }
+                            }
                         }
-                        Button {
-                            text: @tr("Add");
-                            touch: root.touch;
-                            disabled: ModalHostState.friends-code-input == "";
-                            loading: ModalHostState.friends-loading;
-                            clicked => { root.add-code(); }
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            Button {
+                                border-radius: Spacing.radius-control;
+                                text: @tr("Paste");
+                                variant: "secondary";
+                                touch: root.touch;
+                                clicked => { ModalHostState.friends-paste-code(); }
+                            }
+                            if root.touch: Button {
+                                text: @tr("Scan a code");
+                                icon: Icons.camera;
+                                variant: "secondary";
+                                touch: true;
+                                clicked => { ModalHostState.friends-scan-code(); }
+                            }
                         }
-                    }
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
-                        Button {
-                            text: @tr("Paste");
-                            variant: "secondary";
-                            touch: root.touch;
-                            clicked => { ModalHostState.friends-paste-code(); }
+                        if ModalHostState.friends-code-status != "": Text {
+                            text: ModalHostState.friends-code-status;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            wrap: word-wrap;
                         }
-                        if root.touch: Button {
-                            text: @tr("Scan a code");
-                            icon: Icons.camera;
-                            variant: "secondary";
-                            touch: true;
-                            clicked => { ModalHostState.friends-scan-code(); }
-                        }
-                    }
-                    if ModalHostState.friends-code-status != "": Text {
-                        text: ModalHostState.friends-code-status;
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        wrap: word-wrap;
                     }
                 }
             }

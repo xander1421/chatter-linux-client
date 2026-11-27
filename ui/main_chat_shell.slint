@@ -19,6 +19,7 @@ import { IdentityChangeBar } from "chat/identity_change_bar.slint";
 import { AppThreadPanel } from "app_thread_panel.slint";
 import { AppSidebarHost } from "app_sidebar_host.slint";
 import { Materials } from "theme/materials.slint";
+import { Icons } from "theme/icons.slint";
 import { Colors } from "theme/colors.slint";
 import { Spacing } from "theme/spacing.slint";
 import { Typography } from "theme/typography.slint";
@@ -207,7 +208,7 @@ export component MainChatShell inherits Rectangle {
             // canvas across their whole page so list rows cannot show through.
             // With full opaque child coverage the base is never sampled, even
             // if the two ambient gradients have different local coordinates.
-            background: ChatPane.thread-panel-visible || root.chat-layout-covers-panel ? transparent : Materials.ambient;
+            background: ChatPane.thread-panel-visible || root.chat-layout-covers-panel ? transparent : Colors.background;
             // Reserve the complete control bar and unmount the covered sidebar.
             x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
                 : root.call-hides-sidebar || root.normal-sidebar-offset == 0px ? Spacing.panel-gutter : root.normal-sidebar-offset;
@@ -525,19 +526,31 @@ export component MainChatShell inherits Rectangle {
                 // flashed the two-pane placeholder on every phone open.
                 if !CallView.active-call-fullscreen && ChatPane.channel-name == "" && !ChatPane.loading-messages: Rectangle {
                     vertical-stretch: 1;
-                    background: root.show-first-friend ? Colors.surface : Colors.background;
-                    border-radius: root.show-first-friend ? 12px : 0px;
+                    background: Colors.background;
                     if root.show-first-friend: FirstFriend {
                         width: parent.width;
                         height: parent.height;
                         touch: root.is-mobile-platform;
                     }
-                    if !root.show-first-friend: Text {
-                        text: @tr("Select a conversation");
-                        color: Colors.text-muted;
-                        font-size: Typography.lg;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    if !root.show-first-friend: VerticalLayout {
+                        alignment: center;
+                        cross-axis-alignment: center;
+                        spacing: Spacing.sm;
+                        Image {
+                            source: Icons.message-circle;
+                            width: 20px;
+                            height: 20px;
+                            colorize: Colors.text-secondary;
+                            accessible-role: none;
+                        }
+                        Text {
+                            text: @tr("Select a conversation");
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
                     }
                 }
                 } // end VerticalLayout (call dock + ChatLayout)

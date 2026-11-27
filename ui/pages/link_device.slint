@@ -30,7 +30,7 @@ export component LinkDevicePage inherits Rectangle {
     callback go-to-login();    // back to login
     callback copy-link();      // copy raw URL to clipboard (paste-link fallback)
 
-    background: Materials.ambient;
+    background: Colors.background;
 
     flick := Flickable {
         width: 100%;
@@ -39,7 +39,7 @@ export component LinkDevicePage inherits Rectangle {
         interactive: content.preferred-height > self.height;
 
         content := VerticalLayout {
-            padding: Spacing.lg;
+            padding: Spacing.sm;
             spacing: Spacing.none;
             alignment: center;
             // Centre the card (see login.slint).
@@ -48,9 +48,9 @@ export component LinkDevicePage inherits Rectangle {
             Rectangle { height: Spacing.xl; }
 
             Rectangle {
-                width: min(480px, flick.width - 2 * Spacing.lg);
-                background: Colors.surface;
-                border-radius: Spacing.radius-lg;
+                width: min(480px, flick.width - 2 * Spacing.sm);
+                background: Colors.surface-card;
+                border-radius: Spacing.radius-panel;
                 transform-origin: { x: self.width / 2, y: 0px };
                 transform-scale-x: 96% + root.arrival * 4%;
                 transform-scale-y: 94% + root.arrival * 6%;
@@ -58,7 +58,7 @@ export component LinkDevicePage inherits Rectangle {
 
                 VerticalLayout {
                     spacing: Spacing.md;
-                    padding: Spacing.lg;
+                    padding: Spacing.sm;
 
                     // Choose before "Generate QR": linking talks to the server
                     // from the first step. Fixed while a link is running.
@@ -69,7 +69,7 @@ export component LinkDevicePage inherits Rectangle {
 
                     Text {
                         text: @tr("Link this device");
-                        color: Colors.primary;
+                        color: Colors.text-primary;
                         font-size: Typography.xxl;
                         font-weight: Typography.bold;
                         horizontal-alignment: center;
@@ -95,14 +95,14 @@ export component LinkDevicePage inherits Rectangle {
                     // generated the link. Keep the surface stable while it does.
                     Rectangle {
                         height: 280px;
-                        background: root.link-url != "" ? white : Colors.surface-hover;
-                        border-radius: Spacing.radius-md;
+                        background: root.link-url != "" ? Colors.qr-background : Colors.surface-control;
+                        border-radius: Spacing.radius-control;
                         animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
                         Image {
                             source: root.qr-image;
-                            width: 256px;
-                            height: 256px;
+                            width: min(256px, parent.width - 2 * Spacing.sm);
+                            height: self.width;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             image-fit: contain;
@@ -133,8 +133,8 @@ export component LinkDevicePage inherits Rectangle {
                             wrap: word-wrap;
                         }
                         Rectangle {
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
+                            background: Colors.surface-control;
+                            border-radius: Spacing.radius-control;
                             VerticalLayout {
                                 padding: Spacing.sm;
                                 // One elided line, not wrapped: the column sized
@@ -151,6 +151,7 @@ export component LinkDevicePage inherits Rectangle {
                             }
                         }
                         Button {
+                            border-radius: Spacing.radius-control;
                             text: @tr("Copy link");
                             variant: "secondary";
                             clicked => { root.copy-link(); }
@@ -163,7 +164,7 @@ export component LinkDevicePage inherits Rectangle {
                     // HorizontalLayout it overflowed its row onto "Copy link".
                     Text {
                         text: root.status-text;
-                        color: root.linking ? Colors.primary : Colors.text-secondary;
+                        color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                         wrap: word-wrap;
@@ -180,11 +181,13 @@ export component LinkDevicePage inherits Rectangle {
                     HorizontalLayout {
                         spacing: Spacing.sm;
                         Button {
+                            border-radius: Spacing.radius-control;
                             text: @tr("Cancel");
                             variant: "secondary";
                             clicked => { root.cancel(); }
                         }
                         Button {
+                            border-radius: Spacing.radius-control;
                             text: @tr("Generate QR");
                             variant: "primary";
                             disabled: root.linking;

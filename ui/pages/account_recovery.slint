@@ -45,7 +45,7 @@ export component AccountRecoveryPage inherits Rectangle {
     callback recover(string, string, string, string);  // username, recovery_code, new_password, new_pin
     callback go-to-login();
 
-    background: Materials.ambient;
+    background: Colors.background;
 
     // The form scrolls when the keyboard covers it (login.slint does the
     // same): five inputs plus the IME do not fit a phone.
@@ -63,8 +63,8 @@ export component AccountRecoveryPage inherits Rectangle {
 
         Rectangle {
             width: min(480px, flick.width - 2 * Spacing.md);
-            background: Colors.surface;
-            border-radius: Spacing.radius-lg;
+            background: Colors.surface-card;
+            border-radius: Spacing.radius-panel;
             transform-origin: { x: self.width / 2, y: 0px };
             transform-scale-x: 96% + root.arrival * 4%;
             transform-scale-y: 94% + root.arrival * 6%;
@@ -73,12 +73,12 @@ export component AccountRecoveryPage inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 spacing: Spacing.lg;
-                padding: Spacing.xl;
+                padding: Spacing.sm;
 
                 // App logo/title
                 Text {
                     text: @tr("Chatter");
-                    color: Colors.primary;
+                    color: Colors.text-primary;
                     font-size: Typography.xxxl;
                     font-weight: Typography.bold;
                     horizontal-alignment: center;
@@ -115,6 +115,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     }
 
                     Input {
+                        inset-control: true;
                         placeholder: @tr("Enter your username");
                         text <=> root.username;
                         disabled: root.loading;
@@ -140,6 +141,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     }
 
                     Input {
+                        inset-control: true;
                         placeholder: @tr("Enter your recovery code");
                         password: true;
                         text <=> root.recovery-code;
@@ -163,6 +165,7 @@ export component AccountRecoveryPage inherits Rectangle {
                         }
 
                         Input {
+                            inset-control: true;
                             placeholder: @tr("New password");
                             password: true;
                             text <=> root.new-password;
@@ -182,6 +185,7 @@ export component AccountRecoveryPage inherits Rectangle {
                         }
 
                         Input {
+                            inset-control: true;
                             placeholder: @tr("Confirm password");
                             password: true;
                             text <=> root.confirm-password;
@@ -217,6 +221,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     }
 
                     Input {
+                        inset-control: true;
                         placeholder: @tr("PIN (8+ characters)");
                         password: true;
                         text <=> root.new-pin;
@@ -229,7 +234,7 @@ export component AccountRecoveryPage inherits Rectangle {
                 // Success message display
                 if success != "": Rectangle {
                     background: Colors.success.with-alpha(0.1);
-                    border-radius: Spacing.radius-md;
+                    border-radius: Spacing.radius-control;
 
                     HorizontalLayout {
                         padding: Spacing.md;
@@ -248,7 +253,7 @@ export component AccountRecoveryPage inherits Rectangle {
                 if error != "": Rectangle {
                     min-height: error-copy.preferred-height + Spacing.md * 2;
                     background: Colors.error.with-alpha(0.1);
-                    border-radius: Spacing.radius-md;
+                    border-radius: Spacing.radius-control;
 
                     error-copy := Text {
                         x: Spacing.md + root.error-nudge;
@@ -268,6 +273,7 @@ export component AccountRecoveryPage inherits Rectangle {
 
                 // Recover Account button
                 Button {
+                    border-radius: Spacing.radius-control;
                     text: loading ? "" : @tr("Recover account");
                     variant: "primary";
                     loading: root.loading;
@@ -287,6 +293,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Button {
+                        border-radius: Spacing.radius-control;
                         text: @tr("Back to login");
                         variant: "ghost";
                         clicked => { root.go-to-login(); }

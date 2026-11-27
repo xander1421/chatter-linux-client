@@ -1,4 +1,4 @@
-// Connection status banner — Neo 2.0 with glow effects on reconnecting
+// Connection status banner
 //
 // Two facts, and the second one is the point of it:
 //
@@ -18,11 +18,10 @@
 // "the mesh is running" is never allowed to read as "your message will arrive"
 // — delivery is the context bar's subject, not this one's.
 
-import { KeyFocus } from "./key_focus.slint";
+import { HeaderButton } from "header_button.slint";
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Materials } from "../theme/materials.slint";
-import { Elevation } from "../theme/elevation.slint";
 import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -137,32 +136,14 @@ export component ConnectionBanner inherits Rectangle {
         connection-state == "failed" ? Colors.error :
         Colors.error;  // disconnected
 
-    border-radius: Spacing.radius-chrome;
-    background: Colors.surface;
-
-    Rectangle {
-        border-radius: root.border-radius;
-        background: root.banner-color.with-alpha(0.10);
-    }
-    // Neo 2.0: glow bloom on connecting/reconnecting states
-    drop-shadow-blur: connection-state == "connecting" || connection-state == "reconnecting"
-        ? Elevation.halo-blur-strong : 0px;
-    drop-shadow-color: connection-state == "connecting" || connection-state == "reconnecting"
-        ? Colors.primary.with-alpha(0.2) : transparent;
-    drop-shadow-offset-y: connection-state == "connecting" || connection-state == "reconnecting"
-        ? 2px : 0px;
-
-    // Bottom border accent
-    Rectangle {
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: root.banner-color.with-alpha(0.3);
-    }
+    border-radius: Spacing.radius-panel;
+    border-width: 1px;
+    border-color: Colors.border;
+    background: Colors.surface-card;
 
     content := VerticalLayout {
-        padding-left: root.tight ? Spacing.sm : Spacing.lg;
-        padding-right: root.tight ? Spacing.sm : Spacing.lg;
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
         // Narrow: -2px, i.e. (40 - 44) / 2. The row is the close button's 44px
         // and cannot be less; the negative padding centres that 44px inside the
         // 40px banner instead of letting it hang off the bottom edge. Nothing
@@ -210,7 +191,7 @@ export component ConnectionBanner inherits Rectangle {
                       connection-state == "failed" ? (root.tight ? @tr("Server unreachable") : @tr("Server unreachable — check your network")) :
                       root.tight ? @tr("No server — messages will send later")
                                  : @tr("Server unreachable — messages will send later");
-                color: root.banner-color;
+                color: Colors.text-primary;
                 font-size: Typography.xs;
                 font-weight: Typography.medium;
                 vertical-alignment: center;
@@ -226,33 +207,17 @@ export component ConnectionBanner inherits Rectangle {
             // phone, where a 16px icon is a miss more often than a hit. It stays
             // 44px in the compact banner too, centred in a 40px row, so it is the
             // banner that gives the 4px rather than the target.
-            Rectangle {
-                width: 44px;
-                height: 44px;
+            HeaderButton {
+                width: Spacing.button-height;
+                height: self.width;
                 horizontal-stretch: 0;
-                border-radius: 6px;
-                background: close-touch.has-hover ? root.banner-color.with-alpha(0.15) : transparent;
-                transform-scale-x: close-touch.pressed ? 88% : 100%;
-                transform-scale-y: close-touch.pressed ? 88% : 100%;
-                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-
-                Image {
-                    source: Icons.x;
-                    width: 14px;
-                    height: 14px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: root.banner-color;
-                }
-
-                close-touch := TouchArea {
-                    clicked => { root.dismissed(); }
-                }
-                accessible-role: button;
-                accessible-label: @tr("Dismiss the connection banner");
-                accessible-action-default => { root.dismissed(); }
-                KeyFocus { border-radius: parent.border-radius; activate => { root.dismissed(); } }
+                glyph: 14px;
+                control-radius: Spacing.radius-control;
+                plain: true;
+                icon: Icons.x;
+                label: @tr("Dismiss the connection banner");
+                enabled: root.should-show;
+                clicked => { root.dismissed(); }
             }
         }
 
