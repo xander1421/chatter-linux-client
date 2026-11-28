@@ -64,7 +64,7 @@ export component MessageQuote inherits Rectangle {
     }
 
     quote-row := HorizontalLayout {
-        padding: root.compact-composer-preview ? 0px : Spacing.xs;
+        padding: root.compact-composer-preview ? Spacing.none : Spacing.xs;
         padding-left: root.composer-preview ? self.padding : Spacing.sm + Spacing.xxs;
         spacing: Spacing.sm;
         alignment: stretch;

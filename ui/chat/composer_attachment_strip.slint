@@ -29,7 +29,7 @@ export component ComposerAttachmentStrip inherits Rectangle {
         attachment-cards := HorizontalLayout {
             width: attachment-scroll.viewport-width;
             height: attachment-scroll.viewport-height;
-            padding: root.compact ? 0px : Spacing.sm;
+            padding: root.compact ? Spacing.none : Spacing.sm;
             spacing: Spacing.sm;
             alignment: root.compact ? start : center;
 

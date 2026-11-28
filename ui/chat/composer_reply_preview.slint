@@ -18,7 +18,7 @@ export component ComposerReplyPreview inherits Rectangle {
     clip: true;
 
     HorizontalLayout {
-        padding-right: root.compact ? 0px : root.row-padding;
+        padding-right: root.compact ? Spacing.none : root.row-padding;
         spacing: Spacing.sm;
 
         quote := MessageQuote {
