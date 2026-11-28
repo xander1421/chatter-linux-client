@@ -34,7 +34,7 @@ Set by the owner and cofounder designer on 2026-11-27, starting from the section
   - the selected state (row fill at `tint-strong`, focus ring);
   - unread badges;
   - links.
-- It is **not** used for decorative stripes, labels or eyebrows. In particular, no coloured left "accent rail" on rounded cards. A quoted, pinned or replied-to message shows its sender name in `text-secondary` with a neutral 2 px rule in `Colors.border`, or no rule at all.
+- It is **not** used for decorative stripes, labels or eyebrows. In particular, no coloured left "accent rail" on rounded cards. A quoted, pinned or replied-to message shows its sender name in `text-secondary` and no rule (owner 2026-11-28: no vertical lines in quotes).
 - **Muted states** use neutral fills (`surface-control`), never accent.
 - **No literal colours** in components. Use theme tokens only.
 

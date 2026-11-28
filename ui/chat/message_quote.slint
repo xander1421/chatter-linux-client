@@ -41,12 +41,6 @@ export component MessageQuote inherits Rectangle {
     preferred-height: quote-row.preferred-height;
     horizontal-stretch: 1;
 
-    if !root.composer-preview: Rectangle {
-        width: 2px;
-        height: parent.height;
-        background: Colors.border;
-    }
-
     // Tap the quote to jump to the original message.
     // Suppressed when the parent is gone/unknown.
     //
@@ -65,7 +59,7 @@ export component MessageQuote inherits Rectangle {
 
     quote-row := HorizontalLayout {
         padding: root.compact-composer-preview ? Spacing.none : Spacing.xs;
-        padding-left: root.composer-preview ? self.padding : Spacing.sm + Spacing.xxs;
+        padding-left: root.composer-preview ? self.padding : Spacing.sm;
         spacing: Spacing.sm;
         alignment: stretch;
 
